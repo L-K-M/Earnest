@@ -11,48 +11,37 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func (s *Service) executeIngestRules(ctx context.Context, feed int64, ids []int64) error {
-	rows, err := s.store.Pool().Query(ctx, `SELECT DISTINCT p.user_id,p.id FROM principals p JOIN subscriptions sub ON sub.user_id=p.user_id WHERE p.kind='human' AND sub.feed_id=$1 AND sub.deleted_at IS NULL ORDER BY p.user_id`, feed)
+// executeRuleJob isolates failures to one rule, so other rules can still run.
+func (s *Service) executeRuleJob(ctx context.Context, userID, ruleID, feedID int64, ids []int64) error {
+	var a Actor
+	a.UserID, a.Kind, a.Via, a.Scopes = userID, PrincipalHuman, CredentialInternal, HumanScopes
+	err := s.store.Pool().QueryRow(ctx, `SELECT id FROM principals WHERE user_id=$1 AND kind='human' ORDER BY id LIMIT 1`, userID).Scan(&a.PrincipalID)
+	if err == pgx.ErrNoRows {
+		return nil
+	}
 	if err != nil {
-		return fmt.Errorf("rule subscribers: %w", err)
+		return fmt.Errorf("rule owner: %w", err)
 	}
-	var actors []Actor
-	for rows.Next() {
-		var a Actor
-		if err := rows.Scan(&a.UserID, &a.PrincipalID); err != nil {
-			rows.Close()
-			return fmt.Errorf("scan rule subscriber: %w", err)
+	rules, err := s.Rules(ctx, a)
+	if err != nil {
+		return err
+	}
+	for _, rule := range rules {
+		if rule.ID != ruleID || !rule.Enabled {
+			continue
 		}
-		a.Kind = PrincipalHuman
-		a.Via = CredentialInternal
-		a.Scopes = HumanScopes
-		actors = append(actors, a)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("read rule subscribers: %w", err)
-	}
-	for _, a := range actors {
-		rules, err := s.Rules(ctx, a)
+		entries, err := s.ruleEntries(ctx, userID, time.Time{}, ids)
 		if err != nil {
 			return err
 		}
-		entries, err := s.ruleEntries(ctx, a.UserID, time.Time{}, ids)
-		if err != nil {
-			return err
-		}
-		for _, rule := range rules {
-			if !rule.Enabled {
-				continue
-			}
-			for _, entry := range entries {
-				if matchesRule(rule.Predicate, entry) {
-					if err := s.applyRule(ctx, a, rule, entry); err != nil {
-						return fmt.Errorf("rule %d: %w", rule.ID, err)
-					}
+		for _, entry := range entries {
+			if entry.FeedID == feedID && matchesRule(rule.Predicate, entry) {
+				if err := s.applyRule(ctx, a, rule, entry); err != nil {
+					return fmt.Errorf("rule %d: %w", rule.ID, err)
 				}
 			}
 		}
+		break
 	}
 	return nil
 }
@@ -79,6 +68,14 @@ func (s *Service) applyRule(ctx context.Context, human Actor, rule Rule, entry r
 			return fmt.Errorf("rule actor: %w", err)
 		}
 		actor := Actor{UserID: human.UserID, PrincipalID: principal, Kind: PrincipalPipeline, Via: CredentialInternal, Scopes: []Scope{ScopeStateWrite}}
+		matchOp := fmt.Sprintf("rule/%d/%d/match", rule.ID, entry.ID)
+		replay, err := replayOp(ctx, tx, principal, "ApplyRule", matchOp)
+		if err != nil {
+			return err
+		}
+		if replay != nil {
+			return nil
+		}
 		now := s.now().UTC()
 		for i, action := range rule.Actions {
 			op := fmt.Sprintf("rule/%d/%d/%d", rule.ID, entry.ID, i)
@@ -151,8 +148,14 @@ func (s *Service) applyRule(ctx context.Context, human Actor, rule Rule, entry r
 				if _, err = tx.Exec(ctx, `INSERT INTO activity(user_id,principal_id,action,target,created_at) VALUES($1,$2,'label.added',$3,$4)`, human.UserID, principal, map[string]any{"rule_id": rule.ID, "rule_name": rule.Name, "entry_id": entry.ID, "label_id": action.LabelID}, now); err != nil {
 					return fmt.Errorf("record rule label activity: %w", err)
 				}
-			case RuleNotify, RuleWebhook:
-				return fmt.Errorf("rule delivery is not configured: %w", ErrInvalid)
+			case RuleNotify:
+				if err := s.ruleNotificationTx(ctx, tx, actor, rule, entry, action.Budget); err != nil {
+					return err
+				}
+			case RuleWebhook:
+				if err := s.ruleWebhookTx(ctx, tx, human.UserID, action.WebhookID, entry.FeedID, entry.ID); err != nil {
+					return err
+				}
 			default:
 				return fmt.Errorf("unknown rule action: %w", ErrInvalid)
 			}
@@ -161,6 +164,6 @@ func (s *Service) applyRule(ctx context.Context, human Actor, rule Rule, entry r
 		if err != nil {
 			return fmt.Errorf("record rule match: %w", err)
 		}
-		return nil
+		return store.FinishOp(ctx, tx, principal, matchOp, map[string]any{"rule_id": rule.ID, "entry_id": entry.ID})
 	})
 }

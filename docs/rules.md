@@ -29,7 +29,7 @@ For example, a rule for a selected feed and the word funding has this tree:
 | --- | --- |
 | Add a native label | Any valid predicate |
 | Set shelf to later or done | Any valid predicate, with every possible match scoped to selected feeds |
-| Notify | Any valid predicate, with a budget |
+| Notify | Any valid predicate, with a daily budget |
 | Webhook | Feed and keyword predicates only, including keyword alone |
 
 An AND is feed scoped when at least one child is scoped. Every branch of an
@@ -43,7 +43,16 @@ model-derived results. Notification and webhook destinations are managed
 separately. Agents cannot create rules, and agent-written labels never feed
 rules.
 
-Rules can be validated and dry-run. Enabled rules run on newly ingested entries
-after the ingest transaction commits. Label and shelf actions are recorded in
-activity with the rule name. Notification and webhook delivery are not wired
-yet; a matching rule with either action returns an error after ingest commits.
+Rules are managed by humans at `/v1/rules`. A dry run at
+`POST /v1/rules:dry-run` returns matching entry summaries from the past seven
+days without writing. Enabled rules are queued in the ingest transaction and
+run asynchronously on newly ingested entries. Failed jobs retry with backoff;
+a repeatedly failing rule is disabled and its reason appears on the rule.
+Enabling it clears the reason.
+
+Notifications use the Rules pipeline principal and identify the rule and
+matched text in their server-generated provenance. The default daily budget is
+three notifications per rule; set `budget` on a notify action to change it.
+Each rule and entry pair is deduplicated. Now feeds produce alerts; other feeds
+produce digests. Webhook actions queue `entry.matched` with entry and feed IDs.
+Label and shelf actions are recorded in activity with the rule name.

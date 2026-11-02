@@ -94,6 +94,11 @@ func serve() error {
 	}
 
 	go runRetention(ctx, svc, time.Duration(cfg.RetentionDays)*24*time.Hour, logger)
+	ruleDone := make(chan struct{})
+	go func() {
+		defer close(ruleDone)
+		runRuleWorker(ctx, svc, logger)
+	}()
 
 	fetchErr := make(chan error, 1)
 	go func() {
@@ -120,6 +125,7 @@ func serve() error {
 	listenErr := srv.ListenAndServe()
 	stop()
 	<-shutdownDone
+	<-ruleDone
 
 	if err := <-fetchErr; err != nil {
 		return fmt.Errorf("fetcher: %w", err)
@@ -196,5 +202,30 @@ func pruneRetention(ctx context.Context, svc *service.Service, retention time.Du
 		}
 	} else if n > 0 {
 		logger.Info("change log pruned", "revisions", n)
+	}
+}
+
+// runRuleWorker drains committed rule jobs independently of feed ingestion.
+func runRuleWorker(ctx context.Context, svc *service.Service, logger *slog.Logger) {
+	const interval = time.Second
+	const batchSize = 100
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		count, err := svc.RunRuleJobs(ctx, batchSize)
+		if err != nil && ctx.Err() == nil {
+			logger.Error("rule worker failed", "error", err)
+		}
+		if err == nil && count == batchSize {
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 	}
 }

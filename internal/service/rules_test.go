@@ -62,6 +62,9 @@ func TestRuleExecutionAndManagement(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := f.ingest(t, "matched")
+	if n, err := f.s.RunRuleJobs(ctx, 10); err != nil || n != 1 {
+		t.Fatalf("run rule job: %d %v", n, err)
+	}
 	var shelf, source string
 	if err := f.db.Pool().QueryRow(ctx, `SELECT shelf,shelf_source FROM entry_state WHERE principal_id=$1 AND entry_id=$2`, f.a.PrincipalID, id).Scan(&shelf, &source); err != nil {
 		t.Fatal(err)
@@ -122,5 +125,47 @@ func TestRuleDelayedWriteLosesToUnread(t *testing.T) {
 	}
 	if shelf != "none" {
 		t.Fatalf("shelf = %s", shelf)
+	}
+}
+
+func TestRuleJobRetriesAndDisables(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := context.Background()
+	label, err := f.s.CreateLabel(ctx, f.a, "Temporary", "temporary-label")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule, err := f.s.CreateRule(ctx, f.a, Rule{Name: "Broken", Enabled: true, Predicate: RulePredicate{Type: RuleFeedIn, IDs: []int64{f.feed}}, Actions: []RuleAction{{Type: RuleAddLabel, LabelID: label.ID}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.Pool().Exec(ctx, `UPDATE labels SET deleted_at=now() WHERE id=$1`, label.ID); err != nil {
+		t.Fatal(err)
+	}
+	id := f.ingest(t, "committed despite rule failure")
+	for attempt := 1; attempt <= ruleJobMaxAttempts; attempt++ {
+		n, err := f.s.RunRuleJobs(ctx, 10)
+		if err != nil || n != 1 {
+			t.Fatalf("attempt %d: %d %v", attempt, n, err)
+		}
+		if attempt < ruleJobMaxAttempts {
+			n, err := f.s.RunRuleJobs(ctx, 10)
+			if err != nil || n != 0 {
+				t.Fatalf("retry ran before backoff: %d %v", n, err)
+			}
+			f.clock.Add(int64(ruleJobRetryDelay * time.Duration(1<<(attempt-1))))
+		}
+	}
+	var enabled bool
+	var reason string
+	if err := f.db.Pool().QueryRow(ctx, `SELECT enabled,action->>'disable_reason' FROM rules WHERE id=$1`, rule.ID).Scan(&enabled, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if enabled || reason == "" {
+		t.Fatalf("rule enabled=%v reason=%q", enabled, reason)
+	}
+	var exists bool
+	if err := f.db.Pool().QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM entries WHERE id=$1)`, id).Scan(&exists); err != nil || !exists {
+		t.Fatalf("entry missing: %v", err)
 	}
 }
