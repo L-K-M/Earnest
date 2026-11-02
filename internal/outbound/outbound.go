@@ -46,12 +46,21 @@ const (
 	RedirectNone
 )
 
+// Protocol selects the permitted HTTP protocol.
+type Protocol uint8
+
+const (
+	HTTP1 Protocol = iota
+	HTTP2
+)
+
 type Credentials struct {
 	Username, Password string
 	Headers            http.Header
 }
 type Policy struct {
 	Purpose      Purpose
+	Protocol     Protocol
 	Credentials  Credentials
 	MaxBodySize  int64
 	Timeout      time.Duration
@@ -149,6 +158,9 @@ func (c *Client) Do(request *http.Request, p Policy) (*Result, error) {
 	default:
 		return nil, fmt.Errorf("invalid purpose")
 	}
+	if p.Protocol != HTTP1 && p.Protocol != HTTP2 {
+		return nil, fmt.Errorf("invalid protocol")
+	}
 	if p.Redirect != RedirectFollow && p.Redirect != RedirectNone {
 		return nil, fmt.Errorf("invalid redirect policy")
 	}
@@ -206,7 +218,7 @@ func (c *Client) Do(request *http.Request, p Policy) (*Result, error) {
 		if err != nil {
 			return nil, classifyNetwork(err)
 		}
-		transport := c.transport(req.URL)
+		transport := c.transport(req.URL, p.Protocol)
 		resp, err := transport.RoundTrip(req)
 		if err != nil {
 			release()
@@ -363,7 +375,7 @@ func (c *Client) allowed(addr netip.Addr, hostport string) bool {
 	}
 	return false
 }
-func (c *Client) transport(u *url.URL) *http.Transport {
+func (c *Client) transport(u *url.URL, protocol Protocol) *http.Transport {
 	hostport := u.Host
 	if u.Port() == "" {
 		port := "80"
@@ -372,7 +384,14 @@ func (c *Client) transport(u *url.URL) *http.Transport {
 		}
 		hostport = net.JoinHostPort(u.Hostname(), port)
 	}
-	return &http.Transport{Proxy: nil, DisableKeepAlives: true, DisableCompression: true, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+	protocols := new(http.Protocols)
+	if protocol == HTTP2 {
+		protocols.SetHTTP2(true)
+	} else {
+		protocols.SetHTTP1(true)
+	}
+	// A fresh transport per hop cannot coalesce connections across hosts.
+	return &http.Transport{Protocols: protocols, Proxy: nil, DisableKeepAlives: true, DisableCompression: true, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(address)
 		if err != nil {
 			return nil, err
