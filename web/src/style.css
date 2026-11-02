@@ -1,0 +1,14 @@
+:root {font-family: system-ui, sans-serif; color: #282620; background: #f8f6ef; line-height: 1.5}
+* {box-sizing: border-box}
+body {margin: 0}
+button, input {font: inherit}
+button {cursor: pointer}
+.layout {display: grid; grid-template-columns: 12rem minmax(16rem, 24rem) minmax(0, 1fr); min-height: 100vh}
+nav, main, article {padding: 1.5rem; border-right: 1px solid #ccc}
+nav button, .entry {display: block; width: 100%; text-align: left; border: 0; background: none; padding: .7rem}
+button:hover, button:focus-visible, [aria-current] {background: #e8e4d9}
+article h2 {font-family: Georgia, serif}
+iframe {display: block; border: 0; width: 100%; height: 80vh; margin-top: 1rem}
+.login {max-width: 28rem; margin: 10vh auto; border: 0}
+label, input {display: block; width: 100%; margin-bottom: 1rem}
+@media (max-width: 800px) {.layout {display: block} nav button {display: inline-block; width: auto} iframe {height: 60vh}}
