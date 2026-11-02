@@ -54,9 +54,17 @@ services:
         condition: service_healthy
     environment:
       EARNEST_HTTP_ADDR: ":8080"
-      # Wired now so the deployment contract is real; the scaffold accepts it
-      # and reports it at startup but does not query the database yet.
-      EARNEST_DATABASE_URL: postgres://earnest:${EARNEST_DB_PASSWORD:-earnest}@postgres:5432/earnest
+      # Override for an external database; otherwise use this stack's Postgres.
+      EARNEST_DATABASE_URL: ${EARNEST_DATABASE_URL:-postgres://earnest:${EARNEST_DB_PASSWORD:-earnest}@postgres:5432/earnest}
+      # Required for signing and encrypted stored credentials. Keep with backups.
+      EARNEST_SECRET_KEY: ${EARNEST_SECRET_KEY:?Set EARNEST_SECRET_KEY to at least 32 bytes}
+      # Provision the distinct content origin before enabling article frames.
+      EARNEST_BASE_URL: "${EARNEST_BASE_URL:-http://localhost:8080}"
+      EARNEST_CONTENT_ORIGIN: "${EARNEST_CONTENT_ORIGIN:-http://localhost:8081}"
+      EARNEST_OUTBOUND_ALLOW_PRIVATE: "${EARNEST_OUTBOUND_ALLOW_PRIVATE:-}"
+      EARNEST_FETCH_MIN_INTERVAL: "${EARNEST_FETCH_MIN_INTERVAL:-15m}"
+      EARNEST_FETCH_MAX_INTERVAL: "${EARNEST_FETCH_MAX_INTERVAL:-24h}"
+      EARNEST_RETENTION_DAYS: "${EARNEST_RETENTION_DAYS:-90}"
       EARNEST_LOG_LEVEL: "${EARNEST_LOG_LEVEL:-info}"
     ports:
       - "${EARNEST_PORT:-8080}:8080"
