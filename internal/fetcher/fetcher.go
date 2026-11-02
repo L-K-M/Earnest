@@ -1,0 +1,425 @@
+// Package fetcher schedules and processes feed retrieval through outbound.
+package fetcher
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"math/rand/v2"
+	"net/http"
+	"net/url"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/L-K-M/Earnest/internal/extract"
+	"github.com/L-K-M/Earnest/internal/feed"
+	"github.com/L-K-M/Earnest/internal/metrics"
+	"github.com/L-K-M/Earnest/internal/outbound"
+	"github.com/L-K-M/Earnest/internal/sanitize"
+	"github.com/L-K-M/Earnest/internal/service"
+)
+
+// Service is the persistence boundary used by the fetcher.
+type Service interface {
+	ClaimDueFeeds(context.Context, time.Time, int, time.Duration) ([]service.FeedToFetch, error)
+	KnownIdentities(context.Context, int64, []string) (map[string]bool, error)
+	RecordFetch(context.Context, service.FetchOutcome) (service.IngestSummary, error)
+}
+
+// Config controls scheduling and outbound limits.
+type Config struct {
+	MinInterval, MaxInterval time.Duration
+	PollInterval, Lease      time.Duration
+	Workers, BatchSize       int
+	ExtraPorts               []uint16
+	Metrics                  *metrics.Registry
+}
+
+// Fetcher coordinates retrieval and reporting.
+type Fetcher struct {
+	service Service
+	client  *outbound.Client
+	config  Config
+	kick    chan struct{}
+}
+
+// New constructs a fetcher with sensible defaults.
+func New(s Service, c *outbound.Client, cfg Config) (*Fetcher, error) {
+	if s == nil || c == nil {
+		return nil, errors.New("fetcher: service and client are required")
+	}
+	if cfg.MinInterval == 0 {
+		cfg.MinInterval = 15 * time.Minute
+	}
+	if cfg.MaxInterval == 0 {
+		cfg.MaxInterval = 24 * time.Hour
+	}
+	if cfg.PollInterval == 0 {
+		cfg.PollInterval = time.Minute
+	}
+	if cfg.Lease == 0 {
+		cfg.Lease = 10 * time.Minute
+	}
+	if cfg.Workers == 0 {
+		cfg.Workers = 4
+	}
+	if cfg.BatchSize == 0 {
+		cfg.BatchSize = cfg.Workers
+	}
+	if cfg.MinInterval < 0 || cfg.MaxInterval < cfg.MinInterval || cfg.PollInterval < 0 || cfg.Lease < 0 || cfg.Workers < 1 || cfg.BatchSize < 1 {
+		return nil, errors.New("fetcher: invalid config")
+	}
+	cfg.ExtraPorts = append([]uint16(nil), cfg.ExtraPorts...)
+	return &Fetcher{service: s, client: c, config: cfg, kick: make(chan struct{}, 1)}, nil
+}
+
+// Kick wakes the scheduler after a subscription changes.
+func (f *Fetcher) Kick() {
+	select {
+	case f.kick <- struct{}{}:
+	default:
+	}
+}
+
+// Run processes claimed feeds until cancellation or a claim error.
+func (f *Fetcher) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if f.config.Metrics != nil {
+		defer f.config.Metrics.SetQueueDepth(0)
+	}
+	errs := make(chan error, 1)
+	workerError := func() error {
+		select {
+		case err := <-errs:
+			return err
+		default:
+			return nil
+		}
+	}
+	jobs := make(chan service.FeedToFetch)
+	var wg sync.WaitGroup
+	for i := 0; i < f.config.Workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for item := range jobs {
+				if err := f.Fetch(ctx, item); err != nil && ctx.Err() == nil {
+					select {
+					case errs <- err:
+					default:
+					}
+					cancel()
+					return
+				}
+			}
+		}()
+	}
+	defer func() { close(jobs); wg.Wait() }()
+	for {
+		feeds, err := f.service.ClaimDueFeeds(ctx, time.Now().UTC(), f.config.BatchSize, f.config.Lease)
+		if err != nil {
+			if ctx.Err() != nil {
+				return workerError()
+			}
+			return fmt.Errorf("claim feeds: %w", err)
+		}
+		for i, item := range feeds {
+			if f.config.Metrics != nil {
+				f.config.Metrics.SetQueueDepth(len(feeds) - i)
+			}
+			select {
+			case jobs <- item:
+			case <-ctx.Done():
+				return workerError()
+			}
+		}
+		if f.config.Metrics != nil {
+			f.config.Metrics.SetQueueDepth(0)
+		}
+		if len(feeds) == f.config.BatchSize {
+			continue
+		}
+		timer := time.NewTimer(f.config.PollInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return workerError()
+		case <-f.kick:
+			timer.Stop()
+		case <-timer.C:
+		}
+	}
+}
+
+func credentials(c *service.FeedCredentials) outbound.Credentials {
+	var result outbound.Credentials
+	if c != nil {
+		result.Username = c.Username
+		result.Password = c.Password
+		result.Headers = make(http.Header)
+		for k, v := range c.Headers {
+			result.Headers.Set(k, v)
+		}
+	}
+	return result
+}
+
+// Fetch retrieves one claimed feed and records its outcome.
+func (f *Fetcher) Fetch(ctx context.Context, item service.FeedToFetch) error {
+	now := time.Now().UTC()
+	out := service.FetchOutcome{FeedID: item.FeedID, AttemptedAt: now, Status: service.FetchFailed}
+	result, err := f.client.Get(ctx, item.URL, outbound.Policy{Purpose: outbound.Feed, Credentials: credentials(item.Credentials), ETag: item.ETag, LastModified: item.LastModified, ExtraPorts: f.config.ExtraPorts})
+	var parsed *feed.Feed
+	if result != nil {
+		resp := result.Response
+		defer resp.Body.Close()
+		out.HTTPStatus = resp.StatusCode
+		if result.PermanentRedirect {
+			out.PermanentRedirectURL = result.FinalURL.String()
+		}
+		out.ETag = resp.Header.Get("ETag")
+		out.LastModified = resp.Header.Get("Last-Modified")
+		if resp.StatusCode == http.StatusNotModified {
+			if out.ETag == "" {
+				out.ETag = item.ETag
+			}
+			if out.LastModified == "" {
+				out.LastModified = item.LastModified
+			}
+		}
+		if err == nil && resp.StatusCode == http.StatusNotModified {
+			out.Status = service.FetchNotModified
+		} else if err == nil && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
+			err = fmt.Errorf("HTTP status %d", resp.StatusCode)
+		} else if err == nil {
+			var data []byte
+			data, err = io.ReadAll(resp.Body)
+			if err == nil {
+				parsed, err = feed.Parse(data, feed.ParseOptions{BaseURL: result.FinalURL.String(), Charset: resp.Header.Get("Content-Type")})
+				if err != nil {
+					err = fmt.Errorf("parse feed: %w", err)
+				}
+			}
+			if err == nil {
+				out.Feed = metadata(parsed)
+				out.Items, err = f.items(ctx, item, parsed.Items)
+				if err == nil {
+					out.Status = service.FetchOK
+				}
+			}
+		}
+	}
+	if err != nil {
+		class := outbound.ErrorClass(err)
+		if class == "" {
+			if out.HTTPStatus >= 400 && out.HTTPStatus < 500 {
+				class = "http_4xx"
+			} else {
+				class = "parse"
+			}
+		}
+		out.ErrorClass = string(class)
+		out.ErrorMessage = err.Error()
+		out.Items = nil
+		var oe *outbound.Error
+		if errors.As(err, &oe) && (out.HTTPStatus == 429 || out.HTTPStatus == 503) {
+			out.RetryAfter = oe.RetryAfter
+		}
+	}
+	interval := f.interval(item, parsed, out.Status, out.ErrorClass)
+	if result != nil {
+		if age, ok := outbound.ParseMaxAge(result.Response.Header.Get("Cache-Control")); ok && age > interval {
+			interval = age
+		}
+	}
+	if out.RetryAfter > interval {
+		interval = out.RetryAfter
+	}
+	out.NextFetchAt = now.Add(interval)
+	summary, recordErr := f.service.RecordFetch(ctx, out)
+	if f.config.Metrics != nil {
+		class := string(out.Status)
+		if out.ErrorClass != "" {
+			class = out.ErrorClass
+		}
+		f.config.Metrics.ObserveFetch(class, time.Since(now).Seconds())
+		if recordErr == nil {
+			f.config.Metrics.AddItems(summary.Created + summary.Updated)
+		}
+	}
+	if recordErr != nil {
+		return fmt.Errorf("record fetch: %w", recordErr)
+	}
+	return nil
+}
+
+func (f *Fetcher) interval(item service.FeedToFetch, parsed *feed.Feed, status service.FetchStatus, class string) time.Duration {
+	d := time.Hour
+	if status == service.FetchFailed {
+		switch outbound.Class(class) {
+		case outbound.HTTPGone, outbound.HTTP403, outbound.DeniedAddress, outbound.RedirectLoop, "http_4xx":
+			return f.config.MaxInterval
+		}
+		d = item.Interval * 2
+		if d <= 0 {
+			d = time.Hour
+		}
+	} else if parsed != nil {
+		dates := make([]time.Time, 0, len(parsed.Items))
+		for _, it := range parsed.Items {
+			if it.Published != nil && !it.Published.After(time.Now()) {
+				dates = append(dates, *it.Published)
+			}
+		}
+		sort.Slice(dates, func(i, j int) bool { return dates[i].Before(dates[j]) })
+		if len(dates) > 1 {
+			d = dates[len(dates)-1].Sub(dates[0]) / time.Duration(len(dates)-1)
+			if d > time.Hour {
+				d = time.Hour
+			}
+		}
+	}
+	if status != service.FetchFailed && d >= time.Hour {
+		d = time.Duration(float64(d) * (1 + rand.Float64()*0.1))
+	} else {
+		d = time.Duration(float64(d) * (0.9 + rand.Float64()*0.2))
+	}
+	if d < f.config.MinInterval {
+		d = f.config.MinInterval
+	}
+	if d > f.config.MaxInterval {
+		d = f.config.MaxInterval
+	}
+	return d
+}
+func metadata(p *feed.Feed) *service.FeedMeta {
+	return &service.FeedMeta{Title: p.Title, SiteURL: p.SiteURL, IconURL: p.IconURL, Language: p.Language}
+}
+func (f *Fetcher) items(ctx context.Context, claim service.FeedToFetch, list []feed.Item) ([]service.IngestItem, error) {
+	known := map[string]bool{}
+	if claim.Extract == service.ExtractAlways && len(list) > 0 {
+		hashes := make([]string, len(list))
+		for i, it := range list {
+			hashes[i] = feed.IdentityHash(it)
+		}
+		var err error
+		known, err = f.service.KnownIdentities(ctx, claim.FeedID, hashes)
+		if err != nil {
+			return nil, fmt.Errorf("known identities: %w", err)
+		}
+	}
+	result := make([]service.IngestItem, 0, len(list))
+	for _, it := range list {
+		base, _ := url.Parse(it.URL)
+		content := it.ContentHTML
+		if content == "" {
+			content = it.SummaryHTML
+		}
+		doc, err := sanitize.Sanitize(base, content)
+		if err != nil {
+			return nil, fmt.Errorf("sanitize item: %w", err)
+		}
+		source := service.ContentFromFeed
+		if claim.Extract == service.ExtractAlways && !known[feed.IdentityHash(it)] && it.URL != "" {
+			r, e := f.client.Get(ctx, it.URL, outbound.Policy{Purpose: outbound.Extract, ExtraPorts: f.config.ExtraPorts})
+			if e == nil && r != nil {
+				body, readErr := io.ReadAll(r.Response.Body)
+				r.Response.Body.Close()
+				if readErr == nil && r.Response.StatusCode >= 200 && r.Response.StatusCode < 300 {
+					extracted, extractErr := extract.Extract(r.FinalURL, body)
+					if extractErr == nil && extracted.Status == extract.StatusOK {
+						doc = extracted.Document
+						source = service.ContentFromExtracted
+					}
+				}
+			} else if r != nil {
+				r.Response.Body.Close()
+			}
+		}
+		entry := service.IngestItem{IdentityHash: feed.IdentityHash(it), GUID: it.GUID, URL: it.URL, Title: it.Title, Author: it.Author, PublishedAt: it.Published, UpdatedAt: it.Updated, ContentHash: feed.ContentHash(it), Language: it.Language, ContentHTML: doc.HTML, ContentText: sanitize.Text(doc.HTML), SanitizerVersion: int(doc.Version), ContentSource: source}
+		for _, enc := range it.Enclosures {
+			entry.Enclosures = append(entry.Enclosures, service.Enclosure{URL: enc.URL, Type: enc.Type, Length: enc.Length})
+		}
+		result = append(result, entry)
+	}
+	return result, nil
+}
+
+// ProbeError classifies a discovery failure.
+type ProbeError struct {
+	Class string
+	Err   error
+}
+
+func (e *ProbeError) Error() string { return e.Class + ": " + e.Err.Error() }
+func (e *ProbeError) Unwrap() error { return e.Err }
+
+// Probe discovers a feed and returns its parsed, sanitised contents.
+func (f *Fetcher) Probe(ctx context.Context, rawURL string, creds *service.FeedCredentials) (string, service.FeedMeta, []service.IngestItem, error) {
+	urls := []string{rawURL}
+	original, _ := url.Parse(rawURL)
+	seen := map[string]bool{}
+	var last error
+	for len(urls) > 0 && len(seen) < 32 {
+		target := urls[0]
+		urls = urls[1:]
+		if seen[target] {
+			continue
+		}
+		seen[target] = true
+		targetURL, _ := url.Parse(target)
+		var scoped *service.FeedCredentials
+		if original != nil && targetURL != nil && strings.EqualFold(original.Scheme, targetURL.Scheme) && strings.EqualFold(original.Host, targetURL.Host) {
+			scoped = creds
+		}
+		r, err := f.client.Get(ctx, target, outbound.Policy{Purpose: outbound.Discovery, Credentials: credentials(scoped), ExtraPorts: f.config.ExtraPorts})
+		if err != nil {
+			if r != nil {
+				r.Response.Body.Close()
+			}
+			last = err
+			continue
+		}
+		data, err := io.ReadAll(r.Response.Body)
+		r.Response.Body.Close()
+		if err != nil {
+			last = err
+			continue
+		}
+		if r.Response.StatusCode < 200 || r.Response.StatusCode >= 300 {
+			last = fmt.Errorf("HTTP status %d", r.Response.StatusCode)
+			continue
+		}
+		parsed, err := feed.Parse(data, feed.ParseOptions{BaseURL: r.FinalURL.String(), Charset: r.Response.Header.Get("Content-Type")})
+		if err == nil {
+			items, e := f.items(ctx, service.FeedToFetch{}, parsed.Items)
+			if e != nil {
+				return "", service.FeedMeta{}, nil, &ProbeError{Class: "parse", Err: e}
+			}
+			return r.FinalURL.String(), *metadata(parsed), items, nil
+		}
+		last = err
+		if strings.Contains(strings.ToLower(r.Response.Header.Get("Content-Type")), "html") || strings.HasPrefix(strings.ToLower(strings.TrimSpace(string(data))), "<!doctype html") || strings.HasPrefix(strings.ToLower(strings.TrimSpace(string(data))), "<html") {
+			candidates, e := feed.Discover(data, r.FinalURL.String())
+			if e == nil {
+				for _, c := range candidates {
+					if !seen[c.URL] {
+						urls = append(urls, c.URL)
+					}
+				}
+			}
+		}
+	}
+	if last == nil {
+		last = errors.New("no feed found")
+	}
+	class := string(outbound.ErrorClass(last))
+	if class == "" {
+		class = "parse"
+	}
+	return "", service.FeedMeta{}, nil, &ProbeError{Class: class, Err: last}
+}

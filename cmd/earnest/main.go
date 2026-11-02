@@ -52,6 +52,11 @@ func main() {
 			slog.Error("identity command failed", "error", err)
 			os.Exit(1)
 		}
+	case "generation":
+		if err := rotateGeneration(os.Args[2:]); err != nil {
+			slog.Error("generation rotation failed", "error", err)
+			os.Exit(1)
+		}
 	case "healthcheck":
 		os.Exit(healthcheck())
 	case "version", "--version", "-version":
@@ -164,4 +169,27 @@ func healthcheck() int {
 		return 1
 	}
 	return 0
+}
+
+// rotateGeneration invalidates restored cursors before the server starts.
+func rotateGeneration(args []string) error {
+	if len(args) != 1 || args[0] != "rotate" {
+		return fmt.Errorf("usage: earnest generation rotate")
+	}
+	dsn := os.Getenv("EARNEST_DATABASE_URL")
+	if dsn == "" {
+		return fmt.Errorf("EARNEST_DATABASE_URL is required")
+	}
+	ctx := context.Background()
+	db, err := store.Open(ctx, dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	generation, err := db.RotateGeneration(ctx)
+	if err != nil {
+		return fmt.Errorf("rotate generation: %w", err)
+	}
+	fmt.Println(generation)
+	return nil
 }
