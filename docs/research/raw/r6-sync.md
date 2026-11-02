@@ -1,6 +1,6 @@
 # Round 9 review: sync model
 
-Reviewer: GLM-5.3-Flash. Verifier: SWE-2 high, asked to refute each finding. The report is unedited; the verdicts follow it.
+Reviewed 2026-11-02. Reviewer: GLM-5.3-Flash. Verifier: SWE-2 high, asked to refute each finding. The report is unedited; the verdicts follow it. At a glance: confirmed SYNC-1, SYNC-2, SYNC-3, SYNC-4, SYNC-5, SYNC-6, SYNC-7, SYNC-8; plausible SYNC-9.
 
 ID: SYNC-1
 Severity: blocking

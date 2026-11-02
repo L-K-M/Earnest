@@ -175,7 +175,7 @@ The model is allowed to reject these mechanisms, including restore handling and 
 - A range record names subscriptions, so it can't express a cluster scope.
 - Mark unread on a Done item resets `shelf` through Google Reader (vector 16) but not natively, where a batch item writes one register. Either the server resets `shelf`, or the client sends both writes.
 - The lock order covers per-user counters, not the `seq` counter an ingest also updates.
-- Google Reader's `mark-all-as-read`: which `first_seen_at` maps `ts` to `seq`, and what happens without `ts`.
+- Google Reader's `mark-all-as-read` has no rule for a missing `ts`. Plausible, not confirmed.
 - What `/v1/changes` returns to an agent token: its allowlist only, with filtered events still advancing the cursor, or nothing.
 
 ### Endpoints

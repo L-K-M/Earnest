@@ -1,6 +1,6 @@
 # Round 9 review: agent governance and threat model
 
-Reviewer: MiMo V2.6 Pro. Verifier: GLM-5.3, asked to refute each finding. The report is unedited; the verdicts follow it.
+Reviewed 2026-11-02. Reviewer: MiMo V2.6 Pro. Verifier: GLM-5.3, asked to refute each finding. The report is unedited; the verdicts follow it. At a glance: confirmed SEC-1, SEC-2, SEC-3, SEC-5, SEC-6, SEC-7; plausible SEC-4.
 
 ID: SEC-1
 Severity: blocking

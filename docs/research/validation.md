@@ -15,7 +15,7 @@ Treat every recommendation as a hypothesis. Nothing was built, no client was run
 | 6, final check | Sol; Inkling Small, free (consistency) | Sol's verdict: **yes, fit to guide steps 0 and 1**. Not an implementation specification, and it said so. For this round Sol was asked that narrower question, because the next phase is experiments and a model, not implementation |
 | 7, revision | Claude Opus 5.5 | Sol's last items applied. Two findings from the free consistency check were wrong and were not applied |
 | 8, delta check | Sol | Reviewed the edits made after its verdict and found one more hole, fixed above. Yes stands for steps 0 and 1 |
-| 9, review | SWE-2 max (facts, consistency); GLM-5.3-Flash (sync); MiMo V2.6 Pro (security); Mistral Large 4 (steps 0 and 1). GLM-5.3, SWE-2 high and MiMo V2.6 Pro each tried to refute another's findings | After the move to `L-K-M/Earnest`. 32 findings: 24 confirmed, 2 plausible, 6 refuted |
+| 9, review | SWE-2 max (facts, consistency); GLM-5.3-Flash (sync); MiMo V2.6 Pro (security); Mistral Large 4 (steps 0 and 1). GLM-5.3, SWE-2 high and MiMo V2.6 Pro each tried to refute another's findings | After the move to `L-K-M/Earnest`. 32 findings: 24 confirmed, 2 plausible, 6 refuted. Reports: [steps](raw/r6-steps.md), [security](raw/r6-security.md), [sync](raw/r6-sync.md), [facts](raw/r6-facts.md), [consistency](raw/r6-consistency.md) |
 | 10, revision | Claude Opus 5.5 | Facts and step 0 fixed. Sync and security gaps recorded as open, not fixed |
 
 ## What the reviews changed
@@ -83,7 +83,7 @@ Mostly defects introduced by the first round of fixes.
 | Step 0 reads with counts hidden | No method was given for NewsBlur | Mistral |
 | You'll know whether NewsBlur is enough | No criterion. Now judged against what Earnest is for | Mistral |
 
-Still open: nine sync gaps, [listed in api.md](api.md#change-feed), and six security gaps, [listed in llm.md](llm.md#open-gaps). Four minor consistency findings were confirmed but not applied; see [raw/r6-consistency.md](raw/r6-consistency.md). The six refuted findings were not applied.
+Still open: nine sync gaps, [listed in api.md](api.md#change-feed), and six security gaps covering seven findings, [listed in llm.md](llm.md#open-gaps). Four minor consistency findings were confirmed but not applied; see [raw/r6-consistency.md](raw/r6-consistency.md). The six refuted findings were not applied.
 
 ## Errors in the research reports
 

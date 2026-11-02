@@ -1,6 +1,6 @@
 # Round 9 review: steps 0 and 1
 
-Reviewer: Mistral Large 4. Verifier: MiMo V2.6 Pro, asked to refute each finding. The report is unedited; the verdicts follow it.
+Reviewed 2026-11-02. Reviewer: Mistral Large 4. Verifier: MiMo V2.6 Pro, asked to refute each finding. The report is unedited; the verdicts follow it. At a glance: confirmed ACT-2, ACT-3, ACT-5, ACT-6; refuted ACT-1, ACT-4, ACT-7, ACT-8.
 
 ID: ACT-1
 Severity: major

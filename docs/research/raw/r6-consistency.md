@@ -1,6 +1,6 @@
 # Round 9 review: internal consistency
 
-Reviewer: SWE-2 max. Verifier: GLM-5.3, asked to refute each finding. The report is unedited apart from shortened local paths; the verdicts follow it.
+Reviewed 2026-11-02. Reviewer: SWE-2 max. Verifier: GLM-5.3, asked to refute each finding. The report is unedited apart from shortened local paths; the verdicts follow it. At a glance: confirmed CON-1, CON-3, CON-4, CON-5; refuted CON-2, CON-6.
 
 ID: CON-1
 Severity: minor

@@ -1,6 +1,6 @@
 # Round 9 review: external facts
 
-Reviewer: SWE-2 max. Verifier: GLM-5.3, asked to refute each finding. The report is unedited; the verdicts follow it.
+Reviewed 2026-11-02. Reviewer: SWE-2 max. Verifier: GLM-5.3, asked to refute each finding. The report is unedited; the verdicts follow it. At a glance: confirmed FACT-1, FACT-2.
 
 ID: FACT-1
 Severity: minor
@@ -8,6 +8,7 @@ Location: docs/research/tech-stack.md:59
 Issue: The doc states sqlite-vec has "no ANN index," but the cited v0.1.10 alpha series added ANN indexes, so the claim is wrong as written.
 Evidence: tech-stack.md:59 "sqlite-vec is still `v0.1.10-alpha.4`, pre-v1, with no ANN index, so brute force over 5.5M vectors"; https://github.com/asg017/sqlite-vec/releases — v0.1.10-alpha.1 notes: "Initial alpha release of `sqlite-vec` with new ANN indexes: rescore, ivf (experimental, not enabled), and DiskANN," and v0.1.10-alpha.4 fixes bugs in "the new ivf/diskann features."
 Fix: Reword to say sqlite-vec's ANN indexes exist only in pre-release form and are experimental/off by default, so it is still effectively brute force for a stable deployment.
+
 ID: FACT-2
 Severity: minor
 Location: docs/research/api.md:252
