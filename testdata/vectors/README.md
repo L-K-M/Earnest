@@ -75,6 +75,9 @@ No input supplies source. Invalid syntax rejects the entire transaction.
 | `client_apply` | device, name, optional count | Apply captured page and its final cursor; count truncates payload to simulate a crash; return cursor |
 | `client_queue` | device, write | Coalesce register intent, `{}` |
 | `client_queue_range` | device, write, scope, optional through_seq or ts | Queue a first-class range with fixed boundary, `{}` |
+| `client_merge_state` | device, state | Merge a supplied wire state fragment by independent register revisions, `{}` |
+| `client_submit` | device, name | Send the head outbox item as one request, keep it queued, save the response and the request generation under name; one Result or RangeResult |
+| `client_ack` | device, name | Apply a saved response under its request generation: merge per register, remove the operation, `{}` |
 | `client_flush` | device, trusted context | Submit consecutive register writes as atomic batches and ranges individually in outbox order; ordered Results or RangeResults |
 | `accept_notification` | actor, op_id, optional generation | Notification with pending/uncertain/delivered status |
 | `attempt_notification` | actor, op_id, at | Record before sending; Notification, or attempted/withheld error |
@@ -116,9 +119,17 @@ Done also queues a shelf-none intent with operation ID `unreadID/clear-done`.
 This intent survives coalescing unread into seen (32). Within a batch, a
 register carrying the same newly allocated event revision came from an earlier
 item's side effect. A later explicit register action applies after that effect
-in list order (35). Keep original generation
-on notification retries; release does not enable old-generation pending rows
-(33).
+in list order (35). Acknowledged states merge per register revision, so a late
+response cannot erase a newer register (36). Acknowledgements carry the request
+generation; a response from a superseded generation is rejected whole, before
+merging or removal, and the item survives to replay (37). Keep original
+generation on notification retries; release does not enable old-generation
+pending rows (33).
+
+Vector 38 supplies the independent-register scenario directly: an older state
+fragment fills a missing shelf register while newer seen and kept registers
+survive. This catches implementations that discard an entire row by
+`state_rev`, even when ordinary server responses already contain all registers.
 
 No runner should use wall-clock time or sleep. Prepared ingests and ordered
 steps model transaction schedules, not actual SQL locks. Vector 11 proves

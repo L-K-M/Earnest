@@ -26,7 +26,7 @@ const (
 	apnsTopic = "ch.lkmc.Earnest"
 
 	apnsProductionHost = "api.push.apple.com"
-	apnsSandboxHost    = "api.sandbox.apple.com"
+	apnsSandboxHost    = "api.sandbox.push.apple.com"
 
 	// apnsPushTypeAlert shows the notification immediately, with sound and a
 	// badge if the payload asks for them.
@@ -61,7 +61,7 @@ type APNsConfig struct {
 	PrivateKey []byte
 	KeyID      string
 	TeamID     string
-	// Sandbox selects api.sandbox.apple.com instead of production.
+	// Sandbox selects api.sandbox.push.apple.com instead of production.
 	Sandbox bool
 }
 

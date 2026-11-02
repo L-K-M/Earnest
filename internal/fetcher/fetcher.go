@@ -155,6 +155,44 @@ func (f *Fetcher) Run(ctx context.Context) error {
 	}
 }
 
+// Fetcher-internal classes for failures outbound never produces.
+const (
+	classParse   outbound.Class = "parse"
+	classHTTP4xx outbound.Class = "http_4xx"
+)
+
+// persistedErrorClass translates outbound (and fetcher-internal) failure
+// classes into the vocabulary the service validates and persists as feed
+// health. Scheduling keeps the outbound class; this mapping only crosses the
+// service boundary.
+func persistedErrorClass(class outbound.Class) string {
+	switch class {
+	case outbound.DNS:
+		return "dns"
+	case outbound.Connect:
+		return "network"
+	case outbound.TLS:
+		return "tls"
+	case outbound.Timeout:
+		return "timeout"
+	case outbound.DeniedAddress:
+		return "policy"
+	case outbound.TooLarge:
+		return "size"
+	case outbound.HTTPGone:
+		return "gone"
+	case outbound.HTTP429:
+		return "rate_limit"
+	case outbound.HTTP403:
+		return "challenge"
+	case outbound.HTTP5xx, outbound.RedirectLoop, classHTTP4xx:
+		return "http"
+	case outbound.Decode, classParse:
+		return "parse"
+	}
+	return "parse"
+}
+
 func credentials(c *service.FeedCredentials) outbound.Credentials {
 	var result outbound.Credentials
 	if c != nil {
@@ -213,16 +251,17 @@ func (f *Fetcher) Fetch(ctx context.Context, item service.FeedToFetch) error {
 			}
 		}
 	}
+	var class outbound.Class
 	if err != nil {
-		class := outbound.ErrorClass(err)
+		class = outbound.ErrorClass(err)
 		if class == "" {
 			if out.HTTPStatus >= 400 && out.HTTPStatus < 500 {
-				class = "http_4xx"
+				class = classHTTP4xx
 			} else {
-				class = "parse"
+				class = classParse
 			}
 		}
-		out.ErrorClass = string(class)
+		out.ErrorClass = persistedErrorClass(class)
 		out.ErrorMessage = err.Error()
 		out.Items = nil
 		var oe *outbound.Error
@@ -230,7 +269,7 @@ func (f *Fetcher) Fetch(ctx context.Context, item service.FeedToFetch) error {
 			out.RetryAfter = oe.RetryAfter
 		}
 	}
-	interval := f.interval(item, parsed, out.Status, out.ErrorClass)
+	interval := f.interval(item, parsed, out.Status, class)
 	if result != nil {
 		if age, ok := outbound.ParseMaxAge(result.Response.Header.Get("Cache-Control")); ok && age > interval {
 			interval = age
@@ -257,11 +296,11 @@ func (f *Fetcher) Fetch(ctx context.Context, item service.FeedToFetch) error {
 	return nil
 }
 
-func (f *Fetcher) interval(item service.FeedToFetch, parsed *feed.Feed, status service.FetchStatus, class string) time.Duration {
+func (f *Fetcher) interval(item service.FeedToFetch, parsed *feed.Feed, status service.FetchStatus, class outbound.Class) time.Duration {
 	d := time.Hour
 	if status == service.FetchFailed {
-		switch outbound.Class(class) {
-		case outbound.HTTPGone, outbound.HTTP403, outbound.DeniedAddress, outbound.RedirectLoop, "http_4xx":
+		switch class {
+		case outbound.HTTPGone, outbound.HTTP403, outbound.DeniedAddress, outbound.RedirectLoop, classHTTP4xx:
 			return f.config.MaxInterval
 		}
 		d = item.Interval * 2

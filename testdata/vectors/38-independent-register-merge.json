@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "name": "independent-register-merge",
+  "decision": "Merge each register independently. A cached row at state_rev 9 carries seen rev 8 and kept rev 9 but no shelf update. A delayed state fragment at state_rev 7 must fill shelf rev 6 without replacing seen, kept or state_rev. Rejecting the older row wholesale loses shelf=later.",
+  "setup": [
+    {"op": "ingest", "entry": {"id": 1, "subscription_id": 1}, "expect": {"id": 1}},
+    {"op": "bootstrap_begin", "device": "phone", "expect": {}},
+    {"op": "bootstrap_page", "device": "phone", "expect": {}}
+  ],
+  "operations": [
+    {
+      "op": "client_merge_state",
+      "device": "phone",
+      "state": {
+        "principal": 1,
+        "entry_id": 1,
+        "state_rev": 9,
+        "seen": {"value": "unseen", "rev": 8},
+        "shelf": {"value": "none", "rev": 0},
+        "kept": {"value": true, "rev": 9}
+      },
+      "expect": {}
+    },
+    {
+      "op": "client_merge_state",
+      "device": "phone",
+      "state": {
+        "principal": 1,
+        "entry_id": 1,
+        "state_rev": 7,
+        "seen": {"value": "seen", "rev": 7},
+        "shelf": {"value": "later", "rev": 6},
+        "kept": {"value": false, "rev": 0}
+      },
+      "expect": {}
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_state",
+      "device": "phone",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {"value": "unseen", "rev": 8},
+          "shelf": {"value": "later", "rev": 6},
+          "kept": {"value": true, "rev": 9},
+          "state_rev": 9
+        },
+        "unread": true
+      }
+    }
+  ]
+}

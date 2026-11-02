@@ -88,7 +88,8 @@ func TestFetchFailures(t *testing.T) {
 		status             int
 		body, retry, class string
 	}{
-		{"rate", 429, "", "120", "http_429"}, {"malformed", 200, "<rss><channel>", "", "parse"}, {"gone", 410, "", "", "http_4xx_gone"},
+		{"rate", 429, "", "120", "rate_limit"}, {"malformed", 200, "<rss><channel>", "", "parse"}, {"gone", 410, "", "", "gone"},
+		{"challenge", 403, "", "", "challenge"}, {"server", 500, "", "", "http"}, {"client", 418, "", "", "http"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -160,7 +161,7 @@ func TestRedirectAndRetryDate(t *testing.T) {
 	if s.outcomes[0].PermanentRedirectURL != server.URL+"/feed" {
 		t.Fatalf("redirect %+v", s.outcomes[0])
 	}
-	if s.outcomes[1].ErrorClass != "denied_address" {
+	if s.outcomes[1].ErrorClass != "policy" {
 		t.Fatalf("private %+v", s.outcomes[1])
 	}
 	if s.outcomes[2].RetryAfter < 119*time.Minute || s.outcomes[2].NextFetchAt.Sub(s.outcomes[2].AttemptedAt) < s.outcomes[2].RetryAfter {
@@ -183,7 +184,54 @@ func TestBodyLimit(t *testing.T) {
 	if err := f.Fetch(context.Background(), service.FeedToFetch{URL: server.URL}); err != nil {
 		t.Fatal(err)
 	}
-	if s.outcomes[0].ErrorClass != "too_large" {
+	if s.outcomes[0].ErrorClass != "size" {
+		t.Fatalf("%+v", s.outcomes[0])
+	}
+}
+
+func TestPersistedErrorClasses(t *testing.T) {
+	// Every outbound class has an explicit service-vocabulary mapping; feed
+	// health rejects anything else.
+	for _, tc := range []struct {
+		class outbound.Class
+		want  string
+	}{
+		{outbound.DNS, "dns"},
+		{outbound.Connect, "network"},
+		{outbound.TLS, "tls"},
+		{outbound.Timeout, "timeout"},
+		{outbound.DeniedAddress, "policy"},
+		{outbound.TooLarge, "size"},
+		{outbound.HTTPGone, "gone"},
+		{outbound.HTTP429, "rate_limit"},
+		{outbound.HTTP403, "challenge"},
+		{outbound.HTTP5xx, "http"},
+		{outbound.RedirectLoop, "http"},
+		{outbound.Decode, "parse"},
+		{classHTTP4xx, "http"},
+		{classParse, "parse"},
+		{"something_new", "parse"},
+	} {
+		if got := persistedErrorClass(tc.class); got != tc.want {
+			t.Errorf("persistedErrorClass(%q) = %q, want %q", tc.class, got, tc.want)
+		}
+	}
+}
+
+func TestConnectRefusedMapsToNetwork(t *testing.T) {
+	c, err := outbound.New(outbound.Config{AllowHosts: []string{"127.0.0.1:1"}, Spacing: time.Nanosecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &fakeService{}
+	f, err := New(s, c, Config{ExtraPorts: []uint16{1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Fetch(context.Background(), service.FeedToFetch{URL: "http://127.0.0.1:1/"}); err != nil {
+		t.Fatal(err)
+	}
+	if s.outcomes[0].ErrorClass != "network" {
 		t.Fatalf("%+v", s.outcomes[0])
 	}
 }
@@ -204,7 +252,7 @@ func TestCompressedBombAndSlowServer(t *testing.T) {
 	if err := f.Fetch(context.Background(), service.FeedToFetch{URL: server.URL}); err != nil {
 		t.Fatal(err)
 	}
-	if s.outcomes[0].ErrorClass != "too_large" {
+	if s.outcomes[0].ErrorClass != "size" {
 		t.Fatalf("gzip: %+v", s.outcomes[0])
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)

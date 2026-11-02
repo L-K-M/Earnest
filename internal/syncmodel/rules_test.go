@@ -232,13 +232,68 @@ func TestOutboxGenerationAndLateAcknowledgement(t *testing.T) {
 	if err := c.Queue(w); err != nil {
 		t.Fatal(err)
 	}
-	c.Acknowledge([]Result{{OpID: "a", Status: Applied, State: State{Principal: 1, EntryID: 1, Seen: Register{Value: SeenValue, Rev: 2}}}})
+	if err := c.Acknowledge("g1", []Result{{OpID: "a", Status: Applied, State: State{Principal: 1, EntryID: 1, Seen: Register{Value: SeenValue, Rev: 2}}}}); err != nil {
+		t.Fatal(err)
+	}
 	if len(c.Outbox()) != 1 || c.State(1, 1).Seen.Value != Unseen {
 		t.Fatal("late ack erased pending replacement")
 	}
 	c.BeginBootstrap(Revision{Generation: "g2", Rev: 1})
 	if c.Outbox()[0].Write.Base != (Revision{Generation: "g2"}) {
 		t.Fatal("generation did not make intent stale")
+	}
+}
+
+func TestStaleGenerationAcknowledgementPreservesReplay(t *testing.T) {
+	c := NewClient(Revision{Generation: "g1"})
+	c.MergeEntry(Entry{ID: 1, Rev: 1})
+	if err := c.Queue(testWrite("a", Seen, SeenValue)); err != nil {
+		t.Fatal(err)
+	}
+	stale := []Result{{OpID: "a", Status: Applied, State: State{Principal: 1, EntryID: 1, Seen: Register{Value: SeenValue, Rev: 9}, StateRev: 9}}}
+	// The request was sent under g1 but its response lands after the client
+	// re-bootstrapped into g2. Rejection must precede any merge or removal.
+	c.BeginBootstrap(Revision{Generation: "g2", Rev: 4})
+	if err := c.Acknowledge("g1", stale); !errors.Is(err, ErrGeneration) {
+		t.Fatal(err)
+	}
+	if len(c.Outbox()) != 1 || c.Outbox()[0].Write.OpID != "a" {
+		t.Fatal("stale-generation ack dropped replayable intent")
+	}
+	if s := c.serverState(1, 1); s.StateRev != 0 || s.Seen.Rev != 0 {
+		t.Fatal("stale-generation ack merged state", s)
+	}
+	if err := c.Acknowledge("g2", stale); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Outbox()) != 0 {
+		t.Fatal("current-generation ack did not remove its operation")
+	}
+}
+
+func TestStaleGenerationRangeAcknowledgementPreservesReplay(t *testing.T) {
+	c := NewClient(Revision{Generation: "g1"})
+	c.MergeEntry(Entry{ID: 1, Rev: 1})
+	r := RangeWrite{Write: Write{OpID: "r", Principal: 1, Register: Seen, Value: SeenValue, Base: Revision{Generation: "g1"}, OccurredAt: testTime(), Kind: Passive}, Scope: Scope{Kind: ScopeAll}, ThroughSeq: 1}
+	if err := c.QueueRange(r); err != nil {
+		t.Fatal(err)
+	}
+	result := RangeResult{Status: Applied, Results: []Result{{OpID: "r", Status: Applied, State: State{Principal: 1, EntryID: 1, Seen: Register{Value: SeenValue, Rev: 9}, StateRev: 9}}}}
+	c.BeginBootstrap(Revision{Generation: "g2", Rev: 4})
+	if err := c.AcknowledgeRange("r", "g1", result); !errors.Is(err, ErrGeneration) {
+		t.Fatal(err)
+	}
+	if len(c.Outbox()) != 1 || c.Outbox()[0].Range == nil {
+		t.Fatal("stale-generation range ack dropped replayable intent")
+	}
+	if s := c.serverState(1, 1); s.StateRev != 0 {
+		t.Fatal("stale-generation range ack merged state", s)
+	}
+	if err := c.AcknowledgeRange("r", "g2", result); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Outbox()) != 0 {
+		t.Fatal("current-generation range ack did not remove its operation")
 	}
 }
 
@@ -341,7 +396,7 @@ func TestUnknownMissingEntryIsGone(t *testing.T) {
 func TestClientTombstoneCannotResurrect(t *testing.T) {
 	c := NewClient(Revision{Generation: "g1"})
 	c.MergeEntry(Entry{ID: 1, Rev: 1})
-	c.Acknowledge([]Result{{OpID: "gone", Status: Gone, State: InitialState(1, 1)}})
+	c.Acknowledge("g1", []Result{{OpID: "gone", Status: Gone, State: InitialState(1, 1)}})
 	c.MergeEntry(Entry{ID: 1, Rev: 2})
 	e, _ := c.Entry(1)
 	if !e.Deleted {
