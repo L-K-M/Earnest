@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -18,7 +19,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/L-K-M/Earnest/internal/config"
+	"github.com/L-K-M/Earnest/internal/api"
 	"github.com/L-K-M/Earnest/internal/store"
 )
 
@@ -57,53 +58,30 @@ func main() {
 			slog.Error("generation rotation failed", "error", err)
 			os.Exit(1)
 		}
+	case "openapi":
+		if err := openapi(os.Stdout); err != nil {
+			slog.Error("openapi failed", "error", err)
+			os.Exit(1)
+		}
 	case "healthcheck":
 		os.Exit(healthcheck())
 	case "version", "--version", "-version":
 		fmt.Printf("earnest %s (%s)\n", version, revision)
 	default:
-		fmt.Fprintf(os.Stderr, "usage: earnest [serve|healthcheck|migrate|version|user|token|compat-password]\n")
+		fmt.Fprintf(os.Stderr, "usage: earnest [serve|healthcheck|migrate|openapi|generation|version|user|token|compat-password]\n")
 		os.Exit(2)
 	}
 }
 
-func serve() error {
-	cfg, err := config.Load()
+// openapi writes the generated OpenAPI document. It needs no configuration or
+// database, so it runs in packaging and tooling contexts.
+func openapi(w io.Writer) error {
+	spec, err := api.OpenAPI()
 	if err != nil {
-		return fmt.Errorf("configuration: %w", err)
+		return fmt.Errorf("generate openapi: %w", err)
 	}
-	slog.SetLogLoggerLevel(cfg.LogLevel)
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	db, err := openDatabase(ctx, cfg.DatabaseURL)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	addr := cfg.HTTPAddr
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", healthzHandler)
-
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-
-	go func() {
-		<-ctx.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(ctx)
-	}()
-
-	slog.Info("earnest listening", "addr", addr, "version", version, "revision", revision)
-
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return err
-	}
-	return nil
+	_, err = w.Write(spec)
+	return err
 }
 
 // migrate needs only database access, so maintenance does not require app secrets.

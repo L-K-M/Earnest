@@ -164,7 +164,7 @@ func (a *Auth) RevokeToken(ctx context.Context, actor Actor, id int64) error {
 	if !humanAdmin(actor) {
 		return ErrForbidden
 	}
-	return a.db.WithTx(ctx, func(tx pgx.Tx) error {
+	err := a.db.WithTx(ctx, func(tx pgx.Tx) error {
 		alloc, err := store.AllocateCounters(ctx, tx, 0, map[int64]int64{actor.UserID: 1})
 		if err != nil {
 			return err
@@ -183,6 +183,10 @@ func (a *Auth) RevokeToken(ctx context.Context, actor Actor, id int64) error {
 		}
 		return nil
 	})
+	if err == nil {
+		a.events.publish(actor.UserID)
+	}
+	return err
 }
 
 // RevokeTokenByID supports trusted server-side administration.

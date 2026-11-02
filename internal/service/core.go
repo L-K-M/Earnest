@@ -44,6 +44,7 @@ type Service struct {
 	now         func() time.Time
 	prober      FeedProber
 	credentials cipher.AEAD
+	events      broker
 }
 
 // New derives a purpose-separated credential key without retaining the deployment secret.
@@ -129,7 +130,7 @@ func (s *Service) change(ctx context.Context, tx pgx.Tx, user int64, kind syncmo
 		return 0, err
 	}
 	rev := allocation.Revs[user].First
-	if err := store.InsertChange(ctx, tx, user, rev, string(kind), payload, s.now().UTC()); err != nil {
+	if err := insertEvent(ctx, tx, user, rev, string(kind), payload, s.now().UTC()); err != nil {
 		return 0, err
 	}
 	return rev, nil

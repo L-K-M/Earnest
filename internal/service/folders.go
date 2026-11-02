@@ -68,7 +68,7 @@ func (s *Service) writeFolder(ctx context.Context, a Actor, id int64, name, opID
 		return Folder{}, ErrInvalid
 	}
 	var out Folder
-	err := s.store.WithTx(ctx, func(tx pgx.Tx) error {
+	err := s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
 			return err
 		}

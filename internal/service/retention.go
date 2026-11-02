@@ -86,7 +86,7 @@ func (s *Service) RetainEntries(ctx context.Context, now time.Time, retention ti
 		now = s.now()
 	}
 	var count int
-	err = s.store.WithTx(ctx, func(tx pgx.Tx) error {
+	err = s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
 			return err
 		}
