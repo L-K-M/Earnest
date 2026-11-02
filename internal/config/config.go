@@ -81,6 +81,20 @@ type Config struct {
 	FetchMinInterval time.Duration
 	FetchMaxInterval time.Duration
 	RetentionDays    int
+
+	// PushVAPIDPrivateKey and PushVAPIDPublicKey override the persisted key pair.
+	PushVAPIDPrivateKey []byte
+	PushVAPIDPublicKey  string
+	// PushVAPIDSubject is a mailto: or https: contact for push providers.
+	PushVAPIDSubject string
+	// PushVAPIDKeyFile defaults to earnest/vapid.json in the user config directory.
+	// Keep this file on persistent storage when using a container.
+	PushVAPIDKeyFile string
+	// APNs is disabled unless all three key settings are supplied.
+	APNsPrivateKey []byte
+	APNsKeyID      string
+	APNsTeamID     string
+	APNsSandbox    bool
 }
 
 // GoString keeps Go-syntax formatting from exposing credentials.
@@ -145,6 +159,9 @@ func Load() (Config, error) {
 			envFetchMaxInterval, cfg.FetchMaxInterval)
 	}
 	if cfg.RetentionDays, err = loadRetentionDays(); err != nil {
+		return Config{}, err
+	}
+	if err := cfg.loadPush(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil

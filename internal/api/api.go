@@ -32,17 +32,19 @@ type actorKey struct{}
 type requestKey struct{}
 type responseKey struct{}
 type server struct {
-	svc     *service.Service
-	auth    *service.Auth
-	logger  *slog.Logger
-	secure  bool
-	baseURL string
-	api     huma.API
+	svc            *service.Service
+	auth           *service.Auth
+	logger         *slog.Logger
+	secure         bool
+	baseURL        string
+	api            huma.API
+	vapidPublicKey string
 }
 
-// New returns the native API and generated OpenAPI handler.
-func New(svc *service.Service, auth *service.Auth, logger *slog.Logger, baseURL string) http.Handler {
-	mux, _ := build(svc, auth, logger, baseURL)
+// New returns the native API and generated OpenAPI handler. The optional
+// VAPID public key enables browser push subscription setup.
+func New(svc *service.Service, auth *service.Auth, logger *slog.Logger, baseURL string, vapidPublicKey ...string) http.Handler {
+	mux, _ := build(svc, auth, logger, baseURL, vapidPublicKey...)
 	return SecurityHeaders(mux)
 }
 
@@ -56,7 +58,7 @@ func OpenAPI() ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
-func build(svc *service.Service, auth *service.Auth, logger *slog.Logger, baseURL string) (*http.ServeMux, huma.API) {
+func build(svc *service.Service, auth *service.Auth, logger *slog.Logger, baseURL string, vapidPublicKey ...string) (*http.ServeMux, huma.API) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -81,13 +83,22 @@ func build(svc *service.Service, auth *service.Auth, logger *slog.Logger, baseUR
 		"session": {Type: "apiKey", In: "cookie", Name: sessionCookie},
 		"csrf":    {Type: "apiKey", In: "header", Name: csrfHeader, Description: "Required with a session cookie on unsafe methods."},
 	}
-	h := humago.New(mux, cfg)
+	h := humago.New(actionMux{mux}, cfg)
 	s := &server{svc: svc, auth: auth, logger: logger, secure: strings.HasPrefix(baseURL, "https://"), baseURL: baseURL, api: h}
+	if len(vapidPublicKey) > 0 {
+		s.vapidPublicKey = vapidPublicKey[0]
+	}
 	h.UseMiddleware(s.authenticate)
 	s.identityRoutes()
 	s.readerRoutes()
 	s.syncRoutes()
 	s.opmlRoutes()
+	s.annotationRoutes()
+	s.notificationRoutes()
+	s.pushRoutes()
+	s.activityRoutes()
+	s.webhookRoutes()
+	s.searchRoutes()
 	s.documentProblems()
 	mux.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) { writeProblem(w, problemStatus(http.StatusNotFound)) })
 	mux.HandleFunc("GET /openapi.json", func(w http.ResponseWriter, r *http.Request) {
@@ -197,8 +208,11 @@ func (s *server) problem(err error) *problem {
 	}
 	if status == http.StatusTooManyRequests {
 		// Budget-bearing service errors may supply structured details without HTTP dependencies.
+		var notificationBudget *service.NotificationBudgetError
 		var budget interface{ BudgetDetails() any }
-		if errors.As(err, &budget) {
+		if errors.As(err, &notificationBudget) {
+			p.Budget = notificationBudget.Budget
+		} else if errors.As(err, &budget) {
 			p.Budget = budget.BudgetDetails()
 		} else {
 			p.Budget = map[string]any{"reason": "rate_limit"}
@@ -231,9 +245,15 @@ type idBody[T any] struct {
 }
 
 func route[I, O any](s *server, method, path, id string, fn func(context.Context, *I) (O, error)) {
-	register(s, method, path, id, authenticatedAccess, fn)
+	routeStatus(s, method, path, id, http.StatusOK, fn)
+}
+func routeStatus[I, O any](s *server, method, path, id string, status int, fn func(context.Context, *I) (O, error)) {
+	registerStatus(s, method, path, id, authenticatedAccess, status, fn)
 }
 func register[I, O any](s *server, method, path, id string, access routeAccess, fn func(context.Context, *I) (O, error)) {
+	registerStatus(s, method, path, id, access, http.StatusOK, fn)
+}
+func registerStatus[I, O any](s *server, method, path, id string, access routeAccess, status int, fn func(context.Context, *I) (O, error)) {
 	security := []map[string][]string{{"bearer": {}}, {"session": {}}}
 	if method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions {
 		security[1]["csrf"] = []string{}
@@ -241,7 +261,7 @@ func register[I, O any](s *server, method, path, id string, access routeAccess, 
 	if access == publicAccess {
 		security = []map[string][]string{}
 	}
-	huma.Register(s.api, huma.Operation{Method: method, Path: path, OperationID: id, Metadata: map[string]any{"public": access == publicAccess}, Security: security, Errors: []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusGone, http.StatusTooManyRequests, http.StatusServiceUnavailable}, MaxBodyBytes: 8 << 20}, func(ctx context.Context, in *I) (*output[O], error) {
+	huma.Register(s.api, huma.Operation{Method: method, Path: path, OperationID: id, DefaultStatus: status, Metadata: map[string]any{"public": access == publicAccess}, Security: security, Errors: []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusGone, http.StatusTooManyRequests, http.StatusServiceUnavailable}, MaxBodyBytes: 8 << 20}, func(ctx context.Context, in *I) (*output[O], error) {
 		result, err := fn(ctx, in)
 		if err != nil {
 			var p *problem

@@ -1,16 +1,27 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/L-K-M/Earnest/internal/config"
+	"github.com/L-K-M/Earnest/internal/outbound"
+	"github.com/L-K-M/Earnest/internal/push"
 	"github.com/L-K-M/Earnest/internal/store"
 	"github.com/L-K-M/Earnest/internal/store/storetest"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestHealthzHandler(t *testing.T) {
@@ -88,4 +99,111 @@ func highestMigrationVersion(t *testing.T) int {
 		}
 	}
 	return highest
+}
+
+func TestPushRegistryAndVAPIDPersistence(t *testing.T) {
+	cfg := config.Config{PushVAPIDKeyFile: filepath.Join(t.TempDir(), "push", "vapid.json")}
+	client, err := outbound.New(outbound.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, public, err := buildPushRegistry(cfg, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(registry.Kinds()); got != "[ntfy unifiedpush webpush]" || public == "" {
+		t.Fatal(got, public)
+	}
+	info, err := os.Stat(cfg.PushVAPIDKeyFile)
+	if err != nil || info.Mode().Perm() != 0600 {
+		t.Fatal(info, err)
+	}
+	var wg sync.WaitGroup
+	for range 6 {
+		wg.Go(func() {
+			keys, err := loadVAPIDKeys(cfg)
+			if err != nil || keys.PublicKey != public {
+				t.Errorf("persisted public key=%s err=%v", keys.PublicKey, err)
+			}
+		})
+	}
+	wg.Wait()
+	keys, err := loadVAPIDKeys(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.PushVAPIDKeyFile = ""
+	cfg.PushVAPIDPrivateKey = keys.PrivateKey
+	cfg.PushVAPIDPublicKey = keys.PublicKey
+	cfg.APNsPrivateKey = keys.PrivateKey
+	cfg.APNsKeyID = "KEYID"
+	cfg.APNsTeamID = "TEAMID"
+	registry, configured, err := buildPushRegistry(cfg, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(registry.Kinds()); got != "[apns ntfy unifiedpush webpush]" || configured != public {
+		t.Fatal(got, configured)
+	}
+	cfg.PushVAPIDPublicKey = "invalid"
+	if _, _, err := buildPushRegistry(cfg, client); err == nil {
+		t.Fatal("invalid VAPID pair accepted")
+	}
+}
+
+func TestVAPIDConcurrentCreationAndCorruption(t *testing.T) {
+	cfg := config.Config{PushVAPIDKeyFile: filepath.Join(t.TempDir(), "vapid.json")}
+	results := make(chan push.VAPIDKeys, 6)
+	var wg sync.WaitGroup
+	for range 6 {
+		wg.Go(func() {
+			keys, err := loadVAPIDKeys(cfg)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			results <- keys
+		})
+	}
+	wg.Wait()
+	close(results)
+	var first push.VAPIDKeys
+	for keys := range results {
+		if first.PublicKey == "" {
+			first = keys
+		}
+		if !bytes.Equal(first.PrivateKey, keys.PrivateKey) {
+			t.Fatal("concurrent creation used different keys")
+		}
+	}
+	if err := os.WriteFile(cfg.PushVAPIDKeyFile, []byte("corrupt"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadVAPIDKeys(cfg); err == nil {
+		t.Fatal("corrupt key file silently replaced")
+	}
+	if data, err := os.ReadFile(cfg.PushVAPIDKeyFile); err != nil || string(data) != "corrupt" {
+		t.Fatal(string(data), err)
+	}
+}
+
+func TestDeliveryWorkerCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	go func() {
+		defer close(done)
+		runDelivery(ctx, logger, "test delivery", func(ctx context.Context, limit int) (int, error) {
+			if limit != deliveryBatchSize {
+				t.Errorf("batch size=%d", limit)
+			}
+			cancel()
+			return 0, errors.New("cancelled send")
+		})
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("worker ignored cancellation")
+	}
 }

@@ -2,12 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -17,6 +22,7 @@ import (
 	"github.com/L-K-M/Earnest/internal/fetcher"
 	"github.com/L-K-M/Earnest/internal/metrics"
 	"github.com/L-K-M/Earnest/internal/outbound"
+	"github.com/L-K-M/Earnest/internal/push"
 	"github.com/L-K-M/Earnest/internal/service"
 	"github.com/L-K-M/Earnest/internal/web"
 )
@@ -26,6 +32,8 @@ const (
 	shutdownGrace = 10 * time.Second
 	// retentionInterval paces the change-log and entry retention sweeps.
 	retentionInterval = 24 * time.Hour
+	deliveryInterval  = time.Second
+	deliveryBatchSize = 100
 )
 
 // feedProber forwards Probe to the fetcher. service.New requires a prober
@@ -62,16 +70,24 @@ func serve() error {
 	}
 	defer db.Close()
 
+	egress, err := outbound.New(outbound.Config{Version: version, AllowHosts: cfg.OutboundAllowPrivate})
+	if err != nil {
+		return fmt.Errorf("outbound client: %w", err)
+	}
+	pushRegistry, publicKey, err := buildPushRegistry(cfg, egress)
+	if err != nil {
+		return fmt.Errorf("push transports: %w", err)
+	}
+
 	prober := &feedProber{}
-	svc, err := service.New(db, service.Deps{FeedProber: prober, SecretKey: cfg.SecretKey})
+	svc, err := service.New(db, service.Deps{FeedProber: prober, SecretKey: cfg.SecretKey, PushRegistry: pushRegistry, Outbound: egress})
 	if err != nil {
 		return fmt.Errorf("service: %w", err)
 	}
 	auth := service.NewAuth(db, time.Now, cfg.SecretKey)
-
-	egress, err := outbound.New(outbound.Config{Version: version, AllowHosts: cfg.OutboundAllowPrivate})
-	if err != nil {
-		return fmt.Errorf("outbound client: %w", err)
+	// Interrupted sends have an unknown outcome and must never be retried.
+	if _, err := svc.RecoverNotificationAttempts(ctx); err != nil {
+		return fmt.Errorf("recover notification attempts: %w", err)
 	}
 
 	registry := metrics.New()
@@ -88,12 +104,26 @@ func serve() error {
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           api.SecurityHeaders(buildMux(cfg.BaseURL, svc, auth, logger, registry)),
+		Handler:           api.SecurityHeaders(buildMux(cfg.BaseURL, svc, auth, logger, registry, publicKey)),
 		ReadHeaderTimeout: 5 * time.Second,
 		BaseContext:       func(net.Listener) context.Context { return ctx },
 	}
 
 	go runRetention(ctx, svc, time.Duration(cfg.RetentionDays)*24*time.Hour, logger)
+
+	var workers sync.WaitGroup
+	for _, job := range []struct {
+		name string
+		run  func(context.Context, int) (int, error)
+	}{
+		{"notification delivery", svc.DeliverNotifications},
+		{"webhook delivery", svc.RunWebhookJobs},
+	} {
+		workers.Go(func() { runDelivery(ctx, logger, job.name, job.run) })
+	}
+	// Stop and join delivery before the deferred database close.
+	defer workers.Wait()
+	defer stop()
 
 	fetchErr := make(chan error, 1)
 	go func() {
@@ -133,8 +163,8 @@ func serve() error {
 // buildMux mounts the surfaces the binary serves. api.New already applies
 // security headers and serves GET /openapi.json; the outer security-headers
 // wrap extends the same policy to every other response.
-func buildMux(baseURL string, svc *service.Service, auth *service.Auth, logger *slog.Logger, registry *metrics.Registry) *http.ServeMux {
-	apiHandler := api.New(svc, auth, logger, baseURL)
+func buildMux(baseURL string, svc *service.Service, auth *service.Auth, logger *slog.Logger, registry *metrics.Registry, vapidPublicKey ...string) *http.ServeMux {
+	apiHandler := api.New(svc, auth, logger, baseURL, vapidPublicKey...)
 	mux := http.NewServeMux()
 	mux.Handle("/v1/", apiHandler)
 	mux.Handle("/openapi.json", apiHandler)
@@ -197,4 +227,132 @@ func pruneRetention(ctx context.Context, svc *service.Service, retention time.Du
 	} else if n > 0 {
 		logger.Info("change log pruned", "revisions", n)
 	}
+}
+
+// runDelivery bounds each pass and never overlaps attempts within a worker.
+func runDelivery(ctx context.Context, logger *slog.Logger, name string, run func(context.Context, int) (int, error)) {
+	ticker := time.NewTicker(deliveryInterval)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		if _, err := run(ctx, deliveryBatchSize); err != nil && ctx.Err() == nil {
+			logger.Error(name+" failed", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func buildPushRegistry(cfg config.Config, egress *outbound.Client) (*push.Registry, string, error) {
+	keys, err := loadVAPIDKeys(cfg)
+	if err != nil {
+		return nil, "", err
+	}
+	transports := push.Config{Client: egress, ExtraPorts: privatePorts(cfg.OutboundAllowPrivate)}
+	ntfy, err := push.NewNtfy(transports)
+	if err != nil {
+		return nil, "", fmt.Errorf("ntfy: %w", err)
+	}
+	webPush, err := push.NewWebPush(transports, keys)
+	if err != nil {
+		return nil, "", fmt.Errorf("Web Push: %w", err)
+	}
+	unified, err := push.NewUnifiedPush(transports, &keys)
+	if err != nil {
+		return nil, "", fmt.Errorf("UnifiedPush: %w", err)
+	}
+	registry := push.NewRegistry()
+	for _, item := range []struct {
+		kind      push.Kind
+		transport push.Transport
+	}{
+		{push.KindNtfy, ntfy}, {push.KindWebPush, webPush}, {push.KindUnifiedPush, unified},
+	} {
+		if err := registry.Register(item.kind, item.transport); err != nil {
+			return nil, "", err
+		}
+	}
+	if len(cfg.APNsPrivateKey) > 0 {
+		apns, err := push.NewAPNs(push.APNsConfig{Client: egress, PrivateKey: cfg.APNsPrivateKey, KeyID: cfg.APNsKeyID, TeamID: cfg.APNsTeamID, Sandbox: cfg.APNsSandbox})
+		if err != nil {
+			return nil, "", fmt.Errorf("APNs: %w", err)
+		}
+		if err := registry.Register(push.KindAPNs, apns); err != nil {
+			return nil, "", err
+		}
+	}
+	return registry, keys.PublicKey, nil
+}
+
+// loadVAPIDKeys publishes a complete file atomically without replacing a pair
+// another process already created. Losing that pair invalidates subscriptions.
+func loadVAPIDKeys(cfg config.Config) (push.VAPIDKeys, error) {
+	if len(cfg.PushVAPIDPrivateKey) > 0 {
+		return push.VAPIDKeys{PrivateKey: cfg.PushVAPIDPrivateKey, PublicKey: cfg.PushVAPIDPublicKey, Subject: cfg.PushVAPIDSubject}, nil
+	}
+	path := cfg.PushVAPIDKeyFile
+	if path == "" {
+		dir, err := os.UserConfigDir()
+		if err != nil {
+			return push.VAPIDKeys{}, fmt.Errorf("VAPID config directory: %w", err)
+		}
+		path = filepath.Join(dir, "earnest", "vapid.json")
+	}
+	read := func() (push.VAPIDKeys, error) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return push.VAPIDKeys{}, err
+		}
+		var keys push.VAPIDKeys
+		if err := json.Unmarshal(data, &keys); err != nil {
+			return push.VAPIDKeys{}, fmt.Errorf("decode VAPID key file: %w", err)
+		}
+		keys.Subject = cfg.PushVAPIDSubject
+		return keys, nil
+	}
+	keys, err := read()
+	if err == nil {
+		return keys, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return push.VAPIDKeys{}, fmt.Errorf("read VAPID keys: %w", err)
+	}
+	keys, err = push.GenerateVAPIDKeys(cfg.PushVAPIDSubject)
+	if err != nil {
+		return push.VAPIDKeys{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return push.VAPIDKeys{}, fmt.Errorf("VAPID key directory: %w", err)
+	}
+	data, err := json.Marshal(keys)
+	if err != nil {
+		return push.VAPIDKeys{}, fmt.Errorf("encode VAPID keys: %w", err)
+	}
+	file, err := os.CreateTemp(filepath.Dir(path), ".vapid-*")
+	if err != nil {
+		return push.VAPIDKeys{}, fmt.Errorf("create VAPID key file: %w", err)
+	}
+	defer os.Remove(file.Name())
+	defer file.Close()
+	if _, err := file.Write(data); err != nil {
+		return push.VAPIDKeys{}, fmt.Errorf("write VAPID keys: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		return push.VAPIDKeys{}, fmt.Errorf("sync VAPID keys: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return push.VAPIDKeys{}, fmt.Errorf("close VAPID keys: %w", err)
+	}
+	if err := os.Link(file.Name(), path); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return read()
+		}
+		return push.VAPIDKeys{}, fmt.Errorf("publish VAPID keys: %w", err)
+	}
+	return keys, nil
 }
