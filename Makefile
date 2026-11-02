@@ -15,7 +15,7 @@ test:
 	$(GO) test -race -count=1 ./...
 
 lint:
-	test -z "$$(gofmt -l cmd)"
+	test -z "$$(gofmt -l cmd internal)"
 	$(GO) vet ./...
 
 docker-build:
