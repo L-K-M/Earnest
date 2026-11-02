@@ -15,6 +15,7 @@ import (
 	"github.com/L-K-M/Earnest/internal/compat/greader"
 	"github.com/L-K-M/Earnest/internal/config"
 	"github.com/L-K-M/Earnest/internal/fetcher"
+	"github.com/L-K-M/Earnest/internal/mcp"
 	"github.com/L-K-M/Earnest/internal/metrics"
 	"github.com/L-K-M/Earnest/internal/outbound"
 	"github.com/L-K-M/Earnest/internal/service"
@@ -139,6 +140,8 @@ func buildMux(baseURL string, svc *service.Service, auth *service.Auth, logger *
 	mux.Handle("/v1/", apiHandler)
 	mux.Handle("/openapi.json", apiHandler)
 	mux.Handle("/api/greader/", greader.New(svc, auth, logger))
+	mux.Handle("/mcp", mcp.New(svc, auth, baseURL, logger))
+	mux.HandleFunc("/llms.txt", mcp.LLMS)
 	mux.Handle("/metrics", registry)
 	mux.HandleFunc("/healthz", healthzHandler)
 	mux.Handle("/", web.New())
