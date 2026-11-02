@@ -1,5 +1,7 @@
 # LLM integration
 
+**Decided since.** [decisions.md](decisions.md#agents) overrides parts of this file: agents read every feed, private ones included, with no allowlist, and proposals are gone. The [open gaps](#open-gaps) are decided.
+
 ## Principle
 
 Two directions, in this order:
@@ -158,6 +160,8 @@ Don't promise universal undo. Say which actions can be reverted, which cancelled
 - **Hiding, not leaking.** An agent with `state:write-human` can mark an alert Done before you see it. The log records it, but only if you look. Plausible, not confirmed.
 
 ### External agents
+
+[Decided since](decisions.md#agents): agents read every feed, private ones included, so the allowlist below no longer applies.
 
 The hardest case, because Earnest doesn't control the agent. A Claude or Codex session reading your feeds may also hold your email, shell and code. That session has the full trifecta, and Earnest supplies the untrusted content. Earnest can't fix that, but it can reduce the damage:
 
