@@ -44,11 +44,14 @@ func TestFeedProberForwards(t *testing.T) {
 	}
 }
 
-func TestGreaderFallbackUnavailable(t *testing.T) {
+// The mount must reach the real Google Reader handler: ClientLogin
+// answers 405 to GET without touching the service.
+func TestGreaderMounted(t *testing.T) {
+	mux := buildMux("http://localhost:8080", nil, nil, slog.Default(), metrics.New())
 	rec := httptest.NewRecorder()
-	newGreader(nil, nil, nil).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/greader/reader/api/0/stream/contents", nil))
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503", rec.Code)
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/greader/accounts/ClientLogin", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rec.Code)
 	}
 }
 
@@ -115,7 +118,7 @@ func TestBuildMux(t *testing.T) {
 		{"/healthz", http.StatusOK},
 		{"/metrics", http.StatusOK},
 		{"/openapi.json", http.StatusOK},
-		{"/api/greader/reader/api/0/stream/contents", http.StatusServiceUnavailable},
+		{"/api/greader/reader/api/0/stream/contents", http.StatusUnauthorized},
 		{"/", http.StatusOK},
 	} {
 		rec := httptest.NewRecorder()

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/L-K-M/Earnest/internal/api"
+	"github.com/L-K-M/Earnest/internal/compat/greader"
 	"github.com/L-K-M/Earnest/internal/config"
 	"github.com/L-K-M/Earnest/internal/fetcher"
 	"github.com/L-K-M/Earnest/internal/metrics"
@@ -41,16 +42,6 @@ func (p *feedProber) Probe(ctx context.Context, rawURL string, creds *service.Fe
 		return "", service.FeedMeta{}, nil, service.ErrUnavailable
 	}
 	return p.delegate.Probe(ctx, rawURL, creds)
-}
-
-// newGreader builds the Google Reader adapter mounted at /api/greader/.
-// internal/compat/greader does not exist yet; when it lands this factory
-// becomes greader.New(svc, auth, logger). Until then the mount answers 503 so
-// clients see "not implemented" instead of a routing hole.
-var newGreader = func(_ *service.Service, _ *service.Auth, _ *slog.Logger) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "google reader api is not implemented yet", http.StatusServiceUnavailable)
-	})
 }
 
 func serve() error {
@@ -147,7 +138,7 @@ func buildMux(baseURL string, svc *service.Service, auth *service.Auth, logger *
 	mux := http.NewServeMux()
 	mux.Handle("/v1/", apiHandler)
 	mux.Handle("/openapi.json", apiHandler)
-	mux.Handle("/api/greader/", newGreader(svc, auth, logger))
+	mux.Handle("/api/greader/", greader.New(svc, auth, logger))
 	mux.Handle("/metrics", registry)
 	mux.HandleFunc("/healthz", healthzHandler)
 	mux.Handle("/", web.New())
