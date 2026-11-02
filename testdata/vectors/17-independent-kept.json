@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "name": "independent-kept",
+  "decision": "Star only changes kept. Star then unstar never moves Later to another shelf.",
+  "setup": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 1,
+        "seq": 1,
+        "rev": 1
+      }
+    },
+    {
+      "op": "write",
+      "write": {
+        "op_id": "later",
+        "entry_id": 1,
+        "register": "shelf",
+        "value": "later"
+      },
+      "expect": {
+        "status": "applied"
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "google",
+      "op_id": "star",
+      "action": "star",
+      "entry_id": 1,
+      "expect": {
+        "status": "applied"
+      }
+    },
+    {
+      "op": "google",
+      "op_id": "unstar",
+      "action": "unstar",
+      "entry_id": 1,
+      "expect": {
+        "status": "applied"
+      }
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "later"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": true
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "shelf": {
+            "rev": 2
+          },
+          "kept": {
+            "rev": 4
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,160 @@
+{
+  "version": 1,
+  "name": "expired-cursor",
+  "decision": "Cursor expiry replaces the cache, preserves pending intent, replays the log, then flushes the outbox. A second flush is empty.",
+  "setup": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 1,
+        "seq": 1,
+        "rev": 1
+      }
+    },
+    {
+      "op": "bootstrap_begin",
+      "device": "phone",
+      "expect": {
+        "generation": "g1"
+      }
+    },
+    {
+      "op": "bootstrap_page",
+      "device": "phone",
+      "expect": {}
+    },
+    {
+      "op": "client_pull",
+      "device": "phone",
+      "expect": {
+        "generation": "g1"
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "client_queue",
+      "device": "phone",
+      "write": {
+        "op_id": "queued",
+        "entry_id": 1,
+        "register": "seen",
+        "value": "seen"
+      },
+      "expect": {}
+    },
+    {
+      "op": "write",
+      "write": {
+        "op_id": "later",
+        "entry_id": 1,
+        "register": "shelf",
+        "value": "later"
+      },
+      "expect": {
+        "status": "applied"
+      }
+    },
+    {
+      "op": "retain",
+      "rev": 2,
+      "expect": {}
+    },
+    {
+      "op": "client_pull",
+      "device": "phone",
+      "error": "cursor_gone",
+      "expect": null
+    },
+    {
+      "op": "bootstrap_begin",
+      "device": "phone",
+      "expect": {
+        "generation": "g1"
+      }
+    },
+    {
+      "op": "bootstrap_page",
+      "device": "phone",
+      "expect": {}
+    },
+    {
+      "op": "client_pull",
+      "device": "phone",
+      "expect": {
+        "generation": "g1"
+      }
+    },
+    {
+      "op": "client_flush",
+      "device": "phone",
+      "expect": [
+        {
+          "status": "applied"
+        }
+      ]
+    },
+    {
+      "op": "client_flush",
+      "device": "phone",
+      "expect": []
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          },
+          "shelf": {
+            "value": "later"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "device": "phone",
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          },
+          "shelf": {
+            "value": "later"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_client",
+      "device": "phone",
+      "expect": {
+        "outbox_size": 0
+      }
+    },
+    {
+      "op": "assert_log",
+      "expect": {
+        "rev": 3,
+        "count": 1
+      }
+    }
+  ]
+}

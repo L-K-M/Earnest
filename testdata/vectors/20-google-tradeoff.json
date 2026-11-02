@@ -1,0 +1,151 @@
+{
+  "version": 1,
+  "name": "google-tradeoff",
+  "decision": "Compatibility has no base or action clock. Even a fresh passive read loses to a deliberate native unread. Queued unread, star and unstar use deliberate receipt time and may override newer native decisions; this unavoidable loss of intent is confined to those actions.",
+  "setup": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 1,
+        "seq": 1,
+        "rev": 1
+      }
+    },
+    {
+      "op": "write",
+      "write": {
+        "op_id": "native-unread",
+        "entry_id": 1,
+        "register": "seen",
+        "value": "unseen"
+      },
+      "at": "2026-11-01T12:00:00Z",
+      "expect": {
+        "status": "applied"
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "google",
+      "op_id": "fresh-read",
+      "action": "read",
+      "entry_id": 1,
+      "expect": {
+        "status": "superseded"
+      }
+    },
+    {
+      "op": "write",
+      "write": {
+        "op_id": "native-seen",
+        "entry_id": 1,
+        "register": "seen",
+        "value": "seen",
+        "base_rev": {
+          "generation": "g1",
+          "rev": 2
+        }
+      },
+      "at": "2026-11-02T10:00:00Z",
+      "expect": {
+        "status": "applied"
+      }
+    },
+    {
+      "op": "google",
+      "op_id": "stale-unread",
+      "action": "unread",
+      "entry_id": 1,
+      "expect": {
+        "status": "applied"
+      }
+    },
+    {
+      "op": "write",
+      "write": {
+        "op_id": "native-unstar",
+        "entry_id": 1,
+        "register": "kept",
+        "value": false
+      },
+      "at": "2026-11-02T10:00:00Z",
+      "expect": {
+        "status": "applied"
+      }
+    },
+    {
+      "op": "google",
+      "op_id": "stale-star",
+      "action": "star",
+      "entry_id": 1,
+      "expect": {
+        "status": "applied"
+      }
+    },
+    {
+      "op": "write",
+      "write": {
+        "op_id": "native-star",
+        "entry_id": 1,
+        "register": "kept",
+        "value": true,
+        "base_rev": {
+          "generation": "g1",
+          "rev": 6
+        }
+      },
+      "at": "2026-11-02T11:00:00Z",
+      "expect": {
+        "status": "applied"
+      }
+    },
+    {
+      "op": "google",
+      "op_id": "stale-unstar",
+      "action": "unstar",
+      "entry_id": 1,
+      "expect": {
+        "status": "applied"
+      }
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": true
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "source": "deliberate"
+          },
+          "kept": {
+            "source": "deliberate"
+          }
+        }
+      }
+    }
+  ]
+}

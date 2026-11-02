@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "name": "restore-generation",
+  "decision": "A generation check precedes base comparison and deduplication. Even a numerically matching old revision requires re-bootstrap.",
+  "setup": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 1,
+        "seq": 1,
+        "rev": 1
+      }
+    },
+    {
+      "op": "write",
+      "write": {
+        "op_id": "seen",
+        "entry_id": 1,
+        "register": "seen",
+        "value": "seen"
+      },
+      "expect": {
+        "status": "applied"
+      }
+    },
+    {
+      "op": "checkpoint",
+      "name": "backup",
+      "expect": {
+        "rev": 2
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "write",
+      "write": {
+        "op_id": "unread",
+        "entry_id": 1,
+        "register": "seen",
+        "value": "unseen"
+      },
+      "expect": {
+        "status": "applied"
+      }
+    },
+    {
+      "op": "restore",
+      "name": "backup",
+      "generation": "g2",
+      "expect": {}
+    },
+    {
+      "op": "changes",
+      "cursor": {
+        "generation": "g1",
+        "rev": 2
+      },
+      "error": "generation",
+      "expect": {}
+    },
+    {
+      "op": "write",
+      "write": {
+        "op_id": "old-base",
+        "entry_id": 1,
+        "register": "seen",
+        "value": "unseen",
+        "base_rev": {
+          "generation": "g1",
+          "rev": 2
+        }
+      },
+      "error": "generation",
+      "expect": null
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_log",
+      "expect": {
+        "generation": "g2",
+        "rev": 2,
+        "gapless": true
+      }
+    }
+  ]
+}

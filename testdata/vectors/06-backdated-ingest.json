@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "name": "backdated-ingest",
+  "decision": "The mark-all boundary is the receipt-visible seq, not publication time. An entry committed above that boundary remains unread.",
+  "setup": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 1,
+        "seq": 1,
+        "rev": 1
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 2,
+        "subscription_id": 1,
+        "published_at": "2020-01-01T00:00:00Z"
+      },
+      "expect": {
+        "id": 2,
+        "seq": 2
+      }
+    },
+    {
+      "op": "range",
+      "write": {
+        "op_id": "all"
+      },
+      "scope": {
+        "kind": "all"
+      },
+      "through_seq": 1,
+      "expect": {
+        "through_seq": 1,
+        "except": []
+      }
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 2,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": true
+      }
+    }
+  ]
+}

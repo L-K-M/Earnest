@@ -1,0 +1,215 @@
+{
+  "version": 1,
+  "name": "client-coalescing",
+  "decision": "One outbox register retains only the newest local action and its oldest server base. Pending overlays survive bootstrap; acknowledgements remove exact op_ids. Shelf and kept coalesce independently.",
+  "setup": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 1,
+        "seq": 1,
+        "rev": 1
+      }
+    },
+    {
+      "op": "bootstrap_begin",
+      "device": "phone",
+      "expect": {
+        "generation": "g1"
+      }
+    },
+    {
+      "op": "bootstrap_page",
+      "device": "phone",
+      "expect": {}
+    },
+    {
+      "op": "client_pull",
+      "device": "phone",
+      "expect": {
+        "generation": "g1"
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "client_queue",
+      "device": "phone",
+      "write": {
+        "op_id": "seen",
+        "entry_id": 1,
+        "register": "seen",
+        "value": "seen"
+      },
+      "expect": {}
+    },
+    {
+      "op": "client_queue",
+      "device": "phone",
+      "write": {
+        "op_id": "unseen",
+        "entry_id": 1,
+        "register": "seen",
+        "value": "unseen"
+      },
+      "expect": {}
+    },
+    {
+      "op": "client_queue",
+      "device": "phone",
+      "write": {
+        "op_id": "later",
+        "entry_id": 1,
+        "register": "shelf",
+        "value": "later"
+      },
+      "expect": {}
+    },
+    {
+      "op": "client_queue",
+      "device": "phone",
+      "write": {
+        "op_id": "star",
+        "entry_id": 1,
+        "register": "kept",
+        "value": true
+      },
+      "expect": {}
+    },
+    {
+      "op": "assert_client",
+      "device": "phone",
+      "expect": {
+        "outbox_size": 3
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "device": "phone",
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "later"
+          },
+          "kept": {
+            "value": true
+          }
+        },
+        "unread": true
+      }
+    },
+    {
+      "op": "bootstrap_begin",
+      "device": "phone",
+      "expect": {
+        "generation": "g1"
+      }
+    },
+    {
+      "op": "bootstrap_page",
+      "device": "phone",
+      "expect": {}
+    },
+    {
+      "op": "client_pull",
+      "device": "phone",
+      "expect": {
+        "generation": "g1"
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "device": "phone",
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "later"
+          },
+          "kept": {
+            "value": true
+          }
+        },
+        "unread": true
+      }
+    },
+    {
+      "op": "client_flush",
+      "device": "phone",
+      "expect": [
+        {
+          "status": "applied"
+        },
+        {
+          "status": "applied"
+        },
+        {
+          "status": "applied"
+        }
+      ]
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "later"
+          },
+          "kept": {
+            "value": true
+          }
+        },
+        "unread": true
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "device": "phone",
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "later"
+          },
+          "kept": {
+            "value": true
+          }
+        },
+        "unread": true
+      }
+    },
+    {
+      "op": "assert_client",
+      "device": "phone",
+      "expect": {
+        "outbox_size": 0
+      }
+    },
+    {
+      "op": "assert_log",
+      "expect": {
+        "rev": 2
+      }
+    }
+  ]
+}

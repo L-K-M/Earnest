@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "name": "equal-time",
+  "decision": "Equal-rank equal-time stale actions use the later committed revision. A slow deliberate clock can lose, which preserves newer known intent.",
+  "setup": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 1,
+        "seq": 1,
+        "rev": 1
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "write",
+      "write": {
+        "op_id": "first",
+        "entry_id": 1,
+        "register": "seen",
+        "value": "seen"
+      },
+      "expect": {
+        "status": "applied"
+      }
+    },
+    {
+      "op": "write",
+      "write": {
+        "op_id": "second",
+        "entry_id": 1,
+        "register": "seen",
+        "value": "unseen"
+      },
+      "expect": {
+        "status": "applied"
+      }
+    },
+    {
+      "op": "write",
+      "write": {
+        "op_id": "slow-clock",
+        "entry_id": 1,
+        "register": "seen",
+        "value": "seen",
+        "occurred_at": "2026-11-02T11:59:59Z"
+      },
+      "expect": {
+        "status": "superseded"
+      }
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": true
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "rev": 3
+          }
+        },
+        "unread": true
+      }
+    },
+    {
+      "op": "assert_log",
+      "expect": {
+        "rev": 3,
+        "gapless": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,195 @@
+{
+  "version": 1,
+  "name": "resource-tombstones",
+  "decision": "Every resource is revisioned, including deletion. Native folder and annotation updates are also sync events, so bootstrap covers every listed resource.",
+  "setup": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 1,
+        "seq": 1,
+        "rev": 1
+      }
+    },
+    {
+      "op": "bootstrap_begin",
+      "device": "phone",
+      "expect": {
+        "generation": "g1"
+      }
+    },
+    {
+      "op": "bootstrap_page",
+      "device": "phone",
+      "expect": {}
+    },
+    {
+      "op": "client_pull",
+      "device": "phone",
+      "expect": {
+        "generation": "g1"
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "update_entry",
+      "entry_id": 1,
+      "entry": {
+        "published_at": "2026-01-01T00:00:00Z"
+      },
+      "expect": {}
+    },
+    {
+      "op": "object",
+      "object": {
+        "kind": "subscription",
+        "id": 1,
+        "folder_id": 9
+      },
+      "expect": {
+        "rev": 3
+      }
+    },
+    {
+      "op": "object",
+      "object": {
+        "kind": "subscription",
+        "id": 1,
+        "folder_id": 9,
+        "name": "renamed"
+      },
+      "expect": {
+        "rev": 4
+      }
+    },
+    {
+      "op": "object",
+      "object": {
+        "kind": "folder",
+        "id": 9
+      },
+      "expect": {
+        "rev": 5
+      }
+    },
+    {
+      "op": "object",
+      "object": {
+        "kind": "annotation",
+        "id": 7,
+        "principal": 1,
+        "entry_id": 1
+      },
+      "expect": {
+        "rev": 6
+      }
+    },
+    {
+      "op": "object",
+      "object": {
+        "kind": "annotation",
+        "id": 7,
+        "deleted": true
+      },
+      "expect": {
+        "rev": 7,
+        "deleted": true
+      }
+    },
+    {
+      "op": "object",
+      "object": {
+        "kind": "subscription",
+        "id": 1,
+        "deleted": true
+      },
+      "expect": {
+        "rev": 8,
+        "deleted": true
+      }
+    },
+    {
+      "op": "object",
+      "object": {
+        "kind": "token",
+        "id": 3,
+        "deleted": true
+      },
+      "expect": {
+        "rev": 9,
+        "deleted": true
+      }
+    },
+    {
+      "op": "client_pull",
+      "device": "phone",
+      "expect": {}
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_object",
+      "object": {
+        "kind": "annotation",
+        "id": 7
+      },
+      "device": "phone",
+      "expect": {
+        "object": {
+          "deleted": true,
+          "rev": 7
+        }
+      }
+    },
+    {
+      "op": "assert_object",
+      "object": {
+        "kind": "subscription",
+        "id": 1
+      },
+      "device": "phone",
+      "expect": {
+        "object": {
+          "deleted": true,
+          "rev": 8
+        }
+      }
+    },
+    {
+      "op": "assert_object",
+      "object": {
+        "kind": "token",
+        "id": 3
+      },
+      "device": "phone",
+      "expect": {
+        "object": {
+          "deleted": true,
+          "rev": 9
+        }
+      }
+    },
+    {
+      "op": "assert_entry",
+      "entry_id": 1,
+      "device": "phone",
+      "expect": {
+        "entry": {
+          "rev": 2
+        }
+      }
+    },
+    {
+      "op": "assert_log",
+      "expect": {
+        "rev": 9,
+        "gapless": true
+      }
+    }
+  ]
+}

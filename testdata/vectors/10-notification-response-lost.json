@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "name": "notification-response-lost",
+  "decision": "Attempt is recorded before send; uncertain attempts never retry. Restored pending rows are withheld, and a lost-response replay retains the old generation and is rejected.",
+  "setup": [
+    {
+      "op": "accept_notification",
+      "op_id": "notice",
+      "expect": {
+        "status": "pending"
+      }
+    },
+    {
+      "op": "checkpoint",
+      "name": "backup",
+      "expect": {
+        "rev": 0
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "attempt_notification",
+      "op_id": "notice",
+      "expect": {
+        "status": "uncertain"
+      }
+    },
+    {
+      "op": "complete_notification",
+      "op_id": "notice",
+      "expect": {}
+    },
+    {
+      "op": "attempt_notification",
+      "op_id": "notice",
+      "error": "attempted",
+      "expect": {
+        "status": "delivered"
+      }
+    },
+    {
+      "op": "restore",
+      "name": "backup",
+      "generation": "g2",
+      "expect": {}
+    },
+    {
+      "op": "accept_notification",
+      "op_id": "notice",
+      "generation": "g1",
+      "error": "generation",
+      "expect": {}
+    },
+    {
+      "op": "attempt_notification",
+      "op_id": "notice",
+      "error": "withheld",
+      "expect": {
+        "status": "pending"
+      }
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_log",
+      "expect": {
+        "generation": "g2",
+        "rev": 0,
+        "count": 0
+      }
+    }
+  ]
+}

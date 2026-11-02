@@ -1,0 +1,103 @@
+{
+  "version": 1,
+  "name": "missing-ts",
+  "decision": "Omitted Google Reader ts resolves the receipt-visible highest seq. An explicit ts resolves the highest seq first seen no later than that time, regardless of publication.",
+  "setup": [
+    {
+      "op": "ingest",
+      "at": "2026-11-01T12:00:00Z",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "seq": 1
+      }
+    },
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 2,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 2,
+        "seq": 2,
+        "rev": 2
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "range",
+      "write": {
+        "op_id": "explicit-ts",
+        "kind": "passive"
+      },
+      "scope": {
+        "kind": "all"
+      },
+      "ts": "2026-11-01T13:00:00Z",
+      "expect": {
+        "through_seq": 1
+      }
+    },
+    {
+      "op": "range",
+      "write": {
+        "op_id": "no-ts",
+        "kind": "passive"
+      },
+      "scope": {
+        "kind": "all"
+      },
+      "expect": {
+        "through_seq": 2
+      }
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 2,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_log",
+      "expect": {
+        "rev": 4
+      }
+    }
+  ]
+}
