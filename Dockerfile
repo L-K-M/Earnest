@@ -7,6 +7,16 @@
 # reproducible-builds "unset".
 ARG VERSION=dev REVISION=unknown CREATED=1970-01-01T00:00:00Z
 
+FROM --platform=$BUILDPLATFORM node:24-alpine AS web
+WORKDIR /src
+RUN corepack enable
+COPY web/package.json web/pnpm-lock.yaml ./web/
+WORKDIR /src/web
+RUN pnpm install --frozen-lockfile
+COPY web/ ./
+COPY api/openapi.json ../api/openapi.json
+RUN pnpm build
+
 FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
 ENV GOTOOLCHAIN=local
 ARG TARGETOS TARGETARCH VERSION REVISION
@@ -16,6 +26,7 @@ COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
+COPY --from=web /src/web/dist/ internal/web/dist/
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
@@ -40,7 +51,7 @@ RUN apk add --no-cache ca-certificates tzdata
 COPY --from=build /out/earnest /usr/local/bin/earnest
 COPY LICENSE /usr/share/doc/earnest/LICENSE
 ENV EARNEST_HTTP_ADDR=:8080
-EXPOSE 8080
+EXPOSE 8080 8081
 # The binary doubles as the liveness probe — no curl in this image.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD ["/usr/local/bin/earnest", "healthcheck"]

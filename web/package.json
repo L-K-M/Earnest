@@ -1,0 +1,39 @@
+{
+  "name": "earnest-web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "packageManager": "pnpm@10.15.1",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc -b && vite build",
+    "typecheck": "tsc -b --pretty false",
+    "lint": "eslint src",
+    "test": "vitest run",
+    "generate": "openapi-typescript ../api/openapi.json -o src/api.generated.ts",
+    "check-generated": "openapi-typescript ../api/openapi.json -o /tmp/earnest-api-types.ts && cmp src/api.generated.ts /tmp/earnest-api-types.ts"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "5.90.21",
+    "@tanstack/react-virtual": "3.13.18",
+    "openapi-fetch": "0.15.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.1",
+    "@testing-library/react": "16.3.0",
+    "@types/node": "22.19.1",
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "4.7.0",
+    "eslint": "9.39.1",
+    "eslint-plugin-react-hooks": "7.0.1",
+    "jsdom": "27.2.0",
+    "openapi-typescript": "7.10.1",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.48.1",
+    "vite": "6.4.1",
+    "vitest": "3.2.4"
+  }
+}

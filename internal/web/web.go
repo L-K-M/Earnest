@@ -1,28 +1,40 @@
-// Package web serves the embedded web client and, later, the sandboxed
-// content origin. The React client has not been built yet, so New returns a
-// placeholder that answers the root route instead of a 404.
+// Package web serves the embedded reader and isolated article content.
 package web
 
-import "net/http"
+import (
+	"embed"
+	"io/fs"
+	"net/http"
+	"path"
+	"strings"
+)
 
-const index = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Earnest</title>
-</head>
-<body>
-<p>Earnest is running. The web client is not built yet; use the API under /v1/ or the OpenAPI document at /openapi.json.</p>
-</body>
-</html>
-`
+//go:embed dist
+var assets embed.FS
 
-// New returns the web client handler mounted at /. Until web/ ships a built
-// bundle it serves a placeholder page.
-func New() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(index))
+// New serves the embedded app with a fallback for client-side routes.
+func New(origin string) http.Handler {
+	root, err := fs.Sub(assets, "dist")
+	if err != nil {
+		panic(err)
+	}
+	files := http.FileServer(http.FS(root))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-src "+origin+"; img-src 'self' "+origin+"; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		name := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
+		if strings.HasPrefix(name, "assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		if _, err := fs.Stat(root, name); err != nil && !strings.HasPrefix(name, "assets/") {
+			r = r.Clone(r.Context())
+			r.URL.Path = "/"
+		}
+		files.ServeHTTP(w, r)
 	})
 }

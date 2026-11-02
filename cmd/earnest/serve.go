@@ -15,6 +15,7 @@ import (
 	"github.com/L-K-M/Earnest/internal/compat/greader"
 	"github.com/L-K-M/Earnest/internal/config"
 	"github.com/L-K-M/Earnest/internal/fetcher"
+	"github.com/L-K-M/Earnest/internal/imageproxy"
 	"github.com/L-K-M/Earnest/internal/metrics"
 	"github.com/L-K-M/Earnest/internal/outbound"
 	"github.com/L-K-M/Earnest/internal/service"
@@ -74,6 +75,19 @@ func serve() error {
 		return fmt.Errorf("outbound client: %w", err)
 	}
 
+	proxy, err := imageproxy.New(cfg.SecretKey, egress, cfg.ContentOrigin)
+	if err != nil {
+		return fmt.Errorf("image proxy: %w", err)
+	}
+	content, err := web.NewContent(svc, auth, proxy, cfg.ContentOrigin, cfg.SecretKey)
+	if err != nil {
+		return fmt.Errorf("content: %w", err)
+	}
+	contentMux := http.NewServeMux()
+	contentMux.Handle("/content/", content)
+	contentMux.Handle("/img/", proxy)
+	contentServer := &http.Server{Addr: cfg.ContentAddr, Handler: contentMux, ReadHeaderTimeout: 5 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx }}
+
 	registry := metrics.New()
 	f, err := fetcher.New(svc, egress, fetcher.Config{
 		MinInterval: cfg.FetchMinInterval,
@@ -88,10 +102,20 @@ func serve() error {
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           api.SecurityHeaders(buildMux(cfg.BaseURL, svc, auth, logger, registry)),
+		Handler:           api.SecurityHeaders(buildMuxWithWeb(cfg.BaseURL, cfg.ContentOrigin, svc, auth, logger, registry, content)),
 		ReadHeaderTimeout: 5 * time.Second,
 		BaseContext:       func(net.Listener) context.Context { return ctx },
 	}
+
+	contentErr := make(chan error, 1)
+	go func() {
+		err := contentServer.ListenAndServe()
+		contentErr <- err
+		if err != nil && err != http.ErrServerClosed {
+			logger.Error("content listener failed", "error", err)
+			stop()
+		}
+	}()
 
 	go runRetention(ctx, svc, time.Duration(cfg.RetentionDays)*24*time.Hour, logger)
 
@@ -114,6 +138,7 @@ func serve() error {
 		ctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 		defer cancel()
 		_ = srv.Shutdown(ctx)
+		_ = contentServer.Shutdown(ctx)
 	}()
 
 	logger.Info("earnest listening", "addr", cfg.HTTPAddr, "version", version, "revision", revision)
@@ -121,6 +146,9 @@ func serve() error {
 	stop()
 	<-shutdownDone
 
+	if err := <-contentErr; err != nil && err != http.ErrServerClosed {
+		return fmt.Errorf("content listener: %w", err)
+	}
 	if err := <-fetchErr; err != nil {
 		return fmt.Errorf("fetcher: %w", err)
 	}
@@ -134,6 +162,10 @@ func serve() error {
 // security headers and serves GET /openapi.json; the outer security-headers
 // wrap extends the same policy to every other response.
 func buildMux(baseURL string, svc *service.Service, auth *service.Auth, logger *slog.Logger, registry *metrics.Registry) *http.ServeMux {
+	return buildMuxWithWeb(baseURL, "http://localhost:8081", svc, auth, logger, registry, nil)
+}
+
+func buildMuxWithWeb(baseURL, contentOrigin string, svc *service.Service, auth *service.Auth, logger *slog.Logger, registry *metrics.Registry, content *web.Content) *http.ServeMux {
 	apiHandler := api.New(svc, auth, logger, baseURL)
 	mux := http.NewServeMux()
 	mux.Handle("/v1/", apiHandler)
@@ -141,7 +173,10 @@ func buildMux(baseURL string, svc *service.Service, auth *service.Auth, logger *
 	mux.Handle("/api/greader/", greader.New(svc, auth, logger))
 	mux.Handle("/metrics", registry)
 	mux.HandleFunc("/healthz", healthzHandler)
-	mux.Handle("/", web.New())
+	if content != nil {
+		mux.HandleFunc("GET /web/content-url/{entry}", content.URLHandler)
+	}
+	mux.Handle("/", web.New(contentOrigin))
 	return mux
 }
 
