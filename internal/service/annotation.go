@@ -138,7 +138,7 @@ func (s *Service) PutAnnotation(ctx context.Context, a Actor, r PutAnnotationReq
 		return Annotation{}, err
 	}
 	var out Annotation
-	err = s.store.WithTx(ctx, func(tx pgx.Tx) error {
+	err = s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
 			return err
 		}
@@ -174,7 +174,7 @@ func (s *Service) PutAnnotation(ctx context.Context, a Actor, r PutAnnotationReq
 		if err != nil {
 			return fmt.Errorf("put annotation: %w", err)
 		}
-		if err := store.InsertChange(ctx, tx, a.UserID, rev, string(syncmodel.AnnotationUpdated), annotationPayload(out), s.now()); err != nil {
+		if err := insertEvent(ctx, tx, a.UserID, rev, string(syncmodel.AnnotationUpdated), annotationPayload(out), s.now()); err != nil {
 			return err
 		}
 		if err := s.recordActivity(ctx, tx, a, "annotation.updated", map[string]any{"id": out.ID}, before, out); err != nil {
@@ -200,7 +200,7 @@ func (s *Service) GetAnnotation(ctx context.Context, a Actor, principal int64, i
 		return Annotation{}, err
 	}
 	var out Annotation
-	err = s.store.WithTx(ctx, func(tx pgx.Tx) error {
+	err = s.withEvents(ctx, func(tx pgx.Tx) error {
 		var err error
 		out, err = annotationByKey(ctx, tx, a.UserID, principal, ids, kind)
 		if err != nil {
@@ -265,7 +265,7 @@ func (s *Service) DeleteAnnotation(ctx context.Context, a Actor, ids []int64, ki
 	if err != nil {
 		return err
 	}
-	return s.store.WithTx(ctx, func(tx pgx.Tx) error {
+	return s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
 			return err
 		}
@@ -290,7 +290,7 @@ func (s *Service) DeleteAnnotation(ctx context.Context, a Actor, ids []int64, ki
 		tombstone := old
 		tombstone.Rev = rev
 		tombstone.Deleted = true
-		if err := store.InsertChange(ctx, tx, a.UserID, rev, string(syncmodel.AnnotationDeleted), annotationPayload(tombstone), s.now()); err != nil {
+		if err := insertEvent(ctx, tx, a.UserID, rev, string(syncmodel.AnnotationDeleted), annotationPayload(tombstone), s.now()); err != nil {
 			return err
 		}
 		if err := s.recordActivity(ctx, tx, a, "annotation.deleted", map[string]any{"id": old.ID, "rev": rev}, old, nil); err != nil {
