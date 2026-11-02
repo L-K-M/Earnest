@@ -1,0 +1,33 @@
+name: release
+
+# The tag IS the release: scripts/release.sh X.Y.Z --push creates vX.Y.Z, this
+# mints the GitHub release with generated notes, and images.yml verifies the
+# image builds on the same tag. Deployments then run ./update.sh, which builds
+# the image locally from the tagged source — nothing is published to a registry.
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Create the GitHub release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          generate_release_notes: true
+          body: |
+            Deploy or update on your host with `./update.sh` — the image is
+            built locally from this source revision (see `compose.yaml`).
+
+            **Latest tag:** `${{ github.ref_name }}`
