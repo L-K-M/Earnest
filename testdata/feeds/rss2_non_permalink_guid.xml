@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Non-permalink guids</title>
+    <link>https://example.com/</link>
+    <item>
+      <title>Opaque rotating id</title>
+      <link>https://example.com/opaque</link>
+      <guid isPermaLink="false">session-abc123</guid>
+    </item>
+    <item>
+      <title>URN uuid</title>
+      <link>https://example.com/urn</link>
+      <guid isPermaLink="false">urn:uuid:123e4567-e89b-12d3-a456-426614174000</guid>
+    </item>
+    <item>
+      <title>Bare UUID</title>
+      <link>https://example.com/bare</link>
+      <guid isPermaLink="false">123e4567-e89b-12d3-a456-426614174000</guid>
+    </item>
+    <item>
+      <title>Tag uri</title>
+      <link>https://example.com/tag</link>
+      <guid isPermaLink="false">tag:example.com,2006:1</guid>
+    </item>
+    <item>
+      <title>Url shaped but marked false</title>
+      <link>https://example.com/urlshaped</link>
+      <guid isPermaLink="false">https://example.com/canonical</guid>
+    </item>
+  </channel>
+</rss>

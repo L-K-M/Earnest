@@ -1,0 +1,22 @@
+{
+  "feed": {
+    "title": "XHTML Atom",
+    "site_url": "",
+    "feed_url": "https://example.com/atom.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "urn:uuid:123e4567-e89b-12d3-a456-426614174000",
+      "url": "",
+      "title": "A bold title \u0026 more",
+      "author": "",
+      "summary_html": "Summary \u003cem\u003etext\u003c/em\u003e",
+      "content_html": "\u003cp\u003eBody \u003ca href=\"https://example.com/page.html\"\u003elink\u003c/a\u003e \u003cimg src=\"https://example.com/pic.png\"/\u003e\u003c/p\u003e",
+      "language": "",
+      "identity": "86916e63131f932604fc709b55a72d5d37b4c6a7eb848933298d67d6d357545b",
+      "content_hash": "3115c55bbe9ba4bbf4d96afb6ff21c45c0385642b63f0f996313df648f0c2a1a"
+    }
+  ]
+}

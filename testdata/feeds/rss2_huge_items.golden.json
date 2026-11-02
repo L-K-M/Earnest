@@ -1,0 +1,11 @@
+{
+  "error": "feed: document exceeds the item limit",
+  "feed": {
+    "title": "",
+    "site_url": "",
+    "feed_url": "",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": null
+}

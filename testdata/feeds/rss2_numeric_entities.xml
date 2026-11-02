@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <title>Entities &amp; &lt;tags&gt;</title>
+  <link>https://example.com/</link>
+  <item>
+    <title>caf&#233; &#x3A; na&#239;ve</title>
+    <link>https://example.com/e</link>
+    <guid>e1</guid>
+    <description>&lt;b&gt;escaped&lt;/b&gt;</description>
+  </item>
+</channel></rss>

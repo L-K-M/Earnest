@@ -1,0 +1,24 @@
+{
+  "feed": {
+    "title": "Atom oh three",
+    "site_url": "",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "tag:example.com,2006:5",
+      "url": "https://example.test/old/5",
+      "title": "Old entry",
+      "author": "Ada",
+      "published": "2006-01-02T15:04:05Z",
+      "updated": "2006-01-03T15:04:05Z",
+      "summary_html": "",
+      "content_html": "\u003cp\u003eOld body\u003c/p\u003e",
+      "language": "",
+      "identity": "a84aa8c3cca7f7226cd699b935820fce71af336610be05abe530abf99d359797",
+      "content_hash": "011fdc5e874a8cb8f0ae4d51a8acaf014455023471a996c570164d05aebcb8ba"
+    }
+  ]
+}

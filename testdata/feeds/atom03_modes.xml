@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed version="0.3" xmlns="http://purl.org/atom/ns#">
+  <title>Atom modes</title>
+  <entry>
+    <title>Escaped</title>
+    <id>tag:example.com,2006:6</id>
+    <content type="text/html" mode="escaped">&lt;p&gt;Escaped body&lt;/p&gt;</content>
+  </entry>
+  <entry>
+    <title>Base64</title>
+    <id>tag:example.com,2006:7</id>
+    <content type="text/html" mode="base64">PHA+QmFzZTY0IGJvZHk8L3A+</content>
+  </entry>
+  <entry>
+    <title>XML mode</title>
+    <id>tag:example.com,2006:8</id>
+    <content type="text/html" mode="xml"><p xmlns="http://www.w3.org/1999/xhtml">Inline markup</p></content>
+  </entry>
+  <entry>
+    <title>Default mode</title>
+    <id>tag:example.com,2006:9</id>
+    <content type="text/plain">Just text</content>
+  </entry>
+</feed>

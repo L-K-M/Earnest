@@ -1,0 +1,10 @@
+{
+  "feed": {
+    "title": "Cats \u0026nbsp; Dogs",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": null
+}

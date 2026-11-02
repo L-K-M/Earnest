@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Garbage dates</title>
+    <link>https://example.com/</link>
+    <item>
+      <title>Words</title>
+      <link>https://example.com/a</link>
+      <pubDate>yesterday maybe</pubDate>
+    </item>
+    <item>
+      <title>Impossible day</title>
+      <link>https://example.com/b</link>
+      <pubDate>2026-02-30</pubDate>
+    </item>
+    <item>
+      <title>No date</title>
+      <link>https://example.com/c</link>
+    </item>
+  </channel>
+</rss>

@@ -1,0 +1,46 @@
+{
+  "feed": {
+    "title": "Atom ten",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.com/atom.xml",
+    "language": "en",
+    "icon_url": "https://example.com/icon.png"
+  },
+  "items": [
+    {
+      "guid": "tag:example.com,2006:1",
+      "url": "https://example.com/posts/1",
+      "title": "Entry one",
+      "author": "Ada",
+      "published": "2006-01-02T15:04:05Z",
+      "updated": "2006-01-02T16:04:05Z",
+      "summary_html": "Short summary",
+      "content_html": "\u003cp\u003eHello \u003cb\u003eworld\u003c/b\u003e\u003c/p\u003e",
+      "enclosures": [
+        {
+          "url": "https://example.com/media/1.mp3",
+          "type": "audio/mpeg",
+          "length": 123
+        }
+      ],
+      "categories": [
+        "tech"
+      ],
+      "language": "en",
+      "identity": "425fb5f2595a10ae21d7360331adefd8cad9090f36f6eb02ffb55f5bc208911c",
+      "content_hash": "4cb42a1ab8f097b2ef1dbbfa5b06163ae68ea1809c3012aeaf8deb6f9f0f2f57"
+    },
+    {
+      "guid": "tag:example.com,2006:2",
+      "url": "https://example.com/posts/2",
+      "title": "Entry two",
+      "author": "Grace",
+      "updated": "2006-01-03T15:04:05Z",
+      "summary_html": "",
+      "content_html": "Plain text body \u0026amp; more",
+      "language": "en",
+      "identity": "cc3a40eaeea56f075bed7bc80b61d0c63c946638537140486443fb1369e71e31",
+      "content_hash": "f872f75e063d7d6d5e74ead6dd83f149161eb41dc6cd62bbd9a559313faaff91"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Future</title>
+    <link>https://example.com/</link>
+    <item>
+      <title>Future post</title>
+      <link>https://example.com/future</link>
+      <guid>future</guid>
+      <pubDate>Wed, 04 Mar 2035 10:11:12 GMT</pubDate>
+      <description>Published in the future</description>
+    </item>
+  </channel>
+</rss>

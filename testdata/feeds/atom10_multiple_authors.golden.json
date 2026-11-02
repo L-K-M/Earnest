@@ -1,0 +1,27 @@
+{
+  "feed": {
+    "title": "Many authors",
+    "site_url": "",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "tag:example.com,2006:4",
+      "url": "",
+      "title": "Collaborative",
+      "author": "Ada",
+      "summary_html": "",
+      "content_html": "",
+      "categories": [
+        "tech",
+        "go",
+        "Labelled"
+      ],
+      "language": "",
+      "identity": "29d5a4513abb7c9acbe3a872d845dcf35c42c78dc6f9d8cba8e18f69f753ee69",
+      "content_hash": "fddebf7513b41dda27543de78a866d776bb63922ab986aae5106bb2081ac7d2f"
+    }
+  ]
+}

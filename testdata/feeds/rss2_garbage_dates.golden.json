@@ -1,0 +1,44 @@
+{
+  "feed": {
+    "title": "Garbage dates",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "",
+      "url": "https://example.com/a",
+      "title": "Words",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "language": "",
+      "identity": "04eb124138012504ac9b90b7b3d7a6f87b05316bcdf951dada78199878214305",
+      "content_hash": "ebcc17b4c55f1f6f80a8a5c81edba75453ec98ea80318e65f9a7d030cd2d6c2e"
+    },
+    {
+      "guid": "",
+      "url": "https://example.com/b",
+      "title": "Impossible day",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "language": "",
+      "identity": "ec63240ea09a92bf82e4b3e77f49cf79ba6914b0f716e2e83cf06e81533b849d",
+      "content_hash": "d59e49ab27d7ef76c5f3e88f2ff544f185c816fc19e8ab09e52aedaec79f437a"
+    },
+    {
+      "guid": "",
+      "url": "https://example.com/c",
+      "title": "No date",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "language": "",
+      "identity": "29d172e91704289f9f64c058c41074f10aaa4d3333eda3f30f484dbf2d4729ba",
+      "content_hash": "2142557e172f076ffd2b4527ab1cc8b717347ff3688e3e08f99aa5d638dd020a"
+    }
+  ]
+}

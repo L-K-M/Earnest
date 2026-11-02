@@ -1,0 +1,33 @@
+{
+  "feed": {
+    "title": "Languages",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "en-GB",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "fr-1",
+      "url": "https://example.com/fr",
+      "title": "French item",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "language": "fr",
+      "identity": "ef5343a00decbd3007315290a1afa1e9953efa7c0391c764f3839c64c57f0e72",
+      "content_hash": "52f8ae5ed619edbc2254b67cc112712112f081d3dc45a7c415d811814f9d56a5"
+    },
+    {
+      "guid": "en-1",
+      "url": "https://example.com/en",
+      "title": "Inherits feed language",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "language": "en-GB",
+      "identity": "ed18a79ce28934d58aad6e3e568bb8bd28b7daa58c288fd1b0fd8bad2b470e3c",
+      "content_hash": "a538ebbf86b3e57341862b41aa9420a355f6dc93e7138f7535346c139b58f4e5"
+    }
+  ]
+}

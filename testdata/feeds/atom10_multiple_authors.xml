@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Many authors</title>
+  <entry>
+    <title>Collaborative</title>
+    <id>tag:example.com,2006:4</id>
+    <author><name>Ada</name></author>
+    <author><name>Grace</name></author>
+    <contributor><name>Linus</name></contributor>
+    <category term="tech"/>
+    <category term="tech"/>
+    <category term="go"/>
+    <category label="Labelled"/>
+  </entry>
+</feed>

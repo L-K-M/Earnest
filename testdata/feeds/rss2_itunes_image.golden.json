@@ -1,0 +1,10 @@
+{
+  "feed": {
+    "title": "iTunes image",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": "https://example.com/cover.jpg"
+  },
+  "items": null
+}

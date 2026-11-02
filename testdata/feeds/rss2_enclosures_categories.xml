@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Enclosures</title>
+    <link>https://example.com/</link>
+    <item>
+      <title>Podcast episode</title>
+      <link>https://example.com/ep1</link>
+      <guid>ep1</guid>
+      <category domain="https://example.com/cats">News</category>
+      <category>news</category>
+      <category>News</category>
+      <enclosure url="https://cdn.example.com/ep1.mp3" type="audio/mpeg" length="123456"/>
+      <enclosure url="https://cdn.example.com/ep1.ogg" type="audio/ogg" length="98765"/>
+    </item>
+  </channel>
+</rss>

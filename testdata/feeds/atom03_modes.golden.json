@@ -1,0 +1,55 @@
+{
+  "feed": {
+    "title": "Atom modes",
+    "site_url": "",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "tag:example.com,2006:6",
+      "url": "",
+      "title": "Escaped",
+      "author": "",
+      "summary_html": "",
+      "content_html": "\u003cp\u003eEscaped body\u003c/p\u003e",
+      "language": "",
+      "identity": "8114d262b285c873141c1c38a39a361e4bec745e4a3a7c560cd420cb81954c57",
+      "content_hash": "fe8aeeab0b2ad62f45813964da17be06c0a5adecd324191979bc12ccbd6702c6"
+    },
+    {
+      "guid": "tag:example.com,2006:7",
+      "url": "",
+      "title": "Base64",
+      "author": "",
+      "summary_html": "",
+      "content_html": "\u003cp\u003eBase64 body\u003c/p\u003e",
+      "language": "",
+      "identity": "3ceeb921f091946eac2710d157ac13f0f1aed0008ac7912ac7cc06843ddff738",
+      "content_hash": "19d9d5062fe22861db837af2ee9cbaa5c4dcc259e72bab51289d69cfd74f5efc"
+    },
+    {
+      "guid": "tag:example.com,2006:8",
+      "url": "",
+      "title": "XML mode",
+      "author": "",
+      "summary_html": "",
+      "content_html": "\u003cp\u003eInline markup\u003c/p\u003e",
+      "language": "",
+      "identity": "ca1a6c9cf305cbafed380a6b6189bba98762cb8eb482177319852c4497a19bed",
+      "content_hash": "b231cf01fa2f982cc79ef6a9d0c3c6707fe724eeb808d1ea0f65c6edaf639e36"
+    },
+    {
+      "guid": "tag:example.com,2006:9",
+      "url": "",
+      "title": "Default mode",
+      "author": "",
+      "summary_html": "",
+      "content_html": "Just text",
+      "language": "",
+      "identity": "b905be0c1018a0027d4f3226144be9c5388755e5ad91fb4b4deb683b38ee657d",
+      "content_hash": "56da2a8aabe773963e791bdb79d77598b3553e9256fbe316174bc02607e86fe8"
+    }
+  ]
+}
