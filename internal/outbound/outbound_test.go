@@ -248,3 +248,34 @@ func TestLimiterCancellation(t *testing.T) {
 		t.Fatalf("waiting: %v", err)
 	}
 }
+
+func TestHTTP2CheckedDialer(t *testing.T) {
+	s := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor != 2 {
+			t.Errorf("protocol = %s", r.Proto)
+		}
+		fmt.Fprint(w, "ok")
+	}))
+	s.EnableHTTP2 = true
+	s.StartTLS()
+	defer s.Close()
+	p := localPolicy(t, s.URL)
+	p.Protocol = HTTP2
+	c := client(t, Config{})
+	if _, err := c.Get(context.Background(), s.URL, p); ErrorClass(err) != DeniedAddress {
+		t.Fatalf("private destination: %v", err)
+	}
+	c = client(t, Config{AllowPrefixes: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}})
+	u, _ := url.Parse(s.URL)
+	tr := c.transport(u, HTTP2)
+	tr.TLSClientConfig = s.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	defer tr.CloseIdleConnections()
+	resp, err := tr.RoundTrip(httptest.NewRequest("GET", s.URL, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.ProtoMajor != 2 {
+		t.Fatalf("protocol = %s", resp.Proto)
+	}
+}

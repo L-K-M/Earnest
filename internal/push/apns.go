@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/L-K-M/Earnest/internal/outbound"
 )
 
 const (
@@ -53,9 +55,9 @@ const (
 
 // APNsConfig configures the APNs transport.
 type APNsConfig struct {
-	// RoundTripper must negotiate HTTP/2, which APNs requires. Production
-	// wiring supplies one whose dialer applies the shared destination checks;
-	// destinations are fixed Apple hosts, so no device can redirect them.
+	// Client is the checked outbound client for production delivery.
+	Client *outbound.Client
+	// RoundTripper is a legacy injection seam; prefer Client.
 	RoundTripper http.RoundTripper
 	// PrivateKey is the .p8 signing key, PEM-encoded PKCS#8.
 	PrivateKey []byte
@@ -69,11 +71,12 @@ type APNsConfig struct {
 // authentication. Payloads are not encrypted end to end, so they never carry
 // agent text.
 type APNs struct {
-	client  *http.Client
-	teamID  string
-	keyID   string
-	private *ecdsa.PrivateKey
-	sandbox bool
+	client   *http.Client
+	outbound *outbound.Client
+	teamID   string
+	keyID    string
+	private  *ecdsa.PrivateKey
+	sandbox  bool
 
 	mu       sync.Mutex
 	token    string
@@ -85,7 +88,7 @@ type APNs struct {
 // NewAPNs returns an APNs transport, or an error when the configuration is
 // unusable.
 func NewAPNs(cfg APNsConfig) (*APNs, error) {
-	if cfg.RoundTripper == nil {
+	if cfg.Client == nil && cfg.RoundTripper == nil {
 		return nil, errors.New("apns: missing round tripper")
 	}
 	private, err := parseAPNsPrivateKey(cfg.PrivateKey)
@@ -100,6 +103,7 @@ func NewAPNs(cfg APNsConfig) (*APNs, error) {
 	}
 	return &APNs{
 		client:   &http.Client{Transport: cfg.RoundTripper, Timeout: pushTimeout},
+		outbound: cfg.Client,
 		teamID:   cfg.TeamID,
 		keyID:    cfg.KeyID,
 		private:  private,
@@ -147,9 +151,19 @@ func (a *APNs) Send(ctx context.Context, dev Device, msg Message) (Receipt, erro
 	req.Header.Set("apns-expiration", strconv.FormatInt(a.now().Add(time.Duration(apnsExpirationSeconds)*time.Second).Unix(), 10))
 	req.Header.Set("content-type", "application/json")
 
-	res, err := a.client.Do(req)
-	if err != nil {
-		return Receipt{}, &Error{Kind: KindAPNs, Outcome: classifyRoundTripError(err), Err: err}
+	var res *http.Response
+	if a.outbound != nil {
+		result, err := a.outbound.Do(req, outbound.Policy{Purpose: outbound.Push, Redirect: outbound.RedirectNone, Protocol: outbound.HTTP2, Timeout: pushTimeout, MaxBodySize: maxResponseBody})
+		if result == nil {
+			return Receipt{}, networkError(KindAPNs, err)
+		}
+		res = result.Response
+	} else {
+		var err error
+		res, err = a.client.Do(req)
+		if err != nil {
+			return Receipt{}, &Error{Kind: KindAPNs, Outcome: classifyRoundTripError(err), Err: err}
+		}
 	}
 	defer res.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(res.Body, maxResponseBody))
