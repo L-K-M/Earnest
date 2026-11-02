@@ -56,7 +56,7 @@ Postgres 18 with pgvector 0.8.7. [Postgres 19 is at release candidate](https://w
 
 The 10 KB figure carries this estimate. Extracted long-form articles often run 30 to 80 KB, so if a third of feeds use full text, content alone could reach 150 to 250 GB. That's still fine for a NAS. Retention and embedding only what you might search are policy levers.
 
-The honest case for SQLite: one file, no service, trivial backups, and write contention at 3000 items a day is a non-issue, whatever the research reports implied. It loses on vector search (sqlite-vec is still `v0.1.10-alpha.4`, pre-v1, with no ANN index, so brute force over 5.5M vectors), on job handling, and on any hosted future. Choose Postgres.
+The honest case for SQLite: one file, no service, trivial backups, and write contention at 3000 items a day is a non-issue, whatever the research reports implied. It loses on vector search (sqlite-vec is still `v0.1.10-alpha.4`, pre-v1, and [its ANN indexes exist only in those alphas](https://github.com/asg017/sqlite-vec/releases), so a stable release means brute force over 5.5M vectors), on job handling, and on any hosted future. Choose Postgres.
 
 **Search.** `websearch_to_tsquery` with a `tsvector` per entry, weighted title over body, and per-feed language with a `simple` fallback. Postgres has no BM25, so ranking is adequate rather than good. Hybrid retrieval via reciprocal rank fusion with vectors should help, unmeasured. If it disappoints, add an embedded index later. Meilisearch would be a second service with little payoff at one user.
 

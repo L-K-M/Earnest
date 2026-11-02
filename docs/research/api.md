@@ -1,6 +1,6 @@
 # API
 
-Everything here is a proposal for the next phase. The sync model has been through three rounds of attack and has not been implemented. Treat it as a draft specification: step 1 of the [sequence](README.md#sequence) is an executable model that settles it before any schema or client depends on it.
+Everything here is a proposal for the next phase. The sync model has been through four rounds of attack and has not been implemented. Treat it as a draft specification: step 1 of the [sequence](README.md#sequence) is an executable model that settles it before any schema or client depends on it.
 
 ## Existing sync APIs
 
@@ -166,6 +166,18 @@ The protocol, because a change feed without bootstrap and recovery isn't sync:
 
 The model is allowed to reject these mechanisms, including restore handling and the compatibility conflict policy. At-most-once delivery alone doesn't solve vector 19.
 
+**Open after round 9.** [The ninth review](raw/r6-sync.md) found these undecided or contradictory. Step 1 settles them too:
+
+- `state:batch` isn't atomic, yet a batch becomes one compact `state.updated`, which must commit with its mutation. Otherwise a write landing mid-batch can leave a replaying client different from the server. One event per item, or resolve the batch atomically before compacting.
+- Bootstrap keeps "the higher `rev` per object", but no resource carries one. Each bootstrapped object needs its last change-log `rev`, and state its `state_rev`.
+- Labels are written through Google Reader and bootstrapped, but have no native endpoints, change events or tombstones.
+- Positions are last-writer-wins but have no change event, so they cross devices only at bootstrap. Add `position.updated`, or say so.
+- A range record names subscriptions, so it can't express a cluster scope.
+- Mark unread on a Done item resets `shelf` through Google Reader (vector 16) but not natively, where a batch item writes one register. Either the server resets `shelf`, or the client sends both writes.
+- The lock order covers per-user counters, not the `seq` counter an ingest also updates.
+- Google Reader's `mark-all-as-read`: which `first_seen_at` maps `ts` to `seq`, and what happens without `ts`.
+- What `/v1/changes` returns to an agent token: its allowlist only, with filtered events still advancing the cursor, or nothing.
+
 ### Endpoints
 
 ```
@@ -249,8 +261,10 @@ Current revision is [2026-07-28](https://modelcontextprotocol.io/specification/2
 - **Sampling, Roots and Logging are deprecated**, so don't plan on asking the client's model to summarise through Sampling.
 - Dynamic Client Registration is deprecated in favour of Client ID Metadata Documents. Relevant only with OAuth.
 - `subscriptions/listen` replaces `resources/subscribe`. Don't depend on client support.
-- Transport resumability is gone, so a broken stream means the client retries. **Mutating tools take a stable `operation_id`**; a new JSON-RPC ID can't prevent a duplicate notification.
+- Transport resumability is gone: a broken stream loses the request, and the client re-issues it with a new JSON-RPC ID.
 - [Handles are not authentication](https://modelcontextprotocol.io/specification/2026-07-28/basic/security_best_practices). Cursors and revert handles are 128-bit random, bound server-side to the principal, and they expire.
+
+**Retries are Earnest's problem.** The spec has no operation ID, and a new JSON-RPC ID can't prevent a duplicate notification, so **mutating tools take a stable `operation_id`**, as every native mutation takes an `op_id`.
 
 [Go SDK v1.7 and later support this revision](https://github.com/modelcontextprotocol/go-sdk/releases/tag/v1.7.0), and only when `StreamableHTTPOptions.Stateless` is true. Otherwise clients silently negotiate down.
 

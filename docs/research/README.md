@@ -20,7 +20,7 @@ Status: research, 2026-11-02. Nothing is built. Recommendations are defaults to 
 
 **The position.** Earnest is a reader on your own server, where what an agent can do through it is bounded and visible.
 
-1. **Agents are governed.** Own token, feed allowlist, budget and position. Their output is a labelled, inert layer over your reading. Nothing an agent can reach fetches a URL it influenced, and its text stays out of push payloads. The [threat model](llm.md#threat-model) says what this does and doesn't cover.
+1. **Agents are governed.** Own token, feed allowlist, budget and position. Their output is a labelled, inert layer over your reading. Nothing an agent can reach fetches a URL it influenced, and its text stays out of push payloads. The [threat model](llm.md#threat-model) says what this does and doesn't cover, and which [gaps are still open](llm.md#open-gaps).
 2. **Automation is inspectable.** Plain-language rules compile once to visible filters with a dry run. Models that read feed content have no tools. Cited passages are verified to exist.
 3. **Reading has an end, if you want one.** Each feed says how soon you want it, sessions finish with a plain statement of what happened, and unread counts are a first-class alternative. These ideas have shipped elsewhere, so they aren't a moat, and whether they help is untested.
 
@@ -57,7 +57,7 @@ Each step ends with something used daily, or a result that changes the plan. Ord
 
 | # | Delivers | Proof it worked |
 | --- | --- | --- |
-| 0 | **Experiments, no Earnest code.** Deploy NewsBlur on the NAS with your real feeds. Have an agent write a brief and page you through ntfy, with an enforced tool allowlist. [NewsBlur's MCP can change subscriptions and share publicly](https://www.newsblur.com/features/mcp), and [`newsblur_get_original_text` fetches the source site](https://github.com/samuelclay/NewsBlur/blob/main/newsblur_mcp/newsblur_mcp/tools/stories.py), so exclude those. Give the agent a small wrapper for ntfy with a fixed server and topic that takes plain text only, since [ntfy clients fetch icon URLs automatically](https://docs.ntfy.sh/publish/#icons), and an `Icon` header would be an exit. Separately, read with counts hidden, and try Current if you have an Apple device | You read the brief daily for two weeks. You know whether you want counts and decay. You know whether NewsBlur is enough |
+| 0 | **Experiments, no Earnest code.** Deploy NewsBlur on the NAS with your real feeds. Have an agent write a brief and page you through ntfy, with an enforced tool allowlist. [NewsBlur's MCP can change subscriptions and share publicly](https://www.newsblur.com/features/mcp), and [`newsblur_get_original_text` fetches the source site](https://github.com/samuelclay/NewsBlur/blob/main/newsblur_mcp/newsblur_mcp/tools/stories.py), so exclude those. Enforce the allowlist outside the agent: a filtering proxy in front of NewsBlur's MCP, or at least the agent client's own tool deny list. Run ntfy on the NAS too, default deny, with your phone on the tailnet, so the brief never crosses a public server. Give the agent a small wrapper for it with a fixed server and topic that takes plain text only, since [ntfy clients fetch icon URLs automatically](https://docs.ntfy.sh/publish/#icons), and an `Icon` header would be an exit. Separately, read with counts hidden, through a NewsBlur setting or a user stylesheet like [this FreshRSS one](https://danq.me/2026/02/06/phantom-obligation-vs-freshrss/), and try Current if you have an Apple device. List where NewsBlur falls short as you go | You read the brief daily for two weeks. You know whether you want counts and decay. NewsBlur is enough unless your list names something Earnest exists for: governed agents, inspectable automation or reading with an end |
 | 1 | **Executable state model and sync test vectors.** A small model of registers, conflict policy, range records, bootstrap and restore. No database, no HTTP | The [listed vectors](api.md#change-feed) have decided expected results, and the model passes them |
 | 2 | Schema, entry identity, outbound client and SSRF controls, fetcher with conformance suite, parse and sanitise with golden corpus, Docker, backups, metrics | Your real feeds ingest cleanly, with honest health data |
 | 3 | Native API, change feed, OPML, feed health | The vectors pass against the real server |
@@ -79,7 +79,7 @@ These change the plan. Defaults are in brackets.
 
 1. What reader do you use now, and can you share its OPML? Real feed count and daily volume size everything here. [Assume 300 feeds, about 1000 items a day; design for 1000 feeds, 3000 a day.]
 2. Personal tool, or public release? This decides the push relay and licence. [Personal first, public source.]
-3. Licence? Your fleet mostly uses the Unlicense. Competitors use AGPL (FreshRSS, Folo, Karakeep) or Apache-2.0 (Miniflux). Copied Miniflux files keep their Apache-2.0 headers either way. [Apache-2.0.]
+3. Licence? The repository already carries the Unlicense from its first commit, as most of your fleet does. Competitors use AGPL (FreshRSS, Folo, Karakeep) or Apache-2.0 (Miniflux). Copied Miniflux files keep their Apache-2.0 headers either way. [Apache-2.0, replacing that file before the first code lands.]
 4. Does the NAS have a GPU? Local summarisation on CPU alone is unproven. [Assume no: local embeddings if a benchmark passes; cloud or batched summaries.]
 5. Should cloud-hosted LLM clients reach Earnest, or only agents on your tailnet? OpenAI's tunnel can reach a private server; others need a public listener and OAuth. [Tailnet first.]
 6. Do you read more on the Mac or the phone? This picks the first native client. [Decide after step 4.]
@@ -88,4 +88,4 @@ These change the plan. Defaults are in brackets.
 
 ## Repository
 
-The repository is private at `BigBoyDevBox/Earnest`, because this agent's account can't create repositories under `L-K-M`. Transfer it when ready. Public repositories also get free GitHub Actions, which matters for Mac and Android builds. App identifiers per fleet convention: `ch.lkmc.Earnest` (macOS), `ch.lkmc.earnest` (Android).
+The repository is public at [`L-K-M/Earnest`](https://github.com/L-K-M/Earnest). The research was written in a private repository, `BigBoyDevBox/Earnest`, because this agent's account can't create repositories under `L-K-M`, and its history was merged here. Public repositories get free GitHub Actions, which matters for Mac and Android builds. App identifiers per fleet convention: `ch.lkmc.Earnest` (macOS), `ch.lkmc.earnest` (Android).
