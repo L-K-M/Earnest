@@ -329,7 +329,7 @@ func TestEveryToolHasNoOutboundRequests(t *testing.T) {
 		{"get_briefing", briefingArgs{View: attackerURL, IncludeSummaries: true}, false},
 		{"list_entries", listArgs{}, false},
 		{"read_entry", readArgs{EntryID: f.entryIDs[0]}, false},
-		{"search", searchArgs{Query: attackerURL}, true},
+		{"search", searchArgs{Query: attackerURL}, false},
 		{"list_feeds", struct{}{}, false},
 		{"advance_position", positionArgs{OperationID: "position:" + attackerURL, View: attackerURL, Seq: 1}, false},
 		{"annotate", annotateArgs{OperationID: "note:" + attackerURL, EntryIDs: f.entryIDs, Kind: service.AnnotationBrief, Value: attackerURL}, false},
@@ -521,6 +521,23 @@ func TestToolErrorPrivacy(t *testing.T) {
 	for _, domain := range []error{service.ErrInvalid, service.ErrUnauthorized, service.ErrForbidden, service.ErrNotFound, service.ErrConflict, service.ErrGone, service.ErrRateLimited, service.ErrUnavailable} {
 		if got := safeToolError(domain); !errors.Is(got, domain) {
 			t.Fatalf("lost domain error: %v", got)
+		}
+	}
+}
+
+// Search returns stored entries, each marked untrusted.
+func TestSearchFindsStoredEntries(t *testing.T) {
+	f := newFixture(t, storetest.NewTemplate(t))
+	var out struct {
+		Results []searchHit `json:"results"`
+	}
+	decodeOutput(t, call(t, f, "search", searchArgs{Query: "Article"}), &out)
+	if len(out.Results) == 0 {
+		t.Fatal("search found no stored entries")
+	}
+	for _, hit := range out.Results {
+		if !hit.Untrusted || hit.EntryID == 0 {
+			t.Fatalf("hit = %+v, want an untrusted entry match", hit)
 		}
 	}
 }
