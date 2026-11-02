@@ -166,7 +166,7 @@ The protocol, because a change feed without bootstrap and recovery isn't sync:
 
 The model is allowed to reject these mechanisms, including restore handling and the compatibility conflict policy. At-most-once delivery alone doesn't solve vector 19.
 
-**Open after round 9.** [The ninth review](raw/r6-sync.md) found these undecided or contradictory. Step 1 settles them too:
+**Open after round 9.** [The ninth review](raw/r6-sync.md) found these undecided or contradictory. [All are now decided](decisions.md#sync):
 
 - `state:batch` isn't atomic, yet a batch becomes one compact `state.updated`, which must commit with its mutation. Otherwise a write landing mid-batch can leave a replaying client different from the server. One event per item, or resolve the batch atomically before compacting.
 - Bootstrap keeps "the higher `rev` per object", but no resource carries one. Each bootstrapped object needs its last change-log `rev`, and state its `state_rev`.

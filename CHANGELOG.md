@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Decisions on licence, code reuse, the agent model and the round 9 sync
+  and security gaps, in `docs/research/decisions.md`.
 - Preliminary research: competitor survey, feature set, UX, tech stack
   (Go + Postgres/pgvector, provisional), API shape, LLM threat model and a
   staged build sequence — see `docs/research/` (#1, merged from
