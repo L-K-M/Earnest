@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Atom links</title>
+    <atom:link rel="self" type="application/rss+xml" href="/feed.xml"/>
+    <atom:link rel="alternate" type="text/html" href="/"/>
+    <item>
+      <title>Atom link item</title>
+      <atom:link rel="alternate" type="text/html" href="/posts/1"/>
+      <atom:link rel="enclosure" href="/media/1.mp3" type="audio/mpeg"/>
+      <guid>atom-link-item</guid>
+      <description>No plain link here</description>
+    </item>
+  </channel>
+</rss>

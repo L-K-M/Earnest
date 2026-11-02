@@ -1,0 +1,11 @@
+{
+  "error": "feed: malformed feed document",
+  "feed": {
+    "title": "",
+    "site_url": "",
+    "feed_url": "",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": null
+}

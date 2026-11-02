@@ -1,0 +1,29 @@
+{
+  "feed": {
+    "title": "Relative",
+    "site_url": "https://example.com/blog/",
+    "feed_url": "https://example.com/blog/index.html",
+    "language": "",
+    "icon_url": "https://example.com/blog/img/logo.png"
+  },
+  "items": [
+    {
+      "guid": "relative-1",
+      "url": "https://example.com/blog/post/1",
+      "title": "Relative item",
+      "author": "",
+      "summary_html": "\u003ca href=\"https://example.com/root\"\u003eroot\u003c/a\u003e and \u003cimg src=\"https://example.com/blog/pic.jpg\"/\u003e",
+      "content_html": "",
+      "enclosures": [
+        {
+          "url": "https://example.com/blog/media/a.mp3",
+          "type": "audio/mpeg",
+          "length": 10
+        }
+      ],
+      "language": "",
+      "identity": "f373e2a58d551a3c7710b6011f2f28e5114309d54712f558bcfe700c389feba3",
+      "content_hash": "4ec1b0226f5c487c502b0165fe06c3167c093a816d2e0b9c244f63ffc4243f97"
+    }
+  ]
+}

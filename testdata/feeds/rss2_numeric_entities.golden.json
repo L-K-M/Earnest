@@ -1,0 +1,22 @@
+{
+  "feed": {
+    "title": "Entities \u0026",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "e1",
+      "url": "https://example.com/e",
+      "title": "café : naïve",
+      "author": "",
+      "summary_html": "\u003cb\u003eescaped\u003c/b\u003e",
+      "content_html": "",
+      "language": "",
+      "identity": "d0a63c28ddac49ac7ffd9c50972928cf531a5180c6f6b2bafd9552d7352954d9",
+      "content_hash": "384fad9b2910f2875aefabecb8c2ad2de9b5204c08ab693c67e223939a251b78"
+    }
+  ]
+}

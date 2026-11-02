@@ -1,0 +1,23 @@
+{
+  "feed": {
+    "title": "Future",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "future",
+      "url": "https://example.com/future",
+      "title": "Future post",
+      "author": "",
+      "published": "2035-03-04T10:11:12Z",
+      "summary_html": "Published in the future",
+      "content_html": "",
+      "language": "",
+      "identity": "5bfa66f28d64fd981769bb80702380ae0fc1cc133ff824262452cc5376ce4b60",
+      "content_hash": "77496123e6c040dcd81585162d8452c8af867a0978e819001aad8de15c731c04"
+    }
+  ]
+}

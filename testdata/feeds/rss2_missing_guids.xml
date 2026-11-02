@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>No guids</title>
+    <link>https://example.com/</link>
+    <item>
+      <title>Only title and date</title>
+      <pubDate>Mon, 02 Jan 2006 15:04:05 GMT</pubDate>
+      <description>Fallback identity</description>
+    </item>
+    <item>
+      <title>Only link</title>
+      <link>https://example.com/link-only</link>
+      <description>Link identity</description>
+    </item>
+    <item>
+      <title></title>
+      <description>Nothing at all</description>
+    </item>
+  </channel>
+</rss>

@@ -1,0 +1,45 @@
+{
+  "feed": {
+    "title": "No guids",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "",
+      "url": "",
+      "title": "Only title and date",
+      "author": "",
+      "published": "2006-01-02T15:04:05Z",
+      "summary_html": "Fallback identity",
+      "content_html": "",
+      "language": "",
+      "identity": "df23974f7bd57b2869b68af14431938c06e5f35420421942564206d2db237c6e",
+      "content_hash": "90e0c4772d324e1fece08d4aa3c20fcb94b81a55ef64db688c6f20f3275b10de"
+    },
+    {
+      "guid": "",
+      "url": "https://example.com/link-only",
+      "title": "Only link",
+      "author": "",
+      "summary_html": "Link identity",
+      "content_html": "",
+      "language": "",
+      "identity": "864e102b204829d5a74670bc15e04813f75f8fd15da69450446483d705a28cea",
+      "content_hash": "a2755b2db109bb5f7a26d50fa1be625ef5e639736a5dc8d4b95021e72be4a08d"
+    },
+    {
+      "guid": "",
+      "url": "",
+      "title": "",
+      "author": "",
+      "summary_html": "Nothing at all",
+      "content_html": "",
+      "language": "",
+      "identity": "bcd50e203968b43842d6194605bac556a826ac83fbf758ee19543a6019f29b63",
+      "content_hash": "979089e8c3c0773829a6bd61605eb8477e8a566d82d02f0e1b068a34f510f5d7"
+    }
+  ]
+}

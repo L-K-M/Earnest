@@ -1,0 +1,22 @@
+{
+  "feed": {
+    "title": "Old school",
+    "site_url": "",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "en-us",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "",
+      "url": "https://example.com/091",
+      "title": "Ninety one",
+      "author": "",
+      "summary_html": "Old times",
+      "content_html": "",
+      "language": "en-us",
+      "identity": "61bf8ced53b3c3b135472cb5d35c4581752e615076e00c287b6f99478e857081",
+      "content_hash": "79e1558b9685b435d30bd41fffe9cda6c59e66cf8e3079395f4249f78363f661"
+    }
+  ]
+}

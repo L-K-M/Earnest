@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Double escaped</title>
+    <link>https://example.com/</link>
+    <item>
+      <title>Double</title>
+      <link>https://example.com/double</link>
+      <guid>double</guid>
+      <description>&amp;lt;p&amp;gt;markup that was escaped twice&amp;lt;/p&amp;gt;</description>
+      <content:encoded><![CDATA[&lt;p&gt;escaped inside cdata&lt;/p&gt;]]></content:encoded>
+    </item>
+  </channel>
+</rss>

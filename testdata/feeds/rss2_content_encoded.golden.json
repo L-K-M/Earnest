@@ -1,0 +1,22 @@
+{
+  "feed": {
+    "title": "Content encoded",
+    "site_url": "https://example.com/news/",
+    "feed_url": "https://example.com/rss",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "ce-1",
+      "url": "https://example.com/news/1",
+      "title": "Full content",
+      "author": "",
+      "summary_html": "\u003cp\u003eSummary with \u003ca href=\"https://example.com/about\"\u003elink\u003c/a\u003e\u003c/p\u003e",
+      "content_html": "\u003cp\u003eBody with \u003cimg src=\"https://example.com/news/photo.jpg\"/\u003e and \u003ca href=\"https://example.com/news/more.html\"\u003emore\u003c/a\u003e\u003c/p\u003e",
+      "language": "",
+      "identity": "dcb6d62e82362548f57908c0645a0faaccf9c91f4eb3e76ea1955a6ffa982020",
+      "content_hash": "58ccd0cb35e81e251a3a53f33cb9c64e2800776ee65ad536019f464be7c629fa"
+    }
+  ]
+}

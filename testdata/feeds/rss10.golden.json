@@ -1,0 +1,26 @@
+{
+  "feed": {
+    "title": "RDF feed",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": "https://example.com/logo.png"
+  },
+  "items": [
+    {
+      "guid": "https://example.com/rdf/1",
+      "url": "https://example.com/rdf/1",
+      "title": "RDF item",
+      "author": "Ada",
+      "published": "2006-01-02T15:04:05Z",
+      "summary_html": "RDF description",
+      "content_html": "",
+      "categories": [
+        "RDF"
+      ],
+      "language": "",
+      "identity": "367766eafede05b82c2e650fb9565d8cad2080f47d3e93654b966e2a716aa254",
+      "content_hash": "b544dff2f9358ccd2d884146f6b002c445c333110dd36d6ca2bc85271375f5e7"
+    }
+  ]
+}

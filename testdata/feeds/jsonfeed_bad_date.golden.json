@@ -1,0 +1,44 @@
+{
+  "feed": {
+    "title": "Bad dates",
+    "site_url": "",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "1",
+      "url": "",
+      "title": "Words",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "language": "",
+      "identity": "bc7cfe6caf392f99f3c7493efe65b63cc62bf9bae84c6891e84e2bd0aab52182",
+      "content_hash": "ebcc17b4c55f1f6f80a8a5c81edba75453ec98ea80318e65f9a7d030cd2d6c2e"
+    },
+    {
+      "guid": "2",
+      "url": "",
+      "title": "Impossible",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "language": "",
+      "identity": "1bc95bcd03f2bf8ecbef03e527f643e067297eee7abd4555131dac1a8064dd6a",
+      "content_hash": "cd9ca301294ede502a48a11de9803fe1b05575b4fd618032c2a28f4e26724cd4"
+    },
+    {
+      "guid": "3",
+      "url": "",
+      "title": "No dates",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "language": "",
+      "identity": "e484326165288e271642e16922e5b2bdc6af272aa83859a2df8cfc11df98fdee",
+      "content_hash": "37dd403cd6c523d6ebfbd026888a73e41a0def95d5df4edba7d2e841f37d93ad"
+    }
+  ]
+}

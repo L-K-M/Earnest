@@ -1,0 +1,35 @@
+{
+  "feed": {
+    "title": "JSON ten",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": "https://example.com/icon.png"
+  },
+  "items": [
+    {
+      "guid": "1",
+      "url": "https://example.com/posts/1",
+      "title": "JSON item",
+      "author": "",
+      "published": "2026-01-02T03:04:05Z",
+      "updated": "2026-01-03T03:04:05Z",
+      "summary_html": "A summary",
+      "content_html": "Plain text body",
+      "enclosures": [
+        {
+          "url": "https://example.com/file.pdf",
+          "type": "application/pdf",
+          "length": 2048
+        }
+      ],
+      "categories": [
+        "tech",
+        "json"
+      ],
+      "language": "",
+      "identity": "bc7cfe6caf392f99f3c7493efe65b63cc62bf9bae84c6891e84e2bd0aab52182",
+      "content_hash": "159bb3c4cf947792053a96aa3c9ade017a72d530274889acc1e22681f2ded191"
+    }
+  ]
+}

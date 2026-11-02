@@ -1,0 +1,33 @@
+{
+  "feed": {
+    "title": "Numeric ids",
+    "site_url": "",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "12345678901234567890",
+      "url": "",
+      "title": "Big number",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "language": "",
+      "identity": "f10700482d2fd7e0f8ce296141e88cf1d4352f611a483202b93b07dd6d28a2e3",
+      "content_hash": "8e9d919091af07105ff616d57a3cbed524509e4946c8637235c38553f333c917"
+    },
+    {
+      "guid": "7",
+      "url": "",
+      "title": "Small number",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "language": "",
+      "identity": "fef9ff117509d6d85d6a3f8b1499146f92b3585c33c1fa0d80a320a67392deab",
+      "content_hash": "da71cb8c9376636491e1bddab299d5cb2a639d2b804147eed592a5477014b7a2"
+    }
+  ]
+}

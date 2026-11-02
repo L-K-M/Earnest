@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Atom bases</title>
+  <entry xml:base="posts/">
+    <title>Based entry</title>
+    <id>tag:example.com,2006:3</id>
+    <link rel="alternate" type="text/html" href="1"/>
+    <link rel="alternate" type="text/html" href="/absolute"/>
+    <link xml:base="/media/" rel="enclosure" href="audio.mp3" type="audio/mpeg"/>
+    <content type="html">&lt;img src="pic.jpg"&gt;</content>
+  </entry>
+</feed>

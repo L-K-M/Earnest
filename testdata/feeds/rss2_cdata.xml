@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title><![CDATA[CDATA plain & simple]]></title>
+    <link>https://example.com/</link>
+    <item>
+      <title><![CDATA[A <b>bold</b> title]]></title>
+      <link>https://example.com/cdata</link>
+      <guid isPermaLink="true">https://example.com/cdata</guid>
+      <description><![CDATA[<p>Hello <em>there</em></p>]]></description>
+      <content:encoded><![CDATA[<p>Full body with <a href="/relative">relative link</a></p>]]></content:encoded>
+    </item>
+  </channel>
+</rss>

@@ -1,0 +1,26 @@
+{
+  "feed": {
+    "title": "JSON eleven",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.com/feed.json",
+    "language": "en",
+    "icon_url": "https://example.com/favicon.ico"
+  },
+  "items": [
+    {
+      "guid": "42",
+      "url": "https://example.com/posts/42",
+      "title": "Relative item",
+      "author": "Ada",
+      "published": "2026-01-02T03:04:05Z",
+      "summary_html": "",
+      "content_html": "\u003cp\u003eBody \u003ca href=\"https://example.com/more.html\"\u003emore\u003c/a\u003e\u003c/p\u003e",
+      "categories": [
+        "tech"
+      ],
+      "language": "fr",
+      "identity": "6febea1f18e91b1b7d3cfa12fa8a8ba52e0f938f9b6a02b66a879127900d98f4",
+      "content_hash": "01c2e915e3c83baabc7ba93b7edebfe3b28ecff46b28c23f5b8adc1720cf7706"
+    }
+  ]
+}

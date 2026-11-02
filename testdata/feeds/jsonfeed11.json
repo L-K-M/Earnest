@@ -1,0 +1,24 @@
+{
+  "version": "https://jsonfeed.org/version/1.1",
+  "title": "JSON eleven",
+  "home_page_url": "/",
+  "favicon": "https://example.com/favicon.ico",
+  "language": "en",
+  "authors": [
+    {"name": "Ada", "url": "https://example.com/ada"},
+    {"name": "Grace", "avatar": "https://example.com/grace.png"}
+  ],
+  "items": [
+    {
+      "id": 42,
+      "url": "/posts/42",
+      "external_url": "https://elsewhere.example/posts/42",
+      "title": "Relative item",
+      "content_html": "<p>Body <a href=\"more.html\">more</a></p>",
+      "date_published": "2026-01-02T03:04:05Z",
+      "authors": [{"name": "Ada"}],
+      "tags": ["tech", "tech"],
+      "language": "fr"
+    }
+  ]
+}

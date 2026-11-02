@@ -1,0 +1,22 @@
+{
+  "feed": {
+    "title": "Double escaped",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "double",
+      "url": "https://example.com/double",
+      "title": "Double",
+      "author": "",
+      "summary_html": "\u0026amp;lt;p\u0026amp;gt;markup that was escaped twice\u0026amp;lt;/p\u0026amp;gt;",
+      "content_html": "\u0026amp;lt;p\u0026amp;gt;escaped inside cdata\u0026amp;lt;/p\u0026amp;gt;",
+      "language": "",
+      "identity": "1999f40dec49a29ae4987b5a76302037b2ab0a245a6baeee3643fbf35e0d89cd",
+      "content_hash": "3e77afc00cba5c6deda3e4e3b84f2a2a0af513ea000f6d03144b503edc2e478c"
+    }
+  ]
+}

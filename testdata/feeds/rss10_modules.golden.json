@@ -1,0 +1,26 @@
+{
+  "feed": {
+    "title": "RDF modules",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.com/rdf.xml",
+    "language": "de",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "https://example.com/rdf/2",
+      "url": "https://example.com/rdf/2",
+      "title": "With content module",
+      "author": "Grace",
+      "published": "2006-01-02T00:00:00Z",
+      "summary_html": "",
+      "content_html": "\u003cp\u003eRDF body\u003c/p\u003e",
+      "categories": [
+        "Modules"
+      ],
+      "language": "de",
+      "identity": "c3575cb5aae53e4f34d7f15cac50520e1f3868b738c1f40d0e7352dbf3dd66ee",
+      "content_hash": "dc34cc3b2925d1fb8258fc4d10204af7c2873e4c06f50f980acae78fb410ce49"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "feed": {
+    "title": "Enclosures",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "ep1",
+      "url": "https://example.com/ep1",
+      "title": "Podcast episode",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "enclosures": [
+        {
+          "url": "https://cdn.example.com/ep1.mp3",
+          "type": "audio/mpeg",
+          "length": 123456
+        },
+        {
+          "url": "https://cdn.example.com/ep1.ogg",
+          "type": "audio/ogg",
+          "length": 98765
+        }
+      ],
+      "categories": [
+        "News",
+        "news"
+      ],
+      "language": "",
+      "identity": "b8cc0f49e565e1dc26634aa904eb26aec88f91cd12526aea4a49bb00b3a73e51",
+      "content_hash": "a74eb8a96a3a2a78090af4af7216a0175ab8e64773aed85ac9f369251fdb2583"
+    }
+  ]
+}

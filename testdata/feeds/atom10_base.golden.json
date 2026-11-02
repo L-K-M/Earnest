@@ -1,0 +1,28 @@
+{
+  "feed": {
+    "title": "Atom bases",
+    "site_url": "",
+    "feed_url": "https://example.com/atom.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "tag:example.com,2006:3",
+      "url": "https://example.com/posts/1",
+      "title": "Based entry",
+      "author": "",
+      "summary_html": "",
+      "content_html": "\u003cimg src=\"https://example.com/posts/pic.jpg\"/\u003e",
+      "enclosures": [
+        {
+          "url": "https://example.com/media/audio.mp3",
+          "type": "audio/mpeg"
+        }
+      ],
+      "language": "",
+      "identity": "c7a858d736bdff59e437aaa949f83df75c9977520dafe26344ddaed981face49",
+      "content_hash": "1ac7d271f3154334167cfb9af1b0871226f373376a9d93e4a659f44b5002265e"
+    }
+  ]
+}
