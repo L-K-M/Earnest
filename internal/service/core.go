@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/L-K-M/Earnest/internal/outbound"
+	"github.com/L-K-M/Earnest/internal/push"
 	"github.com/L-K-M/Earnest/internal/store"
 	"github.com/L-K-M/Earnest/internal/syncmodel"
 	"github.com/jackc/pgx/v5"
@@ -33,17 +35,21 @@ type ProbeError interface {
 
 // Deps supplies the clock, outbound probe and deployment secret (at least 32 bytes).
 type Deps struct {
-	Clock      func() time.Time
-	FeedProber FeedProber
-	SecretKey  []byte
+	Clock        func() time.Time
+	FeedProber   FeedProber
+	SecretKey    []byte
+	PushRegistry *push.Registry
+	Outbound     *outbound.Client
 }
 
 // Service owns domain operations. Its dependencies must be safe for concurrent use.
 type Service struct {
-	store       *store.Store
-	now         func() time.Time
-	prober      FeedProber
-	credentials cipher.AEAD
+	store        *store.Store
+	now          func() time.Time
+	prober       FeedProber
+	credentials  cipher.AEAD
+	pushRegistry *push.Registry
+	outbound     *outbound.Client
 }
 
 // New derives a purpose-separated credential key without retaining the deployment secret.
@@ -67,7 +73,7 @@ func New(db *store.Store, deps Deps) (*Service, error) {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{store: db, now: now, prober: deps.FeedProber, credentials: aead}, nil
+	return &Service{store: db, now: now, prober: deps.FeedProber, credentials: aead, pushRegistry: deps.PushRegistry, outbound: deps.Outbound}, nil
 }
 
 func (s *Service) checkActor(ctx context.Context, a Actor, scope Scope) error {
