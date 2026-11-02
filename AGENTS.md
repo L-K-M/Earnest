@@ -5,8 +5,8 @@ Guidance for AI coding agents working in this repository.
 ## What Earnest is
 
 Earnest is a self-hosted **RSS reader** for web, Mac and Android whose API
-treats agents as distinct, governed actors: own identity, feed allowlist,
-read position, annotations, budget and revert log. Deployed on a home NAS via
+treats agents as distinct, governed actors: own identity, read position,
+annotations, budget and revert log. Deployed on a home NAS via
 Docker Compose; tailnet-first, not public.
 
 **This repository is a deployment scaffold plus the research.** The plan lives
@@ -59,7 +59,11 @@ Postgres + pgvector.
 
 - The research docs are defaults to overturn, not commitments
   (`docs/research/README.md`) — but don't rewrite them in place; record new
-  decisions alongside.
+  decisions alongside, as in `docs/research/decisions.md`, which overrides
+  the research.
+- The licence is the Unlicense. Don't copy, port or vendor code from
+  third-party projects; read them for reference only. Code from L-K-M's own
+  repositories may be reused. Libraries are fine as dependencies.
 - CI is SHA-pinned actions + least-privilege permissions; `make check` mirrors
   the CI gate exactly.
 

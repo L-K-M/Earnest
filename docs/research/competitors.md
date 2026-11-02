@@ -54,7 +54,7 @@ Do not fork these. The GPL clients conflict with your usual licences, and their 
 
 | Project | Licence, stack | Stars, last release | Speaks | Note |
 | --- | --- | --- | --- | --- |
-| [Miniflux](https://github.com/miniflux/v2) | Apache-2.0, Go, Postgres | 9.9k, 2.3.4 on 2026-10-20 | Google Reader, Fever, REST | Closest technical relative. Borrow from it |
+| [Miniflux](https://github.com/miniflux/v2) | Apache-2.0, Go, Postgres | 9.9k, 2.3.4 on 2026-10-20 | Google Reader, Fever, REST | Closest technical relative. Borrow from it. [Decided since](decisions.md#licence-and-code-reuse): reference only, no copied code |
 | [FreshRSS](https://github.com/FreshRSS/FreshRSS) | AGPL-3.0, PHP | 16.5k, 1.30.4 on 2026-10-21 | Google Reader, Fever | Largest install base |
 | [CommaFeed](https://github.com/Athou/commafeed) | Apache-2.0, Java | 3.6k, 7.4.1 on 2026-10-22 | Reported | JVM footprint |
 | [Yarr](https://github.com/nkanaev/yarr) | MIT, Go, SQLite | 4.1k, v2.9 on 2026-09-07 | Fever | One binary; proves the SQLite route for small use |

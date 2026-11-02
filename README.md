@@ -4,8 +4,8 @@
 > LLM disclosure: This codebase was written with substantial help from large language models: AI coding agents working from the [`AGENTS.md`](AGENTS.md) brief in this repo.
 
 An RSS reader for web, Mac and Android, with an API that LLMs can use: agents
-get their own identity, feed allowlist, read position, annotations, budget and
-revert log. Self-hosted on your own hardware via Docker Compose.
+get their own identity, read position, annotations, budget and revert log.
+Self-hosted on your own hardware via Docker Compose.
 
 > ### Status: scaffold
 >
