@@ -62,7 +62,7 @@ func (s *Service) PutPosition(ctx context.Context, a Actor, view string, seq uin
 		return syncmodel.Position{}, fmt.Errorf("op_id: %w", ErrInvalid)
 	}
 	out := syncmodel.Position{Principal: syncmodel.ID(a.PrincipalID), View: view, Seq: seq}
-	err := s.store.WithTx(ctx, func(tx pgx.Tx) error {
+	err := s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
 			return err
 		}

@@ -37,6 +37,7 @@ type Auth struct {
 	db        *store.Store
 	now       func() time.Time
 	secretKey []byte
+	events    broker
 	mu        sync.Mutex
 	attempts  map[string]loginAttempts
 }
