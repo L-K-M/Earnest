@@ -47,12 +47,17 @@ func main() {
 			slog.Error("migrate failed", "error", err)
 			os.Exit(1)
 		}
+	case "user", "token", "compat-password":
+		if err := authCommand(os.Args[1:]); err != nil {
+			slog.Error("identity command failed", "error", err)
+			os.Exit(1)
+		}
 	case "healthcheck":
 		os.Exit(healthcheck())
 	case "version", "--version", "-version":
 		fmt.Printf("earnest %s (%s)\n", version, revision)
 	default:
-		fmt.Fprintf(os.Stderr, "usage: earnest [serve|healthcheck|migrate|version]\n")
+		fmt.Fprintf(os.Stderr, "usage: earnest [serve|healthcheck|migrate|version|user|token|compat-password]\n")
 		os.Exit(2)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -48,9 +49,14 @@ func TestStore(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer db.Close()
+		// Every embedded migration is recorded exactly once.
+		files, err := filepath.Glob(filepath.Join("migrations", "*.sql"))
+		if err != nil || len(files) == 0 {
+			t.Fatalf("migration files=%d error=%v", len(files), err)
+		}
 		var count int
-		if err := db.Pool().QueryRow(ctx, "SELECT count(*) FROM schema_migrations").Scan(&count); err != nil || count != 1 {
-			t.Fatalf("ledger count=%d error=%v", count, err)
+		if err := db.Pool().QueryRow(ctx, "SELECT count(*) FROM schema_migrations").Scan(&count); err != nil || count != len(files) {
+			t.Fatalf("ledger count=%d want %d error=%v", count, len(files), err)
 		}
 		var tables int
 		if err := db.Pool().QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'").Scan(&tables); err != nil || tables < 35 {

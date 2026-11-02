@@ -55,7 +55,7 @@ func TestMigrate(t *testing.T) {
 	}
 	defer db.Close()
 	var version int
-	if err := db.Pool().QueryRow(context.Background(), "SELECT max(version) FROM schema_migrations").Scan(&version); err != nil || version != 1 {
+	if err := db.Pool().QueryRow(context.Background(), "SELECT max(version) FROM schema_migrations").Scan(&version); err != nil || version != 3 {
 		t.Fatalf("schema version %d: %v", version, err)
 	}
 }
