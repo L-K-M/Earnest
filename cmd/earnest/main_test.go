@@ -7,6 +7,8 @@ import (
 	"github.com/L-K-M/Earnest/internal/store/storetest"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -54,8 +56,36 @@ func TestMigrate(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	want := highestMigrationVersion(t)
 	var version int
-	if err := db.Pool().QueryRow(context.Background(), "SELECT max(version) FROM schema_migrations").Scan(&version); err != nil || version != 3 {
-		t.Fatalf("schema version %d: %v", version, err)
+	if err := db.Pool().QueryRow(context.Background(), "SELECT max(version) FROM schema_migrations").Scan(&version); err != nil || version != want {
+		t.Fatalf("schema version %d want %d: %v", version, want, err)
 	}
+}
+
+// highestMigrationVersion returns the highest version number among the SQL
+// migration files, so the test follows the migration set instead of a
+// hard-coded version.
+func highestMigrationVersion(t *testing.T) int {
+	t.Helper()
+	names, err := filepath.Glob(filepath.Join("..", "..", "internal", "store", "migrations", "*.sql"))
+	if err != nil || len(names) == 0 {
+		t.Fatalf("glob migrations: %d files, error=%v", len(names), err)
+	}
+	highest := 0
+	for _, name := range names {
+		base := strings.TrimSuffix(filepath.Base(name), ".sql")
+		prefix, _, ok := strings.Cut(base, "_")
+		if !ok {
+			t.Fatalf("migration %q has no version prefix", name)
+		}
+		version, err := strconv.Atoi(prefix)
+		if err != nil {
+			t.Fatalf("migration %q has invalid version prefix: %v", name, err)
+		}
+		if version > highest {
+			highest = version
+		}
+	}
+	return highest
 }
