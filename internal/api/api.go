@@ -99,6 +99,7 @@ func build(svc *service.Service, auth *service.Auth, logger *slog.Logger, baseUR
 	s.activityRoutes()
 	s.webhookRoutes()
 	s.searchRoutes()
+	s.ruleRoutes()
 	s.documentProblems()
 	mux.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) { writeProblem(w, problemStatus(http.StatusNotFound)) })
 	mux.HandleFunc("GET /openapi.json", func(w http.ResponseWriter, r *http.Request) {

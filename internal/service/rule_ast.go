@@ -54,6 +54,9 @@ type RuleAction struct {
 
 const maxRuleNodes = 256
 
+// DefaultRuleNotificationBudget limits notifications per rule per day.
+const DefaultRuleNotificationBudget = 3
+
 // ValidateRule checks the closed AST and the allowed predicates per action.
 // Ownership of referenced feeds, folders, labels and webhooks is checked by
 // the service when a rule is saved.
@@ -77,8 +80,8 @@ func ValidateRule(predicate RulePredicate, actions []RuleAction) error {
 				return fmt.Errorf("shelf action requires selected feeds and a valid shelf: %w", ErrInvalid)
 			}
 		case RuleNotify:
-			if action.Budget <= 0 || action.LabelID != 0 || action.Shelf != "" || action.WebhookID != 0 {
-				return fmt.Errorf("notification action requires a budget: %w", ErrInvalid)
+			if action.Budget < 0 || action.LabelID != 0 || action.Shelf != "" || action.WebhookID != 0 {
+				return fmt.Errorf("invalid notification action: %w", ErrInvalid)
 			}
 		case RuleWebhook:
 			if !webhookSafe || action.WebhookID <= 0 || action.LabelID != 0 || action.Shelf != "" || action.Budget != 0 {

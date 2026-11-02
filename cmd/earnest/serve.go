@@ -143,6 +143,7 @@ func serve() error {
 	}{
 		{"notification delivery", svc.DeliverNotifications},
 		{"webhook delivery", svc.RunWebhookJobs},
+		{"rule jobs", svc.RunRuleJobs},
 	} {
 		workers.Go(func() { runDelivery(ctx, logger, job.name, job.run) })
 	}

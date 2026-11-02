@@ -308,6 +308,12 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 			}
 		}
 
+		if len(newEntries) > 0 {
+			if err := enqueueRuleJobs(ctx, tx, outcome.FeedID, newEntries, receipt); err != nil {
+				return err
+			}
+		}
+
 		// Finalise only the initial cohort. Later backdated arrivals remain new
 		// by first_seen, regardless of the publisher's display timestamp.
 		for _, sub := range subscribers {
@@ -331,11 +337,6 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 	})
 	if err != nil {
 		return IngestSummary{}, err
-	}
-	if len(newEntries) > 0 {
-		if err := s.executeIngestRules(ctx, outcome.FeedID, newEntries); err != nil {
-			return summary, fmt.Errorf("entries committed; execute rules: %w", err)
-		}
 	}
 	return summary, nil
 }

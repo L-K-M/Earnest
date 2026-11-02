@@ -11,13 +11,14 @@ import (
 
 // Rule is a human-authored deterministic rule.
 type Rule struct {
-	ID          int64         `json:"id"`
-	Name        string        `json:"name"`
-	Predicate   RulePredicate `json:"predicate"`
-	Actions     []RuleAction  `json:"actions"`
-	Enabled     bool          `json:"enabled"`
-	LastMatchAt *time.Time    `json:"last_match_at,omitempty"`
-	MatchCount  int64         `json:"match_count"`
+	ID            int64         `json:"id"`
+	Name          string        `json:"name"`
+	Predicate     RulePredicate `json:"predicate"`
+	Actions       []RuleAction  `json:"actions"`
+	Enabled       bool          `json:"enabled"`
+	LastMatchAt   *time.Time    `json:"last_match_at,omitempty"`
+	MatchCount    int64         `json:"match_count"`
+	DisableReason string        `json:"disable_reason,omitempty"`
 }
 
 // NotificationSender delivers a rule notification within its configured budget.
@@ -30,9 +31,16 @@ type WebhookEmitter interface {
 	EmitEntryMatched(context.Context, int64, int64, int64, int64) error
 }
 
+func (s *Service) ruleHuman(ctx context.Context, a Actor) error {
+	if a.Kind != PrincipalHuman {
+		return ErrForbidden
+	}
+	return s.checkActor(ctx, a, ScopeFeedsWrite)
+}
+
 // CreateRule validates and saves a human-authored rule.
 func (s *Service) CreateRule(ctx context.Context, a Actor, rule Rule) (Rule, error) {
-	if err := s.checkActor(ctx, a, ScopeFeedsWrite); err != nil {
+	if err := s.ruleHuman(ctx, a); err != nil {
 		return Rule{}, err
 	}
 	if !validName(rule.Name) {
@@ -183,7 +191,7 @@ func (s *Service) ruleEntries(ctx context.Context, user int64, since time.Time, 
 
 // DryRunRule returns matching entry IDs from the past seven days without writing.
 func (s *Service) DryRunRule(ctx context.Context, a Actor, p RulePredicate, actions []RuleAction) ([]int64, error) {
-	if err := s.checkActor(ctx, a, ScopeFeedsWrite); err != nil {
+	if err := s.ruleHuman(ctx, a); err != nil {
 		return nil, err
 	}
 	if err := ValidateRule(p, actions); err != nil {
@@ -207,7 +215,7 @@ func (s *Service) DryRunRule(ctx context.Context, a Actor, p RulePredicate, acti
 
 // Rules lists the user's rules in creation order.
 func (s *Service) Rules(ctx context.Context, a Actor) ([]Rule, error) {
-	if err := s.checkActor(ctx, a, ScopeEntriesRead); err != nil {
+	if err := s.ruleHuman(ctx, a); err != nil {
 		return nil, err
 	}
 	rows, err := s.store.Pool().Query(ctx, `SELECT id,source,ast,action,enabled,last_match_at,match_count FROM rules WHERE user_id=$1 ORDER BY id`, a.UserID)
@@ -226,12 +234,14 @@ func (s *Service) Rules(ctx context.Context, a Actor) ([]Rule, error) {
 			return nil, fmt.Errorf("decode predicate: %w", err)
 		}
 		var wrapper struct {
-			Actions []RuleAction `json:"actions"`
+			Actions       []RuleAction `json:"actions"`
+			DisableReason string       `json:"disable_reason"`
 		}
 		if err := json.Unmarshal(actions, &wrapper); err != nil {
 			return nil, fmt.Errorf("decode actions: %w", err)
 		}
 		rule.Actions = wrapper.Actions
+		rule.DisableReason = wrapper.DisableReason
 		out = append(out, rule)
 	}
 	if err := rows.Err(); err != nil {
@@ -242,7 +252,7 @@ func (s *Service) Rules(ctx context.Context, a Actor) ([]Rule, error) {
 
 // UpdateRule replaces a rule's name, predicate, actions and enabled flag.
 func (s *Service) UpdateRule(ctx context.Context, a Actor, rule Rule) error {
-	if err := s.checkActor(ctx, a, ScopeFeedsWrite); err != nil {
+	if err := s.ruleHuman(ctx, a); err != nil {
 		return err
 	}
 	if rule.ID <= 0 || !validName(rule.Name) {
@@ -276,13 +286,13 @@ func (s *Service) UpdateRule(ctx context.Context, a Actor, rule Rule) error {
 
 // SetRuleEnabled enables or disables a rule.
 func (s *Service) SetRuleEnabled(ctx context.Context, a Actor, id int64, enabled bool) error {
-	if err := s.checkActor(ctx, a, ScopeFeedsWrite); err != nil {
+	if err := s.ruleHuman(ctx, a); err != nil {
 		return err
 	}
 	if id <= 0 {
 		return ErrInvalid
 	}
-	tag, err := s.store.Pool().Exec(ctx, `UPDATE rules SET enabled=$3 WHERE user_id=$1 AND id=$2`, a.UserID, id, enabled)
+	tag, err := s.store.Pool().Exec(ctx, `UPDATE rules SET enabled=$3, action=CASE WHEN $3 THEN action - 'disable_reason' ELSE action END WHERE user_id=$1 AND id=$2`, a.UserID, id, enabled)
 	if err != nil {
 		return fmt.Errorf("set rule enabled: %w", err)
 	}
@@ -294,7 +304,7 @@ func (s *Service) SetRuleEnabled(ctx context.Context, a Actor, id int64, enabled
 
 // DeleteRule removes a rule.
 func (s *Service) DeleteRule(ctx context.Context, a Actor, id int64) error {
-	if err := s.checkActor(ctx, a, ScopeFeedsWrite); err != nil {
+	if err := s.ruleHuman(ctx, a); err != nil {
 		return err
 	}
 	if id <= 0 {
