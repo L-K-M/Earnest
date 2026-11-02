@@ -17,3 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   multi-stage `Dockerfile`, `compose.yaml` (Postgres 18 + pgvector),
   `update.sh`, `Makefile`, `scripts/build.sh`, `scripts/release.sh`
   (tag-only), CI, image verification and automated PR review.
+
+### Changed
+
+- Research, round 9 review: step 0 now requires self-hosted ntfy and an
+  allowlist enforced outside the agent; two factual errors fixed; sync
+  and security gaps recorded as open in `api.md` and `llm.md` (#2).
