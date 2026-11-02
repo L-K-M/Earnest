@@ -20,22 +20,22 @@ must encrypt before writing them and never log secrets.
 | `sessions` | SHA-256 session ID, random CSRF secret and expiry. No plaintext cookie ID. |
 | `tokens` | SHA-256 token, app/agent/compat kind, audience, scopes, daily notification budget, expiry, last use, revocation and revision. No feed allowlist. |
 | `device_codes` | Hashed device and user codes, requested scopes/audience, approval/consumption state, expiry and polling interval/last poll for RFC 8628. |
-| `feeds` | URL, language, cache validators, adaptive schedule/backoff, detailed health, item counts and extraction policy/status. Public URLs deduplicate globally; private URLs only within the owner. Credentials require an owner; ownership is immutable. |
+| `feeds` | URL, language, cache validators, adaptive schedule/backoff, detailed health, item counts, a fetch lease, posting rate and extraction policy/status. Public URLs deduplicate globally; private URLs only within the owner. Credentials require an owner; ownership is immutable. |
 | `folders` | User-owned subscription folders, revision and tombstone. Active names are unique. |
-| `subscriptions` | User/feed link, title override, same-user folder, cadence, full-text override, mute flags, revision and tombstone. A trigger rejects subscriptions to another user's private feed. |
+| `subscriptions` | User/feed link, title override, same-user folder, cadence, full-text override, mute flags, initial history cutoff and first-fetch cohort boundary, revision and tombstone. New subscriptions expose only the previous day of initial history in the river; subsequent backdated arrivals still count as new by first_seen_at. A trigger rejects subscriptions to another user's private feed. |
 | `entries` | Feed-local identity hash, global ingest `seq`, publisher metadata, current content hash, language, enclosures, retention tombstone and weighted search vector. Tombstones preserve identity and clear search. |
 | `entry_revisions` | Per-user last change-log revision for a shared entry. A single revision on a shared entry cannot represent multiple users' cursors. |
 | `contents` | Sanitised HTML and plain text, keyed by entry/hash/sanitizer version/source. Lists need not load bodies. |
 | `entry_state` | Per-principal seen/shelf/kept registers, each with revision/time/actor/source, plus `state_rev`. Revision zero represents an untouched register with no provenance; missing rows are unseen. |
 | `positions` | Principal/view resume anchor and revision. No foreign key from anchor to entries: retention must not erase a position. Positions make no read claim. |
 | `labels` | Native user labels with revision and tombstone. Agent annotation labels are separate. |
-| `entry_labels` | Same-user label assignments with revision and tombstone. |
+| `entry_labels` | Same-user label assignments with their own stable IDs, revision and tombstone. One label on two entries produces two membership objects. Label definitions travel in change payloads separately from membership objects. |
 | `annotations` | Plain text note/label/score/brief/summary/blurb, principal provenance, source entry IDs, model, prompt version, revision and tombstone. Arrays support multi-entry briefs. |
 | `changes` | Per-user ordered log, primary key `(user_id, rev)`, object payload and retention time. Range and compact batch results belong in payloads. |
-| `op_ids` | Per-principal operation deduplication and cached result; no independent feature mutations yet. |
+| `op_ids` | Per-principal atomic operation deduplication and cached results, retained for 90 days independently of change-log retention. |
 | `system` | Exactly one row containing a random database generation UUID. Rotate after restore, before serving. |
 | `seq_counter` | Singleton transactional ingest counter; distinct from the nontransactional bigserial identity sequence. |
-| `rev_counters` | One transactional change revision counter per user, created on first allocation. |
+| `rev_counters` | One transactional change revision counter and retained-log floor per user, created on first allocation. The floor survives deleting every retained event. |
 | `notifications` | Sender, recipient, stable operation ID, budget token, inert note, source IDs, closed category, principal-namespaced dedupe key, status/timing and generation. Attempt/delivery states require timestamps. Dedupe keys are indexed, not permanently unique: the service applies its dedupe window. |
 | `devices` | User-owned ntfy/webpush/unifiedpush/apns destination, transport keys and `show_text` opt-in defaulting to false. |
 | `push_settings` | User ntfy configuration with encrypted token, optional paired quiet-hour endpoints, timezone and revision. |
@@ -53,8 +53,11 @@ must encrypt before writing them and never log secrets.
 
 ## Ordering and ownership
 
-Call `store.AllocateCounters` once at the start of a mutation transaction,
-before other row locks. It locks the global seq counter first (even when
+Call `store.LockCore` at the start of a domain mutation transaction,
+before other row locks, when the exact allocation counts require database reads.
+Then call `store.AllocateCounters` for the exact counts while retaining that
+lock. Callers that already know their counts can call `store.AllocateCounters`
+directly before other row locks. It locks the global seq counter first (even when
 allocating zero), then per-user rev counters in ascending user ID order.
 Allocate the exact counts needed, use every number, and commit the mutation,
 its log events and jobs together. Abort the transaction after any error.
@@ -79,8 +82,14 @@ ownership where practical. Arrays of source entry IDs intentionally survive
 retention; the service validates their existence and user visibility on write.
 The service also enforces scopes, human-only device/rule management, allowed
 annotation kinds, source provenance, feed access in retrieval, length limits
-and outbound destination policy. No row-level security or feature query API
-is introduced here.
+and outbound destination policy. There is no row-level security; all feature access goes through the service.
+
+Feed credential envelopes use AES-256-GCM with a random nonce prefixed to the
+ciphertext and tag. HKDF-SHA-256 derives the key from the deployment secret
+with purpose `earnest/feed-credentials/v1`; the same purpose is authenticated
+as additional data. Credentials are never included in resource or sync payloads.
+State provenance stores the model's `rule_or_agent` value. Reads normalize the
+foundation's legacy `rule` and `agent` values to that combined class.
 
 ## Search and queue indexes
 
