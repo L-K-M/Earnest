@@ -86,7 +86,7 @@ func (s *Service) CreateLabel(ctx context.Context, a Actor, name, opID string) (
 		return Label{}, err
 	}
 	var out Label
-	err := s.store.WithTx(ctx, func(tx pgx.Tx) error {
+	err := s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
 			return err
 		}
@@ -127,7 +127,7 @@ func (s *Service) RenameLabel(ctx context.Context, a Actor, id int64, name, opID
 		return Label{}, fmt.Errorf("label id: %w", ErrInvalid)
 	}
 	var out Label
-	err := s.store.WithTx(ctx, func(tx pgx.Tx) error {
+	err := s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
 			return err
 		}
@@ -175,7 +175,7 @@ func (s *Service) DeleteLabel(ctx context.Context, a Actor, id int64, opID strin
 		return Label{}, fmt.Errorf("label id: %w", ErrInvalid)
 	}
 	var out Label
-	err := s.store.WithTx(ctx, func(tx pgx.Tx) error {
+	err := s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
 			return err
 		}
@@ -212,7 +212,7 @@ func (s *Service) DeleteLabel(ctx context.Context, a Actor, id int64, opID strin
 				return err
 			}
 			obj := labelObject(a, membershipID, entry, label.Name, uint64(rev), true)
-			if err := store.InsertChange(ctx, tx, a.UserID, rev, string(syncmodel.LabelRemoved), map[string]any{"object": obj, "label_id": id}, s.now().UTC()); err != nil {
+			if err := insertEvent(ctx, tx, a.UserID, rev, string(syncmodel.LabelRemoved), map[string]any{"object": obj, "label_id": id}, s.now().UTC()); err != nil {
 				return err
 			}
 			rev++
@@ -242,7 +242,7 @@ func (s *Service) AddLabel(ctx context.Context, a Actor, labelID, entryID int64,
 		return LabelMembership{}, fmt.Errorf("label or entry id: %w", ErrInvalid)
 	}
 	var out LabelMembership
-	err := s.store.WithTx(ctx, func(tx pgx.Tx) error {
+	err := s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
 			return err
 		}
@@ -292,7 +292,7 @@ func (s *Service) AddLabel(ctx context.Context, a Actor, labelID, entryID int64,
 			return err
 		}
 		obj := labelObject(a, membershipID, entryID, label.Name, uint64(rev), false)
-		if err := store.InsertChange(ctx, tx, a.UserID, rev, string(syncmodel.LabelAdded), map[string]any{"object": obj, "label_id": labelID}, s.now().UTC()); err != nil {
+		if err := insertEvent(ctx, tx, a.UserID, rev, string(syncmodel.LabelAdded), map[string]any{"object": obj, "label_id": labelID}, s.now().UTC()); err != nil {
 			return err
 		}
 		out = LabelMembership{ID: membershipID, LabelID: labelID, EntryID: entryID, Rev: uint64(rev)}
@@ -313,7 +313,7 @@ func (s *Service) RemoveLabel(ctx context.Context, a Actor, labelID, entryID int
 		return LabelMembership{}, fmt.Errorf("label or entry id: %w", ErrInvalid)
 	}
 	var out LabelMembership
-	err := s.store.WithTx(ctx, func(tx pgx.Tx) error {
+	err := s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
 			return err
 		}
@@ -350,7 +350,7 @@ func (s *Service) RemoveLabel(ctx context.Context, a Actor, labelID, entryID int
 			return err
 		}
 		obj := labelObject(a, membershipID, entryID, label.Name, uint64(rev), true)
-		if err := store.InsertChange(ctx, tx, a.UserID, rev, string(syncmodel.LabelRemoved), map[string]any{"object": obj, "label_id": labelID}, s.now().UTC()); err != nil {
+		if err := insertEvent(ctx, tx, a.UserID, rev, string(syncmodel.LabelRemoved), map[string]any{"object": obj, "label_id": labelID}, s.now().UTC()); err != nil {
 			return err
 		}
 		out = LabelMembership{ID: membershipID, LabelID: labelID, EntryID: entryID, Rev: uint64(rev), Deleted: true}

@@ -259,7 +259,7 @@ func (s *Service) Subscribe(ctx context.Context, a Actor, rawURL string, options
 		return Subscription{}, err
 	}
 	var sub Subscription
-	err = s.store.WithTx(ctx, func(tx pgx.Tx) error {
+	err = s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
 			return err
 		}
@@ -500,7 +500,7 @@ func (s *Service) UpdateSubscription(ctx context.Context, a Actor, id int64, opt
 		return Subscription{}, err
 	}
 	var sub Subscription
-	err = s.store.WithTx(ctx, func(tx pgx.Tx) error {
+	err = s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
 			return err
 		}
@@ -576,7 +576,7 @@ func (s *Service) Unsubscribe(ctx context.Context, a Actor, id int64, opID strin
 	if id <= 0 || !validOpID(opID) {
 		return ErrInvalid
 	}
-	return domainError(s.store.WithTx(ctx, func(tx pgx.Tx) error {
+	return domainError(s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
 			return err
 		}

@@ -457,7 +457,7 @@ func (s *Service) emitChange(ctx context.Context, tx pgx.Tx, user, rev int64, ki
 	case Folder:
 		payload["object"] = syncmodel.Object{Kind: syncmodel.FolderObject, ID: syncmodel.ID(object.ID), Name: object.Name, Rev: object.Rev, Deleted: object.Deleted}
 	}
-	return store.InsertChange(ctx, tx, user, rev, string(kind), payload, s.now().UTC())
+	return insertEvent(ctx, tx, user, rev, string(kind), payload, s.now().UTC())
 }
 
 // replayOp registers (principal, opID) inside the locked mutation. A fresh

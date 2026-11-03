@@ -22,6 +22,7 @@ import (
 )
 
 const (
+	envContentAddr          = "EARNEST_CONTENT_ADDR"
 	envHTTPAddr             = "EARNEST_HTTP_ADDR"
 	envDatabaseURL          = "EARNEST_DATABASE_URL"
 	envBaseURL              = "EARNEST_BASE_URL"
@@ -35,6 +36,7 @@ const (
 )
 
 const (
+	defaultContentAddr   = ":8081"
 	defaultHTTPAddr      = ":8080"
 	defaultBaseURL       = "http://localhost:8080"
 	defaultContentOrigin = "http://localhost:8081"
@@ -56,6 +58,9 @@ const (
 type Config struct {
 	// HTTPAddr is the "host:port" listen address for the API server.
 	HTTPAddr string
+
+	// ContentAddr is the separate article listener address.
+	ContentAddr string
 
 	// DatabaseURL is the Postgres DSN: a postgres:// URI or a libpq-style
 	// key=value string. It carries credentials and must never be logged.
@@ -81,6 +86,20 @@ type Config struct {
 	FetchMinInterval time.Duration
 	FetchMaxInterval time.Duration
 	RetentionDays    int
+
+	// PushVAPIDPrivateKey and PushVAPIDPublicKey override the persisted key pair.
+	PushVAPIDPrivateKey []byte
+	PushVAPIDPublicKey  string
+	// PushVAPIDSubject is a mailto: or https: contact for push providers.
+	PushVAPIDSubject string
+	// PushVAPIDKeyFile defaults to earnest/vapid.json in the user config directory.
+	// Keep this file on persistent storage when using a container.
+	PushVAPIDKeyFile string
+	// APNs is disabled unless all three key settings are supplied.
+	APNsPrivateKey []byte
+	APNsKeyID      string
+	APNsTeamID     string
+	APNsSandbox    bool
 }
 
 // GoString keeps Go-syntax formatting from exposing credentials.
@@ -92,10 +111,10 @@ func (c Config) LogValue() slog.Value { return slog.StringValue(c.String()) }
 // String renders the config for startup logging with credentials redacted.
 func (c Config) String() string {
 	return fmt.Sprintf(
-		"http_addr=%s database_url=%s base_url=%s content_origin=%s secret_key=%s "+
+		"http_addr=%s content_addr=%s database_url=%s base_url=%s content_origin=%s secret_key=%s "+
 			"outbound_allow_private=%s log_level=%s fetch_min_interval=%s "+
 			"fetch_max_interval=%s retention_days=%d",
-		c.HTTPAddr, redactedValue, c.BaseURL, c.ContentOrigin, redactedValue,
+		c.HTTPAddr, c.ContentAddr, redactedValue, c.BaseURL, c.ContentOrigin, redactedValue,
 		strings.Join(c.OutboundAllowPrivate, ","), c.LogLevel,
 		c.FetchMinInterval, c.FetchMaxInterval, c.RetentionDays)
 }
@@ -108,6 +127,9 @@ func Load() (Config, error) {
 	var err error
 
 	if cfg.HTTPAddr, err = loadHTTPAddr(); err != nil {
+		return Config{}, err
+	}
+	if cfg.ContentAddr, err = loadListenAddr(envContentAddr, defaultContentAddr); err != nil {
 		return Config{}, err
 	}
 	if cfg.DatabaseURL, err = loadDatabaseURL(); err != nil {
@@ -147,6 +169,9 @@ func Load() (Config, error) {
 	if cfg.RetentionDays, err = loadRetentionDays(); err != nil {
 		return Config{}, err
 	}
+	if err := cfg.loadPush(); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
 }
 
@@ -159,14 +184,18 @@ func envOr(name, def string) string {
 }
 
 func loadHTTPAddr() (string, error) {
-	addr := envOr(envHTTPAddr, defaultHTTPAddr)
+	return loadListenAddr(envHTTPAddr, defaultHTTPAddr)
+}
+
+func loadListenAddr(name, def string) (string, error) {
+	addr := envOr(name, def)
 	_, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return "", fmt.Errorf("%s: invalid listen address %q: %v", envHTTPAddr, addr, err)
+		return "", fmt.Errorf("%s: invalid listen address %q: %v", name, addr, err)
 	}
 	// Port 0 would give an ephemeral listener the healthcheck can't find.
 	if !validPort(port) {
-		return "", fmt.Errorf("%s: invalid port %q", envHTTPAddr, port)
+		return "", fmt.Errorf("%s: invalid port %q", name, port)
 	}
 	return addr, nil
 }

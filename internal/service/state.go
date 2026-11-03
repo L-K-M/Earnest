@@ -153,7 +153,7 @@ func (s *Service) Batch(ctx context.Context, a Actor, writes []syncmodel.Write) 
 	}
 	receipt := s.now().UTC()
 	results := []syncmodel.Result{}
-	err := s.store.WithTx(ctx, func(tx pgx.Tx) error {
+	err := s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
 			return err
 		}
@@ -317,7 +317,7 @@ func (s *Service) Through(ctx context.Context, a Actor, request ThroughRequest) 
 		}
 	}
 	var result syncmodel.RangeResult
-	err := s.store.WithTx(ctx, func(tx pgx.Tx) error {
+	err := s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
 			return err
 		}
@@ -545,7 +545,7 @@ func (s *Service) Cluster(ctx context.Context, a Actor, clusterID int64, templat
 		return nil, ErrInvalid
 	}
 	var results []syncmodel.Result
-	err := s.store.WithTx(ctx, func(tx pgx.Tx) error {
+	err := s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
 			return err
 		}

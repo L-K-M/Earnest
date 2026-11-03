@@ -16,6 +16,7 @@ import (
 // developer's real environment can't leak in — "" means unset to Load.
 var allEnvVars = []string{
 	"EARNEST_HTTP_ADDR",
+	"EARNEST_CONTENT_ADDR",
 	"EARNEST_DATABASE_URL",
 	"EARNEST_BASE_URL",
 	"EARNEST_CONTENT_ORIGIN",
@@ -25,6 +26,9 @@ var allEnvVars = []string{
 	"EARNEST_FETCH_MIN_INTERVAL",
 	"EARNEST_FETCH_MAX_INTERVAL",
 	"EARNEST_RETENTION_DAYS",
+	"EARNEST_PUSH_VAPID_PRIVATE_KEY", "EARNEST_PUSH_VAPID_PUBLIC_KEY",
+	"EARNEST_PUSH_VAPID_SUBJECT", "EARNEST_PUSH_VAPID_KEY_FILE",
+	"EARNEST_APNS_PRIVATE_KEY", "EARNEST_APNS_KEY_ID", "EARNEST_APNS_TEAM_ID", "EARNEST_APNS_SANDBOX",
 }
 
 // requiredEnv is the minimum viable environment.
@@ -55,6 +59,7 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	want := config.Config{
 		HTTPAddr:             ":8080",
+		ContentAddr:          ":8081",
 		DatabaseURL:          "postgres://earnest:pw@db.internal:5432/earnest",
 		BaseURL:              "http://localhost:8080",
 		ContentOrigin:        "http://localhost:8081",
@@ -93,6 +98,7 @@ func TestLoadValid(t *testing.T) {
 			check: func(t *testing.T, got config.Config) {
 				want := config.Config{
 					HTTPAddr:             "127.0.0.1:9090",
+					ContentAddr:          ":8081",
 					DatabaseURL:          "host=db user=earnest dbname=earnest sslmode=disable",
 					BaseURL:              "https://feeds.example.com",
 					ContentOrigin:        "https://content.example.com",
@@ -259,6 +265,7 @@ func TestLoadErrorDoesNotLeakSecrets(t *testing.T) {
 func TestConfigStringRedacts(t *testing.T) {
 	cfg := config.Config{
 		HTTPAddr:             ":8080",
+		ContentAddr:          ":8081",
 		DatabaseURL:          "postgres://u:hunter2@db:5432/d",
 		BaseURL:              "http://app.internal",
 		ContentOrigin:        "http://content.internal",

@@ -79,7 +79,7 @@ func (s *Service) ImportOPML(ctx context.Context, a Actor, outlines []OPMLOutlin
 					continue
 				}
 				var sub Subscription
-				err = s.store.WithTx(ctx, func(tx pgx.Tx) error {
+				err = s.withEvents(ctx, func(tx pgx.Tx) error {
 					if err := store.LockCore(ctx, tx); err != nil {
 						return err
 					}
@@ -120,7 +120,7 @@ func (s *Service) importFolder(ctx context.Context, a Actor, name string) (Folde
 		return Folder{}, ErrInvalid
 	}
 	var folder Folder
-	err := s.store.WithTx(ctx, func(tx pgx.Tx) error {
+	err := s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
 			return err
 		}

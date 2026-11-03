@@ -190,7 +190,8 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 		prepared = append(prepared, ingestChange{item: item, identity: identity, content: content})
 	}
 	summary := IngestSummary{}
-	err := s.store.WithTx(ctx, func(tx pgx.Tx) error {
+	var newEntries []int64
+	err := s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
 			return err
 		}
@@ -292,6 +293,7 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 				if err := tx.QueryRow(ctx, `INSERT INTO entries(feed_id,seq,identity_hash,first_seen_at) VALUES($1,$2,$3,$4) RETURNING id`, outcome.FeedID, int64(p.seq), p.identity, receipt).Scan(&p.id); err != nil {
 					return fmt.Errorf("create ingested entry: %w", err)
 				}
+				newEntries = append(newEntries, p.id)
 			}
 			if _, err := tx.Exec(ctx, `INSERT INTO contents(entry_id,content_hash,sanitizer_version,source,html,text,created_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`, p.id, p.content, p.item.SanitizerVersion, string(p.item.ContentSource), p.item.ContentHTML, p.item.ContentText, receipt); err != nil {
 				return fmt.Errorf("store content version: %w", err)
@@ -313,7 +315,7 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 				if p.item.PublishedAt != nil {
 					e.PublishedAt = *p.item.PublishedAt
 				}
-				if err := store.InsertChange(ctx, tx, sub.user, rev, string(p.kind), map[string]any{"entry": e}, receipt); err != nil {
+				if err := insertEvent(ctx, tx, sub.user, rev, string(p.kind), map[string]any{"entry": e}, receipt); err != nil {
 					return err
 				}
 				if _, err := tx.Exec(ctx, `INSERT INTO entry_revisions(user_id,entry_id,rev) VALUES($1,$2,$3) ON CONFLICT(user_id,entry_id) DO UPDATE SET rev=EXCLUDED.rev`, sub.user, p.id, rev); err != nil {
@@ -322,6 +324,11 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 			}
 		}
 
+		if len(newEntries) > 0 {
+			if err := enqueueRuleJobs(ctx, tx, outcome.FeedID, newEntries, receipt); err != nil {
+				return err
+			}
+		}
 		interval := time.Duration(intervalSeconds * float64(time.Second))
 		if err := s.fetchHealth(ctx, tx, outcome, receipt, interval, failures, private, summary); err != nil {
 			return err
