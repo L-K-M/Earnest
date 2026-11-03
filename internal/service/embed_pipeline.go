@@ -44,10 +44,15 @@ func pipelineError(err error) error {
 
 // PipelineStatus describes configuration without making any provider calls.
 type PipelineStatus struct {
-	Embed    string `json:"embed"`
-	Classify string `json:"classify"`
-	Semantic string `json:"semantic"`
-	Watch    string `json:"watch"`
+	Embed       string `json:"embed"`
+	Classify    string `json:"classify"`
+	Semantic    string `json:"semantic"`
+	Watch       string `json:"watch"`
+	Blurb       string `json:"blurb"`
+	Summary     string `json:"summary"`
+	Edition     string `json:"edition"`
+	Ask         string `json:"ask"`
+	CompileRule string `json:"compile_rule"`
 }
 
 // PipelineStatus reports disabled tasks explicitly for the UI.
@@ -55,7 +60,7 @@ func (s *Service) PipelineStatus(ctx context.Context, a Actor) (PipelineStatus, 
 	if err := s.checkActor(ctx, a, ScopeEntriesRead); err != nil {
 		return PipelineStatus{}, err
 	}
-	status := PipelineStatus{Embed: "disabled", Classify: "disabled", Semantic: "disabled", Watch: "disabled"}
+	status := PipelineStatus{Embed: "disabled", Classify: "disabled", Semantic: "disabled", Watch: "disabled", Blurb: "disabled", Summary: "disabled", Edition: "disabled", Ask: "disabled", CompileRule: "disabled"}
 	e := pipelineEngine(ctx)
 	if e.Enabled(llm.TaskEmbed) {
 		status.Embed = "enabled"
@@ -64,6 +69,11 @@ func (s *Service) PipelineStatus(ctx context.Context, a Actor) (PipelineStatus, 
 	}
 	if e.Enabled(llm.TaskClassify) {
 		status.Classify = "enabled"
+	}
+	for task, target := range map[llm.Task]*string{llm.TaskBlurb: &status.Blurb, llm.TaskSummary: &status.Summary, llm.TaskEdition: &status.Edition, llm.TaskAsk: &status.Ask, llm.TaskCompileRule: &status.CompileRule} {
+		if e.Enabled(task) {
+			*target = "enabled"
+		}
 	}
 	return status, nil
 }
@@ -158,11 +168,17 @@ func (s *Service) RunPipeline(ctx context.Context, limit int) (int, error) {
 				break
 			}
 			if err != nil {
-				return processed, err
+				if deferErr := s.deferClassifier(ctx, entry, model); deferErr != nil {
+					return processed, deferErr
+				}
+				continue
 			}
 			hash := content.Hash()
 			if err := s.store.ClassifySave(ctx, entry, model, pipeline.ClassifierPromptVersion, hash[:], labels); err != nil {
 				return processed, err
+			}
+			if _, err := s.store.Pool().Exec(ctx, `DELETE FROM jobs WHERE unique_key=$1 AND kind='classify'`, classifierRetryKey(entry.ID)); err != nil {
+				return processed, fmt.Errorf("clear classifier retry: %w", err)
 			}
 			processed++
 		}

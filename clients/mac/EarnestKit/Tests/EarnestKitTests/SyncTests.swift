@@ -43,6 +43,44 @@ private func change(_ rev: Int64, _ type: String, _ payload: APIValue) -> APICha
     #expect(try engine.expire(asOf: Date()).count == 1)
 }
 
+@Test func legacyStatePagesAllowContiguousOverlap() throws {
+    let engine = SyncEngine(store: MemorySyncStore())
+    try engine.bootstrap(Cursor(generation: "g1", rev: 1))
+    var first = State(principal: 1, entryID: 1)
+    first.seen = Stamp(value: .text("seen"), rev: 1)
+    var second = first
+    second.kept = Stamp(value: .flag(true), rev: 2)
+    let page = [StateChange(rev: 1, state: first), StateChange(rev: 2, state: second)]
+    let next = Cursor(generation: "g1", rev: 2)
+    try engine.apply(page, next: next)
+    try engine.apply(page, next: next)
+    #expect(try engine.snapshot().cursor == next)
+    #expect(try engine.state(principal: 1, entryID: 1).kept.value == .flag(true))
+}
+
+@Test func legacyStatePagesRejectGapsAtomically() throws {
+    let engine = SyncEngine(store: MemorySyncStore())
+    let cursor = Cursor(generation: "g1", rev: 1)
+    try engine.bootstrap(cursor)
+    let state = State(principal: 1, entryID: 1)
+    for revisions: [Int64] in [[], [1], [3], [1, 3], [2, 2], [0, 2]] {
+        #expect(throws: SyncError.self) {
+            try engine.apply(revisions.map { StateChange(rev: $0, state: state) }, next: Cursor(generation: "g1", rev: 3))
+        }
+        #expect(try engine.snapshot().cursor == cursor)
+        #expect(try engine.snapshot().states.isEmpty)
+    }
+}
+
+@Test func legacyStatePagesReachMaximumRevision() throws {
+    let engine = SyncEngine(store: MemorySyncStore())
+    try engine.bootstrap(Cursor(generation: "g1", rev: .max - 1))
+    let next = Cursor(generation: "g1", rev: .max)
+    try engine.apply([StateChange(rev: .max, state: State(principal: 1, entryID: 1))], next: next)
+    try engine.apply([StateChange](), next: next)
+    #expect(try engine.snapshot().cursor == next)
+}
+
 @Test func batchAcknowledgementMergesStateAndKeepsNewerIntent() throws {
     let engine = SyncEngine(store: MemorySyncStore())
     let cursor = Cursor(generation: "g1", rev: 0)
@@ -368,4 +406,35 @@ private func change(_ rev: Int64, _ type: String, _ payload: APIValue) -> APICha
     let snapshot = try engine.snapshot()
     let decoded = try JSONDecoder().decode(SyncSnapshot.self, from: JSONEncoder().encode(snapshot))
     #expect(decoded == snapshot)
+}
+
+@Test func entryResponsesCannotCrossDatabaseGenerations() throws {
+    for count in [1, 2] { // Individual entry and list responses use the same guarded merge.
+        let engine = SyncEngine(store: MemorySyncStore())
+        try engine.bootstrap(Cursor(generation: "before-restore", rev: 100))
+        let requestGeneration = try #require(engine.snapshot().cursor?.generation)
+        let oldEntries = (1...count).map { id -> APIEntry in
+            let seen = APIRegister(value: .string("seen"), rev: 100, occurredAt: "2026-11-02T12:00:00Z", actor: 1, source: "deliberate")
+            let shelf = APIRegister(value: .string("none"), rev: 0, occurredAt: "", actor: 1, source: "deliberate")
+            let kept = APIRegister(value: .bool(false), rev: 0, occurredAt: "", actor: 1, source: "deliberate")
+            return APIEntry(id: Int64(id), subscriptionID: 1, feedID: 1, seq: Int64(id), firstSeenAt: "2026-11-02T12:00:00Z", title: "Old", url: "", author: "", publishedAt: nil, updatedAt: nil, blurb: nil, rev: 100, deleted: false,
+                            state: APIState(principal: 1, entryID: Int64(id), seen: seen, shelf: shelf, kept: kept, stateRev: 100))
+        }
+        // The coordinator completes restore bootstrap while the HTTP request is suspended.
+        try engine.bootstrap(Cursor(generation: "after-restore", rev: 5))
+        try engine.mergeEntry(SyncEntry(id: 1, subscriptionID: 1, seq: 1, title: "Restored", rev: 5))
+        var restored = State(principal: 1, entryID: 1)
+        restored.seen = Stamp(value: .text("unseen"), rev: 5)
+        restored.stateRev = 5
+        try engine.mergeState(restored)
+        try engine.finishBootstrap()
+        let before = try engine.snapshot()
+        #expect(throws: SyncError.self) { try engine.mergeEntries(oldEntries, generation: requestGeneration) }
+        #expect(try engine.snapshot() == before)
+        restored.seen = Stamp(value: .text("seen"), rev: 6)
+        try engine.mergeState(restored)
+        #expect(try engine.state(principal: 1, entryID: 1).seen.rev == 6)
+        try engine.mergeEntries(oldEntries, generation: "after-restore")
+        #expect(try engine.state(principal: 1, entryID: 1).seen.rev == 100)
+    }
 }

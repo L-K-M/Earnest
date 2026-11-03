@@ -187,6 +187,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		err = a.revert(ctx, args[1:])
 	case "activity":
 		err = a.activity(ctx, args[1:])
+	case "saved-searches":
+		err = a.savedSearches(ctx, args[1:])
 	case "changes":
 		err = a.changes(ctx, args[1:])
 	case "help", "--help", "-h":
@@ -211,15 +213,31 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 // extractJSONFlag pulls the machine-output flag out of any position so both
 // "earnest --json feeds list" and "earnest feeds list --json" work.
+// Values and arguments after -- remain literal, even when they spell --json.
 func extractJSONFlag(args []string) ([]string, bool) {
 	out := make([]string, 0, len(args))
 	found := false
-	for _, arg := range args {
-		if !found && (arg == "--json" || arg == "-json") {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			out = append(out, args[i:]...)
+			break
+		}
+		if arg == "--json" || arg == "-json" {
 			found = true
 			continue
 		}
 		out = append(out, arg)
+		name, hasValue := flagName(arg)
+		if hasValue || i+1 == len(args) {
+			continue
+		}
+		// These are the value-taking flags registered by the client commands.
+		switch name {
+		case "text", "kind", "note", "entry", "category", "dedupe-key", "view", "feed", "folder", "limit", "cursor", "action", "principal", "since":
+			i++
+			out = append(out, args[i])
+		}
 	}
 	return out, found
 }
@@ -242,7 +260,7 @@ Token:  EARNEST_TOKEN or the config written by earnest login
 
   entries list [flags]      list entries (--view, --unread, --feed, --limit, --cursor)
   read <id>                 print the stored plain text
-  search <query>            search entries and notes
+  search [flags] <query>    search entries and notes (--feed, --folder, --limit, --cursor)
   briefing                  entries new since this principal's position
 
   done|later|keep|unread <id>...
@@ -252,11 +270,20 @@ Token:  EARNEST_TOKEN or the config written by earnest login
   brief --text <text> <id>...
                             write a brief over entries
 
-  notify --note <text> [--entry <id>] [--category alert]
+  saved-searches list       list named search views
+  saved-searches add <name> <query> [--feed id] [--folder id] [--limit n]
+                            save a named search view
+  saved-searches show <id>  open a saved search (--cursor)
+  saved-searches rename <id> <name>
+                            rename a saved search
+  saved-searches remove <id>
+                            delete a saved search
+
+  notify --note <text> --entry <id> [--category alert]
                             send a notification
   triage done|seen <id>...  change human state as an agent, returns a revert handle
   revert <handle>           undo a triage
-  activity                  list agent and pipeline activity
+  activity                  list agent and pipeline activity (--grouped)
 
   changes [--cursor <c>]    read the change feed
 
@@ -279,6 +306,7 @@ func parseFlags(fs *flag.FlagSet, args []string, valueFlags map[string]bool) err
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
+			ordered = append(ordered, "--")
 			positional = append(positional, args[i+1:]...)
 			break
 		}

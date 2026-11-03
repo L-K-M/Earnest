@@ -83,6 +83,13 @@ func normalizedFeedURL(raw string) (string, error) {
 		return "", fmt.Errorf("feed URL: %w", ErrInvalid)
 	}
 	u.Host = strings.ToLower(u.Host)
+	if port := u.Port(); (u.Scheme == "http" && port == "80") || (u.Scheme == "https" && port == "443") {
+		host := u.Hostname()
+		if strings.Contains(host, ":") {
+			host = "[" + host + "]"
+		}
+		u.Host = host
+	}
 	u.Fragment = ""
 	if u.Path == "" {
 		u.Path = "/"
@@ -525,7 +532,11 @@ func (s *Service) UpdateSubscription(ctx context.Context, a Actor, id int64, opt
 		}
 		if options.CredentialsSet {
 			feedID := sub.FeedID
-			if err := ensureFeed(ctx, tx, a.UserID, sub.URL, FeedMeta{Title: sub.Title, SiteURL: sub.SiteURL}, encrypted, s.now().UTC(), &feedID); err != nil {
+			var meta FeedMeta
+			if err := tx.QueryRow(ctx, "SELECT title,coalesce(site_url,''),language FROM feeds WHERE id=$1", feedID).Scan(&meta.Title, &meta.SiteURL, &meta.Language); err != nil {
+				return fmt.Errorf("load canonical feed metadata: %w", err)
+			}
+			if err := ensureFeed(ctx, tx, a.UserID, sub.URL, meta, encrypted, s.now().UTC(), &feedID); err != nil {
 				return err
 			}
 			if _, err := tx.Exec(ctx, "UPDATE subscriptions SET feed_id=$2,initial_since=$3,initial_through_seq=(SELECT coalesce(max(seq),0) FROM entries WHERE feed_id=$2),initial_fetch_pending=NOT EXISTS(SELECT 1 FROM entries WHERE feed_id=$2) WHERE id=$1", id, feedID, s.now().UTC().Add(-24*time.Hour)); err != nil {

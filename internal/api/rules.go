@@ -11,6 +11,7 @@ import (
 )
 
 type ruleBody struct {
+	OpID      string                `json:"op_id"`
 	Name      string                `json:"name"`
 	Predicate service.RulePredicate `json:"predicate"`
 	Actions   []service.RuleAction  `json:"actions"`
@@ -48,7 +49,7 @@ func (s *server) ruleRoutes() {
 	})
 	route(s, http.MethodPost, "/v1/rules", "create-rule", func(ctx context.Context, in *bodyInput[ruleBody]) (service.Rule, error) {
 		b := in.Body
-		return s.svc.CreateRule(ctx, actor(ctx), service.Rule{Name: b.Name, Predicate: b.Predicate, Actions: b.Actions, Enabled: b.Enabled})
+		return s.svc.CreateRule(ctx, actor(ctx), service.Rule{Name: b.Name, Predicate: b.Predicate, Actions: b.Actions, Enabled: b.Enabled}, b.OpID)
 	})
 	route(s, http.MethodGet, "/v1/rules/{id}", "get-rule", func(ctx context.Context, in *idInput) (service.Rule, error) {
 		return s.rule(ctx, in.ID)

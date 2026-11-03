@@ -7,6 +7,9 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/L-K-M/Earnest/internal/store"
+	"github.com/jackc/pgx/v5"
 )
 
 // Rule is a human-authored deterministic rule.
@@ -39,39 +42,65 @@ func (s *Service) ruleHuman(ctx context.Context, a Actor) error {
 }
 
 // CreateRule validates and saves a human-authored rule.
-func (s *Service) CreateRule(ctx context.Context, a Actor, rule Rule) (Rule, error) {
+func (s *Service) CreateRule(ctx context.Context, a Actor, rule Rule, opID string) (Rule, error) {
 	if err := s.ruleHuman(ctx, a); err != nil {
 		return Rule{}, err
 	}
-	if !validName(rule.Name) {
-		return Rule{}, fmt.Errorf("rule name: %w", ErrInvalid)
+	if !validOpID(opID) {
+		return Rule{}, ErrInvalid
 	}
-	if err := ValidateRule(rule.Predicate, rule.Actions); err != nil {
+	var out Rule
+	err := s.store.WithTx(ctx, func(tx pgx.Tx) error {
+		if err := store.LockCore(ctx, tx); err != nil {
+			return err
+		}
+		replay, err := replayOp(ctx, tx, a.PrincipalID, "CreateRule", opID)
+		if err != nil {
+			return err
+		}
+		if replay != nil {
+			return json.Unmarshal(replay, &out)
+		}
+		if !validName(rule.Name) {
+			return fmt.Errorf("rule name: %w", ErrInvalid)
+		}
+		if err := ValidateRule(rule.Predicate, rule.Actions); err != nil {
+			return err
+		}
+		if err := checkRuleReferences(ctx, tx, a.UserID, rule.Predicate, rule.Actions); err != nil {
+			return err
+		}
+		predicate, err := json.Marshal(rule.Predicate)
+		if err != nil {
+			return fmt.Errorf("encode predicate: %w", err)
+		}
+		actions, err := json.Marshal(struct {
+			Actions []RuleAction `json:"actions"`
+		}{rule.Actions})
+		if err != nil {
+			return fmt.Errorf("encode actions: %w", err)
+		}
+		out = rule
+		if err := tx.QueryRow(ctx, `INSERT INTO rules(user_id,source,ast,action,enabled,created_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING id`, a.UserID, rule.Name, predicate, actions, rule.Enabled, a.PrincipalID).Scan(&out.ID); err != nil {
+			return fmt.Errorf("create rule: %w", domainError(err))
+		}
+		out.LastMatchAt = nil
+		out.MatchCount = 0
+		return store.FinishOp(ctx, tx, a.PrincipalID, opID, out)
+	})
+	if err != nil {
 		return Rule{}, err
 	}
-	if err := s.checkRuleReferences(ctx, a.UserID, rule.Predicate, rule.Actions); err != nil {
-		return Rule{}, err
-	}
-	predicate, err := json.Marshal(rule.Predicate)
-	if err != nil {
-		return Rule{}, fmt.Errorf("encode predicate: %w", err)
-	}
-	actions, err := json.Marshal(struct {
-		Actions []RuleAction `json:"actions"`
-	}{rule.Actions})
-	if err != nil {
-		return Rule{}, fmt.Errorf("encode actions: %w", err)
-	}
-	err = s.store.Pool().QueryRow(ctx, `INSERT INTO rules(user_id,source,ast,action,enabled,created_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING id`, a.UserID, rule.Name, predicate, actions, rule.Enabled, a.PrincipalID).Scan(&rule.ID)
-	if err != nil {
-		return Rule{}, fmt.Errorf("create rule: %w", domainError(err))
-	}
-	rule.LastMatchAt = nil
-	rule.MatchCount = 0
-	return rule, nil
+	return out, nil
 }
 
 func (s *Service) checkRuleReferences(ctx context.Context, user int64, p RulePredicate, actions []RuleAction) error {
+	return checkRuleReferences(ctx, s.store.Pool(), user, p, actions)
+}
+
+func checkRuleReferences(ctx context.Context, db interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, user int64, p RulePredicate, actions []RuleAction) error {
 	var walk func(RulePredicate) error
 	walk = func(p RulePredicate) error {
 		for _, id := range p.IDs {
@@ -85,7 +114,7 @@ func (s *Service) checkRuleReferences(ctx context.Context, user int64, p RulePre
 			default:
 				continue
 			}
-			if err := s.store.Pool().QueryRow(ctx, q, user, id).Scan(&ok); err != nil {
+			if err := db.QueryRow(ctx, q, user, id).Scan(&ok); err != nil {
 				return fmt.Errorf("check rule reference: %w", err)
 			}
 			if !ok {
@@ -116,7 +145,7 @@ func (s *Service) checkRuleReferences(ctx context.Context, user int64, p RulePre
 			continue
 		}
 		var ok bool
-		if err := s.store.Pool().QueryRow(ctx, q, user, id).Scan(&ok); err != nil {
+		if err := db.QueryRow(ctx, q, user, id).Scan(&ok); err != nil {
 			return fmt.Errorf("check rule action: %w", err)
 		}
 		if !ok {

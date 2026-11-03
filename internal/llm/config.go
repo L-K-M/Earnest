@@ -308,14 +308,14 @@ func loadModels() (map[string]ModelInfo, error) {
 		if err := applyUSD(&info.EmbeddingPer1M, entry.EmbeddingPer1M, name, "embedding_per_1m"); err != nil {
 			return nil, err
 		}
+		if entry.Truncatable != nil {
+			info.Truncatable = *entry.Truncatable
+		}
 		if entry.Dimensions != nil {
-			if *entry.Dimensions < 0 || *entry.Dimensions > StorageDimensions {
+			if *entry.Dimensions < 0 || (*entry.Dimensions > StorageDimensions && !info.Truncatable) {
 				return nil, fmt.Errorf("%s: model %s dimensions %d out of range", envModels, name, *entry.Dimensions)
 			}
 			info.Dimensions = *entry.Dimensions
-		}
-		if entry.Truncatable != nil {
-			info.Truncatable = *entry.Truncatable
 		}
 		models[name] = info
 	}

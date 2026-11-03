@@ -7,14 +7,19 @@ import (
 )
 
 type annotationBody struct {
+	Value string `json:"value"`
+	OpID  string `json:"op_id"`
+}
+
+type briefBody struct {
 	EntryIDs []int64 `json:"entry_ids"`
 	Value    string  `json:"value"`
 	OpID     string  `json:"op_id"`
 }
 
-// annotate writes one annotation over the given entries. The API keys an
-// annotation by author, kind and canonical entry set, so one request covers
-// all ids.
+// annotate writes an annotation over the given entries. Note, label and
+// score are per-entry endpoints, so each id is one request; a brief covers
+// the whole set in one request.
 func (a *app) annotate(ctx context.Context, args []string) error {
 	kind := kindNote
 	fs := newFlagSet("annotate")
@@ -63,15 +68,41 @@ func (a *app) brief(ctx context.Context, args []string) error {
 }
 
 func (a *app) putAnnotation(ctx context.Context, c *client, kind annotationKind, ids []int64, text string) error {
+	if kind == kindBrief {
+		return a.postBrief(ctx, c, ids, text)
+	}
+	results := make([]annotation, 0, len(ids))
+	for _, id := range ids {
+		opID, err := newOpID()
+		if err != nil {
+			return err
+		}
+		raw, err := c.send(ctx, http.MethodPut, fmt.Sprintf("/v1/entries/%d/annotations/%s", id, kind), nil, annotationBody{Value: text, OpID: opID})
+		if err != nil {
+			return err
+		}
+		var result annotation
+		if err := decode(raw, &result); err != nil {
+			return err
+		}
+		results = append(results, result)
+		if !a.json {
+			fmt.Fprintf(a.out, "%s recorded on entry %d (id %d)\n", kind, id, result.ID)
+		}
+	}
+	if a.json {
+		return a.encodeJSON(results)
+	}
+	return nil
+}
+
+// postBrief writes one brief over the whole entry set.
+func (a *app) postBrief(ctx context.Context, c *client, ids []int64, text string) error {
 	opID, err := newOpID()
 	if err != nil {
 		return err
 	}
-	raw, err := c.send(ctx, http.MethodPut, "/v1/annotations/"+string(kind), nil, annotationBody{
-		EntryIDs: ids,
-		Value:    text,
-		OpID:     opID,
-	})
+	raw, err := c.send(ctx, http.MethodPost, "/v1/briefs", nil, briefBody{EntryIDs: ids, Value: text, OpID: opID})
 	if err != nil {
 		return err
 	}
@@ -82,6 +113,6 @@ func (a *app) putAnnotation(ctx context.Context, c *client, kind annotationKind,
 	if err := decode(raw, &result); err != nil {
 		return err
 	}
-	fmt.Fprintf(a.out, "%s recorded on %d entries (id %d)\n", kind, len(ids), result.ID)
+	fmt.Fprintf(a.out, "brief recorded on %d entries (id %d)\n", len(ids), result.ID)
 	return nil
 }

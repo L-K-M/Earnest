@@ -12,6 +12,8 @@ import (
 	"github.com/L-K-M/Earnest/internal/outbound"
 )
 
+const geminiFinishStop = "STOP"
+
 // Gemini is a provider for Google's generateContent and embedContent APIs.
 // The base URL includes the API version, so an operator can move to a newer
 // one by changing configuration.
@@ -84,8 +86,12 @@ func (p *Gemini) Complete(ctx context.Context, req CompleteRequest) (*Completion
 	if err := callJSON(ctx, p.client, p.name, endpoint, p.authHeader(), body, &response, p.timeout, p.extraPorts); err != nil {
 		return nil, err
 	}
+	usage := Usage{Input: response.UsageMetadata.PromptTokenCount, Output: response.UsageMetadata.CandidatesTokenCount}
 	if len(response.Candidates) == 0 {
-		return nil, fmt.Errorf("llm: provider %s returned no candidates", p.name)
+		return &Completion{Usage: usage}, fmt.Errorf("llm: provider %s returned no candidates", p.name)
+	}
+	if reason := response.Candidates[0].FinishReason; reason != "" && reason != geminiFinishStop {
+		return &Completion{Usage: usage}, fmt.Errorf("%w: provider %s stopped early: finishReason %s", ErrInvalidOutput, p.name, reason)
 	}
 	var text strings.Builder
 	for _, part := range response.Candidates[0].Content.Parts {
@@ -93,14 +99,14 @@ func (p *Gemini) Complete(ctx context.Context, req CompleteRequest) (*Completion
 	}
 	if req.Schema != nil {
 		if err := req.Schema.Validate(text.String()); err != nil {
-			return nil, err
+			return &Completion{Usage: usage}, err
 		}
 	}
 	slog.DebugContext(ctx, "llm completion", "provider", p.name, "model", req.Model,
 		"input_tokens", response.UsageMetadata.PromptTokenCount, "output_tokens", response.UsageMetadata.CandidatesTokenCount)
 	return &Completion{
 		Text:  text.String(),
-		Usage: Usage{Input: response.UsageMetadata.PromptTokenCount, Output: response.UsageMetadata.CandidatesTokenCount},
+		Usage: usage,
 	}, nil
 }
 

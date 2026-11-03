@@ -10,6 +10,8 @@ import (
 	"github.com/L-K-M/Earnest/internal/store"
 	"github.com/L-K-M/Earnest/internal/store/storetest"
 	"github.com/L-K-M/Earnest/internal/syncmodel"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestTriageAndRevert(t *testing.T) {
@@ -215,5 +217,107 @@ func TestRevertPreservesUnrelatedRegister(t *testing.T) {
 	state, err := store.LoadState(ctx, f.db.Pool(), f.a.PrincipalID, id)
 	if err != nil || state.Shelf.Value != syncmodel.None || state.Kept.Value != syncmodel.True {
 		t.Fatal(state, err)
+	}
+}
+
+func TestAnnotationRevertRejectsReplacement(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := context.Background()
+	a := surfaceAgent(t, f, "Writer", 3)
+	id := f.ingest(t, "article")
+	req := PutAnnotationRequest{OpID: "old", EntryIDs: []int64{id}, Kind: AnnotationNote, Value: "old"}
+	if _, err := f.s.PutAnnotation(ctx, a, req); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.DeleteAnnotation(ctx, a, req.EntryIDs, req.Kind, "delete-old"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := f.s.ListActivity(ctx, f.a, ActivityFilter{Action: "annotation.deleted"})
+	if err != nil || len(rows) != 1 {
+		t.Fatal(rows, err)
+	}
+	req.OpID, req.Value = "new", "new"
+	if _, err := f.s.PutAnnotation(ctx, a, req); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.Revert(ctx, f.a, rows[0].ID, "undo-delete"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("revert = %v, want conflict", err)
+	}
+}
+
+func TestRevertUsesTransactionForAuthorization(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := context.Background()
+	id := f.ingest(t, "article")
+	a := surfaceAgent(t, f, "Agent", 3)
+	gen, err := f.db.Generation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.Triage(ctx, a, TriageRequest{OpID: "triage", Generation: gen, EntryIDs: []int64{id}, Action: TriageDone}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := f.s.ListActivity(ctx, f.a, ActivityFilter{PrincipalID: a.PrincipalID})
+	if err != nil || len(rows) != 1 {
+		t.Fatal(rows, err)
+	}
+	var held []*pgxpool.Conn
+	for i := 0; i < 9; i++ {
+		c, err := f.db.Pool().Acquire(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		held = append(held, c)
+	}
+	defer func() {
+		for _, c := range held {
+			c.Release()
+		}
+	}()
+	timeout, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	err = f.db.WithTx(timeout, func(tx pgx.Tx) error {
+		if err := store.LockCore(timeout, tx); err != nil {
+			return err
+		}
+		return f.s.revertTx(timeout, tx, f.a, rows[0].ID, "undo")
+	})
+	if err != nil {
+		t.Fatalf("revert with pool occupied: %v", err)
+	}
+}
+
+func TestAgentChangesToUnseenFiltersBeforeLimit(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := context.Background()
+	id := f.ingest(t, "article")
+	a := surfaceAgent(t, f, "Agent", 3)
+	own := syncmodel.State{Principal: syncmodel.ID(a.PrincipalID), EntryID: syncmodel.ID(id), Seen: syncmodel.Register{Value: syncmodel.Unseen}, Shelf: syncmodel.Register{Value: syncmodel.None}, Kept: syncmodel.Register{Value: syncmodel.False}}
+	body, err := json.Marshal(own)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.db.Pool().Exec(ctx, `INSERT INTO activity(user_id,principal_id,action,target,before,after,created_at) SELECT $1,$2,'state.updated','{}',$3::jsonb,$3::jsonb,$4 FROM generate_series(1,1000)`, f.a.UserID, a.PrincipalID, body, f.s.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gen, err := f.db.Generation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.Triage(ctx, a, TriageRequest{OpID: "triage", Generation: gen, EntryIDs: []int64{id}, Action: TriageDone}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := f.s.AgentChangesToUnseen(ctx, f.a, time.Time{})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("unseen changes: %d %v", len(rows), err)
+	}
+	id2 := f.ingest(t, "another article")
+	if _, err := f.s.Triage(ctx, a, TriageRequest{OpID: "triage-2", Generation: gen, EntryIDs: []int64{id2}, Action: TriageDone}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := f.s.AgentChangesToUnseen(ctx, f.a, time.Time{}, ActivityFilter{AfterID: rows[0].ID, Limit: 1})
+	if err != nil || len(page) != 1 || page[0].ID <= rows[0].ID {
+		t.Fatalf("second page: %v %v", page, err)
 	}
 }

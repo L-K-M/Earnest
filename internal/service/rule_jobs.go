@@ -16,13 +16,15 @@ const (
 	ruleJobMaxAttempts = 3
 	ruleJobMaxClaim    = 1000
 	ruleJobRetryDelay  = time.Minute
+	maxRuleErrorRunes  = 1024
 )
 
 type ruleJob struct {
-	UserID   int64   `json:"user_id"`
-	RuleID   int64   `json:"rule_id"`
-	FeedID   int64   `json:"feed_id"`
-	EntryIDs []int64 `json:"entry_ids"`
+	UserID     int64   `json:"user_id"`
+	RuleID     int64   `json:"rule_id"`
+	FeedID     int64   `json:"feed_id"`
+	EntryIDs   []int64 `json:"entry_ids"`
+	Generation string  `json:"generation"`
 }
 
 type claimedRuleJob struct {
@@ -35,7 +37,7 @@ type claimedRuleJob struct {
 // enqueueRuleJobs snapshots the enabled rules for this ingest in the same transaction.
 func enqueueRuleJobs(ctx context.Context, tx pgx.Tx, feed int64, ids []int64, now time.Time) error {
 	_, err := tx.Exec(ctx, `INSERT INTO jobs(kind,payload,run_at)
- SELECT $1,jsonb_build_object('user_id',r.user_id,'rule_id',r.id,'feed_id',$2::bigint,'entry_ids',to_jsonb($3::bigint[])),$4
+ SELECT $1,jsonb_build_object('user_id',r.user_id,'rule_id',r.id,'feed_id',$2::bigint,'entry_ids',to_jsonb($3::bigint[]),'generation',(SELECT generation::text FROM system WHERE singleton)),$4
  FROM rules r WHERE r.enabled AND EXISTS (SELECT 1 FROM subscriptions s WHERE s.user_id=r.user_id AND s.feed_id=$2 AND s.deleted_at IS NULL)`, ruleJobKind, feed, ids, now)
 	if err != nil {
 		return fmt.Errorf("enqueue rule jobs: %w", err)
@@ -58,7 +60,7 @@ func (s *Service) RunRuleJobs(ctx context.Context, limit int) (int, error) {
 			break
 		}
 		processed++
-		err = s.executeRuleJob(ctx, job.payload.UserID, job.payload.RuleID, job.payload.FeedID, job.payload.EntryIDs)
+		err = s.executeRuleJob(ctx, job.payload.UserID, job.payload.RuleID, job.payload.FeedID, job.payload.EntryIDs, job.payload.Generation)
 		if ctx.Err() != nil {
 			return processed, ctx.Err()
 		}
@@ -118,8 +120,8 @@ func (s *Service) finishRuleJob(ctx context.Context, job *claimedRuleJob, cause 
 			return nil
 		}
 		reason := cause.Error()
-		if len(reason) > 1024 {
-			reason = reason[:1024]
+		if runes := []rune(reason); len(runes) > maxRuleErrorRunes {
+			reason = string(runes[:maxRuleErrorRunes])
 		}
 		if job.attempt >= ruleJobMaxAttempts {
 			if _, err := tx.Exec(ctx, `UPDATE rules SET enabled=false,action=jsonb_set(action,'{disable_reason}',to_jsonb($3::text)) WHERE id=$1 AND user_id=$2 AND enabled`, job.payload.RuleID, job.payload.UserID, reason); err != nil {

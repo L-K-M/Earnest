@@ -80,9 +80,14 @@ type SpendStore interface {
 	LLMEnsureMonth(ctx context.Context, provider string, month time.Time, limitUsdMicros int64) (spentUsdMicros int64, limitUsdMicrosOut int64, err error)
 	// LLMAddSpend adds cost to the provider's month.
 	LLMAddSpend(ctx context.Context, provider string, month time.Time, costUsdMicros int64) error
+	// LLMReserveSpend atomically includes estimate in spend if it fits the cap.
+	LLMReserveSpend(ctx context.Context, provider string, month time.Time, limitMicros, estimateMicros int64, expiresAt time.Time) (id string, spentMicros int64, reserved bool, err error)
+	// LLMSettleSpend replaces a hold with actual cost, idempotently.
+	LLMSettleSpend(ctx context.Context, provider, id string, actualMicros int64) error
 }
 
-// Spend is a provider's recorded spend and limit for one month.
+// Spend is a provider's recorded spend and limit for one month. Spent includes
+// conservative estimates for calls whose billed usage is not yet known.
 type Spend struct {
 	Provider string
 	Month    time.Time
@@ -108,7 +113,8 @@ func NewBudget(store SpendStore, limits map[string]USD) *Budget {
 	return &Budget{store: store, limits: limits, now: time.Now}
 }
 
-// Authorize reports ErrBudgetExhausted when the provider's recorded spend has
+// Authorize is an advisory check, not permission to call a provider; use Reserve.
+// It reports ErrBudgetExhausted when the provider's recorded spend has
 // reached its limit. A provider with no configured limit is always
 // authorized. The month's row is created on first use.
 func (b *Budget) Authorize(ctx context.Context, provider string) error {
@@ -122,6 +128,36 @@ func (b *Budget) Authorize(ctx context.Context, provider string) error {
 	}
 	if spend.Spent >= limit {
 		return &BudgetError{Provider: provider, Month: spend.Month, Spent: spend.Spent, Limit: limit}
+	}
+	return nil
+}
+
+// reservationLifetime accommodates the provider's 24-hour batch window and
+// polling delays. Crashed calls expire at their estimate, never as free spend.
+const reservationLifetime = 48 * time.Hour
+
+// Reserve holds a conservative cost estimate before a provider call. It returns
+// ErrBudgetExhausted without a hold when the estimate cannot fit this month.
+func (b *Budget) Reserve(ctx context.Context, provider string, estimate USD) (string, error) {
+	month := b.month()
+	limit := b.limits[provider]
+	id, spent, ok, err := b.store.LLMReserveSpend(ctx, provider, month, int64(limit), int64(estimate), time.Now().Add(reservationLifetime))
+	if err != nil {
+		return "", fmt.Errorf("reserve spend: %w", err)
+	}
+	if !ok {
+		return "", &BudgetError{Provider: provider, Month: month, Spent: USD(spent), Limit: limit}
+	}
+	return id, nil
+}
+
+// Reconcile replaces a reservation with billed cost, including rejected output.
+// A zero cost releases an unbilled call. The receipt retains its original month.
+func (b *Budget) Reconcile(ctx context.Context, provider, id string, actual USD) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := b.store.LLMSettleSpend(ctx, provider, id, int64(actual)); err != nil {
+		return fmt.Errorf("reconcile spend: %w", err)
 	}
 	return nil
 }

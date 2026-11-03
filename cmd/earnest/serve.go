@@ -86,7 +86,8 @@ func serve() error {
 	if err != nil {
 		return fmt.Errorf("model router: %w", err)
 	}
-	modelClient, err := llm.NewClient(router, llm.NewBudget(db, llmConfig.Limits()), llmConfig.Models)
+	modelBudget := llm.NewBudget(db, llmConfig.Limits())
+	modelClient, err := llm.NewClient(router, modelBudget, llmConfig.Models)
 	if err != nil {
 		return fmt.Errorf("model client: %w", err)
 	}
@@ -95,6 +96,9 @@ func serve() error {
 		return fmt.Errorf("pipeline: %w", err)
 	}
 	ctx = service.WithPipeline(ctx, engine)
+	if batch := pipeline.NewEditionBatch(router, modelBudget, llmConfig, egress); batch != nil {
+		ctx = pipeline.WithEditionBatch(ctx, batch)
+	}
 	pushRegistry, publicKey, err := buildPushRegistry(cfg, egress)
 	if err != nil {
 		return fmt.Errorf("push transports: %w", err)
@@ -111,7 +115,7 @@ func serve() error {
 		return fmt.Errorf("recover notification attempts: %w", err)
 	}
 
-	proxy, err := imageproxy.New(cfg.SecretKey, egress, cfg.ContentOrigin)
+	proxy, err := imageproxy.New(cfg.SecretKey, egress, cfg.ContentOrigin, privatePorts(cfg.OutboundAllowPrivate)...)
 	if err != nil {
 		return fmt.Errorf("image proxy: %w", err)
 	}
@@ -163,6 +167,7 @@ func serve() error {
 		{"notification delivery", svc.DeliverNotifications},
 		{"webhook delivery", svc.RunWebhookJobs},
 		{"rule jobs", svc.RunRuleJobs},
+		{"edition jobs", svc.RunEditionJobs},
 	} {
 		workers.Go(func() { runDelivery(ctx, logger, job.name, job.run) })
 	}
@@ -191,8 +196,7 @@ func serve() error {
 		<-ctx.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 		defer cancel()
-		_ = srv.Shutdown(ctx)
-		_ = contentServer.Shutdown(ctx)
+		shutdownServers(ctx, srv, contentServer)
 	}()
 
 	logger.Info("earnest listening", "addr", cfg.HTTPAddr, "version", version, "revision", revision)
@@ -212,6 +216,18 @@ func serve() error {
 	return nil
 }
 
+func shutdownServers(ctx context.Context, servers ...*http.Server) {
+	var draining sync.WaitGroup
+	for _, server := range servers {
+		draining.Go(func() {
+			if err := server.Shutdown(ctx); err != nil {
+				_ = server.Close()
+			}
+		})
+	}
+	draining.Wait()
+}
+
 // buildMux mounts the surfaces the binary serves. api.New already applies
 // security headers and serves GET /openapi.json; the outer security-headers
 // wrap extends the same policy to every other response.
@@ -220,7 +236,7 @@ func buildMux(baseURL string, svc *service.Service, auth *service.Auth, logger *
 }
 
 func buildMuxWithWeb(baseURL, contentOrigin string, svc *service.Service, auth *service.Auth, logger *slog.Logger, registry *metrics.Registry, content *web.Content, vapidPublicKey ...string) *http.ServeMux {
-	apiHandler := api.New(svc, auth, logger, baseURL, vapidPublicKey...)
+	apiHandler := api.New(svc, auth, logger, baseURL, content, vapidPublicKey...)
 	mux := http.NewServeMux()
 	mux.Handle("/v1/", apiHandler)
 	mux.Handle("/openapi.json", apiHandler)

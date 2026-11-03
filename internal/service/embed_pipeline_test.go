@@ -26,6 +26,7 @@ type pipelineProvider struct {
 	mu         sync.Mutex
 	received   []string
 	classifier string
+	invalidFor string
 }
 
 func (p *pipelineProvider) requests() []string {
@@ -42,6 +43,9 @@ func (p *pipelineProvider) serve(w http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
 	p.received = append(p.received, string(body))
 	classification := p.classifier
+	if p.invalidFor != "" && strings.Contains(string(body), p.invalidFor) {
+		classification = `{"labels":"refused"}`
+	}
 	p.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	if strings.HasSuffix(r.URL.Path, "/embeddings") {
@@ -144,7 +148,7 @@ func TestPipelinePrivacyVocabularyAndIdempotency(t *testing.T) {
 	if err != nil || len(ids) != 1 || ids[0] != id {
 		t.Fatalf("classifier rule %v %v", ids, err)
 	}
-	if _, err := f.s.CreateRule(ctx, f.a, Rule{Name: "malicious", Predicate: predicate, Actions: []RuleAction{{Type: RuleWebhook, WebhookID: 1}}, Enabled: true}); !errors.Is(err, ErrInvalid) {
+	if _, err := f.s.CreateRule(ctx, f.a, Rule{Name: "malicious", Predicate: predicate, Actions: []RuleAction{{Type: RuleWebhook, WebhookID: 1}}, Enabled: true}, "create-rule"); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("classifier webhook accepted: %v", err)
 	}
 	var webhookJobs int
@@ -195,7 +199,7 @@ func TestPipelineDisabledAndBudgetPause(t *testing.T) {
 			t.Fatalf("disabled search %v", err)
 		}
 		status, err := f.s.PipelineStatus(ctx, f.a)
-		if err != nil || status.Embed != "disabled" || status.Classify != "disabled" {
+		if err != nil || status != (PipelineStatus{Embed: "disabled", Classify: "disabled", Semantic: "disabled", Watch: "disabled", Blurb: "disabled", Summary: "disabled", Edition: "disabled", Ask: "disabled", CompileRule: "disabled"}) {
 			t.Fatalf("status %+v %v", status, err)
 		}
 		if len(p.requests()) != 0 {
@@ -221,8 +225,9 @@ func TestPipelineDisabledAndBudgetPause(t *testing.T) {
 		if err != nil || len(pending) != 1 {
 			t.Fatalf("lost pending work: %v %v", pending, err)
 		}
-		// Raising the configured cap resumes exactly the same durable work.
-		ctx = pipelineTestContext(t, f.db, p, []llm.Task{llm.TaskEmbed, llm.TaskClassify}, 1000)
+		// The raised cap must cover the conservative input/output reservation,
+		// not just the fake provider's much smaller final usage.
+		ctx = pipelineTestContext(t, f.db, p, []llm.Task{llm.TaskEmbed, llm.TaskClassify}, 10000)
 		if n, err := f.s.RunPipeline(ctx, 10); err != nil || n != 2 {
 			t.Fatalf("resume %d %v", n, err)
 		}
@@ -259,5 +264,93 @@ func TestPipelineUsesNativeEmbeddingWidth(t *testing.T) {
 	requests := p.requests()
 	if len(requests) != 1 || !strings.Contains(requests[0], `"dimensions":768`) {
 		t.Fatalf("native dimension request: %v", requests)
+	}
+}
+
+func TestClassifierFailureDoesNotStarveQueue(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	bad := f.ingest(t, "classifier-refusal-sentinel")
+	healthy := f.ingest(t, "healthy article")
+	p := &pipelineProvider{classifier: `{"labels":["news"]}`, invalidFor: "classifier-refusal-sentinel"}
+	ctx := pipelineTestContext(t, f.db, p, []llm.Task{llm.TaskClassify}, 0)
+	if n, err := f.s.RunPipeline(ctx, 10); err != nil || n != 1 {
+		t.Fatalf("classification pass: processed=%d error=%v, want healthy article processed", n, err)
+	}
+	if _, found, err := f.db.ClassifierLabels(ctx, healthy, "classify-test", pipeline.ClassifierPromptVersion); err != nil || !found {
+		t.Fatalf("healthy article blocked: found=%v error=%v", found, err)
+	}
+	if _, found, err := f.db.ClassifierLabels(ctx, bad, "classify-test", pipeline.ClassifierPromptVersion); err != nil || found {
+		t.Fatalf("invalid output recorded as classification: found=%v error=%v", found, err)
+	}
+	// Recreating the service proves the backoff is durable, not process-local.
+	restarted, err := New(f.db, Deps{SecretKey: []byte(strings.Repeat("s", 32))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := restarted.RunPipeline(ctx, 1); err != nil || n != 0 || len(p.requests()) != 2 {
+		t.Fatalf("backoff after restart: processed=%d calls=%d error=%v", n, len(p.requests()), err)
+	}
+	for attempt := 2; attempt <= 3; attempt++ {
+		if _, err := f.db.Pool().Exec(ctx, `UPDATE jobs SET run_at=now()-interval '1 second' WHERE kind='classify'`); err != nil {
+			t.Fatal(err)
+		}
+		if n, err := restarted.RunPipeline(ctx, 1); err != nil || n != 0 {
+			t.Fatalf("attempt %d: %d %v", attempt, n, err)
+		}
+	}
+	later := f.ingest(t, "later healthy article")
+	if n, err := restarted.RunPipeline(ctx, 1); err != nil || n != 1 {
+		t.Fatalf("exhausted failure blocks later entry: %d %v", n, err)
+	}
+	if _, found, err := f.db.ClassifierLabels(ctx, later, "classify-test", pipeline.ClassifierPromptVersion); err != nil || !found {
+		t.Fatalf("later classification: %v %v", found, err)
+	}
+	if len(p.requests()) != 5 {
+		t.Fatalf("calls=%d, want 3 failed and 2 healthy", len(p.requests()))
+	}
+	// A changed source gets a fresh attempt rather than staying permanently failed.
+	if _, err := f.db.Pool().Exec(ctx, `UPDATE entries SET title='corrected article' WHERE id=$1`, bad); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	p.invalidFor = ""
+	p.mu.Unlock()
+	if n, err := restarted.RunPipeline(ctx, 1); err != nil || n != 1 {
+		t.Fatalf("updated source: %d %v", n, err)
+	}
+	var failures int
+	if err := f.db.Pool().QueryRow(ctx, `SELECT count(*) FROM jobs WHERE kind='classify'`).Scan(&failures); err != nil || failures != 0 {
+		t.Fatalf("stale failures=%d %v", failures, err)
+	}
+}
+
+func TestClassifierBudgetPausePreservesFailureAttempts(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	f.ingest(t, "classifier-refusal-sentinel")
+	p := &pipelineProvider{classifier: `{"labels":["news"]}`, invalidFor: "classifier-refusal-sentinel"}
+	ctx := pipelineTestContext(t, f.db, p, []llm.Task{llm.TaskClassify}, 0)
+	if n, err := f.s.RunPipeline(ctx, 1); err != nil || n != 0 {
+		t.Fatalf("first refusal: %d %v", n, err)
+	}
+	if _, err := f.db.Pool().Exec(ctx, `UPDATE jobs SET run_at=now()-interval '1 second' WHERE kind='classify'`); err != nil {
+		t.Fatal(err)
+	}
+	paused := pipelineTestContext(t, f.db, p, []llm.Task{llm.TaskClassify}, 1)
+	// Budget denial must not be confused with a provider/output failure.
+	if err := llm.NewBudget(f.db, map[string]llm.USD{"fake": 1}).Record(ctx, "fake", 1); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := f.s.RunPipeline(paused, 1); err != nil || n != 0 {
+		t.Fatalf("paused classification: %d %v", n, err)
+	}
+	var attempts int
+	if err := f.db.Pool().QueryRow(ctx, `SELECT attempts FROM jobs WHERE kind='classify'`).Scan(&attempts); err != nil || attempts != 1 || len(p.requests()) != 1 {
+		t.Fatalf("pause consumed attempt: attempts=%d calls=%d error=%v", attempts, len(p.requests()), err)
+	}
+	p.mu.Lock()
+	p.invalidFor = ""
+	p.mu.Unlock()
+	if n, err := f.s.RunPipeline(ctx, 1); err != nil || n != 1 {
+		t.Fatalf("resume: %d %v", n, err)
 	}
 }

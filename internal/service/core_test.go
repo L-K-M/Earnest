@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/L-K-M/Earnest/internal/store"
 	"github.com/L-K-M/Earnest/internal/store/storetest"
@@ -24,6 +25,64 @@ type coreFixture struct {
 	a                  Actor
 	feed, subscription int64
 	clock              atomic.Int64
+}
+
+func TestClaimDueFeedsSkipsInvalidCredentials(t *testing.T) {
+	template := storetest.NewTemplate(t)
+	for _, envelope := range []string{"short", "tampered"} {
+		t.Run(envelope, func(t *testing.T) {
+			f := newCoreFixture(t, template)
+			ctx := t.Context()
+			var poisoned int64
+			body := []byte("short")
+			if envelope == "tampered" {
+				var err error
+				body, err = f.s.sealCredentials(&FeedCredentials{Username: "reader", Password: "secret"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				body[len(body)-1] ^= 1
+			}
+			if err := f.db.Pool().QueryRow(ctx, "INSERT INTO feeds(url,owner_user_id,credentials_encrypted) VALUES('https://poisoned.test/feed',$1,$2) RETURNING id", f.a.UserID, body).Scan(&poisoned); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.db.Pool().Exec(ctx, "INSERT INTO subscriptions(user_id,feed_id) VALUES($1,$2)", f.a.UserID, poisoned); err != nil {
+				t.Fatal(err)
+			}
+			now := f.s.now()
+			if _, err := f.db.Pool().Exec(ctx, "UPDATE feeds SET next_fetch_at=$1", now); err != nil {
+				t.Fatal(err)
+			}
+			claimed, err := f.s.ClaimDueFeeds(ctx, now, 2, time.Minute)
+			if err != nil || len(claimed) != 1 || claimed[0].FeedID != f.feed {
+				t.Fatalf("invalid credentials blocked healthy feed: %+v %v", claimed, err)
+			}
+			// Both rows keep their leases, so the poisoned row cannot spin.
+			again, err := f.s.ClaimDueFeeds(ctx, now, 2, time.Minute)
+			if err != nil || len(again) != 0 {
+				t.Fatalf("claimed rows did not retain leases: %+v %v", again, err)
+			}
+		})
+	}
+}
+
+func TestFetchErrorUTF8Boundary(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := t.Context()
+	for _, suffix := range []string{"é", "世", "😀"} {
+		message := strings.Repeat("a", 1023) + suffix + "trailing"
+		if _, err := f.s.RecordFetch(ctx, FetchOutcome{FeedID: f.feed, Status: FetchFailed, ErrorClass: "http", ErrorMessage: message}); err != nil {
+			t.Fatalf("split UTF-8 fetch error rejected: %v", err)
+		}
+		var stored string
+		var failures int
+		if err := f.db.Pool().QueryRow(ctx, "SELECT error_message,consecutive_failures FROM feeds WHERE id=$1", f.feed).Scan(&stored, &failures); err != nil {
+			t.Fatal(err)
+		}
+		if !utf8.ValidString(stored) || len(stored) > 1024 || !strings.HasPrefix(message, stored) || failures == 0 {
+			t.Fatalf("invalid truncated fetch error: %q failures=%d", stored, failures)
+		}
+	}
 }
 
 func newCoreFixture(t *testing.T, template *storetest.Template) *coreFixture {

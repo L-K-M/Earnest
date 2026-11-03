@@ -55,6 +55,8 @@ export interface ClientSnapshot {
   cursor: Revision;
   entries: Entry[];
   states: State[];
+  // Unversioned gone acknowledgements hide entries until a newer backfill.
+  goneEntries?: bigint[];
   objects: SyncObject[];
   positions: Position[];
   pending: OutboxEntry[];
@@ -90,6 +92,7 @@ export class SyncClient {
   private cursor: Revision;
   private entries = new Map<bigint, Entry>();
   private states = new Map<string, State>();
+  private goneEntries = new Set<bigint>();
   private objects = new Map<string, SyncObject>();
   private positions = new Map<string, Position>();
   private pending: OutboxEntry[] = [];
@@ -101,6 +104,7 @@ export class SyncClient {
   static fromSnapshot(s: ClientSnapshot): SyncClient {
     const c = new SyncClient(s.cursor);
     for (const e of s.entries) c.entries.set(e.id, { ...e });
+    c.goneEntries = new Set(s.goneEntries ?? []);
     for (const st of s.states) c.states.set(stateKey(st.principal, st.entryId), cloneState(st));
     for (const o of s.objects) c.objects.set(objectKey(o.kind, o.id), { ...o });
     for (const p of s.positions) c.positions.set(positionKey(p.principal, p.view), { ...p });
@@ -114,6 +118,7 @@ export class SyncClient {
       cursor: { ...this.cursor },
       entries: [...this.entries.values()].map((e) => ({ ...e })),
       states: [...this.states.values()].map(cloneState),
+      goneEntries: [...this.goneEntries],
       objects: [...this.objects.values()].map((o) => ({ ...o })),
       positions: [...this.positions.values()].map((p) => ({ ...p })),
       pending: this.pending.map((e) => ({ item: clonePending(e.item), inflight: e.inflight })),
@@ -156,13 +161,17 @@ export class SyncClient {
     this.cursor = { ...cursor };
     this.entries = new Map();
     this.states = new Map();
+    this.goneEntries.clear();
     this.objects = new Map();
     this.positions = new Map();
   }
 
   mergeEntry(e: Entry): void {
     const old = this.entries.get(e.id);
-    if (old === undefined || (!old.deleted && e.rev > old.rev)) this.entries.set(e.id, { ...e });
+    if (old === undefined || (e.rev > old.rev && (!old.deleted || this.goneEntries.has(e.id)))) {
+      this.entries.set(e.id, { ...e });
+      this.goneEntries.delete(e.id);
+    }
   }
 
   private static mergeStateRegisters(old: State, next: State): State {
@@ -363,7 +372,8 @@ export class SyncClient {
       this.mergeState(r.state);
       if (r.status === "gone") {
         const e = this.entries.get(r.state.entryId);
-        if (e !== undefined) {
+        if (e !== undefined && !e.deleted) {
+          this.goneEntries.add(e.id);
           e.deleted = true;
           this.entries.set(e.id, e);
         }

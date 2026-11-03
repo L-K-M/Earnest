@@ -244,6 +244,9 @@ func classifyWebhook(result *outbound.Result, err error) webhookResult {
 		if code >= 200 && code <= 299 {
 			return webhookResult{outcome: outcomeDelivered}
 		}
+		if code == http.StatusRequestTimeout {
+			return webhookResult{outcome: outcomeAmbiguous, class: fmt.Sprintf("http_%d", code)}
+		}
 		return webhookResult{outcome: outcomeDefinite, class: fmt.Sprintf("http_%d", code)}
 	}
 	var oe *outbound.Error
@@ -353,8 +356,15 @@ func (s *Service) resolveWebhookJob(ctx context.Context, jobID, webhookID int64,
 				return fmt.Errorf("reschedule webhook job: %w", err)
 			}
 			var active bool
-			if err := tx.QueryRow(ctx, `UPDATE webhooks SET consecutive_failures=consecutive_failures+1,
-    active = active AND consecutive_failures+1 < $2 WHERE id=$1 RETURNING active`, webhookID, webhookMaxFailures).Scan(&active); err != nil {
+			err := tx.QueryRow(ctx, `UPDATE webhooks SET consecutive_failures=consecutive_failures+1,
+    active = active AND consecutive_failures+1 < $2 WHERE id=$1 RETURNING active`, webhookID, webhookMaxFailures).Scan(&active)
+			if errors.Is(err, pgx.ErrNoRows) {
+				if _, err := tx.Exec(ctx, "DELETE FROM jobs WHERE id=$1", jobID); err != nil {
+					return fmt.Errorf("drop webhook job: %w", err)
+				}
+				return nil
+			}
+			if err != nil {
 				return fmt.Errorf("count webhook failure: %w", err)
 			}
 			if !active {

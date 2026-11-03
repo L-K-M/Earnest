@@ -61,6 +61,7 @@ type Entry struct {
 	PublishedAt    *time.Time
 	UpdatedAt      *time.Time
 	Title          string
+	Blurb          *string
 	URL            string
 	Author         string
 	Rev            uint64
@@ -135,6 +136,9 @@ func (s *Service) Entries(ctx context.Context, a Actor, f EntryFilter) ([]Entry,
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list entries: %w", err)
+	}
+	if err := s.attachBlurbs(ctx, a.UserID, page); err != nil {
+		return nil, err
 	}
 	if err := s.attachStates(ctx, principal, page); err != nil {
 		return nil, err
@@ -225,6 +229,9 @@ func (s *Service) GetByIDs(ctx context.Context, a Actor, ids []int64) ([]Entry, 
 		}
 		out = append(out, e)
 	}
+	if err := s.attachBlurbs(ctx, a.UserID, out); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -313,6 +320,40 @@ func (s *Service) attachStates(ctx context.Context, principal int64, page []Entr
 	}
 	for i := range page {
 		page[i].State = states[page[i].ID]
+	}
+	return nil
+}
+
+// attachBlurbs reads only current publisher content annotations for this user.
+func (s *Service) attachBlurbs(ctx context.Context, user int64, entries []Entry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	ids := make([]int64, len(entries))
+	for i := range entries {
+		ids[i] = entries[i].ID
+	}
+	rows, err := s.store.Pool().Query(ctx, `SELECT DISTINCT ON (e.id) e.id, a.value FROM entries e JOIN annotations a ON a.user_id=$1 AND a.kind='blurb' AND a.entry_ids=ARRAY[e.id] AND a.content_hash=e.content_hash AND a.deleted_at IS NULL JOIN principals p ON p.id=a.principal_id AND p.kind='pipeline' AND p.name='Summaries' WHERE e.id=ANY($2) ORDER BY e.id,a.id DESC`, user, ids)
+	if err != nil {
+		return fmt.Errorf("list blurbs: %w", err)
+	}
+	defer rows.Close()
+	values := map[int64]string{}
+	for rows.Next() {
+		var id int64
+		var value string
+		if err := rows.Scan(&id, &value); err != nil {
+			return fmt.Errorf("scan blurb: %w", err)
+		}
+		values[id] = value
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("list blurbs: %w", err)
+	}
+	for i := range entries {
+		if value, ok := values[entries[i].ID]; ok {
+			entries[i].Blurb = &value
+		}
 	}
 	return nil
 }

@@ -23,6 +23,7 @@ final class ScriptedHTTP: URLProtocol {
         var body: String
         var bearer: String? = "Bearer test-token"
         var checkBody: (@Sendable (Data?) throws -> Void)?
+        var query: String?
     }
     private static let lock = NSLock()
     nonisolated(unsafe) private static var replies: [Reply] = []
@@ -34,6 +35,7 @@ final class ScriptedHTTP: URLProtocol {
         return URLSession(configuration: configuration)
     }
     static func assertFinished() { #expect(lock.withLock { replies.isEmpty }) }
+    static var pendingCount: Int { lock.withLock { replies.count } }
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
@@ -45,6 +47,7 @@ final class ScriptedHTTP: URLProtocol {
         }
         #expect(request.url?.path == reply.path)
         #expect(request.httpMethod == reply.method)
+        if let query = reply.query { #expect(request.url?.query == query) }
         #expect(request.value(forHTTPHeaderField: "Authorization") == reply.bearer)
         do { try reply.checkBody?(request.httpBody) }
         catch { Issue.record("Invalid HTTP body: \(error)") }
@@ -95,6 +98,22 @@ final class ScriptedHTTP: URLProtocol {
 }
 
 extension NetworkTests {
+    @Test @MainActor func syncRejectsNonAdvancingChangesPage() async throws {
+        let engine = SyncEngine(store: MemorySyncStore())
+        try engine.bootstrap(Cursor(generation: "g1", rev: 1))
+        try engine.finishBootstrap()
+        let session = ScriptedHTTP.install([
+            .init(path: "/v1/changes", body: #"{"changes":[{"rev":1,"type":"entry.created","payload":{"entry":{"id":1,"rev":1}}}],"next":{"generation":"g1","rev":1},"next_cursor":"g1:1"}"#),
+            // Bound the old retry loop so the regression fails without hanging.
+            .init(path: "/v1/changes", status: 500, body: "{}"),
+        ])
+        defer { session.invalidateAndCancel() }
+        let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: TestTokens(), session: session)
+        await #expect(throws: SyncError.self) { try await SyncCoordinator(engine: engine, api: api).synchronize() }
+        #expect(ScriptedHTTP.pendingCount == 1)
+        #expect(try engine.snapshot().cursor == Cursor(generation: "g1", rev: 1))
+    }
+
     @Test @MainActor func generationRecoveryReplaysOutboxOnce() async throws {
         let engine = SyncEngine(store: MemorySyncStore())
         try engine.bootstrap(Cursor(generation: "old", rev: 10))
@@ -156,6 +175,46 @@ extension NetworkTests {
         defer { session.invalidateAndCancel() }
         let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: TestTokens(), session: session)
         await #expect(throws: APIProblem.self) { try await SyncCoordinator(engine: engine, api: api).synchronize() }
+        ScriptedHTTP.assertFinished()
+    }
+}
+
+extension NetworkTests {
+    @Test(arguments: [0, 1]) func activityFollowsAfterIDUntilFinalPage(_ finalCount: Int) async throws {
+        // IDs are not contiguous, and the cursor must retain full Int64 precision.
+        let firstIDs = (1...1000).map { Int64($0) + 9_007_199_254_740_992 }
+        let lastID = firstIDs.last! + (finalCount == 0 ? 0 : 7)
+        let session = ScriptedHTTP.install([
+            .init(path: "/v1/activity", body: activityPage(firstIDs), query: "after_id=0&limit=1000"),
+            .init(path: "/v1/activity", body: activityPage(finalCount == 0 ? [] : [lastID]), query: "after_id=\(firstIDs.last!)&limit=1000"),
+        ])
+        defer { session.invalidateAndCancel() }
+        let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: TestTokens(), session: session)
+        let items = try await api.activity()
+        #expect(items.count == 1000 + finalCount)
+        #expect(items.last?["id"]?.int64Value == lastID)
+        #expect(items.last?["next_action"]?.stringValue == "revert")
+        ScriptedHTTP.assertFinished()
+    }
+}
+
+private func activityPage(_ ids: [Int64]) -> String {
+    let events = ids.map { id in
+        "{\"id\":\(id),\"principal_id\":1,\"principal_name\":\"Scout\",\"action\":\"state.updated\",\"target\":{},\"before\":{},\"after\":{},\"generation\":\"g1\",\"created_at\":\"2026-11-03T00:00:00Z\",\"next_action\":\"revert\"}"
+    }.joined(separator: ",")
+    return "{\"activities\":[\(events)]}"
+}
+
+extension NetworkTests {
+    @Test func activityRejectsNonAdvancingPage() async throws {
+        let page = activityPage((1...1000).map(Int64.init))
+        let session = ScriptedHTTP.install([
+            .init(path: "/v1/activity", body: page, query: "after_id=0&limit=1000"),
+            .init(path: "/v1/activity", body: page, query: "after_id=1000&limit=1000"),
+        ])
+        defer { session.invalidateAndCancel() }
+        let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: TestTokens(), session: session)
+        await #expect(throws: APIError.self) { try await api.activity() }
         ScriptedHTTP.assertFinished()
     }
 }

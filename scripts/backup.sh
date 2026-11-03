@@ -2,7 +2,7 @@
 set -eu
 : "${PGHOST:=postgres}" "${PGUSER:=earnest}" "${PGDATABASE:=earnest}" "${BACKUP_DIR:=/backups}" "${BACKUP_KEEP:=14}"
 export PGHOST PGUSER PGDATABASE
-case "$BACKUP_KEEP" in ''|*[!0-9]*|0) echo 'BACKUP_KEEP must be a positive integer' >&2; exit 1;; esac
+case "$BACKUP_KEEP" in ''|*[!0-9]*|0*) echo 'BACKUP_KEEP must be a positive integer' >&2; exit 1;; esac
 mkdir -p "$BACKUP_DIR"
 umask 077
 tmp=$(mktemp "$BACKUP_DIR/.earnest-XXXXXX")

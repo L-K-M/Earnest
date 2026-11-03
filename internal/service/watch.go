@@ -9,6 +9,7 @@ import (
 
 	"github.com/L-K-M/Earnest/internal/llm"
 	"github.com/L-K-M/Earnest/internal/pipeline"
+	"github.com/L-K-M/Earnest/internal/store"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -30,11 +31,12 @@ func validateWatch(rule Rule) error {
 
 // CreateWatch saves a semantic description and notify action atomically. Its
 // description is embedded lazily once per model, never once per article.
-func (s *Service) CreateWatch(ctx context.Context, a Actor, w WatchRule) (WatchRule, error) {
+// Repeating opID returns the original watch without granting another budget.
+func (s *Service) CreateWatch(ctx context.Context, a Actor, w WatchRule, opID string) (WatchRule, error) {
 	if err := s.ruleHuman(ctx, a); err != nil {
 		return WatchRule{}, err
 	}
-	if !validName(w.Name) {
+	if !validName(w.Name) || !validOpID(opID) {
 		return WatchRule{}, ErrInvalid
 	}
 	if err := validateWatch(w.Rule); err != nil {
@@ -56,20 +58,35 @@ func (s *Service) CreateWatch(ctx context.Context, a Actor, w WatchRule) (WatchR
 	if err != nil {
 		return WatchRule{}, fmt.Errorf("encode watch actions: %w", err)
 	}
+	w.Status = watchStatus(ctx, w.CheckLLM)
 	err = s.store.WithTx(ctx, func(tx pgx.Tx) error {
+		if err := store.LockCore(ctx, tx); err != nil {
+			return err
+		}
+		replay, err := replayOp(ctx, tx, a.PrincipalID, "CreateWatch", opID)
+		if err != nil {
+			return err
+		}
+		if replay != nil {
+			var stored WatchRule
+			if err := json.Unmarshal(replay, &stored); err != nil {
+				return err
+			}
+			w = stored
+			return nil
+		}
 		if err := tx.QueryRow(ctx, `INSERT INTO rules(user_id,source,ast,action,enabled,created_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING id`, a.UserID, w.Name, predicate, actions, w.Enabled, a.PrincipalID).Scan(&w.ID); err != nil {
 			return fmt.Errorf("create watch: %w", err)
 		}
-		_, err := tx.Exec(ctx, `INSERT INTO watch_rules(rule_id,check_llm,check_budget) VALUES($1,$2,$3)`, w.ID, w.CheckLLM, w.CheckBudget)
+		_, err = tx.Exec(ctx, `INSERT INTO watch_rules(rule_id,check_llm,check_budget) VALUES($1,$2,$3)`, w.ID, w.CheckLLM, w.CheckBudget)
 		if err != nil {
 			return fmt.Errorf("save watch policy: %w", err)
 		}
-		return nil
+		return store.FinishOp(ctx, tx, a.PrincipalID, opID, w)
 	})
 	if err != nil {
 		return WatchRule{}, err
 	}
-	w.Status = watchStatus(ctx, w.CheckLLM)
 	return w, nil
 }
 
@@ -104,7 +121,11 @@ func (s *Service) Watches(ctx context.Context, a Actor) ([]WatchRule, error) {
 		if err := rows.Scan(&id, &w.CheckLLM, &w.CheckBudget); err != nil {
 			return nil, fmt.Errorf("scan watch: %w", err)
 		}
-		w.Rule = byID[id]
+		rule, ok := byID[id]
+		if !ok {
+			continue
+		}
+		w.Rule = rule
 		w.Status = watchStatus(ctx, w.CheckLLM)
 		out = append(out, w)
 	}

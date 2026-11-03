@@ -168,7 +168,7 @@ func pushEndpoint(raw string) (string, error) {
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".home.arpa") {
 		return "", fmt.Errorf("device endpoint is a local hostname: %w", ErrInvalid)
 	}
-	if ip, err := netip.ParseAddr(u.Hostname()); err == nil && !publicPushAddr(ip) {
+	if ip, err := netip.ParseAddr(host); err == nil && !publicPushAddr(ip) {
 		return "", fmt.Errorf("device endpoint is not a public address: %w", ErrInvalid)
 	}
 	if port := u.Port(); port != "" {

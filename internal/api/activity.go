@@ -26,7 +26,9 @@ type activityPage struct {
 	Groups     []activityGroup    `json:"groups,omitempty"`
 }
 type agentChangesInput struct {
-	Since time.Time `query:"since" required:"true"`
+	Since   time.Time `query:"since" required:"true"`
+	AfterID int64     `query:"after_id" minimum:"0"`
+	Limit   int       `query:"limit" default:"1000" minimum:"1" maximum:"1000"`
 }
 type triageBody struct {
 	OpID       string               `json:"op_id"`
@@ -60,7 +62,7 @@ func (s *server) activityRoutes() {
 		return empty{}, s.svc.Revert(ctx, actor(ctx), in.ID, in.Body.OpID)
 	})
 	route(s, http.MethodGet, "/v1/activity/agent-changes", "agent-changes", func(ctx context.Context, in *agentChangesInput) ([]service.Activity, error) {
-		return s.svc.AgentChangesToUnseen(ctx, actor(ctx), in.Since)
+		return s.svc.AgentChangesToUnseen(ctx, actor(ctx), in.Since, service.ActivityFilter{AfterID: in.AfterID, Limit: in.Limit})
 	})
 	route(s, http.MethodPost, "/v1/triage", "triage", func(ctx context.Context, in *bodyInput[triageBody]) (service.TriageResult, error) {
 		b := in.Body

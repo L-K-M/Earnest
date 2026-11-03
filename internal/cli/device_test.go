@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -112,6 +113,26 @@ func TestLoginDeviceFlowSlowDown(t *testing.T) {
 	}
 }
 
+func TestPollDeviceProblemWithoutTitle(t *testing.T) {
+	stubSleeps(t)
+	var polls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if polls.Add(1) == 1 {
+			w.Header().Set("Content-Type", "application/problem+json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"type":"/problems/authorization_pending","error":"authorization_pending"}`))
+			return
+		}
+		writeJSON(w, deviceToken{AccessToken: testToken})
+	}))
+	defer srv.Close()
+
+	token, err := pollDevice(t.Context(), newClient(srv.URL, ""), deviceResult{DeviceCode: "private-device-code", ExpiresIn: 600})
+	if err != nil || token != testToken || polls.Load() != 2 {
+		t.Fatalf("token=%q polls=%d error=%v", token, polls.Load(), err)
+	}
+}
+
 func TestLoginJSONOmitsToken(t *testing.T) {
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -139,7 +160,15 @@ func TestLoginJSONOmitsToken(t *testing.T) {
 		UserID int64  `json:"user_id"`
 		Kind   string `json:"kind"`
 	}
-	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(out))
+	var approval map[string]any
+	if err := decoder.Decode(&approval); err != nil {
+		t.Fatal(err)
+	}
+	if approval["user_code"] != "ABCD-EFGH" || approval["verification_uri"] != srv.URL+"/device" {
+		t.Fatalf("approval = %v", approval)
+	}
+	if err := decoder.Decode(&decoded); err != nil {
 		t.Fatalf("not JSON: %v\n%s", err, out)
 	}
 	if decoded.Server != srv.URL || decoded.UserID != 7 || decoded.Kind != "human" {

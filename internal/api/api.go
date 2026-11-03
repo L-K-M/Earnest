@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/L-K-M/Earnest/internal/service"
+	"github.com/L-K-M/Earnest/internal/web"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 )
@@ -38,19 +39,21 @@ type server struct {
 	secure         bool
 	baseURL        string
 	api            huma.API
+	signer         *web.TicketSigner
 	vapidPublicKey string
 }
 
 // New returns the native API and generated OpenAPI handler. The optional
-// VAPID public key enables browser push subscription setup.
-func New(svc *service.Service, auth *service.Auth, logger *slog.Logger, baseURL string, vapidPublicKey ...string) http.Handler {
-	mux, _ := build(svc, auth, logger, baseURL, vapidPublicKey...)
+// content handler supplies the shared ticket signer for content URLs, and
+// the optional VAPID public key enables browser push subscription setup.
+func New(svc *service.Service, auth *service.Auth, logger *slog.Logger, baseURL string, content *web.Content, vapidPublicKey ...string) http.Handler {
+	mux, _ := build(svc, auth, logger, baseURL, content, vapidPublicKey...)
 	return SecurityHeaders(mux)
 }
 
 // OpenAPI generates the same deterministic document served at /openapi.json.
 func OpenAPI() ([]byte, error) {
-	_, api := build(nil, nil, slog.Default(), "")
+	_, api := build(nil, nil, slog.Default(), "", nil)
 	data, err := json.MarshalIndent(api.OpenAPI(), "", "  ")
 	if err != nil {
 		return nil, err
@@ -58,7 +61,7 @@ func OpenAPI() ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
-func build(svc *service.Service, auth *service.Auth, logger *slog.Logger, baseURL string, vapidPublicKey ...string) (*http.ServeMux, huma.API) {
+func build(svc *service.Service, auth *service.Auth, logger *slog.Logger, baseURL string, content *web.Content, vapidPublicKey ...string) (*http.ServeMux, huma.API) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -84,7 +87,11 @@ func build(svc *service.Service, auth *service.Auth, logger *slog.Logger, baseUR
 		"csrf":    {Type: "apiKey", In: "header", Name: csrfHeader, Description: "Required with a session cookie on unsafe methods."},
 	}
 	h := humago.New(actionMux{mux}, cfg)
-	s := &server{svc: svc, auth: auth, logger: logger, secure: strings.HasPrefix(baseURL, "https://"), baseURL: baseURL, api: h}
+	var signer *web.TicketSigner
+	if content != nil {
+		signer = content.Signer()
+	}
+	s := &server{svc: svc, auth: auth, logger: logger, secure: strings.HasPrefix(baseURL, "https://"), baseURL: baseURL, api: h, signer: signer}
 	if len(vapidPublicKey) > 0 {
 		s.vapidPublicKey = vapidPublicKey[0]
 	}
@@ -99,11 +106,13 @@ func build(svc *service.Service, auth *service.Auth, logger *slog.Logger, baseUR
 	s.activityRoutes()
 	s.webhookRoutes()
 	s.searchRoutes()
+	s.contentURLRoutes()
 	s.ruleRoutes()
 	s.settingsRoutes()
 	s.embedRoutes()
 	s.semanticRoutes()
 	s.watchRoutes()
+	s.generatedPipelineRoutes()
 	s.documentProblems()
 	mux.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) { writeProblem(w, problemStatus(http.StatusNotFound)) })
 	mux.HandleFunc("GET /openapi.json", func(w http.ResponseWriter, r *http.Request) {
@@ -148,10 +157,14 @@ func (s *server) authenticate(ctx huma.Context, next func(huma.Context)) {
 		} else {
 			a, err = s.auth.ResolveToken(r.Context(), token, service.AudienceAPI)
 		}
-	} else if cookie, cookieErr := r.Cookie(sessionCookie); cookieErr == nil {
+	} else if cookie, cookieErr := r.Cookie(sessionCookie); cookieErr == nil && ctx.Operation().OperationID != "session-login" {
 		a, err = s.auth.ResolveSession(r.Context(), cookie.Value)
 		if err == nil && r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
 			err = s.auth.VerifyCSRF(r.Context(), cookie.Value, r.Header.Get(csrfHeader))
+		}
+		if err != nil && public {
+			// Device pairing is also available before establishing a session.
+			a, err = service.Actor{}, nil
 		}
 	} else if !public {
 		err = service.ErrUnauthorized

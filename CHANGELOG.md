@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The native API (`/v1`, OpenAPI, SSE hints), the Google Reader subset
+  for NetNewsWire and Capy Reader, and `earnest serve` wiring it all.
+- The agent surface: tokens bound to an audience, annotations and
+  briefs, notifications with budgets and at-most-once delivery, the
+  activity log with revert, triage, webhooks, the MCP server,
+  `/llms.txt`, an agent skill and the `earnest` CLI. See
+  `docs/agents.md`.
+- Search, saved searches, mutes and deterministic rules with a dry run
+  (`docs/rules.md`).
+- The web client: a river that ends, unread mode, cadences, editions,
+  keyboard triage, reader view in a sandboxed origin, offline reading,
+  Web Push, and screens for agents, rules, search and settings.
+- The optional LLM pipeline, off until configured: embeddings, story
+  clustering, hybrid search, a classifier, watch rules, summaries with
+  verified passages, editions, compiled rules and ask my feeds, all
+  within hard monthly budgets (`docs/pipeline.md`).
+- Mac and Android clients that run the shared sync vectors.
 - Server foundation: the executable sync model with 35 shared test
   vectors (`docs/sync.md`), the full Postgres schema and migrations,
   users, sessions, app and agent tokens and the device flow, the

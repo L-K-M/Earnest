@@ -2,8 +2,10 @@ package cli
 
 import (
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -19,7 +21,7 @@ func TestExtractJSONFlag(t *testing.T) {
 		{name: "leading", in: []string{"--json", "feeds", "list"}, out: []string{"feeds", "list"}, json: true},
 		{name: "trailing", in: []string{"feeds", "list", "--json"}, out: []string{"feeds", "list"}, json: true},
 		{name: "single dash", in: []string{"-json", "whoami"}, out: []string{"whoami"}, json: true},
-		{name: "only one removed", in: []string{"--json", "read", "--json", "1"}, out: []string{"read", "--json", "1"}, json: true},
+		{name: "repeated", in: []string{"--json", "read", "--json", "-json", "1"}, out: []string{"read", "1"}, json: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -29,6 +31,56 @@ func TestExtractJSONFlag(t *testing.T) {
 			}
 			if strings.Join(out, " ") != strings.Join(tt.out, " ") {
 				t.Fatalf("args = %v, want %v", out, tt.out)
+			}
+		})
+	}
+}
+
+func TestRunRepeatedJSONFlag(t *testing.T) {
+	code, out, errOut, _ := runStub(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, meResult{UserID: 7, PrincipalID: 9, Kind: "human"})
+	}, testToken, "--json", "whoami", "--json", "-json")
+	requireCode(t, code, exitOK, errOut)
+	if !json.Valid([]byte(out)) {
+		t.Fatalf("invalid JSON: %q", out)
+	}
+}
+
+func TestParseFlagsPreservesTerminator(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		want  []string
+		limit int
+	}{
+		{"leading literal", []string{"--", "--limit"}, []string{"--limit"}, 10},
+		{"leading value", []string{"--limit", "7", "--", "-publisher"}, []string{"-publisher"}, 7},
+		{"intermixed", []string{"first", "--limit", "7", "--", "-second"}, []string{"first", "-second"}, 7},
+		{"literal flags", []string{"--", "--limit", "7"}, []string{"--limit", "7"}, 10},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := newFlagSet("test")
+			limit := fs.Int("limit", 10, "limit")
+			if err := parseFlags(fs, tc.args, map[string]bool{"limit": true}); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(fs.Args(), tc.want) || *limit != tc.limit {
+				t.Fatalf("args=%q limit=%d, want args=%q limit=%d", fs.Args(), *limit, tc.want, tc.limit)
+			}
+		})
+	}
+}
+
+func TestSearchTerminator(t *testing.T) {
+	for _, query := range []string{"-publisher", "--limit"} {
+		t.Run(query, func(t *testing.T) {
+			code, _, errOut, log := runStub(t, func(w http.ResponseWriter, r *http.Request) {
+				writeJSON(w, searchPage{})
+			}, testToken, "search", "--", query)
+			requireCode(t, code, exitOK, errOut)
+			requests := log.snapshot()
+			if len(requests) != 1 || requests[0].query.Get("q") != query {
+				t.Fatalf("requests=%+v, want query %q", requests, query)
 			}
 		})
 	}
@@ -184,6 +236,29 @@ func TestAPIErrorMessage(t *testing.T) {
 			for _, part := range tt.contain {
 				if !strings.Contains(got, part) {
 					t.Fatalf("message %q does not contain %q", got, part)
+				}
+			}
+		})
+	}
+}
+
+func TestProblemErrorWithoutTitle(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		body     string
+		wantType string
+	}{
+		{"type", `{"type":"/problems/budget","detail":"daily limit","budget":{"used_today":3,"limit_today":3}}`, "/problems/budget"},
+		{"status", `{"status":429,"detail":"daily limit","budget":{"used_today":3,"limit_today":3}}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := problemError(http.StatusTooManyRequests, "42", []byte(tc.body)).(*apiError)
+			if err.problem.Type != tc.wantType || err.problem.Detail != "daily limit" || err.problem.Status != http.StatusTooManyRequests {
+				t.Fatalf("problem fields lost: %+v", err.problem)
+			}
+			for _, part := range []string{"429 Too Many Requests", "daily limit", "budget used 3/3", "retry after 42"} {
+				if !strings.Contains(err.Error(), part) {
+					t.Errorf("message=%q, want %q", err.Error(), part)
 				}
 			}
 		})

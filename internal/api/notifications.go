@@ -47,6 +47,9 @@ type vapidKey struct {
 }
 
 func (s *server) notificationRoutes() {
+	route(s, http.MethodGet, "/v1/agents", "list-agents", func(ctx context.Context, in *empty) ([]service.AgentNotificationStatus, error) {
+		return s.svc.ListAgentNotificationStatus(ctx, actor(ctx))
+	})
 	routeStatus(s, http.MethodPost, "/v1/notifications", "send-notification", http.StatusAccepted, func(ctx context.Context, in *bodyInput[notificationBody]) (service.Notification, error) {
 		b := in.Body
 		return s.svc.SendNotification(ctx, actor(ctx), service.SendNotificationRequest{OpID: b.OpID, Generation: b.Generation, Note: b.Note, EntryIDs: b.EntryIDs, Category: b.Category, DedupeKey: b.DedupeKey})

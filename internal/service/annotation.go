@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -38,6 +39,8 @@ const (
 type Annotation struct {
 	ID          int64          `json:"id"`
 	PrincipalID int64          `json:"principal_id"`
+	AuthorName  string         `json:"author_name"`
+	CreatedAt   time.Time      `json:"created_at"`
 	Kind        AnnotationKind `json:"kind"`
 	EntryIDs    []int64        `json:"entry_ids"`
 	Value       string         `json:"value"`
@@ -147,7 +150,13 @@ func (s *Service) PutAnnotation(ctx context.Context, a Actor, r PutAnnotationReq
 			return err
 		}
 		if replay != nil {
-			return json.Unmarshal(replay, &out)
+			if err := json.Unmarshal(replay, &out); err != nil {
+				return err
+			}
+			if out.AuthorName != "" && !out.CreatedAt.IsZero() {
+				return nil
+			}
+			return tx.QueryRow(ctx, "SELECT p.name,n.created_at FROM annotations n JOIN principals p ON p.id=n.principal_id WHERE n.user_id=$1 AND n.id=$2", a.UserID, out.ID).Scan(&out.AuthorName, &out.CreatedAt)
 		}
 		if err := visibleEntries(ctx, tx, a.UserID, ids); err != nil {
 			return err
@@ -174,6 +183,10 @@ func (s *Service) PutAnnotation(ctx context.Context, a Actor, r PutAnnotationReq
 		if err != nil {
 			return fmt.Errorf("put annotation: %w", err)
 		}
+		out, err = annotationByKey(ctx, tx, a.UserID, a.PrincipalID, ids, r.Kind)
+		if err != nil {
+			return err
+		}
 		if err := insertEvent(ctx, tx, a.UserID, rev, string(syncmodel.AnnotationUpdated), annotationPayload(out), s.now()); err != nil {
 			return err
 		}
@@ -186,7 +199,7 @@ func (s *Service) PutAnnotation(ctx context.Context, a Actor, r PutAnnotationReq
 }
 func annotationByKey(ctx context.Context, tx pgx.Tx, user, principal int64, ids []int64, kind AnnotationKind) (Annotation, error) {
 	var out Annotation
-	err := tx.QueryRow(ctx, "SELECT id,principal_id,kind,entry_ids,value,rev FROM annotations WHERE user_id=$1 AND principal_id=$2 AND entry_ids=$3 AND kind=$4 AND deleted_at IS NULL ORDER BY id DESC LIMIT 1", user, principal, ids, kind).Scan(&out.ID, &out.PrincipalID, &out.Kind, &out.EntryIDs, &out.Value, &out.Rev)
+	err := tx.QueryRow(ctx, "SELECT n.id,n.principal_id,n.kind,n.entry_ids,n.value,n.rev,p.name,n.created_at FROM annotations n JOIN principals p ON p.id=n.principal_id WHERE n.user_id=$1 AND n.principal_id=$2 AND n.entry_ids=$3 AND n.kind=$4 AND n.deleted_at IS NULL ORDER BY n.id DESC LIMIT 1", user, principal, ids, kind).Scan(&out.ID, &out.PrincipalID, &out.Kind, &out.EntryIDs, &out.Value, &out.Rev, &out.AuthorName, &out.CreatedAt)
 	return out, err
 }
 
@@ -229,7 +242,7 @@ func (s *Service) ListAnnotations(ctx context.Context, a Actor, q AnnotationQuer
 		return nil, ErrInvalid
 	}
 	out := []Annotation{}
-	rows, err := s.store.Pool().Query(ctx, `SELECT n.id,n.principal_id,n.kind,n.entry_ids,n.value,n.rev,n.principal_id<>$2 AND $3,n.deleted_at IS NOT NULL
+	rows, err := s.store.Pool().Query(ctx, `SELECT n.id,n.principal_id,n.kind,n.entry_ids,n.value,n.rev,n.principal_id<>$2 AND $3,n.deleted_at IS NOT NULL,p.name,n.created_at
  FROM annotations n JOIN principals p ON p.id=n.principal_id WHERE n.user_id=$1 AND ($9 OR n.deleted_at IS NULL) AND n.id>$4
  AND ($5::bigint=0 OR n.principal_id=$5) AND ($6::text='' OR n.kind=$6) AND (cardinality($7::bigint[])=0 OR n.entry_ids && $7)
  ORDER BY n.id LIMIT $8`, a.UserID, a.PrincipalID, a.Kind == PrincipalAgent, q.AfterID, q.PrincipalID, q.Kind, nonNilIDs(q.EntryIDs), q.Limit, q.IncludeDeleted)
@@ -239,7 +252,7 @@ func (s *Service) ListAnnotations(ctx context.Context, a Actor, q AnnotationQuer
 	defer rows.Close()
 	for rows.Next() {
 		var n Annotation
-		if err := rows.Scan(&n.ID, &n.PrincipalID, &n.Kind, &n.EntryIDs, &n.Value, &n.Rev, &n.Untrusted, &n.Deleted); err != nil {
+		if err := rows.Scan(&n.ID, &n.PrincipalID, &n.Kind, &n.EntryIDs, &n.Value, &n.Rev, &n.Untrusted, &n.Deleted, &n.AuthorName, &n.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, n)
@@ -305,7 +318,7 @@ func (s *Service) TodayBriefs(ctx context.Context, a Actor) ([]Annotation, error
 	if err := s.checkActor(ctx, a, ScopeEntriesRead); err != nil {
 		return nil, err
 	}
-	rows, err := s.store.Pool().Query(ctx, `SELECT DISTINCT ON(n.principal_id) n.id,n.principal_id,n.kind,n.entry_ids,n.value,n.rev
+	rows, err := s.store.Pool().Query(ctx, `SELECT DISTINCT ON(n.principal_id) n.id,n.principal_id,n.kind,n.entry_ids,n.value,n.rev,p.name,n.created_at
  FROM annotations n JOIN principals p ON p.id=n.principal_id WHERE n.user_id=$1 AND p.kind='agent' AND n.kind='brief' AND n.deleted_at IS NULL
  ORDER BY n.principal_id,n.rev DESC,n.id DESC`, a.UserID)
 	if err != nil {
@@ -315,7 +328,7 @@ func (s *Service) TodayBriefs(ctx context.Context, a Actor) ([]Annotation, error
 	out := []Annotation{}
 	for rows.Next() {
 		var n Annotation
-		if err := rows.Scan(&n.ID, &n.PrincipalID, &n.Kind, &n.EntryIDs, &n.Value, &n.Rev); err != nil {
+		if err := rows.Scan(&n.ID, &n.PrincipalID, &n.Kind, &n.EntryIDs, &n.Value, &n.Rev, &n.AuthorName, &n.CreatedAt); err != nil {
 			return nil, err
 		}
 		n.Untrusted = a.Kind == PrincipalAgent && a.PrincipalID != n.PrincipalID

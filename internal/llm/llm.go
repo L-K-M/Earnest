@@ -65,7 +65,8 @@ type CompleteRequest struct {
 	// Schema requests structured output. When set, the provider validates the
 	// model's text against it and rejects invalid output.
 	Schema *Schema
-	// MaxTokens bounds the completion. Zero uses a provider default.
+	// MaxTokens bounds the completion. The governed Client uses DefaultMaxTokens
+	// when unset, and sends that same bound to every provider.
 	MaxTokens int
 	// Temperature controls sampling. Zero uses the provider default.
 	Temperature float32
@@ -88,9 +89,11 @@ type EmbedRequest struct {
 type Provider interface {
 	// Name is the configured provider name, used for budgets and logs.
 	Name() string
-	// Complete performs a chat completion.
+	// Complete performs a chat completion. On rejected output, a non-nil
+	// result retains billed usage with no usable text.
 	Complete(ctx context.Context, req CompleteRequest) (*Completion, error)
-	// Embed performs an embedding call. A provider without an embeddings API
+	// Embed performs an embedding call, retaining billed partial usage on error.
+	// A provider without an embeddings API
 	// returns ErrUnsupported.
 	Embed(ctx context.Context, req EmbedRequest) (*EmbedResult, error)
 }

@@ -9,7 +9,6 @@ import (
 // user/agent search only and must never become internal model input.
 type AnnotationSearchHit struct {
 	Annotation
-	AuthorName string        `json:"author_name"`
 	AuthorKind PrincipalKind `json:"author_kind"`
 }
 
@@ -24,7 +23,7 @@ func (s *Service) SearchAnnotations(ctx context.Context, a Actor, query string, 
 	if len(query) == 0 || len(query) > 1024 || limit < 1 || limit > 1000 {
 		return nil, ErrInvalid
 	}
-	rows, err := s.store.Pool().Query(ctx, `SELECT n.id,n.principal_id,n.kind,n.entry_ids,n.value,n.rev,p.name,p.kind
+	rows, err := s.store.Pool().Query(ctx, `SELECT n.id,n.principal_id,n.kind,n.entry_ids,n.value,n.rev,p.name,p.kind,n.created_at
  FROM annotations n JOIN principals p ON p.id=n.principal_id
  WHERE n.user_id=$1 AND n.deleted_at IS NULL AND n.kind='note'
  AND to_tsvector('simple',n.value) @@ websearch_to_tsquery('simple',$2)
@@ -36,7 +35,7 @@ func (s *Service) SearchAnnotations(ctx context.Context, a Actor, query string, 
 	out := []AnnotationSearchHit{}
 	for rows.Next() {
 		var h AnnotationSearchHit
-		if err := rows.Scan(&h.ID, &h.PrincipalID, &h.Kind, &h.EntryIDs, &h.Value, &h.Rev, &h.AuthorName, &h.AuthorKind); err != nil {
+		if err := rows.Scan(&h.ID, &h.PrincipalID, &h.Kind, &h.EntryIDs, &h.Value, &h.Rev, &h.AuthorName, &h.AuthorKind, &h.CreatedAt); err != nil {
 			return nil, err
 		}
 		h.Untrusted = a.Kind == PrincipalAgent && h.PrincipalID != a.PrincipalID

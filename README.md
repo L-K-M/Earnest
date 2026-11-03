@@ -3,35 +3,29 @@
 > [!IMPORTANT]
 > LLM disclosure: This codebase was written with substantial help from large language models: AI coding agents working from the [`AGENTS.md`](AGENTS.md) brief in this repo.
 
-An RSS reader for web, Mac and Android, with an API that LLMs can use: agents
-get their own identity, read position, annotations, budget and revert log.
-Self-hosted on your own hardware via Docker Compose.
+Earnest is a self-hosted RSS reader for your own server. You can read on the web and through compatible clients. Agents are governed actors with their own identity, read position, annotations, notification budget and revert log.
 
-> ### Status: scaffold
->
-> Nothing is built yet beyond the deployment plumbing: one Go binary that
-> serves `/healthz` and its build version, a Postgres + pgvector sidecar, and
-> the compose / update / release chain — so the infrastructure is real before
-> the service layer lands. The product plan is the
-> [preliminary research](docs/research/README.md).
+The server provides a web client, Google Reader compatibility, MCP and a CLI for agents, Mac and Android clients, and an optional LLM pipeline.
 
-## Deploy
+## Quick start
 
 ```sh
-cp .env.example .env          # set EARNEST_DB_PASSWORD for real deployments
-docker compose up -d --build  # earnest on :8080, postgres + pgvector alongside
+git clone https://github.com/L-K-M/Earnest.git
+cd Earnest
+cp .env.example .env
 ```
 
-On a deployment host, `./update.sh` syncs the checkout, rebuilds the image
-locally with fresh base layers and recreates the stack.
+Edit `.env` and set `EARNEST_DB_PASSWORD` and `EARNEST_SECRET_KEY` to separate random secrets, for example with `openssl rand -hex 32`. The app secret must be at least 32 bytes. Compose has a development database password fallback, so do not leave the database password empty on a deployment.
 
-## Develop
+```sh
+docker compose up -d --build
+docker compose exec earnest earnest user create <name>
+```
 
-`make check` mirrors CI (gofmt, `go vet`, `go test -race`, compose validation,
-image build). `scripts/build.sh` produces `dist/earnest` (`--docker` also
-builds `earnest:local`); `scripts/release.sh X.Y.Z --push` tags a release —
-the tag is the version, stamped into the binary at build time.
+Enter your password at the prompt. Open http://localhost:8080, sign in and import your OPML file during onboarding. For access from other devices, configure both HTTPS origins as described in [operations](docs/operations.md).
+
+See the [documentation index](docs/README.md), [configuration](docs/configuration.md), [agents](docs/agents.md), and [CLI](docs/cli.md). For development, `make check` runs the CI checks; `scripts/build.sh` builds the binary. Releases use Git tags as versions; see [CICD.md](CICD.md).
 
 ## License
 
-[Unlicense](LICENSE) — public domain.
+[Unlicense](LICENSE), public domain.

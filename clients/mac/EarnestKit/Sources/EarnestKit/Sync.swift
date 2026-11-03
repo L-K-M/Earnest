@@ -258,6 +258,17 @@ public final class SyncEngine {
         for state in states { merge(state, into: &data.states) }
         try store.save(data)
     }
+    /// Merge a fetched list or individual entry response only into its request's generation.
+    public func mergeEntries(_ entries: [APIEntry], generation: String) throws {
+        var data = try store.load()
+        guard data.cursor?.generation == generation else { throw SyncError.generationMismatch }
+        for entry in entries {
+            let item = try JSONDecoder().decode(APIValue.self, from: JSONEncoder().encode(entry))
+            merge(entry: try require(SyncEntry(item), "entries"), into: &data)
+            merge(state: try require(State(item["state"] ?? .null), "state"), into: &data)
+        }
+        try store.save(data)
+    }
     /// Merge one `/v1/bootstrap/{kind}` page. Kinds are the endpoint's names:
     /// "entries", "state", "subscriptions", "folders", "labels",
     /// "label_memberships", "positions". Pages merge idempotently by revision.
@@ -413,8 +424,20 @@ public final class SyncEngine {
         var data = try store.load()
         guard let cursor = data.cursor, cursor.generation == next.generation else { throw SyncError.generationMismatch }
         if next.rev <= cursor.rev { return }
-        guard next.rev - cursor.rev == Int64(changes.count), changes.enumerated().allSatisfy({ $0.element.rev == cursor.rev + Int64($0.offset) + 1 }) else { throw SyncError.invalidPage }
-        for change in changes { merge(change.state, into: &data.states) }
+        var expected = cursor.rev
+        var previous: Int64?
+        for change in changes {
+            if let previous {
+                guard previous < Int64.max, change.rev == previous + 1 else { throw SyncError.invalidPage }
+            }
+            previous = change.rev
+            if change.rev > cursor.rev {
+                guard expected < Int64.max, change.rev == expected + 1 else { throw SyncError.invalidPage }
+                expected = change.rev
+            }
+        }
+        guard next.rev == expected else { throw SyncError.invalidPage }
+        for change in changes where change.rev > cursor.rev { merge(change.state, into: &data.states) }
         data.cursor = next
         try store.save(data)
     }

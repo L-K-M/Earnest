@@ -19,6 +19,7 @@ func TestHTTPRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := ruleBody{
+		OpID: "create-rule",
 		Name: "Test rule", Enabled: true,
 		Predicate: service.RulePredicate{Type: service.RuleFeedIn, IDs: []int64{sub.FeedID}},
 		Actions:   []service.RuleAction{{Type: service.RuleSetShelf, Shelf: "done"}},
@@ -31,6 +32,12 @@ func TestHTTPRules(t *testing.T) {
 	}
 	if created.ID <= 0 || created.Name != body.Name || !created.Enabled || !reflect.DeepEqual(created.Predicate, body.Predicate) || !reflect.DeepEqual(created.Actions, body.Actions) {
 		t.Fatalf("created rule=%+v", created)
+	}
+	replayed := f.do(t, http.MethodPost, "/v1/rules", body, f.session())
+	requireStatus(t, replayed, http.StatusOK)
+	var replay service.Rule
+	if err := json.Unmarshal(replayed.Body.Bytes(), &replay); err != nil || replay.ID != created.ID {
+		t.Fatalf("rule replay=%+v: %v", replay, err)
 	}
 	path := fmt.Sprintf("/v1/rules/%d", created.ID)
 	rec = f.do(t, http.MethodGet, "/v1/rules", nil, f.session())

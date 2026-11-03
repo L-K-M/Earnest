@@ -49,7 +49,7 @@ func callJSON(ctx context.Context, client *outbound.Client, provider, endpoint s
 	result, err := client.Do(req, outbound.Policy{
 		Purpose:    outbound.LLM,
 		Timeout:    timeout,
-		Redirect:   outbound.RedirectFollow,
+		Redirect:   outbound.RedirectNone,
 		ExtraPorts: extraPorts,
 	})
 	if result == nil || result.Response == nil {

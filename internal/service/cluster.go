@@ -69,10 +69,10 @@ func (s *Service) ClusterPending(ctx context.Context, model string, limit int) (
 			n, err = s.clusterUser(ctx, tx, user, model, limit)
 			return err
 		})
-		processed += n
 		if err != nil {
 			return processed, err
 		}
+		processed += n
 	}
 	return processed, nil
 }

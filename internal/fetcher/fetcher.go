@@ -363,6 +363,9 @@ func (f *Fetcher) items(ctx context.Context, claim service.FeedToFetch, list []f
 			return nil, fmt.Errorf("sanitize item: %w", err)
 		}
 		source := service.ContentFromFeed
+		if it.ContentHTML == "" {
+			source = service.ContentFromFeedExcerpt
+		}
 		if claim.Extract == service.ExtractAlways && !known[feed.IdentityHash(it)] && it.URL != "" {
 			r, e := f.client.Get(ctx, it.URL, outbound.Policy{Purpose: outbound.Extract, ExtraPorts: f.config.ExtraPorts})
 			if e == nil && r != nil {

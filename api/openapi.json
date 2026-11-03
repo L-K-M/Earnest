@@ -100,9 +100,42 @@
         },
         "type": "object"
       },
+      "AgentNotificationStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "muted": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "principal_id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "used_today": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "principal_id",
+          "name",
+          "muted",
+          "used_today"
+        ],
+        "type": "object"
+      },
       "Annotation": {
         "additionalProperties": false,
         "properties": {
+          "author_name": {
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
           "deleted": {
             "type": "boolean"
           },
@@ -141,6 +174,8 @@
         "required": [
           "id",
           "principal_id",
+          "author_name",
+          "created_at",
           "kind",
           "entry_ids",
           "value",
@@ -163,6 +198,77 @@
         "required": [
           "value",
           "op_id"
+        ],
+        "type": "object"
+      },
+      "AskBody": {
+        "additionalProperties": false,
+        "properties": {
+          "question": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "type": "object"
+      },
+      "AskResult": {
+        "additionalProperties": false,
+        "properties": {
+          "claims": {
+            "items": {
+              "$ref": "#/components/schemas/GroundedClaim"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "daily_limit": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "excerpt_notice": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "prompt_version": {
+            "type": "string"
+          },
+          "remaining_today": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "retrieval": {
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/Source"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "untrusted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "daily_limit",
+          "remaining_today",
+          "claims",
+          "sources",
+          "model",
+          "prompt_version",
+          "retrieval",
+          "untrusted"
         ],
         "type": "object"
       },
@@ -273,6 +379,32 @@
         ],
         "type": "object"
       },
+      "Claim": {
+        "additionalProperties": false,
+        "properties": {
+          "passages": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "verified": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "text",
+          "passages",
+          "verified"
+        ],
+        "type": "object"
+      },
       "ClusterGroup": {
         "additionalProperties": false,
         "properties": {
@@ -292,6 +424,97 @@
           "entry",
           "cluster_id",
           "also_in"
+        ],
+        "type": "object"
+      },
+      "CompileBody": {
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "CompiledFeed": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "CompiledRule": {
+        "additionalProperties": false,
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/RuleAction"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "entry_ids": {
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "feeds_to_confirm": {
+            "items": {
+              "$ref": "#/components/schemas/CompiledFeed"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "matched": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "model": {
+            "type": "string"
+          },
+          "predicate": {
+            "$ref": "#/components/schemas/RulePredicate"
+          },
+          "prompt_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "predicate",
+          "actions",
+          "feeds_to_confirm",
+          "entry_ids",
+          "matched",
+          "description",
+          "model",
+          "prompt_version"
         ],
         "type": "object"
       },
@@ -322,6 +545,23 @@
           "text",
           "sanitizer_version",
           "source"
+        ],
+        "type": "object"
+      },
+      "ContentURLResult": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "expires_at"
         ],
         "type": "object"
       },
@@ -497,6 +737,184 @@
         ],
         "type": "object"
       },
+      "Edition": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "model": {
+            "type": "string"
+          },
+          "period": {
+            "type": "string"
+          },
+          "prompt_version": {
+            "type": "string"
+          },
+          "ready_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "sections": {
+            "items": {
+              "$ref": "#/components/schemas/EditionSection"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "untrusted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "period",
+          "status",
+          "sections",
+          "model",
+          "prompt_version",
+          "ready_at",
+          "created_at",
+          "untrusted"
+        ],
+        "type": "object"
+      },
+      "EditionItem": {
+        "additionalProperties": false,
+        "properties": {
+          "also_in": {
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "blurb": {
+            "$ref": "#/components/schemas/SummaryResult"
+          },
+          "cluster_id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "content_hash": {
+            "type": "string"
+          },
+          "content_source": {
+            "type": "string"
+          },
+          "entry_id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "excerpt_notice": {
+            "type": "string"
+          },
+          "sanitizer_version": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/SummaryResult"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "entry_id",
+          "title",
+          "also_in",
+          "content_hash",
+          "content_source",
+          "sanitizer_version"
+        ],
+        "type": "object"
+      },
+      "EditionSection": {
+        "additionalProperties": false,
+        "properties": {
+          "claims": {
+            "items": {
+              "$ref": "#/components/schemas/GroundedClaim"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EditionItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/Source"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "items",
+          "claims",
+          "sources"
+        ],
+        "type": "object"
+      },
+      "EditionTriggerBody": {
+        "additionalProperties": false,
+        "properties": {
+          "op_id": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "period": {
+            "enum": [
+              "daily",
+              "weekly"
+            ],
+            "type": "string"
+          },
+          "ready_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "period",
+          "op_id"
+        ],
+        "type": "object"
+      },
       "Empty": {
         "additionalProperties": false,
         "type": "object"
@@ -538,6 +956,9 @@
         "additionalProperties": false,
         "properties": {
           "author": {
+            "type": "string"
+          },
+          "blurb": {
             "type": "string"
           },
           "deleted": {
@@ -705,6 +1126,32 @@
           "name",
           "rev",
           "deleted"
+        ],
+        "type": "object"
+      },
+      "GroundedClaim": {
+        "additionalProperties": false,
+        "properties": {
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/PassageCitation"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "verified": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "text",
+          "citations",
+          "verified"
         ],
         "type": "object"
       },
@@ -938,6 +1385,9 @@
             "format": "int64",
             "type": "integer"
           },
+          "muted": {
+            "type": "boolean"
+          },
           "note": {
             "type": "string"
           },
@@ -958,6 +1408,7 @@
         "required": [
           "id",
           "principal_id",
+          "muted",
           "note",
           "entry_ids",
           "category",
@@ -1095,16 +1546,62 @@
         ],
         "type": "object"
       },
+      "PassageCitation": {
+        "additionalProperties": false,
+        "properties": {
+          "content_hash": {
+            "type": "string"
+          },
+          "entry_id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "passages": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "verified": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "entry_id",
+          "content_hash",
+          "passages",
+          "verified"
+        ],
+        "type": "object"
+      },
       "PipelineStatus": {
         "additionalProperties": false,
         "properties": {
+          "ask": {
+            "type": "string"
+          },
+          "blurb": {
+            "type": "string"
+          },
           "classify": {
+            "type": "string"
+          },
+          "compile_rule": {
+            "type": "string"
+          },
+          "edition": {
             "type": "string"
           },
           "embed": {
             "type": "string"
           },
           "semantic": {
+            "type": "string"
+          },
+          "summary": {
             "type": "string"
           },
           "watch": {
@@ -1115,7 +1612,12 @@
           "embed",
           "classify",
           "semantic",
-          "watch"
+          "watch",
+          "blurb",
+          "summary",
+          "edition",
+          "ask",
+          "compile_rule"
         ],
         "type": "object"
       },
@@ -1584,11 +2086,15 @@
           "name": {
             "type": "string"
           },
+          "op_id": {
+            "type": "string"
+          },
           "predicate": {
             "$ref": "#/components/schemas/RulePredicate"
           }
         },
         "required": [
+          "op_id",
           "name",
           "predicate",
           "actions",
@@ -1914,6 +2420,31 @@
         ],
         "type": "object"
       },
+      "Source": {
+        "additionalProperties": false,
+        "properties": {
+          "content_hash": {
+            "type": "string"
+          },
+          "entry_id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "excerpt_only": {
+            "type": "boolean"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "entry_id",
+          "content_hash",
+          "text",
+          "excerpt_only"
+        ],
+        "type": "object"
+      },
       "State": {
         "additionalProperties": false,
         "properties": {
@@ -2143,6 +2674,71 @@
         },
         "required": [
           "op_id"
+        ],
+        "type": "object"
+      },
+      "SummaryResult": {
+        "additionalProperties": false,
+        "properties": {
+          "annotation_id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "claims": {
+            "items": {
+              "$ref": "#/components/schemas/Claim"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "content_hash": {
+            "type": "string"
+          },
+          "content_source": {
+            "type": "string"
+          },
+          "entry_id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "excerpt_notice": {
+            "type": "string"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "prompt_version": {
+            "type": "string"
+          },
+          "sanitizer_version": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "untrusted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "generated_at",
+          "annotation_id",
+          "entry_id",
+          "content_hash",
+          "content_source",
+          "sanitizer_version",
+          "kind",
+          "model",
+          "prompt_version",
+          "claims",
+          "untrusted"
         ],
         "type": "object"
       },
@@ -2399,9 +2995,15 @@
           },
           "name": {
             "type": "string"
+          },
+          "op_id": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
           }
         },
         "required": [
+          "op_id",
           "name",
           "description",
           "enabled",
@@ -2842,6 +3444,28 @@
               "format": "date-time",
               "type": "string"
             }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "after_id",
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 1000,
+              "format": "int64",
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -3115,6 +3739,127 @@
           },
           {
             "csrf": [],
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/agents": {
+      "get": {
+        "operationId": "list-agents",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AgentNotificationStatus"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Gone"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
             "session": []
           }
         ]
@@ -3611,6 +4356,142 @@
             "bearer": []
           },
           {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/ask": {
+      "post": {
+        "operationId": "ask-feeds",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AskResult"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Gone"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "csrf": [],
             "session": []
           }
         ]
@@ -5129,6 +6010,257 @@
         ]
       }
     },
+    "/v1/editions": {
+      "post": {
+        "operationId": "trigger-edition",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditionTriggerBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Edition"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Gone"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "csrf": [],
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/editions/latest": {
+      "get": {
+        "operationId": "latest-edition",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Edition"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Gone"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/v1/entries": {
       "get": {
         "operationId": "list-entries",
@@ -6171,6 +7303,157 @@
         ]
       }
     },
+    "/v1/entries/{id}/content-url": {
+      "get": {
+        "operationId": "entry-content-url",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Image loading mode; agent tokens always get click-to-load.",
+            "explode": false,
+            "in": "query",
+            "name": "mode",
+            "schema": {
+              "description": "Image loading mode; agent tokens always get click-to-load.",
+              "enum": [
+                "proxied",
+                "click"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentURLResult"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Gone"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/v1/entries/{id}/similar": {
       "get": {
         "operationId": "similar-entries",
@@ -6315,6 +7598,157 @@
             "bearer": []
           },
           {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/entries/{id}/summary": {
+      "post": {
+        "operationId": "generate-entry-summary",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "kind",
+            "schema": {
+              "default": "summary",
+              "enum": [
+                "summary",
+                "blurb"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SummaryResult"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Gone"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "csrf": [],
             "session": []
           }
         ]
@@ -11549,6 +12983,142 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Empty"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Gone"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "csrf": [],
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/rules:compile": {
+      "post": {
+        "operationId": "compile-rule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompileBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompiledRule"
                 }
               }
             },

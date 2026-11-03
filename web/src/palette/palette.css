@@ -1,0 +1,5 @@
+#palette-results {list-style:none;padding:0}
+#palette-results button {display:flex;justify-content:space-between;gap:1rem;width:100%;text-align:left}
+#palette-results [aria-selected=true] button {outline:2px solid var(--line)}
+.search-snippet, .offline-article {white-space:pre-wrap;overflow-wrap:anywhere}
+.offline-article {max-width:72ch;margin:2rem auto;font:1.1rem/1.65 Georgia,serif}

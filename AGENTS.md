@@ -9,11 +9,11 @@ treats agents as distinct, governed actors: own identity, read position,
 annotations, budget and revert log. Deployed on a home NAS via
 Docker Compose; tailnet-first, not public.
 
-**This repository is a deployment scaffold plus the research.** The plan lives
-in [`docs/research/`](docs/research/README.md) — decisions, sequence and the
-threat model; the product code has not been written. What exists is the
-plumbing the plan calls for: one Go binary (`earnest`) deployed next to
-Postgres + pgvector.
+The plan lives in [`docs/research/`](docs/research/README.md): decisions,
+sequence and the threat model. The product is one Go binary (`earnest`)
+deployed next to Postgres + pgvector, serving the API, the embedded web
+client (`web/`), Google Reader compatibility, MCP and the CLI. Native
+clients live in `clients/mac` and `clients/android`.
 
 ## Commands
 

@@ -132,11 +132,17 @@ func (a *app) read(ctx context.Context, args []string) error {
 func (a *app) search(ctx context.Context, args []string) error {
 	fs := newFlagSet("search")
 	limit := fs.Int("limit", defaultEntryLimit, "maximum hits")
-	if err := parseFlags(fs, args, map[string]bool{"limit": true}); err != nil || fs.NArg() != 1 {
-		return usagef("usage: earnest search <query>")
+	feed := fs.Int64("feed", 0, "subscription id")
+	folder := fs.Int64("folder", 0, "folder id")
+	cursor := fs.String("cursor", "", "exclusive cursor from the previous page")
+	if err := parseFlags(fs, args, map[string]bool{"limit": true, "feed": true, "folder": true, "cursor": true}); err != nil || fs.NArg() != 1 {
+		return usagef("usage: earnest search [--feed id] [--folder id] [--limit n] [--cursor c] <query>")
 	}
 	if *limit < 1 || *limit > maxEntryLimit {
 		return usagef("--limit must be between 1 and %d", maxEntryLimit)
+	}
+	if *feed < 0 || *folder < 0 {
+		return usagef("--feed and --folder must be positive")
 	}
 	query := strings.TrimSpace(fs.Arg(0))
 	if query == "" {
@@ -149,40 +155,49 @@ func (a *app) search(ctx context.Context, args []string) error {
 	values := url.Values{}
 	values.Set("q", query)
 	values.Set("limit", strconv.Itoa(*limit))
+	if *feed > 0 {
+		values.Set("subscription_id", strconv.FormatInt(*feed, 10))
+	}
+	if *folder > 0 {
+		values.Set("folder_id", strconv.FormatInt(*folder, 10))
+	}
+	if *cursor != "" {
+		values.Set("cursor", *cursor)
+	}
 	raw, err := c.get(ctx, "/v1/search", values)
 	if err != nil {
 		return err
 	}
-	var response searchResponse
-	if err := decode(raw, &response); err != nil {
+	if a.json {
+		return a.writeJSON(raw)
+	}
+	var page searchPage
+	if err := decode(raw, &page); err != nil {
 		return err
 	}
-	if a.json {
-		return a.encodeJSON(response)
-	}
-	rows := tableRows(len(response.Hits))
-	for _, hit := range response.Hits {
+	a.printSearchPage(page)
+	return nil
+}
+
+// printSearchPage renders a search page and its continuation hint.
+func (a *app) printSearchPage(page searchPage) {
+	rows := tableRows(len(page.Matches))
+	for _, hit := range page.Matches {
 		title := hit.Title
-		if title == "" && hit.Kind != "" {
-			title = hit.Kind + " note"
-		}
-		author := hit.Author
-		if author == "" {
-			author = hit.AuthorName
-		}
-		snippet := hit.Snippet
-		if snippet == "" {
-			snippet = hit.Value
+		if title == "" && hit.Kind == "agent_note" {
+			title = "agent note"
 		}
 		rows = append(rows, []string{
-			strconv.FormatInt(hit.ID, 10),
+			strconv.FormatInt(hit.EntryID, 10),
 			cell(title),
-			cell(author),
-			cell(snippet),
+			cell(hit.AgentName),
+			cell(hit.Snippet),
 		})
 	}
-	writeTable(a.out, []string{"ID", "TITLE", "AUTHOR", "SNIPPET"}, rows)
-	return nil
+	writeTable(a.out, []string{"ID", "TITLE", "AGENT", "SNIPPET"}, rows)
+	if page.NextCursor != "" {
+		fmt.Fprintf(a.out, "more: --cursor %s\n", page.NextCursor)
+	}
 }
 
 // briefing lists what is new for this principal since its position in the

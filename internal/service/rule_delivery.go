@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -103,6 +104,9 @@ func (s *Service) ruleNotificationTx(ctx context.Context, tx pgx.Tx, actor Actor
 	budget.UsedToday++
 	var cadence string
 	if err := tx.QueryRow(ctx, `SELECT cadence FROM subscriptions WHERE user_id=$1 AND feed_id=$2 AND deleted_at IS NULL`, actor.UserID, entry.FeedID).Scan(&cadence); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
 		return fmt.Errorf("rule subscription: %w", err)
 	}
 	category := NotificationDigest

@@ -56,9 +56,14 @@ type openAIChatRequest struct {
 	ResponseFormat      *openAIResponseFormat `json:"response_format,omitempty"`
 }
 
+// openAIFinishStop is the finish_reason of a complete answer; "length" and
+// "content_filter" mean the text was cut short.
+const openAIFinishStop = "stop"
+
 type openAIChatResponse struct {
 	Choices []struct {
-		Message struct {
+		FinishReason string `json:"finish_reason"`
+		Message      struct {
 			Content string `json:"content"`
 		} `json:"message"`
 	} `json:"choices"`
@@ -98,20 +103,24 @@ func (p *OpenAI) Complete(ctx context.Context, req CompleteRequest) (*Completion
 	if err := callJSON(ctx, p.client, p.name, p.baseURL+"/chat/completions", p.authHeader(), body, &response, p.timeout, p.extraPorts); err != nil {
 		return nil, err
 	}
+	usage := Usage{Input: response.Usage.PromptTokens, Output: response.Usage.CompletionTokens}
 	if len(response.Choices) == 0 {
-		return nil, fmt.Errorf("llm: provider %s returned no choices", p.name)
+		return &Completion{Usage: usage}, fmt.Errorf("llm: provider %s returned no choices", p.name)
+	}
+	if reason := response.Choices[0].FinishReason; reason != "" && reason != openAIFinishStop {
+		return &Completion{Usage: usage}, fmt.Errorf("%w: provider %s stopped early: finish_reason %s", ErrInvalidOutput, p.name, reason)
 	}
 	text := response.Choices[0].Message.Content
 	if req.Schema != nil {
 		if err := req.Schema.Validate(text); err != nil {
-			return nil, err
+			return &Completion{Usage: usage}, err
 		}
 	}
 	slog.DebugContext(ctx, "llm completion", "provider", p.name, "model", req.Model,
 		"input_tokens", response.Usage.PromptTokens, "output_tokens", response.Usage.CompletionTokens)
 	return &Completion{
 		Text:  text,
-		Usage: Usage{Input: response.Usage.PromptTokens, Output: response.Usage.CompletionTokens},
+		Usage: usage,
 	}, nil
 }
 
@@ -142,17 +151,17 @@ func (p *OpenAI) Embed(ctx context.Context, req EmbedRequest) (*EmbedResult, err
 	if err := callJSON(ctx, p.client, p.name, p.baseURL+"/embeddings", p.authHeader(), body, &response, p.timeout, p.extraPorts); err != nil {
 		return nil, err
 	}
+	tokens := response.Usage.PromptTokens
+	if tokens == 0 {
+		tokens = response.Usage.TotalTokens
+	}
 	if len(response.Data) != len(req.Texts) {
-		return nil, fmt.Errorf("llm: provider %s returned %d embeddings for %d texts", p.name, len(response.Data), len(req.Texts))
+		return &EmbedResult{Usage: Usage{Input: tokens}}, fmt.Errorf("llm: provider %s returned %d embeddings for %d texts", p.name, len(response.Data), len(req.Texts))
 	}
 	sort.SliceStable(response.Data, func(i, j int) bool { return response.Data[i].Index < response.Data[j].Index })
 	vectors := make([][]float32, 0, len(response.Data))
 	for _, item := range response.Data {
 		vectors = append(vectors, item.Embedding)
-	}
-	tokens := response.Usage.PromptTokens
-	if tokens == 0 {
-		tokens = response.Usage.TotalTokens
 	}
 	slog.DebugContext(ctx, "llm embeddings", "provider", p.name, "model", req.Model, "texts", len(req.Texts), "tokens", tokens)
 	return &EmbedResult{Vectors: vectors, Usage: Usage{Input: tokens}}, nil

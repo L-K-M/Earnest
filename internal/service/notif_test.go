@@ -33,6 +33,34 @@ func surfaceRequest(t *testing.T, f *coreFixture, id int64, op string) SendNotif
 	return SendNotificationRequest{OpID: op, Generation: gen, Note: "agent secret https://secret.example", EntryIDs: []int64{id}, Category: NotificationAlert}
 }
 
+func TestMuteAgentHoldsPendingNotification(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := context.Background()
+	a := surfaceAgent(t, f, "Morning", 3)
+	id := f.ingest(t, "article")
+	n, err := f.s.SendNotification(ctx, a, surfaceRequest(t, f, id, "queued"))
+	if err != nil || n.Status != NotificationQueued {
+		t.Fatal(n, err)
+	}
+	if err := f.s.MuteAgent(ctx, f.a, a.PrincipalID, NotificationsMuted, "mute"); err != nil {
+		t.Fatal(err)
+	}
+	n, err = f.s.GetNotification(ctx, f.a, n.ID)
+	if err != nil || n.Status != NotificationHeld {
+		t.Fatalf("muted pending notification: status=%s err=%v", n.Status, err)
+	}
+	if err := f.s.CancelNotification(ctx, f.a, n.ID, "cancel"); err != nil {
+		t.Fatalf("muted pending notification cannot be cancelled: %v", err)
+	}
+	if err := f.s.MuteAgent(ctx, f.a, a.PrincipalID, NotificationsUnmuted, "unmute"); err != nil {
+		t.Fatal(err)
+	}
+	n, err = f.s.GetNotification(ctx, f.a, n.ID)
+	if err != nil || n.Status != NotificationCancelled {
+		t.Fatalf("unmute resurrected cancellation: %+v %v", n, err)
+	}
+}
+
 type surfaceTransport struct {
 	send func(push.Device, push.Message) error
 }

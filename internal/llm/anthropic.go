@@ -16,7 +16,7 @@ const anthropicVersion = "2023-06-01"
 
 // defaultMaxTokens is the completion budget sent when the caller names none.
 // Anthropic requires max_tokens, so there is always a value.
-const defaultMaxTokens = 4096
+const defaultMaxTokens = DefaultMaxTokens
 
 // Anthropic is a provider for the Anthropic Messages API. Anthropic exposes
 // no embeddings API, so Embed returns ErrUnsupported.
@@ -45,8 +45,16 @@ type anthropicRequest struct {
 	Temperature float32            `json:"temperature,omitempty"`
 }
 
+// Stop reasons of a complete answer; "max_tokens" and "refusal" mean the
+// text is cut short or absent.
+const (
+	anthropicStopEndTurn  = "end_turn"
+	anthropicStopSequence = "stop_sequence"
+)
+
 type anthropicResponse struct {
-	Content []struct {
+	StopReason string `json:"stop_reason"`
+	Content    []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"content"`
@@ -85,6 +93,13 @@ func (p *Anthropic) Complete(ctx context.Context, req CompleteRequest) (*Complet
 	if err := callJSON(ctx, p.client, p.name, p.baseURL+"/v1/messages", p.authHeader(), body, &response, p.timeout, p.extraPorts); err != nil {
 		return nil, err
 	}
+	usage := Usage{Input: response.Usage.InputTokens, Output: response.Usage.OutputTokens}
+	switch response.StopReason {
+	case "", anthropicStopEndTurn, anthropicStopSequence:
+	default:
+		return &Completion{Usage: usage}, fmt.Errorf("%w: provider %s stopped early: stop_reason %s", ErrInvalidOutput, p.name, response.StopReason)
+	}
+
 	var text strings.Builder
 	for _, block := range response.Content {
 		if block.Type == "text" {
@@ -93,14 +108,14 @@ func (p *Anthropic) Complete(ctx context.Context, req CompleteRequest) (*Complet
 	}
 	if req.Schema != nil {
 		if err := req.Schema.Validate(text.String()); err != nil {
-			return nil, err
+			return &Completion{Usage: usage}, err
 		}
 	}
 	slog.DebugContext(ctx, "llm completion", "provider", p.name, "model", req.Model,
 		"input_tokens", response.Usage.InputTokens, "output_tokens", response.Usage.OutputTokens)
 	return &Completion{
 		Text:  text.String(),
-		Usage: Usage{Input: response.Usage.InputTokens, Output: response.Usage.OutputTokens},
+		Usage: usage,
 	}, nil
 }
 

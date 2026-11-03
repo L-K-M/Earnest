@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/L-K-M/Earnest/internal/store"
@@ -61,7 +63,9 @@ func (s *Service) ClaimDueFeeds(ctx context.Context, now time.Time, limit int, l
 			f.Interval = time.Duration(seconds * float64(time.Second))
 			f.Credentials, err = s.openCredentials(encrypted)
 			if err != nil {
-				return err
+				// Keep its lease so bad credentials cannot starve other feeds or spin.
+				slog.Error("skip feed with unreadable credentials", "feed_id", f.FeedID)
+				continue
 			}
 			feeds = append(feeds, f)
 		}
@@ -127,6 +131,7 @@ func feedURLValid(raw string) bool {
 
 type ingestChange struct {
 	item              IngestItem
+	excerptOnly       bool
 	identity, content []byte
 	id                int64
 	seq               uint64
@@ -174,6 +179,10 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 		if item.SanitizerVersion <= 0 {
 			return IngestSummary{}, fmt.Errorf("sanitizer version must be positive: %w", ErrInvalid)
 		}
+		excerptOnly := item.ContentSource == ContentFromFeedExcerpt
+		if excerptOnly {
+			item.ContentSource = ContentFromFeed
+		}
 		if item.ContentSource != "" && item.ContentSource != ContentFromFeed && item.ContentSource != ContentFromExtracted {
 			return IngestSummary{}, ErrInvalid
 		}
@@ -187,7 +196,7 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 		if item.Language == "" {
 			item.Language = "simple"
 		}
-		prepared = append(prepared, ingestChange{item: item, identity: identity, content: content})
+		prepared = append(prepared, ingestChange{item: item, excerptOnly: excerptOnly, identity: identity, content: content})
 	}
 	summary := IngestSummary{}
 	var newEntries []int64
@@ -215,8 +224,8 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 			var enclosures []byte
 			var deleted, hasVersion bool
 			err := tx.QueryRow(ctx, `SELECT e.id,e.seq,e.first_seen_at,e.content_hash,coalesce(e.guid,''),coalesce(e.url,''),e.title,e.author,e.language,e.published_at,e.updated_at,e.enclosures,e.deleted_at IS NOT NULL,
-    EXISTS(SELECT 1 FROM contents c WHERE c.entry_id=e.id AND c.content_hash=$3 AND c.sanitizer_version=$4 AND c.source=$5)
-    FROM entries e WHERE e.feed_id=$1 AND e.identity_hash=$2`, outcome.FeedID, p.identity, p.content, p.item.SanitizerVersion, string(p.item.ContentSource)).Scan(&p.id, &p.seq, &p.firstSeen, &oldHash, &guid, &rawURL, &title, &author, &language, &pub, &updated, &enclosures, &deleted, &hasVersion)
+    EXISTS(SELECT 1 FROM contents c WHERE c.entry_id=e.id AND c.content_hash=$3 AND c.sanitizer_version=$4 AND c.source=$5 AND c.excerpt_only=$6)
+    FROM entries e WHERE e.feed_id=$1 AND e.identity_hash=$2`, outcome.FeedID, p.identity, p.content, p.item.SanitizerVersion, string(p.item.ContentSource), p.excerptOnly).Scan(&p.id, &p.seq, &p.firstSeen, &oldHash, &guid, &rawURL, &title, &author, &language, &pub, &updated, &enclosures, &deleted, &hasVersion)
 			if errors.Is(err, pgx.ErrNoRows) {
 				p.kind = syncmodel.EntryCreated
 				changes = append(changes, p)
@@ -295,7 +304,7 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 				}
 				newEntries = append(newEntries, p.id)
 			}
-			if _, err := tx.Exec(ctx, `INSERT INTO contents(entry_id,content_hash,sanitizer_version,source,html,text,created_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`, p.id, p.content, p.item.SanitizerVersion, string(p.item.ContentSource), p.item.ContentHTML, p.item.ContentText, receipt); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO contents(entry_id,content_hash,sanitizer_version,source,html,text,created_at,excerpt_only) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(entry_id,content_hash,sanitizer_version,source) DO UPDATE SET excerpt_only=EXCLUDED.excerpt_only`, p.id, p.content, p.item.SanitizerVersion, string(p.item.ContentSource), p.item.ContentHTML, p.item.ContentText, receipt, p.excerptOnly); err != nil {
 				return fmt.Errorf("store content version: %w", err)
 			}
 			enclosures := p.item.Enclosures
@@ -405,7 +414,7 @@ func (s *Service) fetchHealth(ctx context.Context, tx pgx.Tx, o FetchOutcome, re
 		errorClass = o.ErrorClass
 		message := o.ErrorMessage
 		if len(message) > 1024 {
-			message = message[:1024]
+			message = strings.ToValidUTF8(message[:1024], "")
 		}
 		if private {
 			message = "private feed fetch failed (" + o.ErrorClass + ")"

@@ -97,7 +97,7 @@ func (s *Service) PutPushSettings(ctx context.Context, a Actor, in PushSettingsI
 	if (server == "") != (in.NtfyTopic == "") {
 		return PushSettings{}, fmt.Errorf("ntfy server and topic must be set together: %w", ErrInvalid)
 	}
-	if in.NtfyToken != nil && len(*in.NtfyToken) > maxNtfyTokenLength {
+	if in.NtfyToken != nil && (len(*in.NtfyToken) > maxNtfyTokenLength || strings.IndexFunc(*in.NtfyToken, func(r rune) bool { return r < 0x21 || r > 0x7e }) >= 0) {
 		return PushSettings{}, fmt.Errorf("ntfy token: %w", ErrInvalid)
 	}
 	tz, err := validTimezone(in.Timezone)
@@ -117,7 +117,12 @@ func (s *Service) PutPushSettings(ctx context.Context, a Actor, in PushSettingsI
 			return err
 		}
 		if replay != nil {
-			return json.Unmarshal(replay, &out)
+			var previous PushSettings
+			if err := json.Unmarshal(replay, &previous); err != nil {
+				return err
+			}
+			out = previous
+			return nil
 		}
 		var envelope []byte
 		switch {
@@ -332,7 +337,7 @@ func validNtfyTopic(topic string) error {
 	if topic == "" {
 		return nil
 	}
-	if len(topic) > maxNtfyTopicLength {
+	if len(topic) > maxNtfyTopicLength || topic == "." || topic == ".." {
 		return fmt.Errorf("ntfy topic: %w", ErrInvalid)
 	}
 	for _, r := range topic {

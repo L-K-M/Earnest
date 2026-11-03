@@ -138,6 +138,23 @@ func TestClientSync(t *testing.T) {
 		t.Fatalf("first page %d %q", len(page.ItemRefs), page.Continuation)
 	}
 	firstID := page.ItemRefs[0].ID
+	var secondID int64
+	if err := db.Pool().QueryRow(ctx, "SELECT id FROM entries WHERE id <> $1::bigint AND seq=3000", firstID).Scan(&secondID); err != nil {
+		t.Fatal(err)
+	}
+	read(request("POST", api+"edit-tag", url.Values{"T": {csrfToken}, "i": {strconv.FormatInt(secondID, 10)}, "a": {labelPrefix + "mixed"}}, token))
+	read(request("POST", api+"edit-tag", url.Values{"T": {csrfToken}, "i": {firstID, strconv.FormatInt(secondID, 10)}, "r": {labelPrefix + "mixed"}}, token))
+	var remains bool
+	if err := db.Pool().QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM entry_labels el JOIN labels l ON l.id=el.label_id WHERE el.entry_id=$1 AND l.name='mixed' AND el.deleted_at IS NULL)`, secondID).Scan(&remains); err != nil || remains {
+		t.Fatalf("label remains: %v %v", remains, err)
+	}
+	read(request("POST", api+"edit-tag", url.Values{"T": {csrfToken}, "i": {strconv.FormatInt(secondID, 10)}, "a": {labelPrefix + "mixed"}}, token))
+	read(request("POST", api+"mark-all-as-read", url.Values{"T": {csrfToken}, "s": {labelPrefix + "mixed"}}, token))
+	var labelSeen string
+	if err := db.Pool().QueryRow(ctx, "SELECT seen FROM entry_state WHERE principal_id=$1 AND entry_id=$2", actor.PrincipalID, secondID).Scan(&labelSeen); err != nil || labelSeen != "seen" {
+		t.Fatalf("label mark-all: %s %v", labelSeen, err)
+	}
+	read(request("POST", api+"edit-tag", url.Values{"T": {csrfToken}, "i": {strconv.FormatInt(secondID, 10)}, "r": {statePrefix + "read"}}, token))
 	next := read(request("GET", api+"stream/items/ids?n=10000&xt="+url.QueryEscape(statePrefix+"read")+"&c="+page.Continuation, nil, token))
 	page.ItemRefs = nil
 	if err = json.Unmarshal([]byte(next), &page); err != nil {

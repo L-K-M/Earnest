@@ -192,7 +192,7 @@ import AppKit
             if delay > 0 { try? await Task.sleep(for: .milliseconds(Int(delay * 1000))) }
             guard let self, self.session == s, self.loggedIn, !Task.isCancelled else { return }
             self.syncing = true
-            defer { self.syncing = false }
+            defer { if !Task.isCancelled, self.session == s { self.syncing = false } }
             do {
                 let report = try await coordinator.synchronize()
                 guard !Task.isCancelled, self.session == s, self.loggedIn else { return }
@@ -320,7 +320,8 @@ import AppKit
     private func refreshEntries() async {
         // Keep the last fetched entries on non-entry sections; commands and
         // content loading still need them.
-        guard let api, let view = section.entryView else { return }
+        guard let api, let engine, let view = section.entryView,
+              let generation = try? engine.snapshot().cursor?.generation else { return }
         let expected = section
         let expectedSession = session
         do {
@@ -329,19 +330,20 @@ import AppKit
             var seenCursors = Set<String>()
             repeat {
                 let page = try await api.entries(view: view, cursor: cursor)
+                guard session == expectedSession, (try? engine.snapshot().cursor?.generation) == generation,
+                      !Task.isCancelled else { return }
                 all.append(contentsOf: page.entries ?? [])
                 cursor = page.nextCursor
                 if let cursor, !seenCursors.insert(cursor).inserted { throw APIError.invalidResponse }
             } while cursor != nil && !Task.isCancelled
             guard self.section == expected, loggedIn, session == expectedSession, !Task.isCancelled else { return }
-            if let engine {
-                let items = try all.map { try JSONDecoder().decode(APIValue.self, from: JSONEncoder().encode($0)) }
-                try engine.mergeBootstrap(kind: "entries", items: items)
-                try engine.mergeBootstrap(all.map { $0.state.syncState })
-            }
+            try engine.mergeEntries(all, generation: generation)
             entries = all
         } catch is CancellationError {
-        } catch { report(error) }
+        } catch {
+            guard session == expectedSession, (try? engine.snapshot().cursor?.generation) == generation else { return }
+            report(error)
+        }
     }
 
     private func refreshFeeds() async {
@@ -615,16 +617,16 @@ import AppKit
         guard let id, loggedIn else { html = ""; return }
         html = ""
         runTask("open") { [weak self] in
-            guard let self, let api = self.api, self.loggedIn else { return }
+            guard let self, let api = self.api, let engine = self.engine, self.loggedIn,
+                  let generation = try? engine.snapshot().cursor?.generation else { return }
+            let expectedSession = self.session
             do {
                 if !self.entries.contains(where: { $0.id == id }) {
                     let entry = try await api.entry(id: id)
                     try Task.checkCancellation()
-                    if let engine = self.engine {
-                        let value = try JSONDecoder().decode(APIValue.self, from: JSONEncoder().encode(entry))
-                        try engine.mergeBootstrap(kind: "entries", items: [value])
-                        try engine.mergeState(entry.state.syncState)
-                    }
+                    guard self.loggedIn, self.session == expectedSession,
+                          (try? engine.snapshot().cursor?.generation) == generation else { return }
+                    try engine.mergeEntries([entry], generation: generation)
                     self.entries.append(entry)
                 }
                 let article: String
@@ -635,11 +637,14 @@ import AppKit
                 } catch {
                     article = try await api.content(entryID: id).html
                 }
-                guard self.selected == id, !Task.isCancelled else { return }
+                guard self.selected == id, self.loggedIn, self.session == expectedSession,
+                      (try? engine.snapshot().cursor?.generation) == generation, !Task.isCancelled else { return }
                 self.html = article
                 self.markSeen(entryID: id, entry: self.entries.first(where: { $0.id == id }))
             } catch is CancellationError {
             } catch {
+                guard self.loggedIn, self.session == expectedSession,
+                      (try? engine.snapshot().cursor?.generation) == generation else { return }
                 var missing = (error as? APIProblem)?.status == 404
                 if case APIError.httpStatus(404) = error { missing = true }
                 if missing {

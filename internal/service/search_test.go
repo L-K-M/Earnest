@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/L-K-M/Earnest/internal/llm"
 	"github.com/L-K-M/Earnest/internal/store/storetest"
 )
 
@@ -121,5 +123,29 @@ func TestSearchFeedLanguage(t *testing.T) {
 				t.Fatalf("got %d results, want %d: %v", len(got), tc.count, err)
 			}
 		})
+	}
+}
+
+func TestHybridSearchRejectsAgentBeforeProviderCall(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	p := &pipelineProvider{}
+	ctx := pipelineTestContext(t, f.db, p, []llm.Task{llm.TaskEmbed}, 0)
+	agent := Actor{UserID: f.a.UserID, Kind: PrincipalAgent, Via: CredentialAgentToken, Scopes: []Scope{ScopeEntriesRead}}
+	if err := f.db.Pool().QueryRow(ctx, `INSERT INTO principals(user_id,kind,name) VALUES($1,'agent','Scout') RETURNING id`, agent.UserID).Scan(&agent.PrincipalID); err != nil {
+		t.Fatal(err)
+	}
+	const secret = "PRIVATE_FEED_SECRET_SENTINEL"
+	_, err := f.s.Search(ctx, agent, secret, SearchFilter{Mode: SearchHybrid}, nil)
+	if !errors.Is(err, ErrForbidden) || len(p.requests()) != 0 {
+		t.Fatalf("hybrid agent search: error=%v, provider requests=%v", err, p.requests())
+	}
+	if _, err := f.s.Search(ctx, agent, secret, SearchFilter{Mode: SearchFullText}, nil); err != nil {
+		t.Fatalf("agent full-text search: %v", err)
+	}
+	if _, err := f.s.Search(ctx, f.a, secret, SearchFilter{Mode: SearchHybrid}, nil); err != nil {
+		t.Fatalf("human hybrid search: %v", err)
+	}
+	if len(p.requests()) != 1 {
+		t.Fatalf("human search provider calls=%d, want 1", len(p.requests()))
 	}
 }

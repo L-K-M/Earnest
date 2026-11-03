@@ -26,7 +26,7 @@ func (a *app) notify(ctx context.Context, args []string) error {
 	dedupe := fs.String("dedupe-key", "", "collapse repeats within the dedupe window")
 	fs.StringVar((*string)(&category), "category", string(categoryAlert), "category: alert|digest|brief")
 	if err := parseFlags(fs, args, map[string]bool{"note": true, "entry": true, "category": true, "dedupe-key": true}); err != nil || fs.NArg() != 0 {
-		return usagef("usage: earnest notify --note <text> [--entry id] [--category alert]")
+		return usagef("usage: earnest notify --note <text> --entry <id> [--category alert]")
 	}
 	if *note == "" {
 		return usagef("--note is required")
@@ -34,8 +34,8 @@ func (a *app) notify(ctx context.Context, args []string) error {
 	if !validNotificationCategory(category) {
 		return usagef("invalid --category %q", string(category))
 	}
-	if *entry < 0 {
-		return usagef("--entry must be positive")
+	if *entry <= 0 {
+		return usagef("--entry is required")
 	}
 	c, err := a.client()
 	if err != nil {
@@ -52,12 +52,10 @@ func (a *app) notify(ctx context.Context, args []string) error {
 	body := notificationBody{
 		OpID:       opID,
 		Note:       *note,
+		EntryIDs:   []int64{*entry},
 		Category:   string(category),
 		DedupeKey:  *dedupe,
 		Generation: generation.Generation,
-	}
-	if *entry > 0 {
-		body.EntryIDs = []int64{*entry}
 	}
 	raw, err := c.send(ctx, http.MethodPost, "/v1/notifications", nil, body)
 	if err != nil {

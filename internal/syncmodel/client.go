@@ -325,6 +325,12 @@ func (c *Client) AcknowledgeRange(opID, generation string, r RangeResult) error 
 	}
 	for _, result := range r.Results {
 		c.MergeState(result.State)
+		if result.Status == Gone {
+			if e, ok := c.entries[result.State.EntryID]; ok {
+				e.Deleted = true
+				c.entries[e.ID] = e
+			}
+		}
 	}
 	c.pending = slices.DeleteFunc(c.pending, func(p Pending) bool { return p.operation().OpID == opID })
 	return nil
