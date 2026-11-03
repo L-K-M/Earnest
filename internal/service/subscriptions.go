@@ -403,6 +403,47 @@ func (s *Service) backfillSubscription(ctx context.Context, tx pgx.Tx, user int6
 			return err
 		}
 	}
+
+	// Replay saved state after the entries so clients can merge it by register
+	// revision. These snapshots are not new writes and keep their original stamps.
+	rows, err = tx.Query(ctx, `SELECT st.principal_id,array_agg(st.entry_id ORDER BY st.entry_id)
+ FROM entry_state st JOIN principals p ON p.id=st.principal_id JOIN entries e ON e.id=st.entry_id
+ WHERE p.user_id=$1 AND e.feed_id=$2 GROUP BY st.principal_id ORDER BY st.principal_id`, user, sub.FeedID)
+	if err != nil {
+		return fmt.Errorf("subscription state backfill: %w", err)
+	}
+	type stateTarget struct {
+		principal int64
+		entries   []int64
+	}
+	var targets []stateTarget
+	for rows.Next() {
+		var target stateTarget
+		if err := rows.Scan(&target.principal, &target.entries); err != nil {
+			rows.Close()
+			return fmt.Errorf("read subscription state backfill: %w", err)
+		}
+		targets = append(targets, target)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read subscription state backfill: %w", err)
+	}
+	var results []syncmodel.Result
+	for _, target := range targets {
+		states, err := store.LoadStates(ctx, tx, target.principal, target.entries)
+		if err != nil {
+			return fmt.Errorf("load subscription state backfill: %w", err)
+		}
+		for _, id := range target.entries {
+			results = append(results, syncmodel.Result{Status: syncmodel.Applied, State: states[id]})
+		}
+	}
+	if len(results) > 0 {
+		if _, err := s.change(ctx, tx, user, syncmodel.StateUpdated, map[string]any{"results": results}); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
