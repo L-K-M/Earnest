@@ -31,7 +31,7 @@ jobs:
     # failure, which the reporting step can act on, and leaves "cancelled" to
     # mean only what the concurrency group above means by it: a newer push took
     # over.
-    timeout-minutes: 180
+    timeout-minutes: 358
     # pull_request_target exposes repository secrets and a write-capable token.
     # Never run this privileged job for branches from untrusted forks.
     if: >-
@@ -54,8 +54,10 @@ jobs:
         # needed 17 chunks at a 6.2 min mean, about 105 min, and overran the
         # former 90 min budget twice in a row while posting nothing. 170 min
         # covers roughly 27 chunks at that mean, so a diff half again the size
-        # of #89 still fits.
-        timeout-minutes: 170
+        # of #89 still fits. Earnest PR #6 (about 40 chunks after exclusions)
+        # overran 170 min, so the step now takes nearly all of a hosted runner's
+        # 360 min job limit; larger changes must be split into stacked PRs.
+        timeout-minutes: 350
         # Pin privileged third-party actions to an immutable commit.
         # b44215f = v0.0.16. Verify before bumping:
         #   git ls-remote https://github.com/L-K-M/zai-code-review 'refs/tags/v0.0.16*'
@@ -95,6 +97,11 @@ jobs:
           # the action then retries with. Bigger chunks would hit that more
           # often, not less.
           MAX_CHUNK_CHARS: 25000
+          # Generated code, lockfiles and hand-written test fixtures cost review
+          # time without carrying logic: the OpenAPI document and its generated
+          # client are checked for staleness in CI, and fixtures are exercised by
+          # the tests that read them. The sync vectors stay in scope.
+          EXCLUDE_PATTERNS: "api/openapi.json,web/src/api.generated.ts,**/pnpm-lock.yaml,go.sum,**/go.sum,testdata/feeds/**,testdata/sanitize/**,internal/web/dist/**,clients/android/gradle/**,clients/android/gradlew,clients/android/gradlew.bat"
           ZAI_REVIEWER_NAME: GLM 5.3 Code Review
           GITHUB_TOKEN: ${{ github.token }}
 
