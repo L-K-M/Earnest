@@ -68,7 +68,12 @@ func (s *Service) CreateWatch(ctx context.Context, a Actor, w WatchRule, opID st
 			return err
 		}
 		if replay != nil {
-			return json.Unmarshal(replay, &w)
+			var stored WatchRule
+			if err := json.Unmarshal(replay, &stored); err != nil {
+				return err
+			}
+			w = stored
+			return nil
 		}
 		if err := tx.QueryRow(ctx, `INSERT INTO rules(user_id,source,ast,action,enabled,created_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING id`, a.UserID, w.Name, predicate, actions, w.Enabled, a.PrincipalID).Scan(&w.ID); err != nil {
 			return fmt.Errorf("create watch: %w", err)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/L-K-M/Earnest/internal/llm"
 )
@@ -111,10 +112,10 @@ func (s *Service) CompileRule(ctx context.Context, a Actor, text string) (Compil
 				return CompiledRule{}, fmt.Errorf("compiled webhook needs chosen feeds and your keywords: %w", ErrInvalid)
 			}
 		}
-		if action.LabelID > 0 && !strings.Contains(text, fmt.Sprint(action.LabelID)) {
+		if action.LabelID > 0 && !humanWroteID(text, action.LabelID) {
 			return CompiledRule{}, ErrInvalid
 		}
-		if action.WebhookID > 0 && !strings.Contains(text, fmt.Sprint(action.WebhookID)) {
+		if action.WebhookID > 0 && !humanWroteID(text, action.WebhookID) {
 			return CompiledRule{}, ErrInvalid
 		}
 	}
@@ -123,6 +124,13 @@ func (s *Service) CompileRule(ctx context.Context, a Actor, text string) (Compil
 		return CompiledRule{}, err
 	}
 	return CompiledRule{Predicate: predicate, Actions: output.Actions, FeedsToConfirm: selected, EntryIDs: ids, Matched: len(ids), Description: fmt.Sprintf("Would have matched %d items", len(ids)), Model: model, PromptVersion: CompilePromptVersion}, nil
+}
+
+func humanWroteID(text string, id int64) bool {
+	words := strings.FieldsFunc(text, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != '_'
+	})
+	return slices.Contains(words, fmt.Sprint(id))
 }
 
 func resolveCompiled(node compileNode, feeds []CompiledFeed, selected *[]CompiledFeed, count *int) (RulePredicate, error) {

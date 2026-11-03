@@ -206,7 +206,11 @@ func (s *Service) generateEdition(ctx context.Context, job *claimedEdition, out 
 			continue
 		}
 		fingerprints = append(fingerprints, fingerprint)
-		req, err := pipeline.GroundedRequest(llm.TaskEdition, "This week", section.Sources)
+		period := "This week"
+		if out.Period == EditionDaily {
+			period = "Today"
+		}
+		req, err := pipeline.GroundedRequest(llm.TaskEdition, period, section.Sources)
 		if err != nil {
 			return err
 		}
@@ -337,12 +341,19 @@ func (s *Service) finishEdition(ctx context.Context, job *claimedEdition, out *E
 				out.Error += " " + editionCancellationWarning
 			}
 		}
-		data, err := json.Marshal(out.Sections)
-		if err != nil {
-			return fmt.Errorf("encode generated edition: %w", err)
-		}
-		if _, err := tx.Exec(ctx, `UPDATE editions SET status=$3,sections=$4,model=$5,error=$6,prompt_version=$7 WHERE user_id=$1 AND id=$2`, job.job.UserID, job.job.EditionID, out.Status, data, out.Model, out.Error, out.PromptVersion); err != nil {
-			return fmt.Errorf("save edition: %w", err)
+		if cause != nil && len(out.Sections) == 0 {
+			// A failed load has no snapshot to save; retain the stored list and provenance.
+			if _, err := tx.Exec(ctx, `UPDATE editions SET status=$3,error=$4 WHERE user_id=$1 AND id=$2`, job.job.UserID, job.job.EditionID, out.Status, out.Error); err != nil {
+				return fmt.Errorf("save edition failure: %w", err)
+			}
+		} else {
+			data, err := json.Marshal(out.Sections)
+			if err != nil {
+				return fmt.Errorf("encode generated edition: %w", err)
+			}
+			if _, err := tx.Exec(ctx, `UPDATE editions SET status=$3,sections=$4,model=$5,error=$6,prompt_version=$7 WHERE user_id=$1 AND id=$2`, job.job.UserID, job.job.EditionID, out.Status, data, out.Model, out.Error, out.PromptVersion); err != nil {
+				return fmt.Errorf("save edition: %w", err)
+			}
 		}
 		if out.Status == "ready" || out.Status == "failed" {
 			if _, err := tx.Exec(ctx, `DELETE FROM jobs WHERE id=$1`, job.id); err != nil {
