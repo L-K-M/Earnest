@@ -36,7 +36,8 @@ directory is `0700`. `earnest logout` removes the file.
 
 Every command takes `--json`, in any position. Human output is an aligned
 table; `--json` echoes the server response (or a small composed object for
-`whoami` and `briefing`) with no extra text on stdout.
+`whoami`, `briefing`, a multi-entry `annotate` and `saved-searches show`) with
+no extra text on stdout.
 
 Mutations print their result; state batches list every `op_id`. Every mutation
 generates a UUIDv7 `op_id` client-side and retries are safe: the
@@ -69,7 +70,7 @@ which is already machine-readable, so `--json` does not wrap it.
 ```sh
 earnest entries list [--view today|later|kept|done|all] [--unread] [--feed 5] [--limit 50] [--cursor 123]
 earnest read 1234
-earnest search "rustls"
+earnest search "rustls" [--feed 5] [--folder 2] [--limit 50] [--cursor 123]
 earnest briefing
 ```
 
@@ -78,14 +79,32 @@ earnest briefing
 `--cursor` resumes an exclusive `seq` page. `read` prints the stored plain
 text of `/v1/entries/{id}/content`; it never fetches the publisher's page.
 
-`search` calls `GET /v1/search?q=…&limit=…`. It accepts either a bare JSON
-array or an object wrapping the hits (`hits`, `entries` or `results`) and
-normalises them for `--json`; the table shows id, title, author and snippet.
+`search` calls `GET /v1/search` and reads the real `SearchPage` shape
+(`matches`, `next_cursor`). `--feed` and `--folder` add the API's
+`subscription_id` and `folder_id` filters, `--cursor` resumes an exclusive
+page, and the table shows entry id, title, agent (for agent notes) and
+snippet. `--json` echoes the server's `SearchPage`.
 
 `briefing` is what is new since this principal's position in the chosen view
 (default `today`, which reads the `river` position): it reads
 `/v1/positions/{view}`, then lists entries above that `seq`. Reading never
 marks anything seen.
+
+## Saved searches
+
+```sh
+earnest saved-searches list
+earnest saved-searches add "Rust" "rustls" --feed 5 --limit 20
+earnest saved-searches show 7 [--cursor 123]
+earnest saved-searches rename 7 "Rustls"
+earnest saved-searches remove 7
+```
+
+Saved searches are named query and filter sets owned by your user. `add`,
+`rename` and `remove` need `feeds:write`; `list` and `show` only need
+`entries:read`, so an agent token can open them. `show` reads the saved search
+and then its entries page, printing the query and the same match table as
+`search`; `--json` returns `{search, matches, next_cursor}`.
 
 ## State
 
@@ -112,11 +131,12 @@ earnest annotate 1234 --kind score --text "9"
 earnest brief --text "Three items worth your time" 1234 1235 1236
 ```
 
-One request covers every id: the API keys an annotation by author, kind and
-canonical entry set. Kinds are `note`, `label`, `score` and `brief`;
-`summary` and `blurb` belong to the internal pipeline. Text is plain text with
-control characters stripped and bounded lengths. The newest brief per
-principal appears at the top of Today.
+Note, label and score are per-entry endpoints, so each id is one
+`PUT /v1/entries/{id}/annotations/{kind}` with its own `op_id`. A brief covers
+the whole entry set in one `POST /v1/briefs`. Kinds are `note`, `label`,
+`score` and `brief`; `summary` and `blurb` belong to the internal pipeline.
+Text is plain text with control characters stripped and bounded lengths. The
+newest brief per principal appears at the top of Today.
 
 ## Notifications
 
@@ -124,27 +144,30 @@ principal appears at the top of Today.
 earnest notify --note "CVE in rustls" --entry 1234 --category alert
 ```
 
-`--note` is required, `--entry` optional, `--category` is `alert` (default),
-`digest` or `brief`; `--dedupe-key` collapses repeats within the window. The
-command prints the notification id, its status, the token's daily budget and
-`held until` when quiet hours apply. Over budget returns `429` with the budget
-in the problem body.
+`--note` and `--entry` are required (the API keys a notification to at least
+one entry), `--category` is `alert` (default), `digest` or `brief`;
+`--dedupe-key` collapses repeats within the window. The command prints the
+notification id, its status, the token's daily budget and `held until` when
+quiet hours apply. Over budget returns `429` with the budget in the problem
+body.
 
 ## Triage, revert and activity
 
 ```sh
 earnest triage done 1234 1235    # agent writes human state, gets a handle
 earnest revert <handle>
-earnest activity [--limit 100]
+earnest activity [--limit 100] [--grouped]
 ```
 
 `triage` is the agent-only path that changes your state through the service's
-agent provenance, so the change is labelled as the agent's. It prints the
-result per entry plus the 128-bit revert handle and its expiry. `revert`
-undoes a triage only while the affected registers are unchanged; it needs the
-same principal that created the handle. `activity` lists the immutable
-provenance log (who acted, on what, and whether a revert or cancel is still
-available).
+agent provenance, so the change is labelled as the agent's. It posts
+`POST /v1/triage` with the action in the body and prints the result per entry
+plus the 128-bit revert handle and its expiry. `revert` posts
+`POST /v1/triage:revert` with `revert_handle` and undoes a triage only while
+the affected registers are unchanged; it needs the same principal that created
+the handle. `activity` lists the immutable provenance log (who acted, on what,
+and whether a revert or cancel is still available); `--grouped` reads the
+API's per-principal groups.
 
 ## Changes
 
@@ -198,11 +221,17 @@ Rules an agent must respect:
 | `entries list` | `GET /v1/entries` |
 | `read` | `GET /v1/entries/{id}/content` |
 | `search` | `GET /v1/search` |
+| `saved-searches list` | `GET /v1/saved-searches` |
+| `saved-searches add` | `POST /v1/saved-searches` |
+| `saved-searches show` | `GET /v1/saved-searches/{id}`, `GET /v1/saved-searches/{id}/entries` |
+| `saved-searches rename` | `PATCH /v1/saved-searches/{id}` |
+| `saved-searches remove` | `DELETE /v1/saved-searches/{id}` |
 | `briefing` | `GET /v1/positions/{view}`, `GET /v1/entries` |
 | `done/later/keep/unread` | `GET /v1/bootstrap`, `GET /v1/me`, `POST /v1/state:batch` |
-| `annotate`, `brief` | `PUT /v1/annotations/{kind}` |
+| `annotate` | `PUT /v1/entries/{id}/annotations/{kind}` |
+| `brief` | `POST /v1/briefs` |
 | `notify` | `GET /v1/bootstrap`, `POST /v1/notifications` |
-| `triage` | `GET /v1/bootstrap`, `POST /v1/triage/{action}` |
+| `triage` | `GET /v1/bootstrap`, `POST /v1/triage` |
 | `revert` | `POST /v1/triage:revert` |
 | `activity` | `GET /v1/activity` |
 | `changes` | `GET /v1/changes`, `GET /v1/bootstrap` when no cursor |

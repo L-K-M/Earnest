@@ -14,9 +14,10 @@ func (a *app) activity(ctx context.Context, args []string) error {
 	action := fs.String("action", "", "only this action")
 	principal := fs.Int64("principal", 0, "only this principal")
 	since := fs.String("since", "", "RFC 3339 lower bound")
+	grouped := fs.Bool("grouped", false, "group rows by principal")
 	fs.IntVar(&limit, "limit", defaultActivityLimit, "maximum rows")
 	if err := parseFlags(fs, args, map[string]bool{"action": true, "principal": true, "since": true, "limit": true}); err != nil || fs.NArg() != 0 {
-		return usagef("usage: earnest activity [--limit n]")
+		return usagef("usage: earnest activity [--limit n] [--grouped]")
 	}
 	if limit < 1 || limit > 1000 {
 		return usagef("--limit must be between 1 and 1000")
@@ -32,6 +33,9 @@ func (a *app) activity(ctx context.Context, args []string) error {
 	if *since != "" {
 		query.Set("since", *since)
 	}
+	if *grouped {
+		query.Set("grouped", "true")
+	}
 	c, err := a.client()
 	if err != nil {
 		return err
@@ -43,12 +47,19 @@ func (a *app) activity(ctx context.Context, args []string) error {
 	if a.json {
 		return a.writeJSON(raw)
 	}
-	var rowsData []activity
-	if err := decode(raw, &rowsData); err != nil {
+	var page activityPage
+	if err := decode(raw, &page); err != nil {
 		return err
 	}
-	rows := tableRows(len(rowsData))
-	for _, item := range rowsData {
+	items := page.Activities
+	if *grouped {
+		items = nil
+		for _, group := range page.Groups {
+			items = append(items, group.Activities...)
+		}
+	}
+	rows := tableRows(len(items))
+	for _, item := range items {
 		rows = append(rows, []string{
 			strconv.FormatInt(item.ID, 10),
 			formatTime(item.CreatedAt),

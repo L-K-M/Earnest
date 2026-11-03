@@ -20,10 +20,13 @@ import (
 	"time"
 
 	"github.com/L-K-M/Earnest/internal/feed"
+	"github.com/L-K-M/Earnest/internal/imageproxy"
+	"github.com/L-K-M/Earnest/internal/outbound"
 	"github.com/L-K-M/Earnest/internal/service"
 	"github.com/L-K-M/Earnest/internal/store"
 	"github.com/L-K-M/Earnest/internal/store/storetest"
 	"github.com/L-K-M/Earnest/internal/syncmodel"
+	"github.com/L-K-M/Earnest/internal/web"
 )
 
 type fixtureProber struct{}
@@ -33,11 +36,14 @@ func (fixtureProber) Probe(ctx context.Context, raw string, credentials *service
 	return raw, service.FeedMeta{Title: "Test feed", Language: "english"}, []service.IngestItem{{IdentityHash: hex.EncodeToString(hash[:]), ContentHash: hex.EncodeToString(hash[:]), Title: "Test entry", URL: "https://example.org/article", ContentHTML: "<p>Stored content</p>", ContentText: "Stored content", SanitizerVersion: 1, ContentSource: service.ContentFromFeed}}, nil
 }
 
+const fixtureContentOrigin = "https://content.example"
+
 type apiFixture struct {
 	db      *store.Store
 	svc     *service.Service
 	auth    *service.Auth
 	owner   service.Actor
+	content *web.Content
 	handler http.Handler
 	entryID int64
 	subID   int64
@@ -63,6 +69,18 @@ func newAPIFixture(t *testing.T, template *storetest.Template) *apiFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	egress, err := outbound.New(outbound.Config{Version: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy, err := imageproxy.New(secret, egress, fixtureContentOrigin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := web.NewContent(svc, auth, proxy, fixtureContentOrigin, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
 	sub, err := svc.Subscribe(t.Context(), owner, "https://example.org/feed", service.SubscribeOptions{OpID: "setup"})
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +89,7 @@ func newAPIFixture(t *testing.T, template *storetest.Template) *apiFixture {
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("fixture entries=%v: %v", entries, err)
 	}
-	f := &apiFixture{db: db, svc: svc, auth: auth, owner: owner, handler: New(svc, auth, slog.New(slog.NewTextHandler(io.Discard, nil)), "https://reader.example"), entryID: entries[0].ID, subID: sub.ID}
+	f := &apiFixture{db: db, svc: svc, auth: auth, owner: owner, content: content, handler: New(svc, auth, slog.New(slog.NewTextHandler(io.Discard, nil)), "https://reader.example", content), entryID: entries[0].ID, subID: sub.ID}
 	rec := f.do(t, http.MethodPost, "/v1/session/login", loginBody{Username: "reader", Password: "password"}, requestCredentials{})
 	requireStatus(t, rec, http.StatusOK)
 	var login loginResult
@@ -442,7 +460,7 @@ func TestOpenAPIIsCurrent(t *testing.T) {
 		t.Fatal("api/openapi.json is stale; run go run ./cmd/earnest openapi > api/openapi.json")
 	}
 	rec := httptest.NewRecorder()
-	New(nil, nil, nil, "").ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/openapi.json", nil))
+	New(nil, nil, nil, "", nil).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/openapi.json", nil))
 	if !bytes.Equal(rec.Body.Bytes(), generated) {
 		t.Fatal("served OpenAPI differs from command output")
 	}

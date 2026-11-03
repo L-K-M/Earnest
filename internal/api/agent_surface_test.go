@@ -143,7 +143,7 @@ func TestHTTPAgentSurface(t *testing.T) {
 		if settings := decodeBody[service.PushSettings](t, rec); !settings.TokenSet || settings.QuietStart != "22:00" {
 			t.Fatal(settings)
 		}
-		f.handler = New(f.svc, f.auth, nil, "https://reader.example", "test-public-key")
+		f.handler = New(f.svc, f.auth, nil, "https://reader.example", f.content, "test-public-key")
 		rec = f.do(t, http.MethodGet, "/v1/push/vapid-public-key", nil, f.session())
 		requireStatus(t, rec, http.StatusOK)
 		if decodeBody[vapidKey](t, rec).PublicKey != "test-public-key" {

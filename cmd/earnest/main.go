@@ -61,7 +61,7 @@ func main() {
 		}
 	case "login", "logout", "whoami", "feeds", "entries", "read", "search",
 		"done", "later", "keep", "unread", "briefing", "annotate", "brief",
-		"notify", "triage", "revert", "activity", "changes":
+		"notify", "triage", "revert", "activity", "saved-searches", "changes":
 		cli.Version = version
 		os.Exit(cli.Run(os.Args[1:], os.Stdout, os.Stderr))
 	case "openapi":
@@ -77,7 +77,7 @@ func main() {
 		fmt.Fprint(os.Stderr, "usage: earnest [serve|healthcheck|migrate|openapi|generation|version|\n"+
 			"  user|token|compat-password|login|logout|whoami|feeds|entries|read|search|\n"+
 			"  done|later|keep|unread|briefing|annotate|brief|notify|triage|revert|\n"+
-			"  activity|changes]\n")
+			"  activity|saved-searches|changes]\n")
 		os.Exit(2)
 	}
 }
