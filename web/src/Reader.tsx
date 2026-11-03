@@ -4,8 +4,11 @@ import type {Entry, ReaderActions, Subscription} from './reader'
 import {readerURL} from './reader'
 import {request} from './request'
 import {Typography, settingsInput, type ReadingSettings} from './Settings'
+import {OfflineArticle, useOnline} from './offline/Offline'
+import {MoreLikeThis} from './search/Search'
 
-export function Reader({entry, subscription, settings, actions, onClose, onSettings, renderBody}: {entry: Entry; subscription?: Subscription; settings: ReadingSettings; actions: ReaderActions; onClose: () => void; onSettings: (value: ReadingSettings) => void; renderBody: (url: string) => ReactNode}) {
+export function Reader({entry, subscription, settings, actions, onClose, onSettings, renderBody, onOpen}: {entry: Entry; subscription?: Subscription; settings: ReadingSettings; actions: ReaderActions; onClose: () => void; onSettings: (value: ReadingSettings) => void; renderBody: (url: string) => ReactNode; onOpen?: (entry: Entry) => void}) {
+  const online = useOnline()
   const title = useRef<HTMLHeadingElement>(null)
   const [error, setError] = useState('')
   const [overrideDraft, setOverrideDraft] = useState(() => ({...settings, ...settings.feed_overrides[String(entry.feed_id)]}))
@@ -19,7 +22,7 @@ export function Reader({entry, subscription, settings, actions, onClose, onSetti
     return () => query.removeEventListener('change', changed)
   }, [])
   const typography = {...settings, ...settings.feed_overrides[String(entry.feed_id)]}
-  const content = useQuery({queryKey: ['content', entry.id, typography.theme, typography.measure, typography.font], gcTime:0, queryFn: () => request<{url: string}>(`/web/content-url/${entry.id}`)})
+  const content = useQuery({queryKey: ['content', entry.id, typography.theme, typography.measure, typography.font], enabled:online, gcTime:0, queryFn: () => request<{url: string}>(`/web/content-url/${entry.id}`)})
   const state = actions.state(entry)
   function act(register: 'seen' | 'shelf' | 'kept', value: 'unseen' | 'done' | 'later' | 'none' | boolean) {
     void actions.act(entry, register, value).catch(error => setError(error instanceof Error ? error.message : 'Could not save action.'))
@@ -42,7 +45,8 @@ export function Reader({entry, subscription, settings, actions, onClose, onSetti
     {error && <p role="alert">{error}</p>}
     <details><summary>Typography for this feed</summary><form onSubmit={event => {event.preventDefault();void override(overrideDraft)}}><Typography value={overrideDraft} onChange={value => setOverrideDraft({...overrideDraft, ...value})} /><button disabled={savingOverride}>Save for this feed</button></form></details>
     {content.error && <p role="alert">{content.error.message} <button onClick={() => { void content.refetch() }}>Try again</button></p>}
-    {content.isPending && <p role="status">Opening article…</p>}
-    {content.data && renderBody(readerURL(content.data.url, typography, dark))}
+    {online && content.isPending && <p role="status">Opening article…</p>}
+    {!online || content.isError ? <OfflineArticle entryID={entry.id}/> : content.data && renderBody(readerURL(content.data.url, typography, dark))}
+    {onOpen && online && <MoreLikeThis key={entry.id} entryID={entry.id} onOpen={onOpen}/>}
   </article>
 }

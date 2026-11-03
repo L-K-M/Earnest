@@ -8,7 +8,7 @@ it('shows only server title and body and opens an internal notification link', a
   const showNotification = vi.fn().mockResolvedValue(undefined)
   const openWindow = vi.fn().mockResolvedValue(undefined)
   const self = {addEventListener:(name:string, handler:(event:Event)=>void) => {listeners[name]=handler}, registration:{showNotification}, clients:{openWindow}}
-  runInNewContext(readFileSync('public/sw.js','utf8'), {self})
+  runInNewContext(readFileSync('public/push-worker.js','utf8'), {self})
   let pending:Promise<unknown> = Promise.resolve()
   listeners.push({data:{json:()=>({title:'Earnest',body:'1 alert',text:'private',notification_id:'42',url:'https://evil.test'})},waitUntil:(p:Promise<unknown>)=>{pending=p}})
   await pending

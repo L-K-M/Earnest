@@ -86,7 +86,7 @@ export function Push() {
     <h3>Web Push for this browser</h3><p>This browser shows only the server-generated notification title and body.</p><button disabled={pending} onClick={() => {void run(async () => {
       if (!('serviceWorker' in navigator) || !('PushManager' in window)) throw new Error('Web Push is not available in this browser.')
       const key = await request<Schema['VapidKey']>('/v1/push/vapid-public-key')
-      const registration = await navigator.serviceWorker.register('/sw.js')
+      const registration = await navigator.serviceWorker.register('/push-worker.js', {scope:'/push/'})
       const subscription = await registration.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:applicationKey(key.public_key)})
       const value = subscription.toJSON()
       if (!value.endpoint || !value.keys?.p256dh || !value.keys.auth) throw new Error('The browser did not provide push subscription keys.')
