@@ -15,9 +15,15 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.longOrNull
+import java.time.Instant
 
 internal fun agentChangedEntryId(activity: Activity): Long? =
     ((activity.target as? JsonObject)?.get("entry_id") as? JsonPrimitive)?.longOrNull
+
+internal fun activitySince(changes: List<Activity>, since: Instant): List<Activity> =
+    changes.filter { change ->
+        runCatching { Instant.parse(change.createdAt) }.getOrNull()?.let { it >= since } == true
+    }
 
 /** Server provenance and register values are text, never publisher or agent HTML. */
 internal fun agentChangeText(activity: Activity, titles: Map<Long, String>): String {

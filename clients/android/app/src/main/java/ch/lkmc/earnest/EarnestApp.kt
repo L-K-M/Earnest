@@ -123,9 +123,7 @@ private fun MainScaffold(
     val navigator = rememberListDetailPaneScaffoldNavigator<Long>()
     var view by remember { mutableStateOf(View.TODAY) }
     val readerEntry = state.snapshot.entries.firstOrNull { it.id == navigator.currentDestination?.contentKey && !it.deleted }
-    var readerError by remember { mutableStateOf<String?>(null) }
-    var readerContent by remember { mutableStateOf<ContentUrlResult?>(null) }
-    var readerLoading by remember { mutableStateOf(false) }
+    val reader = remember { ReaderLoadState() }
     var activityGroups by remember { mutableStateOf<List<ch.lkmc.earnest.core.ActivityGroup>>(emptyList()) }
     var showSubscribe by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
@@ -141,23 +139,9 @@ private fun MainScaffold(
         model.notificationEntry(id)?.let { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, it) }
     }
     LaunchedEffect(selected, state.accountKey) {
-        readerContent = null
-        readerError = null
-        val id = selected ?: return@LaunchedEffect
-        readerLoading = true
-        if (state.accountKey == null) return@LaunchedEffect
-        try {
-            if (model.loadEntry(id) == null) {
-                readerError = "This entry is no longer available."
-            } else {
-                readerContent = model.openEntry(id)
-            }
-        } catch (error: kotlinx.coroutines.CancellationException) {
-            throw error
-        } catch (error: Exception) {
-            readerError = error.message ?: "Could not load this entry."
-        } finally {
-            readerLoading = false
+        reader.load(selected, state.accountKey) { id ->
+            if (model.loadEntry(id) == null) throw java.io.IOException("This entry is no longer available.")
+            model.openEntry(id)
         }
     }
     LaunchedEffect(view, state.accountKey) {
@@ -192,8 +176,7 @@ private fun MainScaffold(
         )
     }
 
-    fun undo(entryId: Long, action: () -> Unit) {
-        action()
+    fun undo(entryId: Long) {
         scope.launch {
             val result = snackbar.showSnackbar("Entry updated", actionLabel = "Undo")
             if (result == SnackbarResult.ActionPerformed) model.undoShelf(entryId)
@@ -257,8 +240,8 @@ private fun MainScaffold(
                                     onOpen = { entryId ->
                                         scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
                                     },
-                                    onLater = { undo(it) { model.later(it) } },
-                                    onDone = { undo(it) { model.done(it) } },
+                                    onLater = { id -> model.later(id) { undo(id) } },
+                                    onDone = { id -> model.done(id) { undo(id) } },
                                     onSeen = model::markSeen,
                                     onKeep = { model.keep(it) },
                                     onUnkeep = { model.unkeep(it) },
@@ -273,8 +256,8 @@ private fun MainScaffold(
                                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                     when {
                                         selected == null -> Text("Select an entry")
-                                        readerLoading -> CircularProgressIndicator()
-                                        else -> Text(readerError ?: "Couldn't load this entry. Check your connection and try again.")
+                                        reader.loading -> CircularProgressIndicator()
+                                        else -> Text(reader.error ?: "Couldn't load this entry. Check your connection and try again.")
                                     }
                                 }
                             } else {
@@ -290,13 +273,13 @@ private fun MainScaffold(
                                             overflow = TextOverflow.Ellipsis,
                                         )
                                     }
-                                    val content = readerContent
+                                    val content = reader.content
                                     when {
-                                        readerLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                        reader.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                             CircularProgressIndicator()
                                         }
                                         content == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                            Text(readerError ?: "Couldn't load this entry. Check your connection and try again.")
+                                            Text(reader.error ?: "Couldn't load this entry. Check your connection and try again.")
                                         }
                                         else -> Reader(
                                             url = content.url,

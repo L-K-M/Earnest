@@ -127,6 +127,11 @@ class SyncEngine(private val store: SyncStore) {
         commit(SyncSnapshot(cursor = cursor, outbox = pending))
     }
 
+    /** Installs a fully paged bootstrap; incomplete pages never replace the live cache. */
+    internal fun installBootstrap(completed: SyncSnapshot) {
+        commit(completed)
+    }
+
     private fun stale(item: Pending, generation: String): Pending {
         val base = Revision(generation, 0)
         return when {
@@ -163,10 +168,7 @@ class SyncEngine(private val store: SyncStore) {
     }
 
     fun mergeBootstrap(change: SyncChange) {
-        change.entry?.let { mergeEntry(it) }
-        change.obj?.let { mergeObject(it) }
-        change.position?.let { mergePosition(it) }
-        change.states.forEach { mergeState(it) }
+        commit(merge(snapshot, change))
     }
 
     /**
@@ -346,7 +348,8 @@ class SyncEngine(private val store: SyncStore) {
                 next = next.copy(
                     entries = next.entries.map {
                         if (it.id == result.state.entryId) it.copy(deleted = true) else it
-                    }
+                    },
+                    states = next.states.filterNot { it.entryId == result.state.entryId },
                 )
             }
         }

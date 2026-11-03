@@ -99,6 +99,28 @@ class OpenApiContractTest {
     )
 
     @Test
+    fun contractRejectsFractionalInteger() {
+        val empty = JsonObject(emptyMap())
+        for (number in listOf("12.5", "9007199254740993.1")) {
+            val error = runCatching { assertType("id", json.parseToJsonElement("""{"type":"integer"}""").jsonObject, json.parseToJsonElement(number), empty) }.exceptionOrNull()
+            assertTrue("integer schema accepted $number", error is AssertionError)
+        }
+        assertType("number", json.parseToJsonElement("""{"type":"number"}""").jsonObject, JsonPrimitive(2), empty)
+    }
+
+    @Test
+    fun contractChecksInlineArrayObjects() {
+        val empty = JsonObject(emptyMap())
+        val schema = json.parseToJsonElement("""{"type":"array","items":{"type":"object","required":["id"],"properties":{"id":{"type":"integer"}}}}""").jsonObject
+        for (invalid in listOf("[{}]", "[{\"id\":\"wrong\"}]")) {
+            val error = runCatching { assertType("rows", schema, json.parseToJsonElement(invalid), empty) }.exceptionOrNull()
+            assertTrue("inline schema accepted $invalid", error is AssertionError)
+        }
+        assertType("rows", schema, json.parseToJsonElement("""[{"id":9007199254740993}]"""), empty)
+        assertType("number", json.parseToJsonElement("""{"type":"number"}""").jsonObject, JsonPrimitive(2), empty)
+    }
+
+    @Test
     fun everyModelMatchesItsSchema() {
         val document = json.parseToJsonElement(File("../../../api/openapi.json").readText()).jsonObject
         val schemas = document.getValue("components").jsonObject.getValue("schemas").jsonObject
@@ -196,12 +218,16 @@ class OpenApiContractTest {
             is JsonPrimitive -> when {
                 value.isString -> "string"
                 value.booleanOrNull != null -> "boolean"
-                else -> "integer"
+                value.content.toBigDecimalOrNull()?.stripTrailingZeros()?.scale()?.let { it <= 0 } == true -> "integer"
+                else -> "number"
             }
             JsonNull -> "null"
         }
         val matches = types.contains(actual) || (actual == "integer" && types.contains("number"))
         assertTrue("$path: ${value} is $actual, schema wants $types", matches)
+        if (value is JsonObject && schema["properties"] != null) {
+            assertSchema(path, schema, value, document)
+        }
         if (actual == "array" && value is JsonArray) {
             val itemSchema = schema["items"]?.jsonObject ?: return
             value.forEach { assertType("$path[]", itemSchema, it, document) }
