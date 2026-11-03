@@ -227,6 +227,10 @@
               "null"
             ]
           },
+          "daily_limit": {
+            "format": "int64",
+            "type": "integer"
+          },
           "excerpt_notice": {
             "type": "string"
           },
@@ -235,6 +239,10 @@
           },
           "prompt_version": {
             "type": "string"
+          },
+          "remaining_today": {
+            "format": "int64",
+            "type": "integer"
           },
           "retrieval": {
             "type": "string"
@@ -253,6 +261,8 @@
           }
         },
         "required": [
+          "daily_limit",
+          "remaining_today",
           "claims",
           "sources",
           "model",
@@ -948,6 +958,9 @@
           "author": {
             "type": "string"
           },
+          "blurb": {
+            "type": "string"
+          },
           "deleted": {
             "type": "boolean"
           },
@@ -1567,13 +1580,28 @@
       "PipelineStatus": {
         "additionalProperties": false,
         "properties": {
+          "ask": {
+            "type": "string"
+          },
+          "blurb": {
+            "type": "string"
+          },
           "classify": {
+            "type": "string"
+          },
+          "compile_rule": {
+            "type": "string"
+          },
+          "edition": {
             "type": "string"
           },
           "embed": {
             "type": "string"
           },
           "semantic": {
+            "type": "string"
+          },
+          "summary": {
             "type": "string"
           },
           "watch": {
@@ -1584,7 +1612,12 @@
           "embed",
           "classify",
           "semantic",
-          "watch"
+          "watch",
+          "blurb",
+          "summary",
+          "edition",
+          "ask",
+          "compile_rule"
         ],
         "type": "object"
       },
@@ -2669,6 +2702,10 @@
           "excerpt_notice": {
             "type": "string"
           },
+          "generated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
           "kind": {
             "type": "string"
           },
@@ -2687,6 +2724,7 @@
           }
         },
         "required": [
+          "generated_at",
           "annotation_id",
           "entry_id",
           "content_hash",
