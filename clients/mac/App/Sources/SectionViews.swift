@@ -45,7 +45,7 @@ struct EditionListView: View {
 
 struct FeedsView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var removing: FeedInfo?
+    @SwiftUI.State private var removing: FeedInfo?
 
     var body: some View {
         VStack(spacing: 0) {

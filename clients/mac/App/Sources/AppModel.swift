@@ -428,12 +428,12 @@ import AppKit
 
     /// Displayed entries never mutate the fetched APIEntry: each row's state
     /// is the fetched state merged with the engine's synced-plus-overlay state.
-    private func effectiveState(of entry: APIEntry) -> State {
+    private func effectiveState(of entry: APIEntry) -> EarnestKit.State {
         guard let engine, principalID > 0 else { return entry.state.syncState }
         return (try? engine.state(principal: principalID, entryID: entry.id)) ?? entry.state.syncState
     }
 
-    private func riverVisible(_ state: State) -> Bool {
+    private func riverVisible(_ state: EarnestKit.State) -> Bool {
         state.seen.value == .text("unseen") && state.shelf.value == .text("none")
     }
 
@@ -441,7 +441,7 @@ import AppKit
         feedMap[entry.subscriptionID]?.cadence ?? "today"
     }
 
-    private func row(_ entry: APIEntry, _ state: State) -> EntryRow {
+    private func row(_ entry: APIEntry, _ state: EarnestKit.State) -> EntryRow {
         var subtitle = feedMap[entry.subscriptionID]?.title ?? "Feed \(entry.subscriptionID)"
         if !entry.author.isEmpty { subtitle += " · \(entry.author)" }
         let date = entry.publishedAt.flatMap(DateFormatting.parse) ?? DateFormatting.parse(entry.firstSeenAt)
@@ -494,7 +494,7 @@ import AppKit
         updateEndStatement(presented)
     }
 
-    private func updateEndStatement(_ presented: [(APIEntry, State)]) {
+    private func updateEndStatement(_ presented: [(APIEntry, EarnestKit.State)]) {
         guard section == .today else {
             endTitle = ""
             endDetail = ""
@@ -583,7 +583,7 @@ import AppKit
               let generation = try? engine.snapshot().cursor?.generation else { return }
         let state = entry.map { self.effectiveState(of: $0) }
             ?? (try? engine.state(principal: principalID, entryID: entryID))
-            ?? State(principal: principalID, entryID: entryID)
+            ?? EarnestKit.State(principal: principalID, entryID: entryID)
         guard state.seen.value != .text("seen") else { return }
         let write = Write(opID: "mac.\(UUID().uuidString.lowercased())",
                           principal: principalID, entryID: entryID,

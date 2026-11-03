@@ -211,7 +211,7 @@ import EarnestKit
 @MainActor struct PaletteView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
-    @State private var filter = ""
+    @SwiftUI.State private var filter = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
