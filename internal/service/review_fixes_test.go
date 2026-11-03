@@ -70,6 +70,7 @@ func TestSubscribeSharedEntryBackfill(t *testing.T) {
 			f.s.prober = &subscriptionsProber{}
 			var sub Subscription
 			var err error
+			var savedStates []syncmodel.State
 			if mode == "rebind" || mode == "resubscribe" {
 				opts := SubscribeOptions{OpID: "initial"}
 				if mode == "rebind" {
@@ -80,6 +81,31 @@ func TestSubscribeSharedEntryBackfill(t *testing.T) {
 					t.Fatal(err)
 				}
 				if mode == "resubscribe" {
+					agent := entriesTestAgent(t, f.db, other.UserID, "Reader", ScopeStateWriteHuman)
+					for _, actor := range []Actor{other, agent, f.a} {
+						for _, action := range []struct {
+							register syncmodel.RegisterName
+							value    syncmodel.Value
+						}{
+							{syncmodel.Seen, syncmodel.SeenValue},
+							{syncmodel.Shelf, syncmodel.Later},
+							{syncmodel.Kept, syncmodel.True},
+						} {
+							w := f.write(t, oldID, "saved-"+string(action.register), action.register, action.value)
+							w.Principal = syncmodel.ID(actor.PrincipalID)
+							results, err := f.s.Batch(ctx, actor, []syncmodel.Write{w})
+							if err != nil || len(results) != 1 || results[0].Status != syncmodel.Applied {
+								t.Fatalf("seed %s: %+v %v", action.register, results, err)
+							}
+						}
+						state, err := store.LoadState(ctx, f.db.Pool(), actor.PrincipalID, oldID)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if actor.UserID == other.UserID {
+							savedStates = append(savedStates, state)
+						}
+					}
 					if err := f.s.Unsubscribe(ctx, other, sub.ID, "unsubscribe"); err != nil {
 						t.Fatal(err)
 					}
@@ -88,6 +114,13 @@ func TestSubscribeSharedEntryBackfill(t *testing.T) {
 			cursor, err := f.s.BootstrapCursor(ctx, other)
 			if err != nil {
 				t.Fatal(err)
+			}
+			client := syncmodel.NewClient(cursor)
+			for _, resource := range []BootstrapKind{BootstrapEntries, BootstrapState} {
+				page, err := f.s.Bootstrap(ctx, other, BootstrapRequest{Kind: resource})
+				if err != nil || len(page.Items) != 0 {
+					t.Fatalf("unsubscribed bootstrap %s: %+v %v", resource, page, err)
+				}
 			}
 			// A bootstrap already passed this ID before the shared feed became visible.
 			if mode == "rebind" {
@@ -124,6 +157,69 @@ func TestSubscribeSharedEntryBackfill(t *testing.T) {
 			if !found {
 				t.Fatalf("entry %d missing from bootstrap replay: %+v", oldID, changes.Changes)
 			}
+			var replay []syncmodel.Change
+			var backfilled []syncmodel.State
+			for _, record := range changes.Changes {
+				change := syncmodel.Change{Rev: record.Rev, Type: record.Type}
+				if err := json.Unmarshal(record.Payload, &change); err != nil {
+					t.Fatal(err)
+				}
+				for _, result := range change.Results {
+					backfilled = append(backfilled, result.State)
+				}
+				replay = append(replay, change)
+			}
+			for range 2 {
+				if err := client.ApplyPage(replay, changes.Next); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, saved := range savedStates {
+				server, err := store.LoadState(ctx, f.db.Pool(), int64(saved.Principal), oldID)
+				if err != nil || server != saved {
+					t.Fatalf("backfill changed saved state: got %+v, want %+v: %v", server, saved, err)
+				}
+				if got := client.State(saved.Principal, saved.EntryID); got != server {
+					t.Errorf("replayed state: got %+v, want server %+v", got, server)
+				}
+
+				// A newer seen register cannot block older shelf/kept snapshots.
+				ahead := syncmodel.NewClient(cursor)
+				newer := syncmodel.InitialState(saved.Principal, saved.EntryID)
+				newer.Seen = saved.Seen
+				newer.Seen.Value = syncmodel.Unseen
+				newer.Seen.Rev = changes.Next.Rev + 1
+				newer.StateRev = newer.Seen.Rev
+				ahead.MergeState(newer)
+				if err := ahead.ApplyPage(replay, changes.Next); err != nil {
+					t.Fatal(err)
+				}
+				want := saved
+				want.Seen, want.StateRev = newer.Seen, newer.StateRev
+				if got := ahead.State(saved.Principal, saved.EntryID); got != want {
+					t.Errorf("register merge: got %+v, want %+v", got, want)
+				}
+			}
+			if len(backfilled) != len(savedStates) {
+				t.Fatalf("backfilled %d states, want %d for this user's principals", len(backfilled), len(savedStates))
+			}
+			for i, state := range backfilled {
+				if state != savedStates[i] {
+					t.Fatalf("backfilled state: got %+v, want %+v", state, savedStates[i])
+				}
+			}
+			if mode == "resubscribe" {
+				for _, opID := range []string{"subscribe", "subscribe-again"} {
+					repeated, err := f.s.Subscribe(ctx, other, "https://example.test/feed", SubscribeOptions{OpID: opID})
+					if err != nil || repeated.ID != sub.ID || repeated.Rev != sub.Rev {
+						t.Fatalf("repeated subscribe: %+v %v", repeated, err)
+					}
+				}
+				current, err := f.s.BootstrapCursor(ctx, other)
+				if err != nil || current != changes.Next {
+					t.Fatalf("repeated subscribe emitted changes: %+v %v", current, err)
+				}
+			}
 			var stamped uint64
 			if err := f.db.Pool().QueryRow(ctx, "SELECT rev FROM entry_revisions WHERE user_id=$1 AND entry_id=$2", other.UserID, oldID).Scan(&stamped); err != nil {
 				t.Fatal(err)
@@ -141,6 +237,74 @@ func TestSubscribeSharedEntryBackfill(t *testing.T) {
 			coreCheckGapless(t, f.db, other.UserID)
 		})
 	}
+}
+
+func TestSubscriptionStateBackfillRollback(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := context.Background()
+	id := f.ingest(t, "saved")
+	results, err := f.s.Batch(ctx, f.a, []syncmodel.Write{f.write(t, id, "seen", syncmodel.Seen, syncmodel.SeenValue)})
+	if err != nil || len(results) != 1 || results[0].Status != syncmodel.Applied {
+		t.Fatalf("seed state: %+v %v", results, err)
+	}
+	saved := results[0].State
+	if err := f.s.Unsubscribe(ctx, f.a, f.subscription, "unsubscribe"); err != nil {
+		t.Fatal(err)
+	}
+	cursor, err := f.s.BootstrapCursor(ctx, f.a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entryRev uint64
+	if err := f.db.Pool().QueryRow(ctx, "SELECT rev FROM entry_revisions WHERE user_id=$1 AND entry_id=$2", f.a.UserID, id).Scan(&entryRev); err != nil {
+		t.Fatal(err)
+	}
+	// Reject only new state events, after the entry backfill has been staged.
+	if _, err := f.db.Pool().Exec(ctx, "ALTER TABLE changes ADD CONSTRAINT reject_state_backfill CHECK (type <> 'state.updated') NOT VALID"); err != nil {
+		t.Fatal(err)
+	}
+	f.s.prober = &subscriptionsProber{}
+	options := SubscribeOptions{OpID: "resubscribe"}
+	if _, err := f.s.Subscribe(ctx, f.a, "https://example.test/feed", options); err == nil {
+		t.Fatal("subscription committed without state backfill")
+	}
+	current, err := f.s.BootstrapCursor(ctx, f.a)
+	if err != nil || current != cursor {
+		t.Fatalf("failed backfill changed cursor: %+v, want %+v: %v", current, cursor, err)
+	}
+	subs, err := f.s.Subscriptions(ctx, f.a)
+	if err != nil || len(subs) != 0 {
+		t.Fatalf("failed backfill left subscription: %+v %v", subs, err)
+	}
+	var currentEntryRev uint64
+	if err := f.db.Pool().QueryRow(ctx, "SELECT rev FROM entry_revisions WHERE user_id=$1 AND entry_id=$2", f.a.UserID, id).Scan(&currentEntryRev); err != nil || currentEntryRev != entryRev {
+		t.Fatalf("failed backfill changed entry revision: %d, want %d: %v", currentEntryRev, entryRev, err)
+	}
+	if _, err := f.db.Pool().Exec(ctx, "ALTER TABLE changes DROP CONSTRAINT reject_state_backfill"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.Subscribe(ctx, f.a, "https://example.test/feed", options); err != nil {
+		t.Fatalf("retry after rolled-back backfill: %v", err)
+	}
+	page, err := f.s.Changes(ctx, f.a, cursor, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshots []syncmodel.Result
+	for _, record := range page.Changes {
+		if record.Type != syncmodel.StateUpdated {
+			continue
+		}
+		var change syncmodel.Change
+		if err := json.Unmarshal(record.Payload, &change); err != nil {
+			t.Fatal(err)
+		}
+		snapshots = append(snapshots, change.Results...)
+	}
+	if len(snapshots) != 1 || snapshots[0].State != saved {
+		t.Fatalf("retry snapshots: %+v, want %+v", snapshots, saved)
+	}
+	coreCheckGapless(t, f.db, f.a.UserID)
 }
 
 func TestThroughCapturesReceiptBoundary(t *testing.T) {
