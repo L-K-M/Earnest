@@ -74,6 +74,15 @@ public final class MemorySyncStore: SyncStore {
     public func save(_ snapshot: SyncSnapshot) throws { self.snapshot = snapshot }
 }
 public enum SyncError: Error { case invalidPage, invalidWrite, generationMismatch }
+public enum WriteStatus: String, Sendable { case applied, superseded, gone, expired }
+public struct WriteAcknowledgement: Sendable {
+    public let opID: String
+    public let status: WriteStatus
+    public let state: State?
+    public init(opID: String, status: WriteStatus, state: State?) {
+        self.opID = opID; self.status = status; self.state = state
+    }
+}
 public struct StateChange: Sendable {
     public var rev: Int64
     public var state: State
@@ -132,6 +141,26 @@ public final class SyncEngine {
         guard data.cursor?.generation == generation else { throw SyncError.generationMismatch }
         data.outbox.removeAll { $0.opID == opID && $0.base.generation == generation }
         try store.save(data)
+    }
+    /// Persist effective states and remove only acknowledged operations together.
+    /// Returns gone and expired writes so the caller can report them.
+    @discardableResult public func acknowledge(_ results: [WriteAcknowledgement], generation: String) throws -> [Write] {
+        var data = try store.load()
+        guard data.cursor?.generation == generation else { throw SyncError.generationMismatch }
+        guard Set(results.map(\.opID)).count == results.count else { throw SyncError.invalidPage }
+        var dropped: [Write] = []
+        for result in results {
+            guard let write = data.outbox.first(where: { $0.opID == result.opID && $0.base.generation == generation }) else { continue }
+            if let state = result.state, state.principal == write.principal, state.entryID == write.entryID {
+                merge(state, into: &data.states)
+            } else if result.status == .applied || result.status == .superseded {
+                throw SyncError.invalidPage
+            }
+            if result.status == .gone || result.status == .expired { dropped.append(write) }
+            data.outbox.removeAll { $0.opID == result.opID && $0.base.generation == generation }
+        }
+        try store.save(data)
+        return dropped
     }
     @discardableResult public func expire(asOf now: Date) throws -> [Write] {
         var data = try store.load()

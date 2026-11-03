@@ -71,6 +71,11 @@ public struct ArticleContent: Codable, Sendable {
     public let source: String
     enum CodingKeys: String, CodingKey { case entryID = "entry_id", html, text, sanitizerVersion = "sanitizer_version", source }
 }
+private struct SignedContentURL: Decodable {
+    let url: URL
+    let contentOrigin: URL
+    enum CodingKeys: String, CodingKey { case url, contentOrigin = "content_origin" }
+}
 public struct APIRevision: Codable, Sendable {
     public let generation: String
     public let rev: Int64
@@ -97,6 +102,7 @@ public struct APIProblem: Codable, Error, Sendable {
     public let type, title: String
     public let status: Int
     public let detail, error: String?
+    public let budget: APIValue?
 }
 public enum APIError: Error, Sendable {
     case invalidBaseURL, invalidResponse, httpStatus(Int), invalidEntryID
@@ -161,6 +167,24 @@ public final class EarnestAPI: Sendable {
     public func content(entryID: Int64) async throws -> ArticleContent {
         guard entryID > 0 else { throw APIError.invalidEntryID }
         return try await request("v1/entries/\(entryID)/content")
+    }
+    /// Fetch a signed article without forwarding the API bearer token.
+    public func signedContent(entryID: Int64) async throws -> String {
+        guard entryID > 0 else { throw APIError.invalidEntryID }
+        let signed: SignedContentURL = try await request("v1/entries/\(entryID)/content-url")
+        let url = signed.url
+        let origin = signed.contentOrigin
+        guard let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme),
+              let host = url.host?.lowercased(), !host.isEmpty,
+              url.user == nil, url.password == nil, url.fragment == nil,
+              origin.scheme?.lowercased() == scheme, origin.host?.lowercased() == host,
+              (origin.port ?? (scheme == "https" ? 443 : 80)) == (url.port ?? (scheme == "https" ? 443 : 80)),
+              origin.user == nil, origin.password == nil, origin.query == nil, origin.fragment == nil,
+              origin.path.isEmpty || origin.path == "/" else { throw APIError.invalidResponse }
+        let (data, response) = try await session.data(from: url)
+        guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode),
+              let html = String(data: data, encoding: .utf8) else { throw APIError.invalidResponse }
+        return html
     }
     public func bootstrapCursor() async throws -> APIRevision { try await request("v1/bootstrap") }
     public func bootstrapPage(kind: String, query: [URLQueryItem] = []) async throws -> APIBootstrapPage {

@@ -30,11 +30,27 @@ code approved on the server and stores the resulting token in the macOS
 Keychain. The sync engine and GRDB store are not yet connected to the app. Changes made
 offline are not synchronized; see [sync.md](sync.md) for the intended protocol.
 
-The native reader fetches article content from the authenticated API and
-serves it to WebKit through a custom scheme; it does not use the web reader's separate content origin. See [web.md](web.md) for that origin's listener
-and reverse proxy settings. Article HTML is untrusted: the reader disables
+The native reader serves article content to WebKit through a custom scheme.
+When signed content URLs are available it fetches them from the separate
+content origin; otherwise it fetches the authenticated API content. See
+[web.md](web.md) for the origin's listener and reverse proxy settings.
+Article HTML is untrusted: the reader disables
 JavaScript and restricts navigation and remote content. Agent briefs and notes are not yet shown. Deep links identify entries by internal ID and do not
 supply a URL to fetch.
+
+## Server changes needed
+
+`GET /web/content-url/{id}` requires a browser session, so a native app's
+bearer token cannot use it. Add `GET /v1/entries/{id}/content-url`, accepting
+the same bearer authentication and entry authorization as the content API.
+Return JSON `{"url":"https://content.example/article?...", "content_origin":"https://content.example"}`,
+where `url` is a short-lived signed URL on the separately configured content
+origin and `content_origin` is its scheme, host and optional port. The URL
+must not require the API bearer token. The app checks that the URL belongs to
+that origin, rejects redirects, fetches it without the token, and renders it
+through its restricted custom scheme. Until the endpoint exists, it falls back
+to `GET /v1/entries/{id}/content` and renders the sanitized HTML with the same
+JavaScript-disabled WebKit and restrictive CSP.
 
 ## Distribution later
 

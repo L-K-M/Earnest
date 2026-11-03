@@ -103,8 +103,15 @@ enum Section: String, CaseIterable, Identifiable {
         html = ""
         guard let api, let id else { return }
         do {
-            let content = try await api.content(entryID: id)
-            if selected == id { html = content.html }
+            let article: String
+            do {
+                article = try await api.signedContent(entryID: id)
+            } catch is CancellationError {
+                return
+            } catch {
+                article = try await api.content(entryID: id).html
+            }
+            if selected == id { html = article }
         } catch { self.error = String(describing: error) }
     }
 
