@@ -99,8 +99,11 @@ func (c *client) do(ctx context.Context, method, path string, query url.Values, 
 func problemError(status int, retryAfter string, data []byte) error {
 	apiErr := &apiError{status: status, retryAfter: retryAfter, raw: string(data)}
 	var p problem
-	if err := json.Unmarshal(bytes.TrimSpace(data), &p); err == nil && p.Title != "" {
+	if err := json.Unmarshal(bytes.TrimSpace(data), &p); err == nil && (p.Title != "" || p.Type != "" || p.Status != 0) {
 		apiErr.problem = p
+		if apiErr.problem.Title == "" {
+			apiErr.problem.Title = http.StatusText(status)
+		}
 		if apiErr.problem.Status == 0 {
 			apiErr.problem.Status = status
 		}

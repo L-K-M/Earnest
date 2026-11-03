@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -109,6 +110,26 @@ func TestLoginDeviceFlowSlowDown(t *testing.T) {
 	}
 	if cfg.URL != srv.URL {
 		t.Fatalf("stored url = %q, want %q", cfg.URL, srv.URL)
+	}
+}
+
+func TestPollDeviceProblemWithoutTitle(t *testing.T) {
+	stubSleeps(t)
+	var polls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if polls.Add(1) == 1 {
+			w.Header().Set("Content-Type", "application/problem+json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"type":"/problems/authorization_pending","error":"authorization_pending"}`))
+			return
+		}
+		writeJSON(w, deviceToken{AccessToken: testToken})
+	}))
+	defer srv.Close()
+
+	token, err := pollDevice(t.Context(), newClient(srv.URL, ""), deviceResult{DeviceCode: "private-device-code", ExpiresIn: 600})
+	if err != nil || token != testToken || polls.Load() != 2 {
+		t.Fatalf("token=%q polls=%d error=%v", token, polls.Load(), err)
 	}
 }
 

@@ -217,7 +217,7 @@ func extractJSONFlag(args []string) ([]string, bool) {
 	out := make([]string, 0, len(args))
 	found := false
 	for _, arg := range args {
-		if !found && (arg == "--json" || arg == "-json") {
+		if arg == "--json" || arg == "-json" {
 			found = true
 			continue
 		}
@@ -290,6 +290,7 @@ func parseFlags(fs *flag.FlagSet, args []string, valueFlags map[string]bool) err
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
+			ordered = append(ordered, "--")
 			positional = append(positional, args[i+1:]...)
 			break
 		}
