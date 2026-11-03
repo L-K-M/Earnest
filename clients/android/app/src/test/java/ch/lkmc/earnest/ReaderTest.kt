@@ -27,6 +27,34 @@ class ReaderTest {
     }
     private val error: WebResourceError = android.webkit.TestWebResourceError()
 
+    @Test fun readerStateClearsLoadingOnFailureCancellationAndDeselection() = kotlinx.coroutines.runBlocking {
+        val state = ReaderLoadState()
+        state.load(2, "account") { throw java.io.IOException("offline") }
+        assertFalse(state.loading)
+        assertEquals("offline", state.error)
+        try {
+            state.load(2, "account") { throw kotlinx.coroutines.CancellationException("selection changed") }
+            fail("reader swallowed cancellation")
+        } catch (_: kotlinx.coroutines.CancellationException) {
+        }
+        assertFalse(state.loading)
+        state.load(null, "account") { error("deselection fetched content") }
+        assertNull(state.error)
+        assertNull(state.content)
+        state.load(2, "account") { ContentUrlResult("https://content.test/signed", null, null) }
+        assertEquals("https://content.test/signed", state.content?.url)
+        state.load(2, null) { error("signed-out reader fetched content") }
+        assertNull(state.content)
+        assertFalse(state.loading)
+    }
+
+    @Test fun missingAccountDoesNotLeaveReaderLoading() = kotlinx.coroutines.runBlocking {
+        val state = ReaderLoadState()
+        state.load(2, null) { error("unauthenticated reader fetched content") }
+        assertFalse("reader spinner remained active without an account", state.loading)
+        assertNull(state.content)
+    }
+
     @Test fun mainFrameNetworkFailureLoadsCachedHtmlOnce() {
         val view = createReaderWebView(ApplicationProvider.getApplicationContext<Context>(), url, "<p>cached</p>")
         view.loadUrl(url)

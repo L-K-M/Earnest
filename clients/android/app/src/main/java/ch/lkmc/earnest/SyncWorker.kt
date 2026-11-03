@@ -27,8 +27,7 @@ internal class SyncWorker(context: Context, params: WorkerParameters) : Coroutin
                 val api = EarnestApi(session.identity.server, session.token)
                 val repository = SyncRepository(api, engine)
                 cache.markAgentChangesStale()
-                repository.pull()
-                val rejected = repository.flush()
+                val rejected = repository.pull() + repository.flush()
                 rejected.forEach { Log.i(TAG, "server rejected ${it.opId}: ${it.status}") }
                 engine.expire(Instant.now()).forEach { Log.i(TAG, "expired ${it.operation.opId}") }
                 engine.flush()

@@ -35,6 +35,19 @@ class VectorGateTest {
     )
 
     @Test
+    fun subsetRejectsStringCoercionInBothDirections() {
+        val json = kotlinx.serialization.json.Json
+        for ((string, scalar) in listOf("\"true\"" to "true", "\"1\"" to "1", "\"null\"" to "null")) {
+            for ((expected, actual) in listOf(string to scalar, scalar to string)) {
+                val error = runCatching { subset(json.parseToJsonElement(expected), json.parseToJsonElement(actual), "value") }.exceptionOrNull()
+                assertTrue("subset accepted $expected as $actual", error is AssertionError)
+            }
+        }
+        subset(json.parseToJsonElement("1"), json.parseToJsonElement("1.0"), "number")
+        subset(json.parseToJsonElement("9007199254740993"), json.parseToJsonElement("9007199254740993"), "large integer")
+    }
+
+    @Test
     fun everyFixtureRunsItsClientSteps() {
         val directory = File("../../../testdata/vectors")
         val files = directory.listFiles { file -> file.extension == "json" }.orEmpty().sortedBy { it.name }
@@ -123,7 +136,9 @@ internal fun subset(expected: kotlinx.serialization.json.JsonElement, actual: ko
             val got = actual as? kotlinx.serialization.json.JsonPrimitive
                 ?: error("$path: expected primitive, got $actual")
             if (expected.isString || got.isString) {
-                if (expected.content != got.content) fail("$path: want $expected, got $got")
+                if (expected.isString != got.isString || expected.content != got.content) {
+                    fail("$path: want $expected, got $got")
+                }
                 return
             }
             val expectedNumber = expected.content.toBigDecimalOrNull()

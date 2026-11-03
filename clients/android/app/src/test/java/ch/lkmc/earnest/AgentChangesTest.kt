@@ -6,6 +6,12 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class AgentChangesTest {
+    @Test fun invalidCachedTimestampsDoNotBreakActivityFiltering() {
+        val valid = Activity(1, 9, "Agent", "state.updated", null, null, null, "g1", "2026-11-03T00:00:00Z", "revert")
+        val changes = listOf(valid.copy(id = 2, createdAt = "bad timestamp"), valid, valid.copy(id = 3, createdAt = "2020-01-01T00:00:00Z"))
+        assertEquals(listOf(valid), activitySince(changes, java.time.Instant.parse("2026-11-02T00:00:00Z")))
+    }
+
     @Test fun noticeNamesAgentArticleAndChangedRegisterAsPlainText() {
         val change = Activity(
             1, 9, "<b>Morning Agent</b>", "state.updated",

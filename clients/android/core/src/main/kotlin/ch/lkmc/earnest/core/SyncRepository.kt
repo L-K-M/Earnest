@@ -30,14 +30,20 @@ class SyncRepository(
 
     suspend fun bootstrap() {
         val cursor = api.bootstrap()
-        engine.beginBootstrap(cursor)
+        // Stage the replacement so an interrupted bootstrap retains its old cursor and cache.
+        val staged = SyncEngine(object : SyncStore {
+            private var data = engine.snapshot()
+            override fun load() = data
+            override fun save(snapshot: SyncSnapshot) { data = snapshot }
+        })
+        staged.beginBootstrap(cursor)
         for (kind in BOOTSTRAP_KINDS) {
             var afterId = 0L
             var afterPrincipal = 0L
             var afterView = ""
             do {
                 val page = api.bootstrapPage(kind, afterId, afterPrincipal, afterView)
-                page.items.orEmpty().forEach { engine.mergeBootstrap(resource(kind, it)) }
+                page.items.orEmpty().forEach { staged.mergeBootstrap(resource(kind, it)) }
                 afterId = page.nextId
                 afterPrincipal = page.nextPrincipal
                 afterView = page.nextView
@@ -46,10 +52,13 @@ class SyncRepository(
                 }
             } while (page.hasMore)
         }
+        engine.installBootstrap(staged.snapshot())
         engine.flush()
     }
 
-    suspend fun pull() {
+    /** Pulls pages and reports operations rejected during retention-gap recovery. */
+    suspend fun pull(): List<RejectedOperation> {
+        val rejected = mutableListOf<RejectedOperation>()
         if (engine.snapshot().cursor.generation.isEmpty()) bootstrap()
         while (true) {
             val cursor = engine.snapshot().cursor
@@ -58,13 +67,13 @@ class SyncRepository(
             } catch (error: ApiException) {
                 if (!error.isGone) throw error
                 bootstrap()
-                flush()
+                rejected += flush()
                 continue
             }
             val changes = page.changes.orEmpty()
             engine.applyPage(changes.map { change(it) }, page.next)
             engine.flush()
-            if (changes.isEmpty()) return
+            if (changes.isEmpty()) return rejected
         }
     }
 

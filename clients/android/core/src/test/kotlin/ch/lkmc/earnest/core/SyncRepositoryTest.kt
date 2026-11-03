@@ -33,6 +33,95 @@ class SyncRepositoryTest {
         SyncEngine(Store(SyncSnapshot(Revision("g1", 0), entries = entries, outbox = pending)))
 
     @Test
+    fun failedReplacementPreservesOldCacheAndOnlyRebasesIntentAfterCompletion() = runBlocking {
+        val pending = Pending(write = write("pending"), inFlight = true)
+        val original = SyncSnapshot(Revision("g1", 8), entries = listOf(CachedEntry(99, title = "Offline")), outbox = listOf(pending))
+        val store = Store(original)
+        val engine = SyncEngine(store)
+        var failPage = true
+        val repository = SyncRepository(api { request ->
+            val path = request.url.encodedPath
+            when {
+                path == "/v1/bootstrap" -> 200 to """{"generation":"g2","rev":5}"""
+                path == "/v1/bootstrap/state" && failPage -> throw java.io.IOException("offline")
+                path.startsWith("/v1/bootstrap/") -> 200 to """{"items":[],"next_id":0,"next_principal":0,"next_view":"","has_more":false}"""
+                else -> error("unexpected request $path")
+            }
+        }, engine)
+        try {
+            repository.bootstrap()
+            fail("bootstrap should fail")
+        } catch (_: java.io.IOException) {
+        }
+        assertEquals(original, engine.snapshot())
+        assertEquals(original, SyncEngine(store).snapshot())
+        failPage = false
+        repository.bootstrap()
+        assertEquals(Revision("g2", 5), SyncEngine(store).snapshot().cursor)
+        assertTrue(engine.snapshot().entries.isEmpty())
+        assertEquals(pending.copy(write = pending.operation.copy(base = Revision("g2", 0))), engine.snapshot().outbox.single())
+    }
+
+    @Test
+    fun interruptedBootstrapRetriesAfterReloadWithoutLosingIntent() = runBlocking {
+        for (failedKind in listOf("entries", "subscriptions", "state")) {
+            val pending = Pending(write = write("pending"))
+            val store = Store(SyncSnapshot(Revision("", 0), outbox = listOf(pending)))
+            var engine = SyncEngine(store)
+            var failPage = true
+            var starts = 0
+            val api = api { request ->
+                val path = request.url.encodedPath
+                when {
+                    path == "/v1/bootstrap" -> { starts++; 200 to """{"generation":"g1","rev":0}""" }
+                    path == "/v1/bootstrap/$failedKind" && failPage -> throw java.io.IOException("interrupted $failedKind")
+                    path.startsWith("/v1/bootstrap/") -> {
+                        val items = if (path.endsWith("/entries")) "[$detail]" else "[]"
+                        200 to """{"items":$items,"next_id":0,"next_principal":0,"next_view":"","has_more":false}"""
+                    }
+                    path == "/v1/changes" -> 200 to """{"changes":[],"next":{"generation":"g1","rev":0},"next_cursor":"g1:0"}"""
+                    else -> error("unexpected request $path")
+                }
+            }
+            try {
+                SyncRepository(api, engine).pull()
+                fail("bootstrap should be interrupted")
+            } catch (_: java.io.IOException) {
+            }
+            engine = SyncEngine(store)
+            failPage = false
+            SyncRepository(api, engine).pull()
+            assertEquals("bootstrap was not retried after $failedKind", 2, starts)
+            assertEquals("Headline", engine.entry(2)?.title)
+            assertEquals(listOf("pending"), engine.snapshot().outbox.map { it.operation.opId })
+        }
+    }
+
+    @Test
+    fun retentionRecoveryReturnsRejectedWritesAndRanges() = runBlocking {
+        for (range in listOf(false, true)) {
+            val operation = write("rejected", register = "seen", value = JsonPrimitive("seen"))
+            val pending = if (range) Pending(range = RangeWrite(operation, Scope("all"), 4)) else Pending(write = operation)
+            val engine = engine(listOf(pending))
+            var recovered = false
+            val api = api { request ->
+                when (val path = request.url.encodedPath) {
+                    "/v1/changes" -> if (!recovered) 410 to "{}" else 200 to """{"changes":[],"next":{"generation":"g1","rev":0},"next_cursor":"g1:0"}"""
+                    "/v1/bootstrap" -> { recovered = true; 200 to """{"generation":"g1","rev":0}""" }
+                    "/v1/state:through" -> 200 to json.encodeToString(RangeResult.serializer(), RangeResult("expired", 4, emptyList(), emptyList(), emptyList(), false))
+                    "/v1/state:batch" -> 200 to json.encodeToString(kotlinx.serialization.builtins.ListSerializer(Result.serializer()), listOf(Result("rejected", "gone", SyncEngine.initialState(1, 2), false)))
+                    else -> {
+                        check(path.startsWith("/v1/bootstrap/"))
+                        200 to """{"items":[],"next_id":0,"next_principal":0,"next_view":"","has_more":false}"""
+                    }
+                }
+            }
+            assertEquals(listOf(RejectedOperation("rejected", if (range) "expired" else "gone")), SyncRepository(api, engine).pull())
+            assertTrue(engine.snapshot().outbox.isEmpty())
+        }
+    }
+
+    @Test
     fun batchesCollectEachItemOnceAndStopBeforeRepeatedTarget() = runBlocking {
         val writes = listOf(write("one"), write("two", 3), write("three", value = JsonPrimitive("done")), write("four", register = "kept", value = JsonPrimitive(true)))
         val engine = engine(writes.map { Pending(write = it, inFlight = true) })

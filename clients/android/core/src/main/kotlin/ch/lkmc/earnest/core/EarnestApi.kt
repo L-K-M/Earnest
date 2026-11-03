@@ -1,7 +1,6 @@
 package ch.lkmc.earnest.core
 
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -9,12 +8,16 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.Response
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import kotlin.coroutines.resumeWithException
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
@@ -60,19 +63,32 @@ class EarnestApi(
 
     suspend fun delete(url: HttpUrl): JsonElement = request("DELETE", url, null)
 
-    private suspend fun request(method: String, url: HttpUrl, body: JsonElement?): JsonElement =
-        withContext(Dispatchers.IO) {
-            val requestBody = body?.let { it.toString().toRequestBody(JSON_MEDIA_TYPE) }
-            val builder = Request.Builder().url(url).method(method, requestBody)
-            token?.let { builder.header("Authorization", "Bearer $it") }
-            builder.header("Accept", "application/json")
-            http.newCall(builder.build()).execute().use { response ->
-                val text = response.body?.string().orEmpty()
-                if (!response.isSuccessful) throw problem(response.code, text)
-                if (text.isBlank()) return@withContext JsonNull
-                json.parseToJsonElement(text)
-            }
+    private suspend fun request(method: String, url: HttpUrl, body: JsonElement?): JsonElement {
+        val requestBody = body?.let { it.toString().toRequestBody(JSON_MEDIA_TYPE) }
+        val builder = Request.Builder().url(url).method(method, requestBody)
+        token?.let { builder.header("Authorization", "Bearer $it") }
+        builder.header("Accept", "application/json")
+        val call = http.newCall(builder.build())
+        return suspendCancellableCoroutine { continuation ->
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    continuation.resumeWithException(e)
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    val result = runCatching {
+                        response.use {
+                            val text = it.body?.string().orEmpty()
+                            if (!it.isSuccessful) throw problem(it.code, text)
+                            if (text.isBlank()) JsonNull else json.parseToJsonElement(text)
+                        }
+                    }
+                    continuation.resumeWith(result)
+                }
+            })
         }
+    }
 
     private fun problem(status: Int, text: String): ApiException {
         val code = runCatching {
@@ -198,10 +214,10 @@ class EarnestApi(
 
     suspend fun positions(): List<Position> = get(url("/v1/positions")).decode()
 
-    suspend fun position(view: String): Position = get(url("/v1/positions/$view")).decode()
+    suspend fun position(view: String): Position = get(url("/v1/positions") { it.addPathSegment(view) }).decode()
 
     suspend fun putPosition(view: String, body: PutPosition): Position =
-        put(url("/v1/positions/$view"), json.encodeToJsonElement(PutPosition.serializer(), body)).decode()
+        put(url("/v1/positions") { it.addPathSegment(view) }, json.encodeToJsonElement(PutPosition.serializer(), body)).decode()
 
     suspend fun todaysBriefs(): List<Annotation> = get(url("/v1/briefs/today")).decode()
 

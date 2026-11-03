@@ -96,7 +96,7 @@ class AppViewModel internal constructor(
                     sessionStartedAt = Instant.now()
                     changesSince = cache.preferences.getString(SessionCache.KEY_CHANGES_SINCE, null)
                         ?.takeIf { runCatching { Instant.parse(it) }.isSuccess } ?: Instant.EPOCH.toString()
-                    val changes = cache.agentChanges().filter { Instant.parse(it.createdAt) >= Instant.parse(changesSince) }
+                    val changes = activitySince(cache.agentChanges(), Instant.parse(changesSince))
                     _state.value = restoredState(syncEngine, session.identity.principalId).copy(
                         accountKey = session.identity.cacheKey,
                         cacheNotice = if (cache.legacyCacheRetained) "An older cache is retained on this device. Its unsent actions need manual recovery because their account is unknown." else null,
@@ -139,8 +139,7 @@ class AppViewModel internal constructor(
                     if (!isCurrent(session, cache)) return@withEngine
                     val repository = SyncRepository(api, syncEngine)
                     cache.markAgentChangesStale()
-                    repository.pull()
-                    val rejected = repository.flush()
+                    val rejected = repository.pull() + repository.flush()
                     val expired = syncEngine.expire(Instant.now()).map { it.operation.opId }
                     syncEngine.flush()
                     val briefs = runCatching { api.todaysBriefs() }.getOrNull()
@@ -164,11 +163,12 @@ class AppViewModel internal constructor(
                         cadences = restored.cadences,
                         todayEntryIds = restored.todayEntryIds,
                         agentChanges = changes,
-                        sessionAgentChanges = changes.filter { Instant.parse(it.createdAt) >= sessionStartedAt },
+                        sessionAgentChanges = activitySince(changes, sessionStartedAt),
                         agentChangesError = changesResult.exceptionOrNull()?.let { "Could not refresh agent changes: ${it.message}" },
                         briefs = cached,
                         principals = names.ifEmpty { cachedPrincipalNames(cache) },
                         rejected = rejected,
+                        error = if (rejected.isEmpty()) null else "Some reading actions could not be synced because they expired or their articles were removed.",
                         expired = expired,
                     )
                 }
@@ -190,12 +190,12 @@ class AppViewModel internal constructor(
         queue(entryId, SyncEngine.REGISTER_SEEN, JsonPrimitive(SyncEngine.VALUE_SEEN), SyncEngine.KIND_PASSIVE, "render")
     }
 
-    fun later(entryId: Long) {
-        queue(entryId, SyncEngine.REGISTER_SHELF, JsonPrimitive(SyncEngine.VALUE_LATER), SyncEngine.KIND_EXPLICIT, "later")
+    fun later(entryId: Long, onSaved: () -> Unit = {}) {
+        queue(entryId, SyncEngine.REGISTER_SHELF, JsonPrimitive(SyncEngine.VALUE_LATER), SyncEngine.KIND_EXPLICIT, "later", onSaved)
     }
 
-    fun done(entryId: Long) {
-        queue(entryId, SyncEngine.REGISTER_SHELF, JsonPrimitive(SyncEngine.VALUE_DONE), SyncEngine.KIND_EXPLICIT, "done")
+    fun done(entryId: Long, onSaved: () -> Unit = {}) {
+        queue(entryId, SyncEngine.REGISTER_SHELF, JsonPrimitive(SyncEngine.VALUE_DONE), SyncEngine.KIND_EXPLICIT, "done", onSaved)
     }
 
     fun keep(entryId: Long) {
@@ -214,42 +214,51 @@ class AppViewModel internal constructor(
         queue(entryId, SyncEngine.REGISTER_SHELF, JsonPrimitive(SyncEngine.VALUE_NONE), SyncEngine.KIND_EXPLICIT, "undo")
     }
 
-    private fun queue(entryId: Long, register: String, value: JsonElement, kind: String, action: String) {
+    private fun queue(entryId: Long, register: String, value: JsonElement, kind: String, action: String, onSaved: () -> Unit = {}) {
         viewModelScope.launch(Dispatchers.IO) {
             val cache = account ?: return@launch
             val session = activeSession ?: return@launch
-            cache.withEngine { syncEngine ->
-                if (!isCurrent(session, cache)) return@withEngine
-                val principal = cache.identity.principalId
-                if (principal == 0L || syncEngine.snapshot().cursor.generation.isEmpty()) {
-                    _state.value = _state.value.copy(error = "Still signing in; the action was not saved.")
-                    return@withEngine
+            try {
+                cache.withEngine { syncEngine ->
+                    if (!isCurrent(session, cache)) return@withEngine
+                    val principal = cache.identity.principalId
+                    if (principal == 0L || syncEngine.snapshot().cursor.generation.isEmpty()) {
+                        _state.value = _state.value.copy(error = "Still signing in; the action was not saved.")
+                        return@withEngine
+                    }
+                    val current = syncEngine.state(principal, entryId)
+                    val base = when (register) {
+                        SyncEngine.REGISTER_SHELF -> current.shelf.rev
+                        SyncEngine.REGISTER_KEPT -> current.kept.rev
+                        else -> current.seen.rev
+                    }
+                    val write = StateWrite(
+                        opId = "$action-$entryId-${java.util.UUID.randomUUID()}",
+                        principal = principal,
+                        entryId = entryId,
+                        register = register,
+                        value = value,
+                        base = Revision(syncEngine.snapshot().cursor.generation, base),
+                        occurredAt = Instant.now().toString(),
+                        kind = kind,
+                    )
+                    syncEngine.queue(write)
+                    syncEngine.flush()
+                    _state.value = _state.value.copy(
+                        snapshot = syncEngine.snapshot(),
+                        states = effectiveStates(syncEngine, principal),
+                        cadences = restoredState(syncEngine, principal).cadences,
+                        agentChanges = cache.agentChanges(),
+                        sessionAgentChanges = activitySince(cache.agentChanges(), sessionStartedAt),
+                    )
+                    onSaved()
                 }
-                val current = syncEngine.state(principal, entryId)
-                val base = when (register) {
-                    SyncEngine.REGISTER_SHELF -> current.shelf.rev
-                    SyncEngine.REGISTER_KEPT -> current.kept.rev
-                    else -> current.seen.rev
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (isCurrent(session, cache)) {
+                    _state.value = _state.value.copy(error = "Could not save the action: ${error.message}")
                 }
-                val write = StateWrite(
-                    opId = "$action-$entryId-${java.util.UUID.randomUUID()}",
-                    principal = principal,
-                    entryId = entryId,
-                    register = register,
-                    value = value,
-                    base = Revision(syncEngine.snapshot().cursor.generation, base),
-                    occurredAt = Instant.now().toString(),
-                    kind = kind,
-                )
-                syncEngine.queue(write)
-                syncEngine.flush()
-                _state.value = _state.value.copy(
-                    snapshot = syncEngine.snapshot(),
-                    states = effectiveStates(syncEngine, principal),
-                    cadences = restoredState(syncEngine, principal).cadences,
-                    agentChanges = cache.agentChanges(),
-                    sessionAgentChanges = cache.agentChanges().filter { Instant.parse(it.createdAt) >= sessionStartedAt },
-                )
             }
         }
     }
@@ -398,7 +407,7 @@ class AppViewModel internal constructor(
             .associate { it.id to syncEngine.state(principal, it.id) }
     }
 
-    private fun opId(action: String) = "$action-${System.currentTimeMillis()}"
+    private fun opId(action: String) = "$action-${java.util.UUID.randomUUID()}"
 
     companion object {
         private const val KEY_PRINCIPALS = "principal_names"

@@ -42,6 +42,26 @@ class SyncEngineTest {
     )
 
     @Test
+    fun bootstrapIgnoresStatesForUnknownAndDeletedEntries() {
+        val engine = SyncEngine(Store())
+        engine.mergeBootstrap(SyncChange(1, states = listOf(state())))
+        assertTrue("unknown entry retained bootstrap state", engine.snapshot().states.isEmpty())
+        engine.mergeBootstrap(SyncChange(2, entry = CachedEntry(2, deleted = true), states = listOf(state())))
+        assertTrue("deleted entry retained bootstrap state", engine.snapshot().states.isEmpty())
+    }
+
+    @Test
+    fun goneAcknowledgementRemovesAllPrincipalsStates() {
+        val engine = SyncEngine(Store())
+        engine.mergeBootstrap(SyncChange(1, entry = CachedEntry(2), states = listOf(state(), state().copy(principal = 9))))
+        engine.queue(write("gone", "seen"))
+        engine.acknowledge("g1", listOf(Result("gone", "gone", state(), false)))
+        assertTrue(engine.entry(2)!!.deleted)
+        assertTrue("gone entry retained state", engine.snapshot().states.isEmpty())
+        assertEquals(JsonPrimitive("unseen"), engine.state(1, 2).seen.value)
+    }
+
+    @Test
     fun coalescingPreservesDoneClearAndOldBase() {
         val engine = SyncEngine(Store())
         engine.mergeBootstrap(SyncChange(1, entry = CachedEntry(2, 3, 1, 1), states = listOf(state())))

@@ -10,7 +10,10 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.net.toUri
@@ -40,6 +43,34 @@ internal fun Reader(url: String?, cachedHtml: String?, modifier: Modifier = Modi
             onReset = null,
             onRelease = { it.destroy() },
         )
+    }
+}
+
+/** State for one selection; cancellation clears the previous load before a new one starts. */
+internal class ReaderLoadState {
+    var content by mutableStateOf<ContentUrlResult?>(null)
+        private set
+    var error by mutableStateOf<String?>(null)
+        private set
+    var loading by mutableStateOf(false)
+        private set
+
+    suspend fun load(selected: Long?, accountKey: String?, fetch: suspend (Long) -> ContentUrlResult?) {
+        content = null
+        error = null
+        loading = false
+        val id = selected ?: return
+        if (accountKey == null) return
+        loading = true
+        try {
+            content = fetch(id)
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
+        } catch (failure: Exception) {
+            error = failure.message ?: "Could not load this entry."
+        } finally {
+            loading = false
+        }
     }
 }
 
