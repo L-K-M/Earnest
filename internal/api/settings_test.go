@@ -106,12 +106,11 @@ func TestHTTPSettings(t *testing.T) {
 	})
 }
 
-// The production mount lives outside this task's assigned paths. With the
-// reviewed route patch applied (or a Go overlay), exercise the real router.
+// The production router mounts the settings routes.
 func TestHTTPSettingsProductionMount(t *testing.T) {
-	_, document := build(nil, nil, nil, "")
+	_, document := build(nil, nil, nil, "", nil)
 	if document.OpenAPI().Paths["/v1/settings"] == nil {
-		t.Skip("settings route mount awaits integration in internal/api/api.go")
+		t.Fatal("the router does not mount /v1/settings")
 	}
 
 	template := storetest.NewTemplate(t)
