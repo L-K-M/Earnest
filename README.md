@@ -5,7 +5,7 @@
 
 Earnest is a self-hosted RSS reader for your own server. You can read on the web and through compatible clients. Agents are governed actors with their own identity, read position, annotations, notification budget and revert log.
 
-The server provides a web client, Google Reader compatibility, MCP and a CLI for agents, a Mac client, and an optional LLM pipeline. An Android client is planned; this checkout does not contain one.
+The server provides a web client, Google Reader compatibility, MCP and a CLI for agents, Mac and Android clients, and an optional LLM pipeline.
 
 ## Quick start
 
