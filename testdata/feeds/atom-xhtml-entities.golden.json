@@ -1,0 +1,33 @@
+{
+  "feed": {
+    "title": "Feed \u0026 \u003cb\u003e text",
+    "site_url": "",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "urn:example:entities",
+      "url": "",
+      "title": "Title \u0026 \u003cb\u003e text bold",
+      "author": "",
+      "summary_html": "Summary \u0026amp; \u0026lt;b\u0026gt; text",
+      "content_html": "Content \u0026amp; \u0026lt;b\u0026gt; text \u003cb\u003ebold\u003c/b\u003e",
+      "language": "",
+      "identity": "7dd80618f43cc31e9c67156b4a8fc9517f82e7630fef680327f71a400f78d428",
+      "content_hash": "3cc18887156e79f54a1b98463d06fdafa3bad77ec9923afac165f1aea3877914"
+    },
+    {
+      "guid": "urn:example:text-only",
+      "url": "",
+      "title": "Plain \u0026 \u003cb\u003e text",
+      "author": "",
+      "summary_html": "",
+      "content_html": "Content \u0026amp; \u0026lt;b\u0026gt; text",
+      "language": "",
+      "identity": "218fd1a969c6a183ecb3c41dc45f22118fc9a51df01106e166697a1a86ac9dff",
+      "content_hash": "e6373e698e67ca21ac7228830d991915f0eab8e0024cd8cbd011069ac2d1611e"
+    }
+  ]
+}

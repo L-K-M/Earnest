@@ -140,6 +140,14 @@ func resolveHTML(s, base string) string {
 	if !looksLikeHTML(s) {
 		return escapeText(s)
 	}
+	return resolveHTMLFragment(s, base)
+}
+
+// resolveHTMLFragment accepts markup that may contain only escaped text.
+func resolveHTMLFragment(s, base string) string {
+	if len(s) > maxHTMLFieldBytes {
+		return s
+	}
 	nodes, err := parseFragment(s)
 	if err != nil {
 		return s

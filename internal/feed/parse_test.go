@@ -2,6 +2,7 @@ package feed
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -579,5 +580,32 @@ func TestParseHTTPCharsetOverridesDeclaration(t *testing.T) {
 	}
 	if feed.Title != "café" {
 		t.Fatalf("title = %q, want %q", feed.Title, "café")
+	}
+}
+
+func TestParseAtomXHTMLEntities(t *testing.T) {
+	data, err := os.ReadFile("../../testdata/feeds/atom-xhtml-entities.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	feed, err := Parse(data, ParseOptions{BaseURL: "https://example.test/feed.xml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := feed.Title, "Feed & <b> text"; got != want {
+		t.Errorf("feed title = %q, want %q", got, want)
+	}
+	it := feed.Items[0]
+	if got, want := it.Title, "Title & <b> text bold"; got != want {
+		t.Errorf("title = %q, want %q", got, want)
+	}
+	if got, want := it.SummaryHTML, "Summary &amp; &lt;b&gt; text"; got != want {
+		t.Errorf("summary = %q, want %q", got, want)
+	}
+	if got, want := it.ContentHTML, "Content &amp; &lt;b&gt; text <b>bold</b>"; got != want {
+		t.Errorf("content = %q, want %q", got, want)
+	}
+	if got, want := feed.Items[1].ContentHTML, "Content &amp; &lt;b&gt; text"; got != want {
+		t.Errorf("text-only content = %q, want %q", got, want)
 	}
 }

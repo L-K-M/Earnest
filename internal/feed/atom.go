@@ -102,7 +102,7 @@ func atomText(n *node) string {
 	typ := strings.ToLower(strings.TrimSpace(n.attrAny("type")))
 	switch typ {
 	case "xhtml", "application/xhtml+xml":
-		return plainTitle(unwrapXHTMLDiv(n))
+		return htmlText("<div>" + unwrapXHTMLDiv(n) + "</div>")
 	default:
 		return plainTitle(textContent(n))
 	}
@@ -191,7 +191,7 @@ func atomMarkup(n *node, base string) string {
 	case "html", "text/html":
 		return resolveHTML(textContent(n), base)
 	case "xhtml", "application/xhtml+xml":
-		return resolveHTML(unwrapXHTMLDiv(n), base)
+		return resolveHTMLFragment(unwrapXHTMLDiv(n), base)
 	case "", "text", "text/plain":
 		return escapeText(textContent(n))
 	default:
