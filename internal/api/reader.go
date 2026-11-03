@@ -80,11 +80,22 @@ type entriesInput struct {
 	BeforeSeq      uint64                `query:"before_seq"`
 	Limit          int                   `query:"limit" default:"50" minimum:"1" maximum:"200"`
 	Direction      service.PageDirection `query:"direction" enum:"forward,backward"`
+	Group          string                `query:"group" enum:"cluster"`
 	Cursor         string                `query:"cursor" doc:"Exclusive seq cursor returned by the preceding page, preserving the same filters and direction."`
 }
 type entriesPage struct {
-	Entries    []entry `json:"entries"`
-	NextCursor string  `json:"next_cursor,omitempty"`
+	Entries    []entry        `json:"entries"`
+	Status     string         `json:"status,omitempty"`
+	Groups     []clusterGroup `json:"groups,omitempty"`
+	NextCursor string         `json:"next_cursor,omitempty"`
+}
+
+// clusterGroup annotates one listed entry with its cluster identity and how
+// many other visible members share it. Unclustered entries carry zero values.
+type clusterGroup struct {
+	Entry     entry `json:"entry"`
+	ClusterID int64 `json:"cluster_id"`
+	AlsoIn    int   `json:"also_in"`
 }
 
 func (s *server) readerRoutes() {
@@ -147,7 +158,30 @@ func (s *server) readerRoutes() {
 				in.AfterSeq = seq
 			}
 		}
-		entries, err := s.svc.Entries(ctx, actor(ctx), service.EntryFilter{View: in.View, Cadence: in.Cadence, SubscriptionID: in.SubscriptionID, FolderID: in.FolderID, LabelID: in.LabelID, PrincipalID: in.PrincipalID, UnreadOnly: in.UnreadOnly, AfterSeq: in.AfterSeq, BeforeSeq: in.BeforeSeq, Limit: in.Limit, Direction: in.Direction})
+		filter := service.EntryFilter{View: in.View, Cadence: in.Cadence, SubscriptionID: in.SubscriptionID, FolderID: in.FolderID, LabelID: in.LabelID, PrincipalID: in.PrincipalID, UnreadOnly: in.UnreadOnly, AfterSeq: in.AfterSeq, BeforeSeq: in.BeforeSeq, Limit: in.Limit, Direction: in.Direction}
+		if in.Group == "cluster" {
+			groups, err := s.svc.ClusterGroups(ctx, actor(ctx), filter)
+			if err != nil {
+				return entriesPage{}, pipelineErr(err)
+			}
+			entries := make([]service.Entry, 0, len(groups))
+			page := entriesPage{Groups: make([]clusterGroup, 0, len(groups))}
+			status, err := s.svc.PipelineStatus(ctx, actor(ctx))
+			if err != nil {
+				return entriesPage{}, err
+			}
+			page.Status = status.Embed
+			for _, g := range groups {
+				entries = append(entries, g.Entry)
+				page.Groups = append(page.Groups, clusterGroup{Entry: toEntry(g.Entry), ClusterID: g.ClusterID, AlsoIn: g.AlsoIn})
+			}
+			page.Entries = toEntries(entries)
+			if len(groups) == in.Limit {
+				page.NextCursor = strconv.FormatUint(entries[len(entries)-1].Seq, 10)
+			}
+			return page, nil
+		}
+		entries, err := s.svc.ClusterEntries(ctx, actor(ctx), filter)
 		page := entriesPage{Entries: toEntries(entries)}
 		if len(entries) == in.Limit {
 			page.NextCursor = strconv.FormatUint(entries[len(entries)-1].Seq, 10)

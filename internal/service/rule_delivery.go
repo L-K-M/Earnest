@@ -47,6 +47,9 @@ func (s *Service) EmitEntryMatched(ctx context.Context, user, webhookID, feedID,
 }
 
 func ruleMatchedText(p RulePredicate, e ruleEntry) string {
+	if p.Type == RuleSemantic && e.SemanticMatches[p.Value] {
+		return passage(e.Body)
+	}
 	if p.Type == RuleKeyword {
 		for _, term := range p.Terms {
 			if strings.Contains(strings.ToLower(e.Title), strings.ToLower(term)) || strings.Contains(strings.ToLower(e.Body), strings.ToLower(term)) {

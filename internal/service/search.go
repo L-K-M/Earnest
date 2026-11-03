@@ -9,9 +9,10 @@ import (
 
 // SearchFilter narrows search to a subscription or folder. Zero selects all.
 type SearchFilter struct {
-	SubscriptionID int64 `json:"subscription_id,omitempty"`
-	FolderID       int64 `json:"folder_id,omitempty"`
-	Limit          int   `json:"limit,omitempty"`
+	Mode           SearchMode `json:"mode,omitempty"`
+	SubscriptionID int64      `json:"subscription_id,omitempty"`
+	FolderID       int64      `json:"folder_id,omitempty"`
+	Limit          int        `json:"limit,omitempty"`
 }
 
 // SearchCursor identifies the last result in a descending rank and sequence page.
@@ -46,6 +47,12 @@ func (s *Service) Search(ctx context.Context, a Actor, query string, f SearchFil
 	}
 	if cursor != nil && (math.IsNaN(cursor.Rank) || math.IsInf(cursor.Rank, 0) || cursor.Rank < 0 || cursor.Seq <= 0 || cursor.AnnotationID < 0) {
 		return nil, fmt.Errorf("search cursor: %w", ErrInvalid)
+	}
+	if f.Mode != "" && f.Mode != SearchFullText && f.Mode != SearchHybrid {
+		return nil, ErrInvalid
+	}
+	if f.Mode == SearchHybrid {
+		return s.hybridSearch(ctx, a, query, f, cursor)
 	}
 	limit := f.Limit
 	if limit == 0 {

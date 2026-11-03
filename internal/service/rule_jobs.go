@@ -104,6 +104,12 @@ func (s *Service) finishRuleJob(ctx context.Context, job *claimedRuleJob, cause 
 		if !exists {
 			return nil
 		}
+		if pipelineWaiting(cause) {
+			if _, err := tx.Exec(ctx, `UPDATE jobs SET attempts=greatest(attempts-1,0),run_at=$2,locked_until=NULL,last_error='pipeline paused' WHERE id=$1`, job.id, s.now().UTC().Add(ruleJobRetryDelay)); err != nil {
+				return fmt.Errorf("pause rule job: %w", err)
+			}
+			return nil
+		}
 		if cause == nil {
 			_, err := tx.Exec(ctx, `DELETE FROM jobs WHERE id=$1`, job.id)
 			if err != nil {
