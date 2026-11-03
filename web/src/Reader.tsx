@@ -48,7 +48,7 @@ export function Reader({entry, subscription, settings, actions, onClose, onSetti
     <details><summary>Typography for this feed</summary><form onSubmit={event => {event.preventDefault();void override(overrideDraft)}}><Typography value={overrideDraft} onChange={value => setOverrideDraft({...overrideDraft, ...value})} /><button disabled={savingOverride}>Save for this feed</button></form></details>
     {content.error && <p role="alert">{content.error.message} <button onClick={() => { void content.refetch() }}>Try again</button></p>}
     {online && content.isPending && <p role="status">Opening article…</p>}
-    {!online || content.isError ? <OfflineArticle entryID={entry.id}/> : content.data && renderBody(readerURL(content.data.url, typography, dark))}
+    {(!online && !content.data) || content.isError ? <OfflineArticle entryID={entry.id}/> : content.data && renderBody(readerURL(content.data.url, typography, dark))}
     {onOpen && online && <MoreLikeThis key={entry.id} entryID={entry.id} onOpen={onOpen}/>}
   </article>
 }

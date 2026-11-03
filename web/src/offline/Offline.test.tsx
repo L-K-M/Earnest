@@ -2,10 +2,43 @@
 import {afterEach,expect,it,vi} from 'vitest'
 import {cleanup,fireEvent,render,screen} from '@testing-library/react'
 import {QueryClient,QueryClientProvider} from '@tanstack/react-query'
-import {OfflineArticle,OfflineStatus,registerOffline} from './Offline'
+import {MessageChannel} from 'node:worker_threads'
+import {OfflineArticle,OfflineStatus,registerOffline,clearOffline} from './Offline'
 import {request} from '../request'
 vi.mock('../request',() => ({request:vi.fn()}))
-afterEach(() => {cleanup();vi.restoreAllMocks();vi.resetAllMocks()})
+afterEach(() => {cleanup();vi.restoreAllMocks();vi.resetAllMocks();vi.unstubAllGlobals();vi.useRealTimers();delete (navigator as unknown as {serviceWorker?: unknown}).serviceWorker})
+
+it.each([null,{scriptURL:'https://reader.test/push-worker.js'}])('fences an active offline worker before deleting cache with controller %j',async controller => {
+  vi.stubGlobal('MessageChannel',MessageChannel)
+  let acknowledge = () => undefined as void
+  const postMessage = vi.fn((_message,ports) => {acknowledge=() => {ports[0].postMessage('cleared');ports[0].close()}})
+  Object.defineProperty(navigator,'serviceWorker',{configurable:true,value:{controller,getRegistration:vi.fn().mockResolvedValue({active:{scriptURL:'https://reader.test/offline-worker.js',postMessage}})}})
+  const remove = vi.fn().mockResolvedValue(true)
+  vi.stubGlobal('caches',{delete:remove})
+  const clearing = clearOffline()
+  await Promise.resolve()
+  expect(postMessage).toHaveBeenCalledWith({type:'earnest:clear-offline'},expect.any(Array))
+  expect(remove).not.toHaveBeenCalled()
+  acknowledge()
+  await clearing
+  expect(remove).toHaveBeenCalledWith('earnest-reading-v1')
+})
+
+it('refuses to finish clearing if the active worker does not acknowledge',async () => {
+  vi.useFakeTimers()
+  const close = vi.fn()
+  vi.stubGlobal('MessageChannel',class {port1={close,onmessage:null};port2={}})
+  Object.defineProperty(navigator,'serviceWorker',{configurable:true,value:{controller:null,getRegistration:vi.fn().mockResolvedValue({active:{scriptURL:'https://reader.test/offline-worker.js',postMessage:vi.fn()}})}})
+  const remove = vi.fn()
+  vi.stubGlobal('caches',{delete:remove})
+  const clearing = clearOffline().then(() => null,error => error as Error)
+  await vi.advanceTimersByTimeAsync(5000)
+  expect(await clearing).toBeInstanceOf(Error)
+  expect((await clearing)?.message).toContain('Retry sign out')
+  expect(close).toHaveBeenCalledOnce()
+  expect(remove).not.toHaveBeenCalled()
+})
+
 it('quietly reports connectivity changes',() => {
   const online = vi.spyOn(navigator,'onLine','get')
   online.mockReturnValue(true)

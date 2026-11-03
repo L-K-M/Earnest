@@ -26,6 +26,19 @@ async function search() {
   fireEvent.click(screen.getByRole('button',{name:'Search'}))
   return screen.findByRole('region',{name:'Agent note matches'})
 }
+it('reports a pipeline lookup failure while leaving full-text search usable',async () => {
+  vi.mocked(request).mockImplementation(async path => {
+    if (path === '/v1/pipeline') throw new Error('Pipeline unavailable')
+    return {matches:[article]}
+  })
+  render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><Search onOpen={vi.fn()}/></QueryClientProvider>)
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent','Could not check whether AI search features are available.')
+  fireEvent.change(screen.getByLabelText('Search your feeds'),{target:{value:'funding'}})
+  fireEvent.click(screen.getByRole('button',{name:'Search'}))
+  expect(await screen.findByRole('button',{name:'Funding news'})).toBeTruthy()
+  expect(request).toHaveBeenCalledWith('/v1/search?q=funding&mode=fulltext',expect.anything())
+})
+
 it('separates inert agent notes and labels their author, opens publisher entries',async () => {
   const {onOpen} = mount('disabled')
   const notes = await search()
