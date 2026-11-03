@@ -15,6 +15,7 @@ import { formatTime, parseTime, ZERO_TIME } from "./time.js";
 import {
   emptyEntry,
   entryAgeSeconds,
+  errGeneration,
   errInvalid,
   stateGoogleRead,
   stateUnread,
@@ -26,8 +27,10 @@ import {
   type OperationKind,
   type Position,
   type RangeWrite,
+  type RangeResult,
   type RegisterName,
   type Revision,
+  type Result,
   type State,
   type Status,
   type SyncObject,
@@ -40,6 +43,7 @@ import {
   decodeObject,
   decodePosition,
   decodeScope,
+  decodeState,
   decodeValue,
   encodeChange,
   encodeEntry,
@@ -88,6 +92,9 @@ export const VECTOR_FILES: readonly string[] = [
   "33-restore-release-safety.json",
   "34-integer-identity.json",
   "35-batch-causal-shelf.json",
+  "36-ack-out-of-order-merge.json",
+  "37-ack-stale-generation.json",
+  "38-independent-register-merge.json",
 ];
 
 const DEFAULT_RECEIPT = Date.parse("2026-11-02T12:00:00Z");
@@ -103,6 +110,7 @@ const STEP_KEYS = new Set([
   "actor",
   "token",
   "entry",
+  "state",
   "write",
   "writes",
   "scope",
@@ -128,6 +136,8 @@ const SCOPE_KEYS = new Set(["kind", "ids"]);
 const OBJECT_KEYS = new Set(["kind", "id", "principal", "entry_id", "folder_id", "name", "rev", "deleted"]);
 const POSITION_KEYS = new Set(["principal", "view", "seq", "rev"]);
 const REVISION_KEYS = new Set(["generation", "rev"]);
+const STATE_KEYS = new Set(["principal", "entry_id", "seen", "shelf", "kept", "state_rev"]);
+const REGISTER_KEYS = new Set(["value", "rev", "occurred_at", "actor", "source"]);
 
 function checkKeys(o: JsonObject, allowed: Set<string>, what: string): void {
   for (const k of Object.keys(o)) {
@@ -161,6 +171,19 @@ const asWrite = (w: StepWrite): Write => w as Write;
 interface Captured {
   changes: Change[];
   next: Revision;
+}
+
+type SavedResponse =
+  | { kind: "write"; generation: string; results: Result[] }
+  | { kind: "range"; generation: string; opId: string; result: RangeResult };
+
+function stepState(v: JsonValue | undefined): State {
+  const o = asObj(v ?? {}, "state");
+  checkKeys(o, STATE_KEYS, "state");
+  for (const key of ["seen", "shelf", "kept"]) {
+    if (o[key] !== undefined) checkKeys(asObj(o[key], `state.${key}`), REGISTER_KEYS, `state.${key}`);
+  }
+  return decodeState(o);
 }
 
 const zeroNotification = (): JsonValue => ({ actor: 0n, op_id: "", generation: "", status: "", replay: false, attempted_at: formatTime(ZERO_TIME) });
@@ -249,6 +272,7 @@ class Runner {
   private snapshots = new Map<string, Model>();
   private prepared = new Map<string, Entry>();
   private pages = new Map<string, Captured>();
+  private responses = new Map<string, SavedResponse>();
 
   private model(server: string): Model {
     let m = this.models.get(server);
@@ -454,6 +478,36 @@ class Runner {
           c.queueRange(rangeOf());
           return {};
         }, {});
+      }
+      case "client_merge_state": {
+        if (c === undefined) return fail(null, errInvalid());
+        c.mergeState(stepState(s.state));
+        return ok({});
+      }
+      case "client_submit": {
+        if (c === undefined) return fail(null, errInvalid());
+        const pending = c.outbox()[0];
+        if (pending === undefined) return fail(null, errInvalid());
+        return this.attempt(() => {
+          const generation = c.getCursor().generation;
+          if (pending.kind === "range") {
+            const result = m.through(ctx, pending.range);
+            this.responses.set(name, { kind: "range", generation, opId: pending.range.write.opId, result });
+            return encodeRangeResult(result);
+          }
+          const results = m.batch(ctx, [pending.write]);
+          this.responses.set(name, { kind: "write", generation, results });
+          return encodeResult(results[0]);
+        }, null);
+      }
+      case "client_ack": {
+        if (c === undefined) return fail(null, errInvalid());
+        const saved = this.responses.get(name);
+        if (saved === undefined) return fail(null, errInvalid());
+        const outcome = saved.kind === "range"
+          ? c.acknowledgeRange(saved.generation, saved.opId, saved.result)
+          : c.acknowledge(saved.generation, saved.results);
+        return outcome.applied ? ok({}) : fail({}, errGeneration());
       }
       case "client_flush": {
         if (c === undefined) return fail(null, errInvalid());

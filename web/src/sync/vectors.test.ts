@@ -25,6 +25,30 @@ describe.each(VECTOR_FILES)("%s", (file) => {
 
 const MINIMAL = { version: 1, name: "x", decision: "x", final: [{ op: "assert_log", expect: {} }] };
 
+it("submits and acknowledges ranges with their request generation", () => {
+  const v = {
+    ...MINIMAL,
+    setup: [
+      { op: "ingest", entry: { id: 1, subscription_id: 1 }, expect: {} },
+      { op: "checkpoint", name: "snap", expect: {} },
+      { op: "bootstrap_begin", device: "phone", expect: {} },
+      { op: "bootstrap_page", device: "phone", expect: {} },
+    ],
+    operations: [
+      { op: "client_queue_range", device: "phone", write: { op_id: "first" }, scope: { kind: "all" }, expect: {} },
+      { op: "client_submit", device: "phone", name: "first", expect: { status: "applied" } },
+      { op: "client_ack", device: "phone", name: "first", expect: {} },
+      { op: "client_queue_range", device: "phone", write: { op_id: "second" }, scope: { kind: "all" }, expect: {} },
+      { op: "client_submit", device: "phone", name: "second", expect: { status: "applied" } },
+      { op: "restore", name: "snap", generation: "g2", expect: {} },
+      { op: "bootstrap_begin", device: "phone", expect: {} },
+      { op: "client_ack", device: "phone", name: "second", error: "generation", expect: {} },
+    ],
+    final: [{ op: "assert_client", device: "phone", expect: { outbox_size: 1 } }],
+  };
+  expect(() => runVector("range", JSON.stringify(v))).not.toThrow();
+});
+
 describe("harness rejection", () => {
   it("rejects an unregistered vector name in the manifest check", () => {
     expect(VECTOR_FILES).not.toContain("99-unknown.json");
