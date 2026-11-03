@@ -159,8 +159,13 @@ func (c *Content) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		measure = n
 	}
 	font := "Georgia,serif"
-	if r.URL.Query().Get("font") == "sans" {
+	spacing := ""
+	switch r.URL.Query().Get("font") {
+	case "sans":
 		font = "system-ui,sans-serif"
+	case "dyslexic":
+		font = "Verdana,Arial,sans-serif"
+		spacing = "letter-spacing:.05em;word-spacing:.12em;"
 	}
 	bg, fg := "#fff", "#202020"
 	switch r.URL.Query().Get("theme") {
@@ -171,7 +176,7 @@ func (c *Content) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "eink":
 		bg, fg = "#fff", "#000"
 	}
-	css := fmt.Sprintf("body{max-width:%dch;margin:2rem auto;padding:0 1rem;font:1.1rem/1.65 %s;background:%s;color:%s;overflow-wrap:anywhere}img{max-width:100%%;height:auto}a{color:inherit}pre{overflow:auto}", measure, font, bg, fg)
+	css := fmt.Sprintf("body{max-width:%dch;margin:2rem auto;padding:0 1rem;font:1.1rem/1.65 %s;background:%s;color:%s;%soverflow-wrap:anywhere}img{max-width:100%%;height:auto}a{color:inherit}pre{overflow:auto}", measure, font, bg, fg, spacing)
 	hash := sha256.Sum256([]byte(css))
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src "+c.origin+"; style-src 'sha256-"+base64.StdEncoding.EncodeToString(hash[:])+"'; base-uri 'none'; form-action 'none'")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

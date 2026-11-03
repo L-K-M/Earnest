@@ -1,0 +1,344 @@
+import {useCallback, useEffect, useState} from 'react'
+import {
+  CADENCES, EXTRACT_MODES, groupByFolder, isFirehose, newOp, normalizeFeedURLInput, parseCredentialHeaders, summarizeImport,
+  createFolder, createMute, deleteFolder, deleteMute, explainHealth, exportOPML, importOPML, readFileText,
+  listFolders, listMutes, listSubscriptions, patchSubscription, refreshSubscription, renameFolder, subscribe, unsubscribe,
+  type Folder, type Mute, type OPMLResult, type SubscribeBody, type Subscription, type SubscriptionPatch,
+} from './feeds'
+
+function message(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback
+}
+
+type Act = (work: () => Promise<unknown>, note?: string) => Promise<boolean>
+
+export function Feeds({onChanged}: {onChanged: () => void}) {
+  const [subs, setSubs] = useState<Subscription[] | null>(null)
+  const [folders, setFolders] = useState<Folder[]>([])
+  const [mutes, setMutes] = useState<Mute[]>([])
+  const [loadError, setLoadError] = useState('')
+  const [actionError, setActionError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const load = useCallback(async () => {
+    const [nextSubs, nextFolders, nextMutes] = await Promise.all([listSubscriptions(), listFolders(), listMutes()])
+    setSubs(nextSubs ?? [])
+    setFolders(nextFolders ?? [])
+    setMutes(nextMutes ?? [])
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    load().catch(error => { if (active) setLoadError(message(error, 'Could not load feeds.')) })
+    return () => { active = false }
+  }, [load])
+
+  const act: Act = useCallback(async (work, note = '') => {
+    setBusy(true)
+    setActionError('')
+    setNotice('')
+    try {
+      await work()
+      await load()
+      onChanged()
+      if (note) setNotice(note)
+      return true
+    } catch (error) {
+      setActionError(message(error, 'The change did not go through.'))
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }, [load, onChanged])
+
+  function retry() {
+    setLoadError('')
+    load().catch(error => setLoadError(message(error, 'Could not load feeds.')))
+  }
+
+  if (subs === null) {
+    return loadError
+      ? <section aria-label="Feeds"><p role="alert">{loadError} <button onClick={retry}>Try again</button></p></section>
+      : <section aria-label="Feeds"><p role="status">Loading feeds…</p></section>
+  }
+  return <div className="feeds">
+    {actionError && <p role="alert">{actionError}</p>}
+    {notice && <p role="status">{notice}</p>}
+    <SubscribeForm folders={folders} busy={busy} act={act} />
+    <OPMLTools busy={busy} act={act} />
+    <FolderSection folders={folders} busy={busy} act={act} />
+    <SubscriptionSection subs={subs} folders={folders} busy={busy} act={act} />
+    <MuteSection mutes={mutes} busy={busy} act={act} />
+  </div>
+}
+
+function SubscribeForm({folders, busy, act}: {folders: Folder[]; busy: boolean; act: Act}) {
+  const [url, setURL] = useState('')
+  const [title, setTitle] = useState('')
+  const [folderID, setFolderID] = useState(0)
+  const [cadence, setCadence] = useState('today')
+  const [extract, setExtract] = useState('')
+  const [isPrivate, setPrivate] = useState(false)
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [headerText, setHeaderText] = useState('')
+  const [error, setError] = useState('')
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const normalized = normalizeFeedURLInput(url)
+    if (!normalized) {
+      setError('That does not look like a feed address. Give the full URL, starting with https://.')
+      return
+    }
+    const headers = parseCredentialHeaders(headerText)
+    if (headers === null) {
+      setError('Write extra headers as one “Name: value” pair per line.')
+      return
+    }
+    let credentials: SubscribeBody['credentials']
+    if (isPrivate) {
+      if (!username && !password && Object.keys(headers).length === 0) {
+        setError('A private feed needs a username and password, or at least one header.')
+        return
+      }
+      credentials = {username, password, ...(Object.keys(headers).length ? {headers} : {})}
+    }
+    setError('')
+    const body: SubscribeBody = {
+      url: normalized, cadence, op_id: newOp(),
+      ...(title.trim() ? {title: title.trim()} : {}),
+      ...(folderID ? {folder_id: folderID} : {}),
+      ...(extract ? {extract} : {}),
+      ...(credentials ? {credentials} : {}),
+    }
+    if (await act(() => subscribe(body), 'Subscribed. The first fetch is on its way.')) {
+      setURL('')
+      setTitle('')
+      setUsername('')
+      setPassword('')
+      setHeaderText('')
+    }
+  }
+
+  return <section aria-labelledby="subscribe-heading"><h3 id="subscribe-heading">Subscribe</h3>
+    <form onSubmit={submit}>
+      <label>Feed or site URL<input type="url" value={url} onChange={e => setURL(e.target.value)} placeholder="https://example.com/feed.xml" required /></label>
+      <label>Title (optional)<input value={title} onChange={e => setTitle(e.target.value)} placeholder="Leave empty to use the feed’s own title" /></label>
+      <label>Folder<select value={folderID} onChange={e => setFolderID(Number(e.target.value))}><option value={0}>No folder</option>{folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
+      <fieldset><legend>Cadence</legend>{CADENCES.map(option => <label key={option.value}><input type="radio" name="cadence" checked={cadence === option.value} onChange={() => setCadence(option.value)} /> {option.label}: {option.hint}</label>)}</fieldset>
+      <label>Full text<select value={extract} onChange={e => setExtract(e.target.value)}>{EXTRACT_MODES.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+      <details><summary>Private feed credentials</summary>
+        <label><input type="checkbox" checked={isPrivate} onChange={e => setPrivate(e.target.checked)} /> This feed needs credentials</label>
+        {isPrivate && <>
+          <label>Username<input value={username} onChange={e => setUsername(e.target.value)} autoComplete="off" /></label>
+          <label>Password<input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="off" /></label>
+          <label>Extra headers (optional)<textarea value={headerText} onChange={e => setHeaderText(e.target.value)} placeholder={'Authorization: Bearer …'} rows={2} /></label>
+          <p>Credentials are stored encrypted and are never shown again.</p>
+        </>}
+      </details>
+      <button disabled={busy}>Subscribe</button>
+      {error && <p role="alert">{error}</p>}
+    </form>
+  </section>
+}
+
+function OPMLTools({busy, act}: {busy: boolean; act: Act}) {
+  const [file, setFile] = useState<File | null>(null)
+  const [report, setReport] = useState<OPMLResult[] | null>(null)
+  const [error, setError] = useState('')
+  const [working, setWorking] = useState(false)
+
+  async function upload() {
+    if (!file) return
+    setWorking(true)
+    setError('')
+    try {
+      const results = await importOPML(await readFileText(file))
+      setReport(results ?? [])
+      await act(async () => undefined, 'OPML imported.')
+    } catch (cause) {
+      setError(message(cause, 'Could not import that OPML file.'))
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  async function download() {
+    setWorking(true)
+    setError('')
+    try {
+      const text = await exportOPML()
+      const url = URL.createObjectURL(new window.Blob([text], {type: 'text/x-opml'}))
+      const link = document.createElement('a')
+      link.href = url
+      link.download = 'earnest-subscriptions.opml'
+      link.click()
+      URL.revokeObjectURL(url)
+    } catch (cause) {
+      setError(message(cause, 'Could not export OPML.'))
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  const summary = report && summarizeImport(report)
+  return <section aria-labelledby="opml-heading"><h3 id="opml-heading">OPML</h3>
+    <label>Import a subscription file<input type="file" accept=".opml,.xml,text/x-opml,application/xml,text/xml" onChange={e => setFile(e.target.files?.[0] ?? null)} /></label>
+    <button disabled={busy || working || !file} onClick={() => { void upload() }}>Import</button>
+    <button disabled={busy || working} onClick={() => { void download() }}>Export subscriptions</button>
+    {error && <p role="alert">{error}</p>}
+    {summary && <div role="status">
+      <p>{summary.feeds} {summary.feeds === 1 ? 'feed' : 'feeds'} subscribed{summary.folders > 0 && `, ${summary.folders} ${summary.folders === 1 ? 'folder' : 'folders'} created`}{summary.deferred > 0 && '. Their first fetches run in the background.'}</p>
+      {summary.failed.length > 0 && <p role="alert">{summary.failed.length} could not be imported: {summary.failed.join('; ')}</p>}
+    </div>}
+  </section>
+}
+
+function FolderSection({folders, busy, act}: {folders: Folder[]; busy: boolean; act: Act}) {
+  const [name, setName] = useState('')
+  const [editing, setEditing] = useState<number | null>(null)
+  const [draft, setDraft] = useState('')
+  const [error, setError] = useState('')
+
+  async function add(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!name.trim()) {
+      setError('Give the folder a name.')
+      return
+    }
+    setError('')
+    if (await act(() => createFolder(name.trim()), 'Folder created.')) setName('')
+  }
+
+  return <section aria-labelledby="folders-heading"><h3 id="folders-heading">Folders</h3>
+    <form onSubmit={add}>
+      <label>New folder<input value={name} onChange={e => setName(e.target.value)} required /></label>
+      <button disabled={busy}>Add folder</button>
+      {error && <p role="alert">{error}</p>}
+    </form>
+    {folders.length === 0 && <p>No folders yet.</p>}
+    <ul>{folders.map(folder => <li key={folder.id}>
+      {editing === folder.id
+        ? <form onSubmit={event => { event.preventDefault(); const renamed = draft.trim(); if (renamed) void act(() => renameFolder(folder.id, renamed), 'Folder renamed.').then(ok => { if (ok) setEditing(null) }) }}>
+            <label>Name<input value={draft} onChange={e => setDraft(e.target.value)} required /></label>
+            <button disabled={busy}>Save</button><button type="button" onClick={() => setEditing(null)}>Cancel</button>
+          </form>
+        : <>{folder.name} <button disabled={busy} onClick={() => { setEditing(folder.id); setDraft(folder.name) }}>Rename</button>
+          <button disabled={busy} onClick={() => { if (window.confirm(`Delete folder “${folder.name}”? Its feeds move to No folder.`)) void act(() => deleteFolder(folder.id), 'Folder deleted.') }}>Delete</button></>}
+    </li>)}</ul>
+  </section>
+}
+
+function SubscriptionSection({subs, folders, busy, act}: {subs: Subscription[]; folders: Folder[]; busy: boolean; act: Act}) {
+  const groups = groupByFolder(subs, folders)
+  if (subs.length === 0) return <section aria-labelledby="subscriptions-heading"><h3 id="subscriptions-heading">Subscriptions</h3><p>No subscriptions yet.</p></section>
+  return <section aria-labelledby="subscriptions-heading"><h3 id="subscriptions-heading">Subscriptions</h3>
+    {groups.map(group => group.subscriptions.length === 0 ? null : <div key={group.folder?.id ?? 0}>
+      {group.folder && <h4>{group.folder.name}</h4>}
+      <ul>{group.subscriptions.map(sub => <SubscriptionRow key={sub.id} sub={sub} folders={folders} busy={busy} act={act} />)}</ul>
+    </div>)}
+  </section>
+}
+
+function when(iso: string): string {
+  const date = new Date(iso)
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString()
+}
+
+function SubscriptionRow({sub, folders, busy, act}: {sub: Subscription; folders: Folder[]; busy: boolean; act: Act}) {
+  const [title, setTitle] = useState(sub.title)
+  const explanation = explainHealth(sub.health)
+  const patch = (body: Omit<SubscriptionPatch, 'op_id'>, note: string) => act(() => patchSubscription(sub.id, {...body, op_id: newOp()}), note)
+  return <li>
+    <strong>{sub.title || sub.url}</strong>{sub.private && ' · private'}{isFirehose(sub) && ' · firehose'}
+    {' '}<a href={sub.site_url || sub.url} target="_blank" rel="noopener noreferrer">Site</a>
+    <form onSubmit={event => { event.preventDefault(); void patch({title: title.trim()}, 'Title saved.') }}>
+      <label>Title<input value={title} onChange={e => setTitle(e.target.value)} /></label>
+      <button disabled={busy}>Save title</button>
+    </form>
+    <label>Cadence<select value={sub.cadence} disabled={busy} onChange={e => { void patch({cadence: e.target.value}, 'Cadence updated.') }}>{CADENCES.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+    <label>Folder<select value={sub.folder_id} disabled={busy} onChange={e => { void patch({folder_id: Number(e.target.value)}, 'Folder updated.') }}><option value={0}>No folder</option>{folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
+    <label>Full text<select value={sub.extract} disabled={busy} onChange={e => { void patch({extract: e.target.value}, 'Full-text mode updated.') }}>{EXTRACT_MODES.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+    {explanation && <p role="alert">{explanation}{sub.health.consecutive_failures > 1 && ` It has failed ${sub.health.consecutive_failures} times in a row.`}</p>}
+    {!sub.health.last_attempt_at
+      ? <p>Waiting for the first fetch.</p>
+      : <p>
+        {`Tried ${when(sub.health.last_attempt_at)}.`}
+        {sub.health.last_success_at && ` Succeeded ${when(sub.health.last_success_at)}.`}
+        {sub.health.next_fetch_at && ` Next fetch ${when(sub.health.next_fetch_at)}.`}
+        {sub.health.http_status > 0 && ` HTTP ${sub.health.http_status}.`}
+        {sub.health.posts_per_day > 0 && ` About ${Math.round(sub.health.posts_per_day * 10) / 10} posts a day.`}
+      </p>}
+    <Credentials sub={sub} busy={busy} patch={patch} />
+    <button disabled={busy} onClick={() => { void act(() => refreshSubscription(sub.id), 'Refresh requested.') }}>Refresh now</button>
+    <button disabled={busy} onClick={() => { if (window.confirm(`Unsubscribe from “${sub.title || sub.url}”?`)) void act(() => unsubscribe(sub.id), 'Unsubscribed.') }}>Unsubscribe</button>
+  </li>
+}
+
+function Credentials({sub, busy, patch}: {sub: Subscription; busy: boolean; patch: (body: Omit<SubscriptionPatch, 'op_id'>, note: string) => Promise<boolean>}) {
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [headerText, setHeaderText] = useState('')
+  const [error, setError] = useState('')
+
+  async function save(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const headers = parseCredentialHeaders(headerText)
+    if (headers === null) {
+      setError('Write extra headers as one “Name: value” pair per line.')
+      return
+    }
+    if (!username && !password && Object.keys(headers).length === 0) {
+      setError('Enter a username and password, or at least one header.')
+      return
+    }
+    setError('')
+    if (await patch({credentials: {username, password, ...(Object.keys(headers).length ? {headers} : {})}}, 'Credentials saved.')) {
+      setUsername('')
+      setPassword('')
+      setHeaderText('')
+    }
+  }
+
+  return <details><summary>Credentials{sub.private ? ' (set)' : ''}</summary>
+    <p>{sub.private ? 'This feed fetches with stored credentials.' : 'This feed fetches without credentials.'} Credentials are stored encrypted and are never shown again.</p>
+    <form onSubmit={save}>
+      <label>Username<input value={username} onChange={e => setUsername(e.target.value)} autoComplete="off" /></label>
+      <label>Password<input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="off" /></label>
+      <label>Extra headers (optional)<textarea value={headerText} onChange={e => setHeaderText(e.target.value)} rows={2} /></label>
+      <button disabled={busy}>{sub.private ? 'Replace credentials' : 'Set credentials'}</button>
+      {error && <p role="alert">{error}</p>}
+    </form>
+    {sub.private && <button disabled={busy} onClick={() => { if (window.confirm('Clear the stored credentials? The feed becomes public.')) void patch({credentials_set: true}, 'Credentials cleared.') }}>Clear credentials</button>}
+  </details>
+}
+
+function MuteSection({mutes, busy, act}: {mutes: Mute[]; busy: boolean; act: Act}) {
+  const [kind, setKind] = useState<'keyword' | 'author'>('keyword')
+  const [value, setValue] = useState('')
+  const [error, setError] = useState('')
+
+  async function add(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!value.trim()) {
+      setError('Give the mute a value.')
+      return
+    }
+    setError('')
+    if (await act(() => createMute(kind, value.trim()), 'Mute added.')) setValue('')
+  }
+
+  const active = mutes.filter(mute => !mute.deleted)
+  return <section aria-labelledby="mutes-heading"><h3 id="mutes-heading">Mutes</h3>
+    <form onSubmit={add}>
+      <label>Kind<select value={kind} onChange={e => setKind(e.target.value as 'keyword' | 'author')}><option value="keyword">Keyword in the title</option><option value="author">Author</option></select></label>
+      <label>Value<input value={value} onChange={e => setValue(e.target.value)} required /></label>
+      <button disabled={busy}>Add mute</button>
+      {error && <p role="alert">{error}</p>}
+    </form>
+    {active.length === 0 && <p>No mutes. Everything reaches the river.</p>}
+    <ul>{active.map(mute => <li key={mute.id}>{mute.kind === 'keyword' ? 'Title contains' : 'Author'} “{mute.value}” <button disabled={busy} onClick={() => { void act(() => deleteMute(mute.id), 'Mute removed.') }}>Remove</button></li>)}</ul>
+  </section>
+}
