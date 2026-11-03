@@ -32,6 +32,9 @@ func TestAskPublisherOnlyRetrievalAndFailedCitations(t *testing.T) {
 	p := &generatedProvider{outputs: map[string]string{"ask": groundedOutput(id, coreHash("body"+body), "Beacon launched.", "Beacon launched.")}}
 	ctx := generatedContext(t, f, p, []llm.Task{llm.TaskAsk}, 0)
 	answer, err := f.s.Ask(ctx, f.a, "Beacon")
+	if err == nil && (answer.DailyLimit != AskDailyBudget || answer.RemainingToday != AskDailyBudget-1) {
+		t.Fatalf("ask budget %+v", answer)
+	}
 	if err != nil || len(answer.Sources) != 1 || answer.Sources[0].EntryID != id || !answer.Claims[0].Verified || answer.Retrieval != "fulltext" || !answer.Untrusted {
 		t.Fatalf("answer %+v %v", answer, err)
 	}
@@ -44,7 +47,7 @@ func TestAskPublisherOnlyRetrievalAndFailedCitations(t *testing.T) {
 	}
 	p.set("ask", groundedOutput(id, answer.Sources[0].ContentHash, "Fabricated claim remains.", "not in source"))
 	answer, err = f.s.Ask(ctx, f.a, "Beacon")
-	if err != nil || answer.Claims[0].Verified || answer.Claims[0].Text != "Fabricated claim remains." {
+	if err != nil || answer.RemainingToday != AskDailyBudget-2 || answer.Claims[0].Verified || answer.Claims[0].Text != "Fabricated claim remains." {
 		t.Fatalf("fabricated %+v %v", answer, err)
 	}
 	p.set("ask", groundedOutput(id, answer.Sources[0].ContentHash, "Visit https://attacker.invalid/secret", "Beacon launched."))

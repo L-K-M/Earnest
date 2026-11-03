@@ -7,7 +7,7 @@ import type {Entry, ReaderActions} from './reader'
 import {request} from './request'
 vi.mock('./request', () => ({request:vi.fn()}))
 vi.mock('@tanstack/react-virtual', () => ({useVirtualizer: ({count}: {count:number}) => ({getTotalSize:()=>count*100, getVirtualItems:()=>Array.from({length:Math.min(2,count)},(_,index)=>({index,size:100,start:index*100})), scrollToIndex:vi.fn()})}))
-const entries = [1,2,3].map(id => ({id,seq:id,title:`Article ${id}`,subscription_id:1,deleted:false,state:{principal:1,entry_id:id,state_rev:0,seen:{value:'unseen',rev:0},shelf:{value:'none',rev:0},kept:{value:false,rev:0}}})) as Entry[]
+const entries = [1,2,3].map(id => ({id,seq:id,title:`Article ${id}`,blurb:'A cached line',subscription_id:1,deleted:false,state:{principal:1,entry_id:id,state_rev:0,seen:{value:'unseen',rev:0},shelf:{value:'none',rev:0},kept:{value:false,rev:0}}})) as Entry[]
 const callbacks: IntersectionObserverCallback[] = []
 const observed: Element[] = []
 class Observer {
@@ -16,8 +16,8 @@ class Observer {
   disconnect() {}
 }
 afterEach(() => {cleanup();vi.clearAllMocks();vi.unstubAllGlobals();callbacks.length=0;observed.length=0})
-function mount(shortcuts=true) {
-  vi.mocked(request).mockImplementation(async path => path.startsWith('/v1/positions') ? {seq:0} : {entries})
+function mount(shortcuts=true, blurbStatus="disabled") {
+  vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {blurb:blurbStatus} : path.startsWith('/v1/positions') ? {seq:0} : {entries})
   vi.stubGlobal('IntersectionObserver', Observer)
   const act = vi.fn().mockResolvedValue(undefined)
   const actions: ReaderActions = {act,state:entry=>entry.state}
@@ -60,4 +60,11 @@ it('retries a visible row after sync finishes restoring',async()=>{
   const row=observed.find(element=>(element as HTMLElement).dataset.entry==='1')!
   callbacks.at(-1)!([{target:row,isIntersecting:true,intersectionRatio:1} as IntersectionObserverEntry],{} as IntersectionObserver)
   await waitFor(()=>expect(act).toHaveBeenCalledTimes(2),{timeout:2000})
+})
+
+it.each(['enabled','disabled'])('shows cached blurbs only when the task is %s',async status => {
+  mount(true,status)
+  await screen.findByText('Article 1')
+  if (status === 'enabled') await waitFor(() => expect(screen.getAllByText('A cached line')).toHaveLength(2))
+  else expect(screen.queryByText('A cached line')).toBeNull()
 })

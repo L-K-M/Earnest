@@ -134,11 +134,14 @@ func TestLazySummariesCacheVersionAndProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if first.GeneratedAt.IsZero() || first.Model != "generated-test" || first.PromptVersion != pipeline.SummaryPromptVersion {
+		t.Fatalf("provenance %+v", first)
+	}
 	if len(first.Claims) != 3 || !first.Claims[0].Verified || first.ExcerptNotice != pipeline.ExcerptNotice || !first.Untrusted {
 		t.Fatalf("result %+v", first)
 	}
 	cached, err := f.s.SummarizeEntry(ctx, f.a, id, AnnotationSummary)
-	if err != nil || cached.AnnotationID != first.AnnotationID || len(p.payloads()) != 1 {
+	if err != nil || cached.AnnotationID != first.AnnotationID || !cached.GeneratedAt.Equal(first.GeneratedAt) || len(p.payloads()) != 1 {
 		t.Fatalf("cache %+v %v calls=%d", cached, err, len(p.payloads()))
 	}
 	other := item
@@ -155,9 +158,23 @@ func TestLazySummariesCacheVersionAndProvenance(t *testing.T) {
 	if err != nil || len(p.payloads()) != 1 || shared.AnnotationID == first.AnnotationID {
 		t.Fatalf("content sharing %+v %v", shared, err)
 	}
-	if _, err := f.s.SummarizeEntry(ctx, f.a, id, AnnotationBlurb); err != nil {
+	blurb, err := f.s.SummarizeEntry(ctx, f.a, id, AnnotationBlurb)
+	if err != nil || blurb.GeneratedAt.IsZero() || blurb.Model != "generated-test" || blurb.PromptVersion != pipeline.BlurbPromptVersion {
+		t.Fatalf("blurb %+v %v", blurb, err)
+	}
+	entries, err := f.s.Entries(ctx, f.a, EntryFilter{View: ViewAll})
+	if err != nil {
 		t.Fatal(err)
 	}
+	for _, entry := range entries {
+		if entry.ID == id && (entry.Blurb == nil || *entry.Blurb != "Beacon launched.") {
+			t.Fatalf("entry blurb %+v", entry)
+		}
+		if entry.ID == otherID && entry.Blurb != nil {
+			t.Fatalf("unexpected blurb %+v", entry)
+		}
+	}
+
 	if len(p.payloads()) != 2 {
 		t.Fatal("blurb reused summary output")
 	}
@@ -389,5 +406,18 @@ func TestSummaryInvalidTextDoesNotPoisonCache(t *testing.T) {
 	out, err := f.s.SummarizeEntry(ctx, f.a, id, AnnotationSummary)
 	if err != nil || len(out.Claims) != 3 || len(p.payloads()) != 2 {
 		t.Fatalf("invalid output poisoned cache: %+v %v", out, err)
+	}
+}
+
+func TestGeneratedTaskStatus(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	p := &generatedProvider{outputs: map[string]string{}}
+	ctx := generatedContext(t, f, p, []llm.Task{llm.TaskBlurb, llm.TaskEdition, llm.TaskCompileRule}, 0)
+	status, err := f.s.PipelineStatus(ctx, f.a)
+	if err != nil || status.Blurb != "enabled" || status.Edition != "enabled" || status.CompileRule != "enabled" || status.Summary != "disabled" || status.Ask != "disabled" {
+		t.Fatalf("status %+v: %v", status, err)
+	}
+	if len(p.payloads()) != 0 {
+		t.Fatal("status called provider")
 	}
 }

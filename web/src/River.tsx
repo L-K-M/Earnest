@@ -5,12 +5,15 @@ import {emptyCopy} from './copy'
 import {entryQuery, orderEntries, shortcutsAllowed, viewKey, type Entry, type ReaderActions, type Subscription, type View} from './reader'
 import {request} from './request'
 import {TodayAgents, SessionChanges} from './agents/Surfaces'
+import {Edition} from './pipeline/Pipeline'
+import {usePipeline} from './search/pipeline'
 
 type Page = {entries: Entry[]; next_cursor?: string}
 type PageParam = {direction: 'forward' | 'backward'; cursor?: string; after?: number}
 export type SessionSummary = {done: number; later: number; kept: number; seen: number}
 
 export function River({view, subscriptions, actions, selected, onSelect, onOpen, shortcuts, counts, summary, onHelp, since = '1970-01-01T00:00:00Z', sessionStart = '1970-01-01T00:00:00Z'}: {since?:string; sessionStart?:string; view: View; subscriptions: Subscription[]; actions: ReaderActions; selected: Entry | null; onSelect: (entry: Entry) => void; onOpen: (entry: Entry) => void; shortcuts: boolean; counts: boolean; summary: SessionSummary; onHelp: () => void}) {
+  const pipeline = usePipeline()
   const key = viewKey(view)
   const scroller = useRef<HTMLDivElement>(null)
   const heading = useRef<HTMLHeadingElement>(null)
@@ -104,6 +107,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     <header><h2 ref={heading} tabIndex={-1}>{view.title}</h2><button disabled={!list.isSuccess || list.isRefetching} onClick={() => {void list.refetch()}}>Refresh articles</button>{counts && <p>{unread} unread in loaded articles</p>}</header>
     {(error || position.error || list.error) && <p role="alert">{error || position.error?.message || list.error?.message} <button onClick={() => { void (position.isError ? position.refetch() : list.refetch()) }}>Try again</button></p>}
     {(position.isPending || list.isPending) && <p role="status">Finding your place…</p>}
+    {view.kind === 'edition' && <Edition onOpen={onOpen}/>}
     <div className="river-scroll" ref={scroller} tabIndex={0} aria-label="Article list">
       {view.kind === 'today' && <TodayAgents since={since} onOpen={onOpen}/>}
       <button disabled={!list.isSuccess || list.isFetchingPreviousPage} onClick={() => { void list.fetchPreviousPage() }}>Earlier articles</button>
@@ -115,7 +119,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
           const group = view.kind === 'edition' && (row.index === 0 || entries[row.index - 1].subscription_id !== entry.subscription_id)
           return <div className="virtual-row" key={entry.id} role="listitem" data-entry={entry.id} style={{height: row.size, transform: `translateY(${row.start}px)`}}>
             {group && <h3 className="feed-group">{source}</h3>}
-            <button className="entry" aria-current={selected?.id === entry.id ? 'true' : undefined} onFocus={() => onSelect(entry)} onClick={() => onOpen(entry)}><strong>{entry.title || 'Untitled'}</strong><span>{source} · {state.shelf.value === 'none' ? (state.seen.value === 'seen' ? 'Seen' : 'Unread') : state.shelf.value}{state.kept.value === true ? ' · Kept' : ''}</span></button>
+            <button className="entry" aria-current={selected?.id === entry.id ? 'true' : undefined} onFocus={() => onSelect(entry)} onClick={() => onOpen(entry)}><strong>{entry.title || 'Untitled'}</strong>{pipeline.status.blurb === 'enabled' && entry.blurb && <span>{entry.blurb}</span>}<span>{source} · {state.shelf.value === 'none' ? (state.seen.value === 'seen' ? 'Seen' : 'Unread') : state.shelf.value}{state.kept.value === true ? ' · Kept' : ''}</span></button>
           </div>
         })}
       </div>

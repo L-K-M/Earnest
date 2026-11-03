@@ -10,7 +10,7 @@ afterEach(() => {cleanup();vi.resetAllMocks()})
 const rule = {id:1,name:'Noise',predicate:{type:'feed_in',ids:[42]},actions:[{type:'notify',budget:3}],enabled:true,match_count:14,last_match_at:'2026-11-01T12:00:00Z'}
 function mount(pipeline='enabled', watch=false) {
   vi.mocked(request).mockImplementation(async (path,options) => {
-    if (path === '/v1/pipeline') return {embed:pipeline,classify:pipeline,semantic:pipeline,watch:pipeline}
+    if (path === '/v1/pipeline') return {embed:pipeline,classify:pipeline,semantic:pipeline,watch:pipeline,compile_rule:pipeline}
     if (path === '/v1/rules' && !options?.method) return watch ? [rule,{...rule,id:2,name:'Security watch',predicate:{type:'semantic',value:'advisories'}}] : [rule]
     if (path === '/v1/watch-rules') return watch ? [{...rule,id:2,name:'Security watch',predicate:{type:'semantic',value:'advisories'},check_llm:false,check_budget:3,status:pipeline}] : []
     if (path === '/v1/webhooks') return []
@@ -87,4 +87,22 @@ it.each(['enabled','disabled'])('keeps watches out of the generic editor and hid
   }
   fireEvent.click(screen.getByRole('button',{name:'Disable watch Security watch'}))
   await waitFor(() => expect(request).toHaveBeenCalledWith('/v1/rules/2:disable',expect.objectContaining({method:'POST'})))
+})
+
+it('compiles into the editor, dry runs, and requires confirmation before saving',async () => {
+  mount()
+  await edit()
+  vi.mocked(request).mockImplementation(async path => {
+    if (path === '/v1/rules:compile') return {predicate:{type:'feed_in',ids:[42]},actions:[{type:'notify',budget:3}],feeds_to_confirm:[{id:42,name:'Publisher'}]}
+    if (path === '/v1/rules:dry-run') return {entries:[{id:9,title:'Matching story'}]}
+    return []
+  })
+  fireEvent.change(screen.getByLabelText('Describe a rule'),{target:{value:'Notify for Publisher'}})
+  fireEvent.click(screen.getByRole('button',{name:'Compile rule'}))
+  expect(await screen.findByText('Publisher (ID 42)')).toBeTruthy()
+  expect(await screen.findByText('Would have matched 1 items.')).toBeTruthy()
+  expect((screen.getByRole('button',{name:'Save'}) as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.click(screen.getByLabelText('Confirm these feeds'))
+  expect((screen.getByRole('button',{name:'Save'}) as HTMLButtonElement).disabled).toBe(false)
+  expect(vi.mocked(request).mock.calls.some(([path,options]) => path === '/v1/rules/1' && options?.method === 'PATCH')).toBe(false)
 })

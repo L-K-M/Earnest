@@ -195,7 +195,7 @@ func TestPipelineDisabledAndBudgetPause(t *testing.T) {
 			t.Fatalf("disabled search %v", err)
 		}
 		status, err := f.s.PipelineStatus(ctx, f.a)
-		if err != nil || status.Embed != "disabled" || status.Classify != "disabled" {
+		if err != nil || status != (PipelineStatus{Embed: "disabled", Classify: "disabled", Semantic: "disabled", Watch: "disabled", Blurb: "disabled", Summary: "disabled", Edition: "disabled", Ask: "disabled", CompileRule: "disabled"}) {
 			t.Fatalf("status %+v %v", status, err)
 		}
 		if len(p.requests()) != 0 {

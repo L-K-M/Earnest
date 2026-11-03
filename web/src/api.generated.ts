@@ -1252,9 +1252,13 @@ export interface components {
         };
         AskResult: {
             claims: components["schemas"]["GroundedClaim"][] | null;
+            /** Format: int64 */
+            daily_limit: number;
             excerpt_notice?: string;
             model: string;
             prompt_version: string;
+            /** Format: int64 */
+            remaining_today: number;
             retrieval: string;
             sources: components["schemas"]["Source"][] | null;
             untrusted: boolean;
@@ -1429,6 +1433,7 @@ export interface components {
         };
         Entry: {
             author: string;
+            blurb?: string;
             deleted: boolean;
             /** Format: int64 */
             feed_id: number;
@@ -1602,9 +1607,14 @@ export interface components {
             verified: boolean;
         };
         PipelineStatus: {
+            ask: string;
+            blurb: string;
             classify: string;
+            compile_rule: string;
+            edition: string;
             embed: string;
             semantic: string;
+            summary: string;
             watch: string;
         };
         Position: {
@@ -1904,6 +1914,8 @@ export interface components {
             /** Format: int64 */
             entry_id: number;
             excerpt_notice?: string;
+            /** Format: date-time */
+            generated_at: string;
             kind: string;
             model: string;
             prompt_version: string;

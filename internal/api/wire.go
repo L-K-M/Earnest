@@ -17,6 +17,7 @@ type entry struct {
 	PublishedAt    *time.Time      `json:"published_at,omitempty"`
 	UpdatedAt      *time.Time      `json:"updated_at,omitempty"`
 	Title          string          `json:"title"`
+	Blurb          *string         `json:"blurb,omitempty"`
 	URL            string          `json:"url"`
 	Author         string          `json:"author"`
 	Rev            uint64          `json:"rev"`
@@ -49,7 +50,7 @@ type tokenSecret struct {
 }
 
 func toEntry(e service.Entry) entry {
-	return entry{ID: e.ID, SubscriptionID: e.SubscriptionID, FeedID: e.FeedID, Seq: e.Seq, FirstSeenAt: e.FirstSeenAt, PublishedAt: e.PublishedAt, UpdatedAt: e.UpdatedAt, Title: e.Title, URL: e.URL, Author: e.Author, Rev: e.Rev, Deleted: e.Deleted, State: e.State}
+	return entry{ID: e.ID, SubscriptionID: e.SubscriptionID, FeedID: e.FeedID, Seq: e.Seq, FirstSeenAt: e.FirstSeenAt, PublishedAt: e.PublishedAt, UpdatedAt: e.UpdatedAt, Title: e.Title, Blurb: e.Blurb, URL: e.URL, Author: e.Author, Rev: e.Rev, Deleted: e.Deleted, State: e.State}
 }
 func toEntries(items []service.Entry) []entry {
 	result := make([]entry, 0, len(items))

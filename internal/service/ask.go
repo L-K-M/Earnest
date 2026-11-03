@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -10,6 +11,7 @@ import (
 	"github.com/L-K-M/Earnest/internal/llm"
 	"github.com/L-K-M/Earnest/internal/pipeline"
 	"github.com/L-K-M/Earnest/internal/store"
+	"github.com/jackc/pgx/v5"
 )
 
 const (
@@ -20,13 +22,15 @@ const (
 
 // AskResult is an inert answer with passages, provenance and explicit trust labels.
 type AskResult struct {
-	Claims        []pipeline.GroundedClaim `json:"claims"`
-	Sources       []pipeline.Source        `json:"sources"`
-	Model         string                   `json:"model"`
-	PromptVersion string                   `json:"prompt_version"`
-	Retrieval     string                   `json:"retrieval"`
-	ExcerptNotice string                   `json:"excerpt_notice,omitempty"`
-	Untrusted     bool                     `json:"untrusted"`
+	DailyLimit     int                      `json:"daily_limit"`
+	RemainingToday int                      `json:"remaining_today"`
+	Claims         []pipeline.GroundedClaim `json:"claims"`
+	Sources        []pipeline.Source        `json:"sources"`
+	Model          string                   `json:"model"`
+	PromptVersion  string                   `json:"prompt_version"`
+	Retrieval      string                   `json:"retrieval"`
+	ExcerptNotice  string                   `json:"excerpt_notice,omitempty"`
+	Untrusted      bool                     `json:"untrusted"`
 }
 
 // Ask uses hybrid publisher-only retrieval, falling back to full text when embeddings are off.
@@ -42,12 +46,13 @@ func (s *Service) Ask(ctx context.Context, a Actor, question string) (AskResult,
 	if err != nil {
 		return AskResult{}, pipelineError(err)
 	}
-	allowed, err := s.store.AskReserve(ctx, a.UserID, s.now(), AskDailyBudget)
-	if err != nil {
-		return AskResult{}, err
-	}
-	if !allowed {
+	var attempts int
+	err = s.store.Pool().QueryRow(ctx, `INSERT INTO ask_daily_usage(user_id,day,attempts) VALUES($1,$2,1) ON CONFLICT(user_id,day) DO UPDATE SET attempts=ask_daily_usage.attempts+1 WHERE ask_daily_usage.attempts<$3 RETURNING attempts`, a.UserID, s.now().UTC().Format("2006-01-02"), AskDailyBudget).Scan(&attempts)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return AskResult{}, fmt.Errorf("daily ask budget (%d) exhausted: %w", AskDailyBudget, ErrPipelinePaused)
+	}
+	if err != nil {
+		return AskResult{}, fmt.Errorf("reserve ask budget: %w", err)
 	}
 	lexical, err := s.store.AskLexical(ctx, a.UserID, question, hybridCandidates)
 	if err != nil {
@@ -83,7 +88,7 @@ func (s *Service) Ask(ctx context.Context, a Actor, question string) (AskResult,
 			break
 		}
 	}
-	out := AskResult{Claims: []pipeline.GroundedClaim{}, Sources: sources, Model: model, PromptVersion: pipeline.AskPromptVersion, Retrieval: retrieval, Untrusted: true}
+	out := AskResult{DailyLimit: AskDailyBudget, RemainingToday: AskDailyBudget - attempts, Claims: []pipeline.GroundedClaim{}, Sources: sources, Model: model, PromptVersion: pipeline.AskPromptVersion, Retrieval: retrieval, Untrusted: true}
 	if excerpt {
 		out.ExcerptNotice = pipeline.ExcerptNotice
 	}

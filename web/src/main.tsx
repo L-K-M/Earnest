@@ -17,6 +17,7 @@ import {Rules} from './rules/Rules'
 import {Search, useSavedSearches, type SavedSearch} from './search/Search'
 import {Palette, type Command} from './palette/Palette'
 import {OfflineStatus, clearOffline, registerOffline} from './offline/Offline'
+import {Ask} from './pipeline/Pipeline'
 import './style.css'
 
 type Identity = {user_id: number; principal_id: number}
@@ -29,7 +30,7 @@ function App() {
   const [resettingGeneration,setResettingGeneration] = useState(false)
   const [error, setError] = useState('')
   const [view, setView] = useState<View>(standardViews[0])
-  const [panel, setPanel] = useState<'river' | 'feeds' | 'settings' | 'activity' | 'notifications' | 'rules' | 'search'>(() => location.pathname === '/device' ? 'settings' : 'river')
+  const [panel, setPanel] = useState<'river' | 'feeds' | 'settings' | 'activity' | 'notifications' | 'rules' | 'search' | 'ask'>(() => location.pathname === '/device' ? 'settings' : 'river')
   const [savedSearch,setSavedSearch] = useState<SavedSearch | undefined>()
   const [selected, setSelected] = useState<Entry | null>(null)
   const [opened, setOpened] = useState(false)
@@ -73,6 +74,7 @@ function App() {
   const labels = useQuery({queryKey: ['labels'], enabled: signedIn, queryFn: ({signal}) => request<components['schemas']['Label'][]>('/v1/labels',{signal})})
   const preferences = useQuery({queryKey: ['settings'], enabled: signedIn, queryFn: ({signal}) => request<ReadingSettings>('/v1/settings',{signal})})
   const settings = preferences.data ?? defaultSettings
+  const pipeline = useQuery({queryKey:['pipeline'],enabled:signedIn,queryFn:({signal}) => request<components['schemas']['PipelineStatus']>('/v1/pipeline',{signal}),staleTime:30_000})
   const savedSearches = useSavedSearches(signedIn)
   const unreadCounts = useQuery({queryKey:['unread-counts'],enabled:signedIn && settings.reading_mode === 'unread_counts',queryFn:({signal})=>readUnreadCounts(signal),staleTime:30_000})
   const refreshResources = useCallback((reason?: 'generation') => {
@@ -123,6 +125,7 @@ function App() {
     {id:'unread',title:'Mark unread',key:'m',disabled:!selected,run:async () => {if(selected) await actions.act(selected,'seen','unseen')}},
     {id:'subscribe',title:'Subscribe to a feed',key:'Ctrl+K, Enter',run:() => {setPanel('feeds');setOpened(false)}},
     {id:'search',title:'Search',key:'/',run:() => showSearch()},
+    ...(pipeline.data?.ask === 'enabled' ? [{id:'ask',title:'Ask my feeds',key:'Ctrl+K, Enter',run:() => {setPanel('ask');setOpened(false)}}] : []),
     {id:'rules',title:'Rules',key:'Ctrl+K, Enter',run:() => {setPanel('rules');setOpened(false)}},
     {id:'settings',title:'Settings',key:'Ctrl+K, Enter',run:() => {setPanel('settings');setOpened(false)}},
   ]
@@ -151,7 +154,7 @@ function App() {
       {(folders.data ?? []).length > 0 && <details><summary>Folders</summary>{folders.data?.map(folder => <button key={folder.id} onClick={() => choose({kind:'folder', id:folder.id, title:folder.name})}>{folder.name}</button>)}</details>}
       {(labels.data ?? []).length > 0 && <details><summary>Labels</summary>{labels.data?.filter(label => !label.Deleted).map(label => <button key={label.ID} onClick={() => choose({kind:'label', id:label.ID, title:label.Name})}>{label.Name}</button>)}</details>}
       {(savedSearches.data ?? []).map(saved => <button key={saved.id} onClick={() => showSearch(saved)}>{saved.name}</button>)}
-      <button onClick={() => showSearch()}>Search</button><button onClick={() => {setPanel('rules');setOpened(false)}}>Rules</button>
+      <button onClick={() => showSearch()}>Search</button>{pipeline.data?.ask === 'enabled' && <button onClick={() => {setPanel('ask');setOpened(false)}}>Ask my feeds</button>}<button onClick={() => {setPanel('rules');setOpened(false)}}>Rules</button>
       <button onClick={() => {setPanel('activity');setOpened(false)}}>Activity</button><button onClick={() => {setPanel('notifications');setOpened(false)}}>Notifications</button><button onClick={() => {setPanel('feeds');setOpened(false)}}>Manage feeds</button><button onClick={() => {setPanel('settings');setOpened(false)}}>Settings</button><Palette commands={commands} shortcuts={settings.single_key_shortcuts && preferences.isSuccess} helpRef={help}/><button onClick={() => {void logout()}}>Sign out</button>
     </nav>
     <div id="workspace" tabIndex={-1} className={`workspace ${panel === 'river' && !firstRun ? 'with-reader' : ''}`}>
@@ -162,7 +165,7 @@ function App() {
       <OfflineStatus/><p className="sync-status" role="status">{sync.status}</p>
       {sync.error && <p role="alert">{sync.error} <button onClick={sync.retry}>Retry sync</button></p>}
       </div>
-      {firstRun ? <main onChangeCapture={() => setOnboardingStarted(true)} onClickCapture={() => setOnboardingStarted(true)}><Onboarding onComplete={() => {setOnboarded(true);refreshResources();void queryClient.invalidateQueries({queryKey:['position']});choose(standardViews[0])}} /></main> : panel === 'rules' ? <Rules feeds={subscriptions.data ?? []} folders={folders.data ?? []} labels={labels.data ?? []}/> : panel === 'search' ? <Search key={savedSearch?.id ?? 'search'} saved={savedSearch} onOpen={openEntry}/> : panel === 'feeds' ? <main key="feeds" tabIndex={-1} ref={focusPanel}><h2>Feeds</h2><Feeds onChanged={refreshResources} /></main> : panel === 'activity' ? <ActivityScreen /> : panel === 'notifications' ? <Notifications onOpen={entry => {choose(standardViews[0]);setSelected(entry);setOpened(true)}} /> : panel === 'settings' ? <main key="settings" tabIndex={-1} ref={focusPanel}><Settings key={settings.rev} settings={settings} onSaved={savedSettings} /><Tokens /><Push /><Webhooks /></main> : <>
+      {firstRun ? <main onChangeCapture={() => setOnboardingStarted(true)} onClickCapture={() => setOnboardingStarted(true)}><Onboarding onComplete={() => {setOnboarded(true);refreshResources();void queryClient.invalidateQueries({queryKey:['position']});choose(standardViews[0])}} /></main> : panel === 'ask' && pipeline.data?.ask === 'enabled' ? <Ask onOpen={openEntry}/> : panel === 'rules' ? <Rules feeds={subscriptions.data ?? []} folders={folders.data ?? []} labels={labels.data ?? []}/> : panel === 'search' ? <Search key={savedSearch?.id ?? 'search'} saved={savedSearch} onOpen={openEntry}/> : panel === 'feeds' ? <main key="feeds" tabIndex={-1} ref={focusPanel}><h2>Feeds</h2><Feeds onChanged={refreshResources} /></main> : panel === 'activity' ? <ActivityScreen /> : panel === 'notifications' ? <Notifications onOpen={entry => {choose(standardViews[0]);setSelected(entry);setOpened(true)}} /> : panel === 'settings' ? <main key="settings" tabIndex={-1} ref={focusPanel}><Settings key={settings.rev} settings={settings} onSaved={savedSettings} /><Tokens /><Push /><Webhooks /></main> : <>
         <River since={since} sessionStart={sessionStart} key={viewKey(view)} view={view} subscriptions={subscriptions.data ?? []} actions={actions} selected={selected} onSelect={setSelected} onOpen={entry => {setSelected(entry);setOpened(true)}} shortcuts={settings.single_key_shortcuts && preferences.isSuccess} counts={settings.reading_mode === 'unread_counts'} summary={summary} onHelp={() => help.current?.showModal()} />
         {selected && opened ? <Reader key={selected.id} onOpen={openEntry} entry={selected} subscription={subscriptions.data?.find(sub => sub.id === selected.subscription_id)} settings={settings} actions={actions} onSettings={savedSettings} renderBody={url => <iframe title="Article body" src={url} sandbox="allow-popups allow-popups-to-escape-sandbox" />} onClose={() => {setOpened(false);window.requestAnimationFrame(() => document.querySelector<HTMLElement>('.river h2')?.focus())}} /> : <article className="reader-placeholder" aria-label="Reader"><p>Choose an article. It has been waiting patiently.</p></article>}
       </>}

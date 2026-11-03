@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/L-K-M/Earnest/internal/llm"
 	"github.com/L-K-M/Earnest/internal/pipeline"
@@ -16,6 +17,7 @@ import (
 
 // SummaryResult is tainted plain text, with verified passages of one stored version.
 type SummaryResult struct {
+	GeneratedAt      time.Time        `json:"generated_at"`
 	AnnotationID     int64            `json:"annotation_id"`
 	EntryID          int64            `json:"entry_id"`
 	ContentHash      string           `json:"content_hash"`
@@ -102,7 +104,7 @@ func (s *Service) saveSummary(ctx context.Context, user int64, source store.Summ
 			return fmt.Errorf("summary principal: %w", err)
 		}
 		var oldID int64
-		err := tx.QueryRow(ctx, `SELECT id FROM annotations WHERE user_id=$1 AND principal_id=$2 AND kind=$3 AND entry_ids=ARRAY[$4::bigint] AND model=$5 AND prompt_version=$6 AND content_hash=$7 AND citations=$8::jsonb AND value=$9 AND deleted_at IS NULL`, user, principal, out.Kind, source.EntryID, out.Model, out.PromptVersion, source.ContentHash, citations, value).Scan(&oldID)
+		err := tx.QueryRow(ctx, `SELECT id,created_at FROM annotations WHERE user_id=$1 AND principal_id=$2 AND kind=$3 AND entry_ids=ARRAY[$4::bigint] AND model=$5 AND prompt_version=$6 AND content_hash=$7 AND citations=$8::jsonb AND value=$9 AND deleted_at IS NULL`, user, principal, out.Kind, source.EntryID, out.Model, out.PromptVersion, source.ContentHash, citations, value).Scan(&oldID, &out.GeneratedAt)
 		if err == nil {
 			out.AnnotationID = oldID
 			return nil
@@ -119,12 +121,13 @@ func (s *Service) saveSummary(ctx context.Context, user int64, source store.Summ
 		if err != nil && err != pgx.ErrNoRows {
 			return fmt.Errorf("find summary annotation: %w", err)
 		}
+		out.GeneratedAt = s.now().UTC()
 		if liveID > 0 {
 			out.AnnotationID = liveID
-			if _, err := tx.Exec(ctx, `UPDATE annotations SET value=$2,model=$3,prompt_version=$4,rev=$5,content_hash=$6,content_source=$7,sanitizer_version=$8,citations=$9,created_at=$10 WHERE id=$1`, liveID, value, out.Model, out.PromptVersion, rev, source.ContentHash, source.Source, source.SanitizerVersion, citations, s.now()); err != nil {
+			if err := tx.QueryRow(ctx, `UPDATE annotations SET value=$2,model=$3,prompt_version=$4,rev=$5,content_hash=$6,content_source=$7,sanitizer_version=$8,citations=$9,created_at=$10 WHERE id=$1 RETURNING created_at`, liveID, value, out.Model, out.PromptVersion, rev, source.ContentHash, source.Source, source.SanitizerVersion, citations, out.GeneratedAt).Scan(&out.GeneratedAt); err != nil {
 				return fmt.Errorf("update summary annotation: %w", err)
 			}
-		} else if err := tx.QueryRow(ctx, `INSERT INTO annotations(user_id,principal_id,kind,value,entry_ids,model,prompt_version,rev,content_hash,content_source,sanitizer_version,citations,created_at) VALUES($1,$2,$3,$4,ARRAY[$5::bigint],$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`, user, principal, out.Kind, value, source.EntryID, out.Model, out.PromptVersion, rev, source.ContentHash, source.Source, source.SanitizerVersion, citations, s.now()).Scan(&out.AnnotationID); err != nil {
+		} else if err := tx.QueryRow(ctx, `INSERT INTO annotations(user_id,principal_id,kind,value,entry_ids,model,prompt_version,rev,content_hash,content_source,sanitizer_version,citations,created_at) VALUES($1,$2,$3,$4,ARRAY[$5::bigint],$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id,created_at`, user, principal, out.Kind, value, source.EntryID, out.Model, out.PromptVersion, rev, source.ContentHash, source.Source, source.SanitizerVersion, citations, out.GeneratedAt).Scan(&out.AnnotationID, &out.GeneratedAt); err != nil {
 			return fmt.Errorf("save summary annotation: %w", err)
 		}
 		annotation := Annotation{ID: out.AnnotationID, PrincipalID: principal, Kind: out.Kind, EntryIDs: []int64{source.EntryID}, Value: value, Rev: rev, Untrusted: true}
