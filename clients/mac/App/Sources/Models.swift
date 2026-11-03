@@ -1,0 +1,213 @@
+import Foundation
+import EarnestKit
+
+enum Section: String, CaseIterable, Identifiable {
+    case today = "Today", edition = "Edition", later = "Later", kept = "Kept", done = "Done", feeds = "Feeds", activity = "Activity"
+
+    var id: String { rawValue }
+
+    var keyEquivalent: String {
+        switch self {
+        case .today: return "1"
+        case .edition: return "2"
+        case .later: return "3"
+        case .kept: return "4"
+        case .done: return "5"
+        case .feeds: return "6"
+        case .activity: return "7"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .today: return "sun.max"
+        case .edition: return "newspaper"
+        case .later: return "clock"
+        case .kept: return "bookmark"
+        case .done: return "checkmark.circle"
+        case .feeds: return "dot.radiowaves.left.and.right"
+        case .activity: return "clock.arrow.circlepath"
+        }
+    }
+
+    /// The server-side entries view backing entry sections. Today and the
+    /// Edition share the river and split it by subscription cadence.
+    var entryView: String? {
+        switch self {
+        case .today, .edition: return "river"
+        case .later: return "later"
+        case .kept: return "kept"
+        case .done: return "done"
+        case .feeds, .activity: return nil
+        }
+    }
+}
+
+enum EntryCommand {
+    case done, later, keep, unread
+}
+
+struct EntryRow: Identifiable, Equatable {
+    let id: Int64
+    let title: String
+    let subtitle: String
+    let unread: Bool
+}
+
+struct EditionGroup: Identifiable, Equatable {
+    var id: Int64 { subscriptionID }
+    let subscriptionID: Int64
+    let title: String
+    var rows: [EntryRow]
+    var rowIDs: [Int64] { rows.map(\.id) }
+}
+
+struct FeedInfo: Identifiable, Equatable {
+    let id: Int64
+    let feedID: Int64
+    let title: String
+    let url: String
+    let siteURL: String
+    var cadence: String
+    let isPrivate: Bool
+    let deleted: Bool
+    let issue: String?
+
+    init?(_ value: APIValue) {
+        guard let id = value["id"]?.int64Value, id > 0 else { return nil }
+        self.id = id
+        feedID = value["feed_id"]?.int64Value ?? 0
+        title = value["title"]?.stringValue ?? ""
+        url = value["url"]?.stringValue ?? ""
+        siteURL = value["site_url"]?.stringValue ?? ""
+        cadence = value["cadence"]?.stringValue ?? "today"
+        isPrivate = value["private"]?.boolValue ?? false
+        deleted = value["deleted"]?.boolValue ?? false
+        let health = value["health"]
+        let failures = health?["consecutive_failures"]?.int64Value ?? 0
+        issue = failures > 0 ? (health?["error_message"]?.stringValue ?? health?["error_class"]?.stringValue) : nil
+    }
+}
+
+struct ActivityItem: Identifiable, Equatable {
+    let id: Int64
+    let principalID: Int64
+    let principalName: String
+    let action: String
+    let detail: String
+    let entryID: Int64?
+    let nextAction: String
+    let reason: String
+    let createdAt: Date?
+
+    init(_ value: APIValue) {
+        id = value["id"]?.int64Value ?? 0
+        principalID = value["principal_id"]?.int64Value ?? 0
+        principalName = value["principal_name"]?.stringValue ?? ""
+        action = value["action"]?.stringValue ?? ""
+        nextAction = value["next_action"]?.stringValue ?? "nothing"
+        reason = value["reason"]?.stringValue ?? ""
+        createdAt = value["created_at"]?.stringValue.flatMap(DateFormatting.parse)
+        let target = value["target"]
+        let before = value["before"]
+        let after = value["after"]
+        var entry = target?["entry_id"]?.int64Value
+        if entry == nil, let ids = after?["entry_ids"]?.arrayValue, let first = ids.first {
+            entry = first.int64Value
+        }
+        entryID = entry
+        detail = ActivityItem.describe(action: action, target: target, before: before, after: after)
+    }
+
+    private static func describe(action: String, target: APIValue?, before: APIValue?, after: APIValue?) -> String {
+        switch action {
+        case "state.updated":
+            let register = target?["register"]?.stringValue ?? "state"
+            let value = after?[register]?["value"]
+            let text = value?.stringValue ?? (value?.boolValue == true ? "kept" : nil)
+            switch (register, text) {
+            case ("seen", "seen"): return "marked seen"
+            case ("seen", "unseen"): return "marked unread"
+            case ("shelf", "later"): return "moved to Later"
+            case ("shelf", "done"): return "moved to Done"
+            case ("shelf", _): return "cleared the shelf"
+            case ("kept", "kept"): return "kept"
+            case ("kept", _): return "unkept"
+            default: return "changed \(register)"
+            }
+        case "annotation.updated":
+            let kind = after?["kind"]?.stringValue ?? before?["kind"]?.stringValue ?? "annotation"
+            return "wrote a \(kind)"
+        case "annotation.deleted":
+            let kind = before?["kind"]?.stringValue ?? "annotation"
+            return "deleted a \(kind)"
+        case "annotation.reverted":
+            return "reverted an annotation"
+        case "position.updated":
+            return "moved its read position"
+        case "notification.created":
+            return "sent a notification"
+        case "notification.cancelled":
+            return "cancelled a notification"
+        default:
+            return action.replacingOccurrences(of: ".", with: " ")
+        }
+    }
+}
+
+struct ActivityGroup: Identifiable, Equatable {
+    var id: Int64 { principalID }
+    let principalID: Int64
+    let name: String
+    var items: [ActivityItem]
+}
+
+struct BriefItem: Identifiable, Equatable {
+    let id: Int64
+    let principalID: Int64
+    let text: String
+    let entryIDs: [Int64]
+
+    init?(_ value: APIValue) {
+        guard let id = value["id"]?.int64Value, value["deleted"]?.boolValue != true else { return nil }
+        self.id = id
+        principalID = value["principal_id"]?.int64Value ?? 0
+        text = value["value"]?.stringValue ?? ""
+        entryIDs = value["entry_ids"]?.arrayValue?.compactMap(\.int64Value) ?? []
+    }
+}
+
+struct SessionCounts: Equatable {
+    var done = 0
+    var later = 0
+    var kept = 0
+    var unread = 0
+
+    var total: Int { done + later + kept + unread }
+
+    var summary: String {
+        var parts: [String] = []
+        if kept > 0 { parts.append("\(kept) kept") }
+        if later > 0 { parts.append("\(later) for later") }
+        if done > 0 { parts.append("\(done) done") }
+        if unread > 0 { parts.append("\(unread) back in the river") }
+        return parts.isEmpty ? "" : parts.joined(separator: " · ") + " this session."
+    }
+
+    mutating func record(_ command: EntryCommand, unkeep: Bool = false) {
+        switch command {
+        case .done: done += 1
+        case .later: later += 1
+        case .keep: if !unkeep { kept += 1 }
+        case .unread: unread += 1
+        }
+    }
+}
+
+struct PaletteCommand: Identifiable {
+    var id: String { title }
+    let title: String
+    let key: String
+    let enabled: Bool
+    let action: () -> Void
+}

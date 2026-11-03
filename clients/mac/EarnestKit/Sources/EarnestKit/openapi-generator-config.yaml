@@ -1,0 +1,28 @@
+generate:
+  - types
+  - client
+accessModifier: internal
+namingStrategy: idiomatic
+filter:
+  operations:
+    - device-start
+    - device-poll
+    - list-entries
+    - get-entry
+    - entry-content
+    - get-me
+    - list-subscriptions
+    - subscribe
+    - patch-subscription
+    - unsubscribe
+    - list-activity
+    - agent-changes
+    - revert-activity
+    - today-briefs
+    - bootstrap-cursor
+    - bootstrap-page
+    - get-changes
+    - state-batch
+    - state-through
+    - list-annotations
+    - list-tokens

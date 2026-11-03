@@ -30,12 +30,30 @@ func (s *Service) executeRuleJob(ctx context.Context, userID, ruleID, feedID int
 		if rule.ID != ruleID || !rule.Enabled {
 			continue
 		}
+		if err := ValidateRule(rule.Predicate, rule.Actions); err != nil {
+			return err
+		}
 		entries, err := s.ruleEntries(ctx, userID, time.Time{}, ids)
 		if err != nil {
 			return err
 		}
 		for _, entry := range entries {
+			var ready bool
+			entry, ready, err = s.prepareModelPredicates(ctx, userID, rule.Predicate, entry)
+			if err != nil {
+				return err
+			}
+			if !ready {
+				continue
+			}
 			if entry.FeedID == feedID && matchesRule(rule.Predicate, entry) {
+				confirmed, err := s.confirmWatch(ctx, userID, rule, entry)
+				if err != nil {
+					return err
+				}
+				if !confirmed {
+					continue
+				}
 				if err := s.applyRule(ctx, a, rule, entry); err != nil {
 					return fmt.Errorf("rule %d: %w", rule.ID, err)
 				}
@@ -47,6 +65,9 @@ func (s *Service) executeRuleJob(ctx context.Context, userID, ruleID, feedID int
 }
 
 func (s *Service) applyRule(ctx context.Context, human Actor, rule Rule, entry ruleEntry) error {
+	if err := ValidateRule(rule.Predicate, rule.Actions); err != nil {
+		return err
+	}
 	return s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
 			return err
