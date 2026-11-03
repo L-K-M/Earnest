@@ -4,6 +4,7 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import androidx.core.content.edit
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -35,15 +36,18 @@ internal class Secrets(context: Context) {
         set(value) {
             val trimmed = value.trim().trimEnd('/')
             require(trimmed.isEmpty() || trimmed.startsWith("https://")) { "Enter an HTTPS server origin" }
-            prefs.edit().putString(KEY_SERVER, trimmed).apply()
+            prefs.edit { putString(KEY_SERVER, trimmed) }
         }
 
     fun saveToken(value: String) {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, key)
         val payload = cipher.iv + cipher.doFinal(value.toByteArray(Charsets.UTF_8))
-        prefs.edit().putString(KEY_TOKEN, Base64.encodeToString(payload, Base64.NO_WRAP)).apply()
+        prefs.edit { putString(KEY_TOKEN, Base64.encodeToString(payload, Base64.NO_WRAP)) }
     }
+
+    /** Cheap check for whether a token exists, without touching the Keystore. */
+    fun hasToken(): Boolean = prefs.contains(KEY_TOKEN)
 
     fun token(): String? {
         val encoded = prefs.getString(KEY_TOKEN, null) ?: return null
@@ -56,7 +60,7 @@ internal class Secrets(context: Context) {
     }
 
     fun clearToken() {
-        prefs.edit().remove(KEY_TOKEN).apply()
+        prefs.edit { remove(KEY_TOKEN) }
     }
 
     companion object {

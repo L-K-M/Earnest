@@ -19,6 +19,14 @@ object Notifications {
 
     const val EXTRA_NOTIFICATION_ID = "earnest.notification_id"
 
+    /** New content is quiet; only Now alerts rise above IMPORTANCE_LOW. */
+    fun channelFor(category: String): String = when (category) {
+        "alert" -> CHANNEL_ALERT
+        "digest" -> CHANNEL_DIGEST
+        "brief" -> CHANNEL_BRIEF
+        else -> CHANNEL_NEW_CONTENT
+    }
+
     fun ensureChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java)
         listOf(
@@ -40,12 +48,7 @@ object Notifications {
     fun show(context: Context, notificationId: Long, category: String, title: String, body: String) {
         val manager = context.getSystemService(NotificationManager::class.java)
         if (!manager.areNotificationsEnabled()) return
-        val channel = when (category) {
-            "alert" -> CHANNEL_ALERT
-            "digest" -> CHANNEL_DIGEST
-            "brief" -> CHANNEL_BRIEF
-            else -> CHANNEL_NEW_CONTENT
-        }
+        val channel = channelFor(category)
         val intent = Intent(context, MainActivity::class.java).apply {
             putExtra(EXTRA_NOTIFICATION_ID, notificationId)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP

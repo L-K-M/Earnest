@@ -5,6 +5,7 @@ on:
     paths:
       - 'clients/android/**'
       - 'testdata/vectors/**'
+      - 'api/openapi.json'
       - '.github/workflows/android.yml'
 
 permissions:

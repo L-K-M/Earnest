@@ -1,7 +1,8 @@
 package ch.lkmc.earnest
 
 import android.content.Intent
-import android.net.Uri
+import android.os.Build
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -9,6 +10,7 @@ import android.webkit.WebViewClient
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.net.toUri
 import androidx.webkit.WebViewAssetLoader
 import java.io.ByteArrayInputStream
 
@@ -22,7 +24,7 @@ private const val ASSET_URL = "https://$ASSET_HOST/article/index.html"
  */
 @Composable
 internal fun Reader(url: String?, cachedHtml: String?, modifier: Modifier = Modifier) {
-    val allowedHost = url?.let { Uri.parse(it).host }
+    val allowedHost = url?.let { it.toUri().host }
     AndroidView(
         modifier = modifier,
         factory = { context ->
@@ -30,8 +32,13 @@ internal fun Reader(url: String?, cachedHtml: String?, modifier: Modifier = Modi
                 settings.javaScriptEnabled = false
                 settings.allowFileAccess = false
                 settings.allowContentAccess = false
-                settings.allowFileAccessFromFileURLs = false
-                settings.allowUniversalAccessFromFileURLs = false
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                    // API 29 still honours these; API 30+ removed them and defaults to false.
+                    @Suppress("DEPRECATION")
+                    settings.allowFileAccessFromFileURLs = false
+                    @Suppress("DEPRECATION")
+                    settings.allowUniversalAccessFromFileURLs = false
+                }
                 settings.blockNetworkLoads = false
 
                 val loader = WebViewAssetLoader.Builder().addPathHandler("/article/") { path ->
@@ -43,6 +50,11 @@ internal fun Reader(url: String?, cachedHtml: String?, modifier: Modifier = Modi
                 }.build()
 
                 webViewClient = object : WebViewClient() {
+                    override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                        // The render process died; keep the app alive and let Compose recreate the view.
+                        return true
+                    }
+
                     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                         val uri = request.url
                         if (request.isForMainFrame && uri.host == allowedHost) return false

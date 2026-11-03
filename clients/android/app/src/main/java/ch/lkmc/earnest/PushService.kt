@@ -5,6 +5,7 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import ch.lkmc.earnest.core.DeviceBody
 import ch.lkmc.earnest.core.EarnestApi
@@ -17,7 +18,6 @@ import org.unifiedpush.android.connector.data.PushMessage
 import org.unifiedpush.android.connector.PushService
 import org.unifiedpush.android.connector.UnifiedPush
 import org.unifiedpush.android.connector.data.PublicKeySet
-import java.security.MessageDigest
 
 /** The encrypted push payload; [text] is the agent's own words and is never displayed. */
 @Serializable
@@ -59,31 +59,32 @@ class EarnestPushService : PushService() {
         Log.i(TAG, "UnifiedPush unregistered")
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        scope.cancel()
+    }
+
     private suspend fun registerEndpoint(url: String, keys: PublicKeySet) {
         val secrets = Secrets(this)
         val token = secrets.token() ?: return
         val api = EarnestApi(secrets.server, token)
         val body = DeviceBody(
-            kind = "unifiedpush",
+            kind = KIND_UNIFIEDPUSH,
             endpoint = url,
             p256dh = keys.pubKey,
             authSecret = keys.auth,
-            showText = showText(),
-            opId = "device-" + MessageDigest.getInstance("SHA-256")
-                .digest(url.toByteArray(Charsets.UTF_8))
-                .joinToString("") { "%02x".format(it) },
+            // Agent text is never displayed, so the server is asked never to send it.
+            showText = false,
+            // Keys rotate for the same endpoint, so each registration needs a fresh op_id.
+            opId = "device-${System.currentTimeMillis()}",
         )
         runCatching { api.registerDevice(body) }
             .onFailure { Log.i(TAG, "Device registration failed: ${it.message}") }
     }
 
-    private fun showText(): Boolean =
-        getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_SHOW_TEXT, false)
-
     companion object {
         private const val TAG = "EarnestPush"
-        private const val PREFS = "push"
-        private const val KEY_SHOW_TEXT = "show_text"
+        private const val KIND_UNIFIEDPUSH = "unifiedpush"
 
         /** Registers with the current or default distributor, if one is installed. */
         fun register(context: Context) {

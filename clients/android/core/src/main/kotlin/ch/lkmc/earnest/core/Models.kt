@@ -299,6 +299,21 @@ data class MeResult(
 )
 
 @Serializable
+data class Token(
+    val id: Long,
+    @SerialName("principal_id") val principalId: Long,
+    val name: String,
+    val kind: String,
+    val audience: String,
+    val scopes: List<String>? = null,
+    @SerialName("daily_budget") val dailyBudget: Long = 0,
+    @SerialName("expires_at") val expiresAt: String? = null,
+    @SerialName("last_used_at") val lastUsedAt: String? = null,
+    @SerialName("revoked_at") val revokedAt: String? = null,
+    @SerialName("created_at") val createdAt: String = "",
+)
+
+@Serializable
 data class DeviceStart(
     @SerialName("client_name") val clientName: String,
 )

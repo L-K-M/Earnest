@@ -4,7 +4,6 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
-import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface SyncSnapshotDao {
@@ -21,9 +20,6 @@ interface SyncSnapshotDao {
 @Dao
 interface ContentDao {
     @Query("SELECT * FROM contents WHERE entryId = :entryId")
-    fun entry(entryId: Long): Flow<ContentEntity?>
-
-    @Query("SELECT * FROM contents WHERE entryId = :entryId")
     suspend fun get(entryId: Long): ContentEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -36,7 +32,7 @@ interface ContentDao {
 @Dao
 interface BriefDao {
     @Query("SELECT * FROM briefs ORDER BY rev DESC")
-    fun all(): Flow<List<BriefEntity>>
+    suspend fun get(): List<BriefEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun saveAll(briefs: List<BriefEntity>)

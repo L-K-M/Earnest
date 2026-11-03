@@ -248,6 +248,8 @@ class EarnestApi(
 
     suspend fun me(): MeResult = get(url("/v1/me")).decode()
 
+    suspend fun tokens(): List<Token> = get(url("/v1/tokens")).decode()
+
     companion object {
         private val JSON_MEDIA_TYPE = "application/json".toMediaType()
     }

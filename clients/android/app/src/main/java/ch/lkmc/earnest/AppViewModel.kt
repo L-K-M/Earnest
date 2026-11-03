@@ -1,6 +1,7 @@
 package ch.lkmc.earnest
 
 import android.app.Application
+import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import ch.lkmc.earnest.core.Annotation
@@ -28,6 +29,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
@@ -42,6 +45,7 @@ data class UiState(
     val states: Map<Long, State> = emptyMap(),
     val cadences: Map<Long, String> = emptyMap(),
     val briefs: List<BriefEntity> = emptyList(),
+    val principals: Map<Long, String> = emptyMap(),
     val loading: Boolean = false,
     val error: String? = null,
     val rejected: List<RejectedOperation> = emptyList(),
@@ -61,8 +65,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
-
-    val server: String = secrets.server
 
     private val _loggedIn = MutableStateFlow(secrets.token() != null)
     val loggedIn: StateFlow<Boolean> = _loggedIn.asStateFlow()
@@ -124,14 +126,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     syncEngine.flush()
                     val me = runCatching { api.me() }.getOrNull()
                     me?.let { savePrincipal(it.principalId) }
-                    val briefs = runCatching { api.todaysBriefs() }.getOrDefault(emptyList())
-                    cacheBriefs(briefs)
+                    val briefs = runCatching { api.todaysBriefs() }.getOrNull()
+                    if (briefs != null) cacheBriefs(briefs)
+                    val cached = briefs?.map { BriefEntity(it.principalId, it.value, it.rev) } ?: db.briefs().get()
+                    val names = principalNames(api)
+                    savePrincipalNames(names)
                     _state.value = _state.value.copy(
                         snapshot = syncEngine.snapshot(),
                         principalId = me?.principalId ?: principalId(),
                         states = effectiveStates(syncEngine, me?.principalId ?: principalId()),
                         cadences = cadences(syncEngine),
-                        briefs = briefs.map { BriefEntity(it.principalId, it.value, it.rev) },
+                        briefs = cached,
+                        principals = names.ifEmpty { cachedPrincipalNames() },
                         rejected = rejected,
                         expired = expired,
                     )
@@ -139,6 +145,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: ApiException) {
                 if (error.isUnauthorized) {
                     secrets.clearToken()
+                    _loggedIn.value = false
                 }
                 _state.value = _state.value.copy(error = error.message)
             } catch (error: Exception) {
@@ -182,6 +189,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val syncEngine = engine ?: return@launch
             mutex.withLock {
                 val principal = principalId()
+                if (principal == 0L || syncEngine.snapshot().cursor.generation.isEmpty()) {
+                    _state.value = _state.value.copy(error = "Still signing in; the action was not saved.")
+                    return@launch
+                }
                 val current = syncEngine.state(principal, entryId)
                 val base = when (register) {
                     SyncEngine.REGISTER_SHELF -> current.shelf.rev
@@ -212,6 +223,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             val api = api() ?: return@launch
             runCatching { api.subscribe(SubscriptionBody(url = url, opId = opId("subscribe"), cadence = cadence)) }
+                .onSuccess { refresh() }
                 .onFailure { _state.value = _state.value.copy(error = it.message) }
         }
     }
@@ -220,6 +232,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             val api = api() ?: return@launch
             runCatching { api.unsubscribe(subscriptionId, opId("unsubscribe")) }
+                .onSuccess { refresh() }
                 .onFailure { _state.value = _state.value.copy(error = it.message) }
         }
     }
@@ -229,7 +242,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val api = api() ?: return@launch
             runCatching {
                 api.updateSubscription(subscriptionId, SubscriptionPatch(opId = opId("cadence"), cadence = cadence))
-            }.onFailure { _state.value = _state.value.copy(error = it.message) }
+            }.onSuccess { refresh() }
+            .onFailure { _state.value = _state.value.copy(error = it.message) }
         }
     }
 
@@ -237,14 +251,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             val api = api() ?: return@launch
             runCatching { api.revertActivity(activityId, opId("revert")) }
+                .onSuccess { refresh() }
                 .onFailure { _state.value = _state.value.copy(error = it.message) }
         }
     }
-
-    /** The cached reader content, or null when it has never been opened. */
-    fun content(entryId: Long) = db.content().entry(entryId)
-
-    suspend fun cachedContent(entryId: Long): ContentEntity? = db.content().get(entryId)
 
     /**
      * Fetches the signed content URL and caches the readable content. Returns
@@ -286,19 +296,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         runCatching { api.notification(notificationId).entryIds?.firstOrNull() }.getOrNull()
     }
 
-    fun registerPush() {
-        EarnestPushService.register(getApplication())
-    }
-
-    fun setShowAgentText(enabled: Boolean) {
-        getApplication<Application>().getSharedPreferences("push", Application.MODE_PRIVATE)
-            .edit().putBoolean("show_text", enabled).apply()
-    }
-
-    fun showAgentText(): Boolean =
-        getApplication<Application>().getSharedPreferences("push", Application.MODE_PRIVATE)
-            .getBoolean("show_text", false)
-
     private fun api(): EarnestApi? {
         val token = secrets.token() ?: return null
         return EarnestApi(secrets.server, token)
@@ -311,7 +308,31 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun savePrincipal(principalId: Long) {
         getApplication<Application>().getSharedPreferences(PREFS, Application.MODE_PRIVATE)
-            .edit().putLong(KEY_PRINCIPAL, principalId).apply()
+            .edit { putLong(KEY_PRINCIPAL, principalId) }
+    }
+
+    /** Maps principal IDs to the names agents chose for themselves. */
+    private suspend fun principalNames(api: EarnestApi): Map<Long, String> =
+        runCatching { api.tokens() }.getOrDefault(emptyList())
+            .filter { it.revokedAt == null && it.name.isNotBlank() }
+            .associate { it.principalId to it.name }
+
+    /** Keeps the last known agent names so briefs stay labelled offline. */
+    private fun savePrincipalNames(names: Map<Long, String>) {
+        if (names.isEmpty()) return
+        val encoded = runCatching {
+            json.encodeToString(MapSerializer(Long.serializer(), String.serializer()), names)
+        }.getOrNull() ?: return
+        getApplication<Application>().getSharedPreferences(PREFS, Application.MODE_PRIVATE)
+            .edit { putString(KEY_PRINCIPALS, encoded) }
+    }
+
+    private fun cachedPrincipalNames(): Map<Long, String> {
+        val encoded = getApplication<Application>().getSharedPreferences(PREFS, Application.MODE_PRIVATE)
+            .getString(KEY_PRINCIPALS, null) ?: return emptyMap()
+        return runCatching {
+            json.decodeFromString(MapSerializer(Long.serializer(), String.serializer()), encoded)
+        }.getOrDefault(emptyMap())
     }
 
     private suspend fun cacheBriefs(briefs: List<Annotation>) {
@@ -340,6 +361,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
         private const val PREFS = "session"
         private const val KEY_PRINCIPAL = "principal_id"
+        private const val KEY_PRINCIPALS = "principal_names"
     }
 }
 

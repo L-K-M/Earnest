@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -20,18 +21,22 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.adaptive.layout.AnimatedPane
 import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldRole
 import androidx.compose.material3.adaptive.navigation.NavigableListDetailPaneScaffold
@@ -41,6 +46,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -49,6 +55,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
@@ -82,13 +89,25 @@ private enum class View(val label: String) {
 internal fun EarnestApp(initialEntry: Long?, notificationId: Long?) {
     val model: AppViewModel = viewModel()
     val loggedIn by model.loggedIn.collectAsState()
-    EarnestTheme {
+    val context = LocalContext.current
+    var theme by remember { mutableStateOf(context.themeSetting()) }
+    EarnestTheme(theme) {
         if (!loggedIn) {
             LoginScreen(onLoggedIn = model::onLoggedIn)
             return@EarnestTheme
         }
         val state by model.state.collectAsState()
-        MainScaffold(model, state, initialEntry, notificationId)
+        MainScaffold(
+            model = model,
+            state = state,
+            theme = theme,
+            onThemeChange = { setting ->
+                theme = setting
+                context.setThemeSetting(setting)
+            },
+            initialEntry = initialEntry,
+            notificationId = notificationId,
+        )
     }
 }
 
@@ -97,6 +116,8 @@ internal fun EarnestApp(initialEntry: Long?, notificationId: Long?) {
 private fun MainScaffold(
     model: AppViewModel,
     state: UiState,
+    theme: ThemeSetting,
+    onThemeChange: (ThemeSetting) -> Unit,
     initialEntry: Long?,
     notificationId: Long?,
 ) {
@@ -104,6 +125,7 @@ private fun MainScaffold(
     var view by remember { mutableStateOf(View.TODAY) }
     var readerEntry by remember { mutableStateOf<CachedEntry?>(null) }
     var readerContent by remember { mutableStateOf<ContentUrlResult?>(null) }
+    var readerLoading by remember { mutableStateOf(false) }
     var activityGroups by remember { mutableStateOf<List<ch.lkmc.earnest.core.ActivityGroup>>(emptyList()) }
     var showSubscribe by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
@@ -121,7 +143,9 @@ private fun MainScaffold(
         val id = selected ?: return@LaunchedEffect
         readerEntry = state.snapshot.entries.firstOrNull { it.id == id }
         readerContent = null
+        readerLoading = true
         readerContent = model.openEntry(id)
+        readerLoading = false
     }
     LaunchedEffect(view) {
         if (view == View.ACTIVITY) {
@@ -182,7 +206,12 @@ private fun MainScaffold(
             }
         },
     ) {
-        Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
+        Scaffold(
+            topBar = {
+                EarnestTopBar(view.label, state.loading, model, theme, onThemeChange)
+            },
+            snackbarHost = { SnackbarHost(snackbar) },
+        ) { padding ->
             Column(Modifier.fillMaxSize().padding(padding)) {
                 state.error?.let {
                     Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(8.dp))
@@ -209,6 +238,7 @@ private fun MainScaffold(
                                     principalId = state.principalId,
                                     subscriptionTitles = subscriptionTitles,
                                     briefs = if (view == View.TODAY) state.briefs else emptyList(),
+                                    principalNames = state.principals,
                                     onOpen = { entryId ->
                                         scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
                                     },
@@ -243,8 +273,11 @@ private fun MainScaffold(
                                     }
                                     val content = readerContent
                                     when {
-                                        content == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                        readerLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                             CircularProgressIndicator()
+                                        }
+                                        content == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                            Text("Couldn't load this entry. Check your connection and try again.")
                                         }
                                         else -> Reader(
                                             url = content.url,
@@ -272,6 +305,71 @@ private fun MainScaffold(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EarnestTopBar(
+    title: String,
+    loading: Boolean,
+    model: AppViewModel,
+    theme: ThemeSetting,
+    onThemeChange: (ThemeSetting) -> Unit,
+) {
+    var themeOpen by remember { mutableStateOf(false) }
+    TopAppBar(
+        title = { Text(title) },
+        actions = {
+            if (loading) {
+                CircularProgressIndicator(
+                    Modifier.size(20.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            } else {
+                IconButton(onClick = { model.refresh() }) {
+                    Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
+                }
+            }
+            TextButton(onClick = { themeOpen = true }) { Text("Theme") }
+        },
+    )
+    if (themeOpen) {
+        ThemeDialog(
+            current = theme,
+            onDismiss = { themeOpen = false },
+            onSelect = { setting ->
+                themeOpen = false
+                onThemeChange(setting)
+            },
+        )
+    }
+}
+
+@Composable
+private fun ThemeDialog(
+    current: ThemeSetting,
+    onDismiss: () -> Unit,
+    onSelect: (ThemeSetting) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Theme") },
+        text = {
+            Column {
+                ThemeSetting.entries.forEach { setting ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { onSelect(setting) },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = setting == current, onClick = { onSelect(setting) })
+                        Text(setting.label)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
 @Composable
 private fun EntryListScreen(
     title: String,
@@ -280,6 +378,7 @@ private fun EntryListScreen(
     principalId: Long,
     subscriptionTitles: Map<Long, String>,
     briefs: List<ch.lkmc.earnest.db.BriefEntity>,
+    principalNames: Map<Long, String>,
     onOpen: (Long) -> Unit,
     onLater: (Long) -> Unit,
     onDone: (Long) -> Unit,
@@ -288,14 +387,14 @@ private fun EntryListScreen(
     onUnkeep: (Long) -> Unit,
 ) {
     val listState = rememberLazyListState()
-    MarkSeenOnRender(entries, listState, onSeen)
+    MarkSeenOnRender(entries, principalId, listState, onSeen)
     LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
         if (briefs.isNotEmpty()) {
             item(key = "briefs") {
                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     briefs.forEach { brief ->
                         Text(
-                            "${brief.principalId}: ${brief.value}",
+                            briefLabel(principalNames[brief.principalId], brief.principalId, brief.value),
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }
@@ -336,16 +435,20 @@ private fun EntryListScreen(
 @Composable
 private fun MarkSeenOnRender(
     entries: List<CachedEntry>,
+    principalId: Long,
     listState: androidx.compose.foundation.lazy.LazyListState,
     onSeen: (Long) -> Unit,
 ) {
-    val marked = remember { mutableStateOf(mutableSetOf<Long>()) }
-    LaunchedEffect(listState, entries) {
+    // Resetting with the principal keeps offline launches from losing marks:
+    // rows are marked again once the principal is known.
+    val marked = remember(principalId) { mutableStateListOf<Long>() }
+    LaunchedEffect(listState, entries, principalId) {
+        if (principalId == 0L) return@LaunchedEffect
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.map { it.key } }
             .distinctUntilChanged()
             .collect { keys ->
                 keys.filterIsInstance<Long>().forEach { key ->
-                    if (marked.value.add(key)) onSeen(key)
+                    if (marked.add(key)) onSeen(key)
                 }
             }
     }

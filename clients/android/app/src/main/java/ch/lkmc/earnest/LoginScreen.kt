@@ -14,6 +14,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -21,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import ch.lkmc.earnest.core.ApiException
 import ch.lkmc.earnest.core.DeviceResult
 import ch.lkmc.earnest.core.EarnestApi
@@ -34,7 +36,7 @@ internal fun LoginScreen(onLoggedIn: () -> Unit) {
     val scope = rememberCoroutineScope()
     var server by remember { mutableStateOf("") }
     var authorization by remember { mutableStateOf<DeviceResult?>(null) }
-    var intervalSeconds by remember { mutableStateOf(5L) }
+    var intervalSeconds by remember { mutableLongStateOf(5L) }
     var error by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(authorization) {
@@ -48,6 +50,8 @@ internal fun LoginScreen(onLoggedIn: () -> Unit) {
                 Secrets(context).server = server
                 Secrets(context).saveToken(token.accessToken)
                 onLoggedIn()
+                SyncWorker.schedule(context)
+                EarnestPushService.register(context)
                 return@LaunchedEffect
             } catch (failure: ApiException) {
                 when (failure.code) {
@@ -58,6 +62,9 @@ internal fun LoginScreen(onLoggedIn: () -> Unit) {
                         return@LaunchedEffect
                     }
                 }
+            } catch (failure: Exception) {
+                error = failure.message
+                return@LaunchedEffect
             }
         }
     }
@@ -94,7 +101,7 @@ internal fun LoginScreen(onLoggedIn: () -> Unit) {
             Text("Enter code ${current.userCode} at ${current.verificationUri}")
             TextButton(
                 onClick = {
-                    val uri = Uri.parse(current.verificationUri)
+                    val uri = current.verificationUri.toUri()
                     if (uri.scheme == "https") runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, uri)) }
                 },
             ) {

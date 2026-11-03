@@ -8,10 +8,16 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.edit
 
 /** The reading themes: system, light, dark, true black and e-ink. */
-enum class ThemeSetting { SYSTEM, LIGHT, DARK, BLACK, E_INK }
+enum class ThemeSetting(val label: String) {
+    SYSTEM("System"),
+    LIGHT("Light"),
+    DARK("Dark"),
+    BLACK("True black"),
+    E_INK("E-ink"),
+}
 
 private const val THEME_PREFS = "appearance"
 private const val THEME_KEY = "theme"
@@ -23,13 +29,11 @@ fun Context.themeSetting(): ThemeSetting {
 }
 
 fun Context.setThemeSetting(setting: ThemeSetting) {
-    getSharedPreferences(THEME_PREFS, Context.MODE_PRIVATE).edit().putString(THEME_KEY, setting.name).apply()
+    getSharedPreferences(THEME_PREFS, Context.MODE_PRIVATE).edit { putString(THEME_KEY, setting.name) }
 }
 
 @Composable
-fun EarnestTheme(content: @Composable () -> Unit) {
-    val context = LocalContext.current
-    val setting = context.themeSetting()
+fun EarnestTheme(setting: ThemeSetting, content: @Composable () -> Unit) {
     val dark = isSystemInDarkTheme()
     val scheme = when (setting) {
         ThemeSetting.SYSTEM -> if (dark) darkColorScheme() else lightColorScheme()

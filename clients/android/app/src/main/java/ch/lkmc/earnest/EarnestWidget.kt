@@ -2,9 +2,11 @@ package ch.lkmc.earnest
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.appwidget.action.actionStartActivity
@@ -23,7 +25,9 @@ import androidx.glance.unit.ColorProvider
 import ch.lkmc.earnest.core.CachedEntry
 import ch.lkmc.earnest.core.SyncSnapshot
 import ch.lkmc.earnest.db.AppDatabase
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
 /**
@@ -32,34 +36,38 @@ import kotlinx.serialization.json.Json
  */
 class EarnestWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
+        val entries = withContext(Dispatchers.IO) { WidgetData.headlines(context) }
         provideContent {
-            Headlines(context)
+            Headlines(entries)
         }
     }
 
     @Composable
-    private fun Headlines(context: Context) {
-        val entries = rememberHeadlines(context)
+    private fun Headlines(entries: List<CachedEntry>) {
+        val context = LocalContext.current
         Column(
             modifier = GlanceModifier
                 .fillMaxSize()
-                .background(androidx.glance.unit.ColorProvider(android.graphics.Color.WHITE))
+                .background(ColorProvider(Color(0xFFFFFFFF)))
                 .padding(16.dp),
         ) {
             Text(
                 "Today",
-                style = TextStyle(fontWeight = FontWeight.Bold, color = ColorProvider(android.graphics.Color.BLACK)),
+                style = TextStyle(
+                    fontWeight = FontWeight.Bold,
+                    color = ColorProvider(Color(0xFF101418)),
+                ),
             )
             entries.forEach { entry ->
                 Text(
                     entry.title,
-                    style = TextStyle(color = ColorProvider(android.graphics.Color.BLACK)),
+                    style = TextStyle(color = ColorProvider(Color(0xFF101418))),
                     modifier = GlanceModifier
                         .padding(top = 8.dp)
                         .clickable(
                             actionStartActivity(
                                 Intent(context, MainActivity::class.java).apply {
-                                    data = Uri.parse("earnest://entry/${entry.id}")
+                                    data = "earnest://entry/${entry.id}".toUri()
                                 },
                             ),
                         ),
@@ -68,27 +76,30 @@ class EarnestWidget : GlanceAppWidget() {
         }
     }
 
-    @Composable
-    private fun rememberHeadlines(context: Context): List<CachedEntry> {
-        return androidx.compose.runtime.remember { WidgetData.headlines(context) }
-    }
 }
 
 class EarnestWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = EarnestWidget()
 }
 
-private object WidgetData {
+internal object WidgetData {
+    private val json = Json { ignoreUnknownKeys = true }
+
+    /** Reads the cached snapshot once; the widget has no network access. */
     fun headlines(context: Context): List<CachedEntry> {
         val row = runBlocking { AppDatabase.get(context).snapshot().load() } ?: return emptyList()
-        val snapshot = runCatching { Json { ignoreUnknownKeys = true }.decodeFromString(SyncSnapshot.serializer(), row.json) }
+        val snapshot = runCatching { json.decodeFromString(SyncSnapshot.serializer(), row.json) }
             .getOrNull() ?: return emptyList()
-        return snapshot.entries
+        return headlines(snapshot)
+    }
+
+    /** The newest live headlines, newest first; deleted entries never appear. */
+    internal fun headlines(snapshot: SyncSnapshot): List<CachedEntry> =
+        snapshot.entries
             .filterNot { it.deleted }
             .sortedBy { it.seq }
             .takeLast(HEADLINES)
             .reversed()
-    }
 
     private const val HEADLINES = 5
 }
