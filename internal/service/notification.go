@@ -54,6 +54,7 @@ type NotificationWhy struct {
 type Notification struct {
 	ID          int64                `json:"id"`
 	PrincipalID int64                `json:"principal_id"`
+	Muted       bool                 `json:"muted"`
 	Note        string               `json:"note"`
 	EntryIDs    []int64              `json:"entry_ids"`
 	Category    NotificationCategory `json:"category"`
@@ -182,6 +183,7 @@ func (s *Service) SendNotification(ctx context.Context, a Actor, r SendNotificat
 		if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM notification_mutes WHERE user_id=$1 AND principal_id=$2)", a.UserID, a.PrincipalID).Scan(&muted); err != nil {
 			return err
 		}
+		out.Muted = muted
 		until := quietUntil(settings, receipt)
 		if muted {
 			until = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -220,7 +222,7 @@ type notificationReader interface {
 func loadNotification(ctx context.Context, q notificationReader, user, id int64) (Notification, error) {
 	var out Notification
 	var why []byte
-	err := q.QueryRow(ctx, "SELECT id,sender_principal_id,note,entry_ids,category,status,held_until,budget_used,budget_limit,why,generation::text,created_at FROM notifications WHERE recipient_user_id=$1 AND id=$2", user, id).Scan(&out.ID, &out.PrincipalID, &out.Note, &out.EntryIDs, &out.Category, &out.Status, &out.HeldUntil, &out.Budget.UsedToday, &out.Budget.LimitToday, &why, &out.Generation, &out.CreatedAt)
+	err := q.QueryRow(ctx, "SELECT n.id,n.sender_principal_id,n.note,n.entry_ids,n.category,n.status,n.held_until,n.budget_used,n.budget_limit,n.why,n.generation::text,n.created_at,EXISTS(SELECT 1 FROM notification_mutes m WHERE m.user_id=n.recipient_user_id AND m.principal_id=n.sender_principal_id) FROM notifications n WHERE n.recipient_user_id=$1 AND n.id=$2", user, id).Scan(&out.ID, &out.PrincipalID, &out.Note, &out.EntryIDs, &out.Category, &out.Status, &out.HeldUntil, &out.Budget.UsedToday, &out.Budget.LimitToday, &why, &out.Generation, &out.CreatedAt, &out.Muted)
 	if err != nil {
 		return out, domainError(err)
 	}
@@ -318,6 +320,50 @@ func (s *Service) CancelNotification(ctx context.Context, a Actor, id int64, opI
 		}
 		return store.FinishOp(ctx, tx, a.PrincipalID, opID, map[string]any{"id": id})
 	})
+}
+
+// AgentNotificationStatus describes current delivery policy and total accepted use
+// across the agent's tokens for the user's local day.
+type AgentNotificationStatus struct {
+	PrincipalID int64  `json:"principal_id"`
+	Name        string `json:"name"`
+	Muted       bool   `json:"muted"`
+	UsedToday   int    `json:"used_today"`
+}
+
+// ListAgentNotificationStatus lists the user's agents and current notification use.
+func (s *Service) ListAgentNotificationStatus(ctx context.Context, a Actor) ([]AgentNotificationStatus, error) {
+	if err := s.notificationHuman(ctx, a); err != nil {
+		return nil, err
+	}
+	var timezone string
+	if err := s.store.Pool().QueryRow(ctx, "SELECT coalesce((SELECT timezone FROM push_settings WHERE user_id=$1),'UTC')", a.UserID).Scan(&timezone); err != nil {
+		return nil, fmt.Errorf("load notification timezone: %w", err)
+	}
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		return nil, fmt.Errorf("push timezone: %w", err)
+	}
+	local := s.now().In(loc)
+	start := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
+	end := start.AddDate(0, 0, 1)
+	rows, err := s.store.Pool().Query(ctx, `SELECT p.id,p.name,
+ EXISTS(SELECT 1 FROM notification_mutes m WHERE m.user_id=p.user_id AND m.principal_id=p.id),
+ (SELECT count(*) FROM notifications n WHERE n.recipient_user_id=p.user_id AND n.sender_principal_id=p.id AND n.created_at >= $2 AND n.created_at < $3)
+ FROM principals p WHERE p.user_id=$1 AND p.kind='agent' ORDER BY p.id`, a.UserID, start, end)
+	if err != nil {
+		return nil, fmt.Errorf("list agent notification status: %w", err)
+	}
+	defer rows.Close()
+	out := []AgentNotificationStatus{}
+	for rows.Next() {
+		var agent AgentNotificationStatus
+		if err := rows.Scan(&agent.PrincipalID, &agent.Name, &agent.Muted, &agent.UsedToday); err != nil {
+			return nil, fmt.Errorf("scan agent notification status: %w", err)
+		}
+		out = append(out, agent)
+	}
+	return out, rows.Err()
 }
 
 type NotificationMute string
