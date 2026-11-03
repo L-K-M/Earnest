@@ -70,6 +70,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # Pass optional push and dynamically named LLM settings from the deployment file.
+    env_file:
+      - path: .env
+        required: false
     environment:
       EARNEST_HTTP_ADDR: ":8080"
       EARNEST_CONTENT_ADDR: ":8081"
