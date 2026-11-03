@@ -74,7 +74,10 @@ it('creates a notify-only watch with explicit budgets',async () => {
   fireEvent.change(within(region).getByLabelText('Semantic description'),{target:{value:'Rust security advisories'}})
   fireEvent.change(within(region).getByLabelText('Daily watch notification budget'),{target:{value:'2'}})
   fireEvent.click(within(region).getByRole('button',{name:'Create watch'}))
-  await waitFor(() => expect(request).toHaveBeenCalledWith('/v1/watch-rules',expect.objectContaining({method:'POST',body:JSON.stringify({name:'Security',description:'Rust security advisories',budget:2,enabled:true,check_llm:false,check_budget:3})})))
+  await waitFor(() => {
+    const call = vi.mocked(request).mock.calls.find(([path,options]) => path === '/v1/watch-rules' && options?.method === 'POST')
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({name:'Security',description:'Rust security advisories',budget:2,enabled:true,check_llm:false,check_budget:3,op_id:expect.any(String)})
+  })
 })
 
 it.each(['enabled','disabled'])('keeps watches out of the generic editor and hides them when pipeline is %s',async pipeline => {
@@ -106,3 +109,34 @@ it('compiles into the editor, dry runs, and requires confirmation before saving'
   expect((screen.getByRole('button',{name:'Save'}) as HTMLButtonElement).disabled).toBe(false)
   expect(vi.mocked(request).mock.calls.some(([path,options]) => path === '/v1/rules/1' && options?.method === 'PATCH')).toBe(false)
 })
+
+it('reuses a watch operation after a lost response and rotates it for changed input',async () => {
+  mount()
+  const create = await screen.findByRole('button',{name:'Create watch'})
+  const implementation = vi.mocked(request).getMockImplementation()!
+  let attempts = 0
+  vi.mocked(request).mockImplementation(async (path,options) => {
+    if (path === '/v1/watch-rules' && options?.method === 'POST') {
+      attempts++
+      if (attempts <= 2) throw new Error('Lost response')
+      return {}
+    }
+    return implementation(path,options)
+  })
+  fireEvent.change(screen.getByLabelText('Watch name'),{target:{value:'Security'}})
+  fireEvent.change(screen.getByLabelText('Semantic description'),{target:{value:'Rust security advisories'}})
+  fireEvent.click(create)
+  await screen.findByRole('alert')
+  await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('Lost response'))
+  fireEvent.click(create)
+  await waitFor(() => expect(attempts).toBe(2))
+  await waitFor(() => expect((create as HTMLButtonElement).disabled).toBe(false))
+  fireEvent.change(screen.getByLabelText('Watch name'),{target:{value:'Changed watch'}})
+  fireEvent.click(create)
+  await waitFor(() => expect((screen.getByLabelText('Watch name') as HTMLInputElement).value).toBe(''))
+  const bodies = vi.mocked(request).mock.calls.filter(([path,options]) => path === '/v1/watch-rules' && options?.method === 'POST').map(([,options]) => JSON.parse(String(options?.body)) as {op_id:string})
+  expect(bodies).toHaveLength(3)
+  expect(bodies[0].op_id).toEqual(expect.any(String))
+  expect(bodies[1].op_id).toBe(bodies[0].op_id)
+  expect(bodies[2].op_id).not.toBe(bodies[0].op_id)
+},15000)

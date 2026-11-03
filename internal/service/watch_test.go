@@ -2,8 +2,11 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,7 +18,7 @@ func TestWatchPausesThenNotifiesWithinBudget(t *testing.T) {
 	f := newCoreFixture(t, storetest.NewTemplate(t))
 	p := &pipelineProvider{classifier: `{"labels":["news"]}`}
 	ctx := pipelineTestContext(t, f.db, p, []llm.Task{llm.TaskEmbed, llm.TaskClassify}, 0)
-	watch, err := f.s.CreateWatch(ctx, f.a, WatchRule{Rule: Rule{Name: "Space watch", Predicate: RulePredicate{Type: RuleSemantic, Value: "beacon topic"}, Actions: []RuleAction{{Type: RuleNotify, Budget: 1}}, Enabled: true}, CheckLLM: true, CheckBudget: 1})
+	watch, err := f.s.CreateWatch(ctx, f.a, WatchRule{Rule: Rule{Name: "Space watch", Predicate: RulePredicate{Type: RuleSemantic, Value: "beacon topic"}, Actions: []RuleAction{{Type: RuleNotify, Budget: 1}}, Enabled: true}, CheckLLM: true, CheckBudget: 1}, "create-watch")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,5 +55,57 @@ func TestWatchPausesThenNotifiesWithinBudget(t *testing.T) {
 	disabled, err := f.s.Watches(context.Background(), f.a)
 	if err != nil || len(disabled) != 1 || disabled[0].Status != "disabled" {
 		t.Fatalf("disabled watch %+v %v", disabled, err)
+	}
+}
+
+func TestWatchCreationConcurrentReplay(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := context.Background()
+	watch := WatchRule{Rule: Rule{Name: "Watch", Predicate: RulePredicate{Type: RuleSemantic, Value: "beacon"}, Actions: []RuleAction{{Type: RuleNotify, Budget: 2}}, Enabled: true}, CheckLLM: true, CheckBudget: 3}
+	if _, err := f.s.CreateWatch(ctx, f.a, watch, ""); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("missing op_id: %v", err)
+	}
+	const workers = 8
+	results := make(chan WatchRule, workers)
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			result, err := f.s.CreateWatch(ctx, f.a, watch, "concurrent-watch")
+			results <- result
+			errs <- err
+		})
+	}
+	wg.Wait()
+	close(results)
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	var original WatchRule
+	for result := range results {
+		if original.ID == 0 {
+			original = result
+		}
+		if !reflect.DeepEqual(result, original) {
+			t.Fatalf("replay differs: %+v vs %+v", result, original)
+		}
+	}
+	watches, err := f.s.Watches(ctx, f.a)
+	if err != nil || len(watches) != 1 {
+		t.Fatalf("watches=%v error=%v", watches, err)
+	}
+	watch.Name = "Changed retry payload"
+	replay, err := f.s.CreateWatch(ctx, f.a, watch, "concurrent-watch")
+	if err != nil || !reflect.DeepEqual(replay, original) {
+		t.Fatalf("original receipt lost: %+v %v", replay, err)
+	}
+	if _, err := f.s.CreateLabel(ctx, f.a, "Label", "label-operation"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.CreateWatch(ctx, f.a, watch, "label-operation"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("cross-method op reused: %v", err)
 	}
 }

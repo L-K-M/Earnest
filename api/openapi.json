@@ -2991,9 +2991,15 @@
           },
           "name": {
             "type": "string"
+          },
+          "op_id": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
           }
         },
         "required": [
+          "op_id",
           "name",
           "description",
           "enabled",
