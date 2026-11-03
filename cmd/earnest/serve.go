@@ -21,9 +21,11 @@ import (
 	"github.com/L-K-M/Earnest/internal/config"
 	"github.com/L-K-M/Earnest/internal/fetcher"
 	"github.com/L-K-M/Earnest/internal/imageproxy"
+	"github.com/L-K-M/Earnest/internal/llm"
 	"github.com/L-K-M/Earnest/internal/mcp"
 	"github.com/L-K-M/Earnest/internal/metrics"
 	"github.com/L-K-M/Earnest/internal/outbound"
+	"github.com/L-K-M/Earnest/internal/pipeline"
 	"github.com/L-K-M/Earnest/internal/push"
 	"github.com/L-K-M/Earnest/internal/service"
 	"github.com/L-K-M/Earnest/internal/web"
@@ -76,6 +78,23 @@ func serve() error {
 	if err != nil {
 		return fmt.Errorf("outbound client: %w", err)
 	}
+	llmConfig, err := llm.Load()
+	if err != nil {
+		return fmt.Errorf("model configuration: %w", err)
+	}
+	router, err := llm.NewRouter(llmConfig, egress)
+	if err != nil {
+		return fmt.Errorf("model router: %w", err)
+	}
+	modelClient, err := llm.NewClient(router, llm.NewBudget(db, llmConfig.Limits()), llmConfig.Models)
+	if err != nil {
+		return fmt.Errorf("model client: %w", err)
+	}
+	engine, err := pipeline.New(router, modelClient, llm.NewCache(db), llmConfig.Models)
+	if err != nil {
+		return fmt.Errorf("pipeline: %w", err)
+	}
+	ctx = service.WithPipeline(ctx, engine)
 	pushRegistry, publicKey, err := buildPushRegistry(cfg, egress)
 	if err != nil {
 		return fmt.Errorf("push transports: %w", err)
@@ -146,6 +165,9 @@ func serve() error {
 		{"rule jobs", svc.RunRuleJobs},
 	} {
 		workers.Go(func() { runDelivery(ctx, logger, job.name, job.run) })
+	}
+	if router.Enabled(llm.TaskEmbed) || router.Enabled(llm.TaskClassify) {
+		workers.Go(func() { runDelivery(ctx, logger, "internal pipeline", svc.RunPipeline) })
 	}
 	// Stop and join delivery before the deferred database close.
 	defer workers.Wait()

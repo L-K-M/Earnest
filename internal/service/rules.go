@@ -130,6 +130,9 @@ type ruleEntry struct {
 	ID, FeedID, FolderID int64
 	Title, Body, Author  string
 	FirstSeen            time.Time
+	ClassifierLabels     []string
+	SemanticMatches      map[string]bool
+	ContentHash          []byte
 }
 
 func matchesRule(p RulePredicate, e ruleEntry) bool {
@@ -147,8 +150,10 @@ func matchesRule(p RulePredicate, e ruleEntry) bool {
 		return false
 	case RuleAuthor:
 		return strings.EqualFold(e.Author, p.Value)
-	case RuleClassifierIn, RuleSemantic:
-		return false
+	case RuleClassifierIn:
+		return classifierMatches(p.Terms, e.ClassifierLabels)
+	case RuleSemantic:
+		return e.SemanticMatches[p.Value]
 	case RuleAnd:
 		for _, c := range p.Children {
 			if !matchesRule(c, e) {
@@ -170,7 +175,7 @@ func matchesRule(p RulePredicate, e ruleEntry) bool {
 }
 
 func (s *Service) ruleEntries(ctx context.Context, user int64, since time.Time, ids []int64) ([]ruleEntry, error) {
-	rows, err := s.store.Pool().Query(ctx, `SELECT e.id,e.feed_id,coalesce(s.folder_id,0),e.title,e.author,e.first_seen_at,coalesce(c.text,'') FROM entries e JOIN subscriptions s ON s.feed_id=e.feed_id AND s.user_id=$1 AND s.deleted_at IS NULL LEFT JOIN LATERAL (SELECT text FROM contents WHERE entry_id=e.id AND content_hash=e.content_hash ORDER BY (source='extracted') DESC,sanitizer_version DESC LIMIT 1) c ON true WHERE e.deleted_at IS NULL AND e.first_seen_at >= $2 AND ($3::bigint[] IS NULL OR e.id=ANY($3)) ORDER BY e.seq DESC`, user, since, ids)
+	rows, err := s.store.Pool().Query(ctx, `SELECT e.id,e.feed_id,coalesce(s.folder_id,0),e.title,e.author,e.first_seen_at,coalesce(c.text,''),e.content_hash FROM entries e JOIN subscriptions s ON s.feed_id=e.feed_id AND s.user_id=$1 AND s.deleted_at IS NULL LEFT JOIN LATERAL (SELECT text FROM contents WHERE entry_id=e.id AND content_hash=e.content_hash ORDER BY (source='extracted') DESC,sanitizer_version DESC LIMIT 1) c ON true WHERE e.deleted_at IS NULL AND e.first_seen_at >= $2 AND ($3::bigint[] IS NULL OR e.id=ANY($3)) ORDER BY e.seq DESC`, user, since, ids)
 	if err != nil {
 		return nil, fmt.Errorf("load rule entries: %w", err)
 	}
@@ -178,7 +183,7 @@ func (s *Service) ruleEntries(ctx context.Context, user int64, since time.Time, 
 	result := []ruleEntry{}
 	for rows.Next() {
 		var e ruleEntry
-		if err := rows.Scan(&e.ID, &e.FeedID, &e.FolderID, &e.Title, &e.Author, &e.FirstSeen, &e.Body); err != nil {
+		if err := rows.Scan(&e.ID, &e.FeedID, &e.FolderID, &e.Title, &e.Author, &e.FirstSeen, &e.Body, &e.ContentHash); err != nil {
 			return nil, fmt.Errorf("scan rule entry: %w", err)
 		}
 		result = append(result, e)
@@ -206,6 +211,17 @@ func (s *Service) DryRunRule(ctx context.Context, a Actor, p RulePredicate, acti
 	}
 	ids := []int64{}
 	for _, e := range entries {
+		var ready bool
+		e, ready, err = s.prepareModelPredicates(ctx, a.UserID, p, e)
+		if err != nil {
+			if pipelineWaiting(err) {
+				continue
+			}
+			return nil, err
+		}
+		if !ready {
+			continue
+		}
 		if matchesRule(p, e) {
 			ids = append(ids, e.ID)
 		}
@@ -263,6 +279,15 @@ func (s *Service) UpdateRule(ctx context.Context, a Actor, rule Rule) error {
 	}
 	if err := s.checkRuleReferences(ctx, a.UserID, rule.Predicate, rule.Actions); err != nil {
 		return err
+	}
+	var watch bool
+	if err := s.store.Pool().QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM watch_rules w JOIN rules r ON r.id=w.rule_id WHERE r.user_id=$1 AND r.id=$2)`, a.UserID, rule.ID).Scan(&watch); err != nil {
+		return err
+	}
+	if watch {
+		if err := validateWatch(rule); err != nil {
+			return err
+		}
 	}
 	predicate, err := json.Marshal(rule.Predicate)
 	if err != nil {

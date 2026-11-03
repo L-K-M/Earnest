@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"github.com/L-K-M/Earnest/internal/pipeline"
 	"strings"
 )
 
@@ -29,9 +30,9 @@ type RulePredicate struct {
 	Children []RulePredicate   `json:"children,omitempty"`
 }
 
-// ClassifierPressRelease is the initial classifier vocabulary. The pipeline
-// must use this same vocabulary when it is implemented.
-const ClassifierPressRelease = "press_release"
+// ClassifierPressRelease remains the original rule vocabulary spelling.
+// The pipeline owns the full closed vocabulary.
+const ClassifierPressRelease = pipeline.LabelPressRelease
 
 // RuleActionType identifies a permitted effect of a rule.
 type RuleActionType string
@@ -118,7 +119,7 @@ func validateRulePredicate(p RulePredicate, nodes *int) (scoped, webhookSafe boo
 			return invalid()
 		}
 		for _, term := range p.Terms {
-			if strings.TrimSpace(term) == "" || (p.Type == RuleClassifierIn && term != ClassifierPressRelease) {
+			if strings.TrimSpace(term) == "" || (p.Type == RuleClassifierIn && !pipeline.ValidLabel(term)) {
 				return invalid()
 			}
 		}

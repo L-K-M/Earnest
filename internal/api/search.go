@@ -4,17 +4,19 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/L-K-M/Earnest/internal/service"
 )
 
 type searchInput struct {
-	Query          string `query:"q" required:"true"`
-	SubscriptionID int64  `query:"subscription_id" minimum:"0"`
-	FolderID       int64  `query:"folder_id" minimum:"0"`
-	Limit          int    `query:"limit" default:"50" minimum:"1" maximum:"200"`
-	Cursor         string `query:"cursor" doc:"Exclusive cursor from the preceding page with the same query and filters. An empty page ends pagination."`
+	Query          string             `query:"q" required:"true"`
+	Mode           service.SearchMode `query:"mode" enum:"fulltext,hybrid"`
+	SubscriptionID int64              `query:"subscription_id" minimum:"0"`
+	FolderID       int64              `query:"folder_id" minimum:"0"`
+	Limit          int                `query:"limit" default:"50" minimum:"1" maximum:"200"`
+	Cursor         string             `query:"cursor" doc:"Exclusive cursor from the preceding page with the same query and filters. An empty page ends pagination."`
 }
 type savedSearchEntriesInput struct {
 	ID     int64  `path:"id" minimum:"1"`
@@ -43,6 +45,7 @@ type searchMatch struct {
 }
 type searchPage struct {
 	Matches    []searchMatch `json:"matches"`
+	Status     string        `json:"status,omitempty"`
 	NextCursor string        `json:"next_cursor,omitempty"`
 }
 type searchCursor struct {
@@ -88,6 +91,14 @@ func decodeSearchCursor(raw string) (*service.SearchCursor, error) {
 	return &service.SearchCursor{Rank: cursor.Rank, Seq: cursor.Seq, AnnotationID: cursor.AnnotationID}, nil
 }
 func toSearchPage(rows []service.SearchResult, err error) (searchPage, error) {
+	// An unavailable semantic path is an in-band status on the page, not a
+	// transport failure.
+	if errors.Is(err, service.ErrPipelineDisabled) {
+		return searchPage{Status: statusDisabled, Matches: []searchMatch{}}, nil
+	}
+	if errors.Is(err, service.ErrPipelinePaused) {
+		return searchPage{Status: statusPaused, Matches: []searchMatch{}}, nil
+	}
 	if err != nil {
 		return searchPage{}, err
 	}
@@ -119,7 +130,10 @@ func (s *server) searchRoutes() {
 		if err != nil {
 			return searchPage{}, err
 		}
-		rows, err := s.svc.Search(ctx, actor(ctx), in.Query, service.SearchFilter{SubscriptionID: in.SubscriptionID, FolderID: in.FolderID, Limit: in.Limit}, cursor)
+		rows, err := s.svc.Search(ctx, actor(ctx), in.Query, service.SearchFilter{SubscriptionID: in.SubscriptionID, FolderID: in.FolderID, Mode: in.Mode, Limit: in.Limit}, cursor)
+		if in.Mode == service.SearchHybrid {
+			return semanticPage(rows, err)
+		}
 		return toSearchPage(rows, err)
 	})
 	route(s, http.MethodGet, "/v1/saved-searches", "list-saved-searches", func(ctx context.Context, in *empty) ([]savedSearch, error) {
