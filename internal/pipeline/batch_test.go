@@ -18,8 +18,38 @@ import (
 )
 
 type batchSpend struct {
-	mu    sync.Mutex
-	spent int64
+	mu           sync.Mutex
+	spent        int64
+	reservations map[string]int64
+	next         int
+}
+
+func (b *batchSpend) LLMReserveSpend(_ context.Context, _ string, _ time.Time, limit, estimate int64, _ time.Time) (string, int64, bool, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if limit > 0 && (b.spent >= limit || estimate > limit-b.spent) {
+		return "", b.spent, false, nil
+	}
+	if b.reservations == nil {
+		b.reservations = make(map[string]int64)
+	}
+	b.next++
+	id := fmt.Sprint(b.next)
+	b.reservations[id] = estimate
+	b.spent += estimate
+	return id, b.spent - estimate, true, nil
+}
+
+func (b *batchSpend) LLMSettleSpend(_ context.Context, _ string, id string, actual int64) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	estimate, ok := b.reservations[id]
+	if !ok {
+		return nil
+	}
+	delete(b.reservations, id)
+	b.spent += actual - estimate
+	return nil
 }
 
 func (b *batchSpend) LLMEnsureMonth(_ context.Context, _ string, _ time.Time, limit int64) (int64, int64, error) {
@@ -104,7 +134,7 @@ func TestOpenAIEditionBatchWireBudgetAndSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	id, err := batch.Submit(context.Background(), []llm.CompleteRequest{req})
-	if err != nil || id != "batch-one" {
+	if err != nil || !strings.HasPrefix(id, "batch-one:") {
 		t.Fatalf("submit %q %v", id, err)
 	}
 	outputs, ready, err := batch.Poll(context.Background(), id, []llm.CompleteRequest{req})

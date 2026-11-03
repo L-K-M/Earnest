@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"github.com/L-K-M/Earnest/internal/outbound"
 )
 
 // Client is the pipeline-facing LLM client: routing, budgets, spend
@@ -35,22 +37,38 @@ func (c *Client) Complete(ctx context.Context, task Task, req CompleteRequest) (
 		return nil, err
 	}
 	req.Model = route.Model
-	if err := c.budget.Authorize(ctx, route.Provider.Name()); err != nil {
-		return nil, err
+	if req.MaxTokens <= 0 {
+		req.MaxTokens = DefaultMaxTokens
 	}
-	completion, err := route.Provider.Complete(ctx, req)
+	estimate, err := EstimateCompletion(req, c.models[route.Model])
 	if err != nil {
 		return nil, err
 	}
-	if err := c.budget.Record(ctx, route.Provider.Name(), c.cost(route.Model, completion.Usage, false)); err != nil {
+	id, err := c.budget.Reserve(ctx, route.Provider.Name(), estimate)
+	if err != nil {
+		return nil, err
+	}
+	completion, err := route.Provider.Complete(ctx, req)
+	actual := estimate
+	var pricingErr error
+	if completion != nil {
+		actual, pricingErr = c.models[route.Model].CompletionCost(completion.Usage)
+		if pricingErr != nil || completion.Usage == (Usage{}) {
+			actual = estimate
+		}
+	} else if !billingUnknown(err) {
+		actual = 0
+	}
+	recordErr := c.budget.Reconcile(context.WithoutCancel(ctx), route.Provider.Name(), id, actual)
+	if err := errors.Join(err, pricingErr, recordErr); err != nil {
 		return nil, err
 	}
 	return completion, nil
 }
 
 // Embed resolves task, checks the budget, calls the provider, normalises the
-// vectors to StorageDimensions and records spend. A zero Dimensions asks the
-// provider for the storage width, which is what the schema stores.
+// vectors to StorageDimensions and records spend. A zero Dimensions asks for
+// the smaller of the known native width and the storage width.
 func (c *Client) Embed(ctx context.Context, task Task, req EmbedRequest) ([]Vector, Usage, error) {
 	route, err := c.router.Task(task)
 	if err != nil {
@@ -60,16 +78,40 @@ func (c *Client) Embed(ctx context.Context, task Task, req EmbedRequest) ([]Vect
 	info := c.models[route.Model]
 	if req.Dimensions == 0 {
 		req.Dimensions = StorageDimensions
+		if info.Dimensions > 0 && info.Dimensions < req.Dimensions {
+			req.Dimensions = info.Dimensions
+		}
 	}
 	if info.Dimensions > 0 && req.Dimensions > info.Dimensions {
 		return nil, Usage{}, fmt.Errorf("llm: task %s requests %d dimensions but model %s produces %d",
 			task, req.Dimensions, route.Model, info.Dimensions)
 	}
-	if err := c.budget.Authorize(ctx, route.Provider.Name()); err != nil {
+	// Gemini's embedding API supplies no billable usage; a priced, capped
+	// configuration cannot safely authorize these calls.
+	if _, gemini := route.Provider.(*Gemini); gemini && info.EmbeddingPer1M > 0 && c.budget.limits[route.Provider.Name()] > 0 {
+		return nil, Usage{}, fmt.Errorf("%w: capped Gemini embeddings require billable token counts", ErrUnsupported)
+	}
+	estimate, err := estimateEmbedding(req, info)
+	if err != nil {
+		return nil, Usage{}, err
+	}
+	id, err := c.budget.Reserve(ctx, route.Provider.Name(), estimate)
+	if err != nil {
 		return nil, Usage{}, err
 	}
 	result, err := route.Provider.Embed(ctx, req)
-	if err != nil {
+	actual := estimate
+	var pricingErr error
+	if result != nil {
+		actual, pricingErr = info.EmbeddingCost(result.Usage)
+		if pricingErr != nil || result.Usage == (Usage{}) {
+			actual = estimate
+		}
+	} else if !billingUnknown(err) {
+		actual = 0
+	}
+	recordErr := c.budget.Reconcile(context.WithoutCancel(ctx), route.Provider.Name(), id, actual)
+	if err := errors.Join(err, pricingErr, recordErr); err != nil {
 		return nil, Usage{}, err
 	}
 	vectors := make([]Vector, 0, len(result.Vectors))
@@ -80,21 +122,22 @@ func (c *Client) Embed(ctx context.Context, task Task, req EmbedRequest) ([]Vect
 		}
 		vectors = append(vectors, vector)
 	}
-	if err := c.budget.Record(ctx, route.Provider.Name(), c.cost(route.Model, result.Usage, true)); err != nil {
-		return nil, Usage{}, err
-	}
 	return vectors, result.Usage, nil
 }
 
-// cost prices a usage against the model's configured rates. An unpriced
-// model costs nothing, which the router rejects at construction time.
-func (c *Client) cost(model string, usage Usage, embedding bool) USD {
-	info, ok := c.models[model]
-	if !ok {
-		return 0
+// A lost response may still have incurred a charge. Keep the estimate rather
+// than refunding a timeout, server fault or unreadable successful response.
+func billingUnknown(err error) bool {
+	if err == nil || errors.Is(err, ErrUnsupported) {
+		return false
 	}
-	if embedding {
-		return info.EmbeddingPer1M.MulTokens(usage.Input)
+	switch outbound.ErrorClass(err) {
+	case outbound.DNS, outbound.Connect, outbound.TLS, outbound.DeniedAddress:
+		return false
 	}
-	return info.InputPer1M.MulTokens(usage.Input) + info.OutputPer1M.MulTokens(usage.Output)
+	var providerErr *Error
+	if errors.As(err, &providerErr) {
+		return providerErr.StatusCode < 400 || providerErr.StatusCode >= 500 || providerErr.StatusCode == 408
+	}
+	return true
 }

@@ -84,8 +84,9 @@ func (p *Gemini) Complete(ctx context.Context, req CompleteRequest) (*Completion
 	if err := callJSON(ctx, p.client, p.name, endpoint, p.authHeader(), body, &response, p.timeout, p.extraPorts); err != nil {
 		return nil, err
 	}
+	usage := Usage{Input: response.UsageMetadata.PromptTokenCount, Output: response.UsageMetadata.CandidatesTokenCount}
 	if len(response.Candidates) == 0 {
-		return nil, fmt.Errorf("llm: provider %s returned no candidates", p.name)
+		return &Completion{Usage: usage}, fmt.Errorf("llm: provider %s returned no candidates", p.name)
 	}
 	var text strings.Builder
 	for _, part := range response.Candidates[0].Content.Parts {
@@ -93,14 +94,14 @@ func (p *Gemini) Complete(ctx context.Context, req CompleteRequest) (*Completion
 	}
 	if req.Schema != nil {
 		if err := req.Schema.Validate(text.String()); err != nil {
-			return nil, err
+			return &Completion{Usage: usage}, err
 		}
 	}
 	slog.DebugContext(ctx, "llm completion", "provider", p.name, "model", req.Model,
 		"input_tokens", response.UsageMetadata.PromptTokenCount, "output_tokens", response.UsageMetadata.CandidatesTokenCount)
 	return &Completion{
 		Text:  text.String(),
-		Usage: Usage{Input: response.UsageMetadata.PromptTokenCount, Output: response.UsageMetadata.CandidatesTokenCount},
+		Usage: usage,
 	}, nil
 }
 

@@ -24,6 +24,11 @@ type Identity = {user_id: number; principal_id: number}
 const standardViews: View[] = [{kind:'today', title:'Today'}, {kind:'edition', title:'Edition'}, {kind:'later', title:'Later'}, {kind:'kept', title:'Kept'}, {kind:'done', title:'Done'}]
 
 function App() {
+  const [session, setSession] = useState(0)
+  return <Session key={session} onLogout={() => setSession(value => value + 1)} />
+}
+
+function Session({onLogout}: {onLogout: () => void}) {
   const queryClient = useQueryClient()
   const [identity, setIdentity] = useState<Identity | null>(null)
   const [checking, setChecking] = useState(() => Boolean(localStorage.getItem('earnest.csrf')))
@@ -45,12 +50,17 @@ function App() {
     const id = new URLSearchParams(location.search).get('notification')
     if (!identity || !id || notificationOpened.current) return
     notificationOpened.current = true
+    let active = true
     if (!/^[1-9]\d*$/.test(id)) return
     void request<components['schemas']['Notification']>(`/v1/notifications/${id}`).then(async notification => {
+      if (!active) return
       const entryID = notification.entry_ids?.[0]
       if (!entryID) { setPanel('notifications'); return }
-      setSelected(await request<Entry>(`/v1/entries/${entryID}`)); setPanel('river'); setOpened(true)
-    }).catch(e => {setError(e instanceof Error ? e.message : 'Could not open notification.'); setPanel('notifications')})
+      const entry = await request<Entry>(`/v1/entries/${entryID}`)
+      if (!active) return
+      setSelected(entry); setPanel('river'); setOpened(true)
+    }).catch(e => {if (active) {setError(e instanceof Error ? e.message : 'Could not open notification.'); setPanel('notifications')}})
+    return () => {active = false}
   }, [identity])
   const help = useRef<HTMLDialogElement>(null)
   const signedIn = identity !== null
@@ -140,7 +150,16 @@ function App() {
     } catch (error) { setError(error instanceof Error ? error.message : 'Sign in failed.') }
   }
   async function logout() {
-    try { await request('/v1/session/logout', {method:'POST'}); await clearOffline(); setIdentity(null); queryClient.clear(); localStorage.removeItem('earnest.csrf'); sessionStorage.removeItem('earnest.csrf') }
+    try {
+      await request('/v1/session/logout', {method:'POST'})
+      await clearOffline()
+      await queryClient.cancelQueries()
+      queryClient.clear()
+      localStorage.removeItem('earnest.csrf'); sessionStorage.removeItem('earnest.csrf')
+      localStorage.removeItem('earnest.lastVisit')
+      // Remount every session-owned hook, including callbacks still awaiting I/O.
+      onLogout()
+    }
     catch (error) { setError(error instanceof Error ? error.message : 'Could not sign out.') }
   }
   if (checking) return <main className="login" role="status">Checking your session…</main>

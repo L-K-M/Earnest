@@ -31,6 +31,18 @@ func TestAnnotateSendsOpID(t *testing.T) {
 		t.Fatalf("output = %q", out)
 	}
 	requests := log.snapshot()
+	var opIDs = make(map[string]bool)
+	for _, req := range requests {
+		var body map[string]any
+		if err := json.Unmarshal(req.body, &body); err != nil {
+			t.Fatal(err)
+		}
+		opID, _ := body["op_id"].(string)
+		if opID == "" || opIDs[opID] {
+			t.Fatalf("annotations need distinct op_ids: %v", body)
+		}
+		opIDs[opID] = true
+	}
 	if len(requests) != 2 || requests[0].method != http.MethodPut {
 		t.Fatalf("requests = %+v", requests)
 	}
@@ -241,9 +253,9 @@ func TestRevertPostsHandle(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		var body revertBody
+		var body map[string]any
 		decodeBody(t, r, &body)
-		if body.RevertHandle != "handle-9" || body.OpID == "" {
+		if body["revert_handle"] != "handle-9" || body["op_id"] == "" || body["handle"] != nil {
 			t.Errorf("body = %+v", body)
 		}
 		writeJSON(w, struct{}{})

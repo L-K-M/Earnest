@@ -59,7 +59,7 @@ func main() {
 			slog.Error("generation rotation failed", "error", err)
 			os.Exit(1)
 		}
-	case "login", "logout", "whoami", "feeds", "entries", "read", "search",
+	case "--json", "-json", "login", "logout", "whoami", "feeds", "entries", "read", "search",
 		"done", "later", "keep", "unread", "briefing", "annotate", "brief",
 		"notify", "triage", "revert", "activity", "saved-searches", "changes":
 		cli.Version = version

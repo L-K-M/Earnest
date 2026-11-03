@@ -240,11 +240,11 @@ func (s *Service) generateEdition(ctx context.Context, job *claimedEdition, out 
 	}
 	if s.now().Before(out.ReadyAt) {
 		if batch != nil && !job.job.BatchTried {
-			job.job.BatchTried = true
 			id, err := batch.Submit(ctx, requests)
 			if errors.Is(err, llm.ErrBudgetExhausted) {
 				return pipelineError(err)
 			}
+			job.job.BatchTried = true
 			if err == nil {
 				job.job.BatchID = id
 				job.job.BatchSources = fingerprint

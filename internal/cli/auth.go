@@ -50,7 +50,16 @@ func (a *app) login(ctx context.Context, args []string) error {
 	if err := decode(raw, &started); err != nil {
 		return fmt.Errorf("start device login: %w", err)
 	}
-	if !a.json {
+	if a.json {
+		if err := a.encodeJSON(struct {
+			VerificationURI string `json:"verification_uri"`
+			UserCode        string `json:"user_code"`
+			ExpiresIn       int64  `json:"expires_in"`
+			Interval        int64  `json:"interval"`
+		}{started.VerificationURI, started.UserCode, started.ExpiresIn, started.Interval}); err != nil {
+			return err
+		}
+	} else {
 		fmt.Fprintf(a.out, "Open %s and enter code %s\n", started.VerificationURI, started.UserCode)
 		fmt.Fprintln(a.out, "Waiting for approval…")
 	}

@@ -16,7 +16,7 @@ const anthropicVersion = "2023-06-01"
 
 // defaultMaxTokens is the completion budget sent when the caller names none.
 // Anthropic requires max_tokens, so there is always a value.
-const defaultMaxTokens = 4096
+const defaultMaxTokens = DefaultMaxTokens
 
 // Anthropic is a provider for the Anthropic Messages API. Anthropic exposes
 // no embeddings API, so Embed returns ErrUnsupported.
@@ -91,16 +91,17 @@ func (p *Anthropic) Complete(ctx context.Context, req CompleteRequest) (*Complet
 			text.WriteString(block.Text)
 		}
 	}
+	usage := Usage{Input: response.Usage.InputTokens, Output: response.Usage.OutputTokens}
 	if req.Schema != nil {
 		if err := req.Schema.Validate(text.String()); err != nil {
-			return nil, err
+			return &Completion{Usage: usage}, err
 		}
 	}
 	slog.DebugContext(ctx, "llm completion", "provider", p.name, "model", req.Model,
 		"input_tokens", response.Usage.InputTokens, "output_tokens", response.Usage.OutputTokens)
 	return &Completion{
 		Text:  text.String(),
-		Usage: Usage{Input: response.Usage.InputTokens, Output: response.Usage.OutputTokens},
+		Usage: usage,
 	}, nil
 }
 
