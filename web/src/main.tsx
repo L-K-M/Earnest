@@ -10,6 +10,7 @@ import {Settings, defaultSettings, type ReadingSettings} from './Settings'
 import {Feeds} from './Feeds'
 import {Onboarding} from './Onboarding'
 import {ActivityScreen, Notifications} from './agents/Surfaces'
+import {Tokens, Push, Webhooks} from './account/Account'
 import {useReaderSync} from './syncBridge'
 import {type Entry, type ReaderActions, type Subscription, type View, viewKey} from './reader'
 import './style.css'
@@ -23,7 +24,7 @@ function App() {
   const [checking, setChecking] = useState(() => Boolean(localStorage.getItem('earnest.csrf')))
   const [error, setError] = useState('')
   const [view, setView] = useState<View>(standardViews[0])
-  const [panel, setPanel] = useState<'river' | 'feeds' | 'settings' | 'activity' | 'notifications'>('river')
+  const [panel, setPanel] = useState<'river' | 'feeds' | 'settings' | 'activity' | 'notifications'>(() => location.pathname === '/device' ? 'settings' : 'river')
   const [selected, setSelected] = useState<Entry | null>(null)
   const [opened, setOpened] = useState(false)
   const [onboarded, setOnboarded] = useState(false)
@@ -32,6 +33,18 @@ function App() {
   const [sessionStart] = useState(() => new Date().toISOString())
   const [since] = useState(() => localStorage.getItem('earnest.lastVisit') ?? new Date(0).toISOString())
   useEffect(() => { const save = () => localStorage.setItem('earnest.lastVisit', new Date().toISOString()); window.addEventListener('pagehide', save); return () => window.removeEventListener('pagehide', save) }, [])
+  const notificationOpened = useRef(false)
+  useEffect(() => {
+    const id = new URLSearchParams(location.search).get('notification')
+    if (!identity || !id || notificationOpened.current) return
+    notificationOpened.current = true
+    if (!/^[1-9]\d*$/.test(id)) return
+    void request<components['schemas']['Notification']>(`/v1/notifications/${id}`).then(async notification => {
+      const entryID = notification.entry_ids?.[0]
+      if (!entryID) { setPanel('notifications'); return }
+      setSelected(await request<Entry>(`/v1/entries/${entryID}`)); setPanel('river'); setOpened(true)
+    }).catch(e => {setError(e instanceof Error ? e.message : 'Could not open notification.'); setPanel('notifications')})
+  }, [identity])
   const help = useRef<HTMLDialogElement>(null)
   const palette = useRef<HTMLDialogElement>(null)
   const signedIn = identity !== null
@@ -88,7 +101,7 @@ function App() {
   }
   if (checking) return <main className="login" role="status">Checking your session…</main>
   if (!identity) return <main className="login"><h1>Earnest</h1><form onSubmit={login}><label>Username<input name="username" autoComplete="username" required /></label><label>Password<input name="password" type="password" autoComplete="current-password" required /></label><button>Sign in</button>{error && <p role="alert">{error}</p>}</form></main>
-  const firstRun = !onboarded && (onboardingStarted || (subscriptions.isSuccess && subscriptions.data.length === 0 && preferences.isSuccess && preferences.data.rev === 0))
+  const firstRun = panel === 'river' && !opened && !onboarded && (onboardingStarted || (subscriptions.isSuccess && subscriptions.data.length === 0 && preferences.isSuccess && preferences.data.rev === 0))
   return <div className={`layout${opened ? ' reading' : ''}`} data-theme={settings.theme}>
     <a className="skip-link" href="#workspace">Skip to articles</a>
     <nav aria-label="Views"><h1>Earnest</h1>{standardViews.map(item => <button key={item.kind} aria-current={panel === 'river' && viewKey(view) === viewKey(item) ? 'page' : undefined} onClick={() => choose(item)}>{item.title}</button>)}
@@ -105,7 +118,7 @@ function App() {
       <p className="sync-status" role="status">{sync.status}</p>
       {sync.error && <p role="alert">{sync.error} <button onClick={sync.retry}>Retry sync</button></p>}
       </div>
-      {firstRun ? <main onChangeCapture={() => setOnboardingStarted(true)} onClickCapture={() => setOnboardingStarted(true)}><Onboarding onComplete={() => {setOnboarded(true);refreshResources();void queryClient.invalidateQueries({queryKey:['position']});choose(standardViews[0])}} /></main> : panel === 'feeds' ? <main key="feeds" tabIndex={-1} ref={focusPanel}><h2>Feeds</h2><Feeds onChanged={refreshResources} /></main> : panel === 'activity' ? <ActivityScreen /> : panel === 'notifications' ? <Notifications onOpen={entry => {choose(standardViews[0]);setSelected(entry);setOpened(true)}} /> : panel === 'settings' ? <main key="settings" tabIndex={-1} ref={focusPanel}><Settings key={settings.rev} settings={settings} onSaved={savedSettings} /></main> : <>
+      {firstRun ? <main onChangeCapture={() => setOnboardingStarted(true)} onClickCapture={() => setOnboardingStarted(true)}><Onboarding onComplete={() => {setOnboarded(true);refreshResources();void queryClient.invalidateQueries({queryKey:['position']});choose(standardViews[0])}} /></main> : panel === 'feeds' ? <main key="feeds" tabIndex={-1} ref={focusPanel}><h2>Feeds</h2><Feeds onChanged={refreshResources} /></main> : panel === 'activity' ? <ActivityScreen /> : panel === 'notifications' ? <Notifications onOpen={entry => {choose(standardViews[0]);setSelected(entry);setOpened(true)}} /> : panel === 'settings' ? <main key="settings" tabIndex={-1} ref={focusPanel}><Settings key={settings.rev} settings={settings} onSaved={savedSettings} /><Tokens /><Push /><Webhooks /></main> : <>
         <River since={since} sessionStart={sessionStart} key={viewKey(view)} view={view} subscriptions={subscriptions.data ?? []} actions={actions} selected={selected} onSelect={setSelected} onOpen={entry => {setSelected(entry);setOpened(true)}} shortcuts={settings.single_key_shortcuts && preferences.isSuccess} counts={settings.reading_mode === 'unread_counts'} summary={summary} onHelp={() => help.current?.showModal()} />
         {selected && opened ? <Reader key={selected.id} entry={selected} subscription={subscriptions.data?.find(sub => sub.id === selected.subscription_id)} settings={settings} actions={actions} onSettings={savedSettings} renderBody={url => <iframe title="Article body" src={url} sandbox="allow-popups allow-popups-to-escape-sandbox" />} onClose={() => {setOpened(false);window.requestAnimationFrame(() => document.querySelector<HTMLElement>('.river h2')?.focus())}} /> : <article className="reader-placeholder" aria-label="Reader"><p>Choose an article. It has been waiting patiently.</p></article>}
       </>}
