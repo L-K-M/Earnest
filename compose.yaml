@@ -58,7 +58,7 @@ services:
       - ${EARNEST_BACKUP_VOLUME:-backups}:/backups
       - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
     entrypoint: ["/bin/sh", "-c"]
-    command: ["while true; do /usr/local/bin/backup.sh || echo 'backup failed' >&2; sleep 86400; done"]
+    command: ["while true; do sh /usr/local/bin/backup.sh || echo 'backup failed' >&2; sleep 86400; done"]
 
   earnest:
     <<: *service-defaults
