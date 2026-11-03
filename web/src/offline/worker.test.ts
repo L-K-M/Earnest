@@ -93,3 +93,67 @@ it('clears old identity data and fences content fetches still in flight during l
   await visit.done()
   expect((await cache()).rows.size).toBe(0)
 })
+
+it('purges surviving bodies when fresh bootstrap observes a restored generation',async () => {
+  // Cache Storage survives clearing IndexedDB and restarting the worker.
+  vi.mocked(fetch).mockResolvedValue(json({generation:'g1',rev:1}))
+  const initial = dispatch('/v1/bootstrap')
+  await initial.response;await initial.done()
+  await (await cache()).put('/v1/entries/7/content',json({entry_id:7,text:'Old generation body'}))
+  vi.resetModules();handlers = new Map()
+  await import('./worker')
+  vi.mocked(fetch).mockImplementation(async input => {
+    const path = new URL(href(input as Key)).pathname
+    if (path === '/v1/bootstrap') return json({generation:'g2',rev:0})
+    if (path.endsWith('/content')) throw new TypeError('Prefetch unavailable')
+    return json({entries:[{id:7,title:'Restored metadata'}]})
+  })
+  const restored = dispatch('/v1/bootstrap')
+  await restored.response;await restored.done()
+  const visit = dispatch('/v1/entries?view=river')
+  expect(await (await visit.response)!.json()).toEqual({entries:[{id:7,title:'Restored metadata'}]})
+  await visit.done()
+  const body = dispatch('/v1/entries/7/content')
+  await expect(body.response).rejects.toThrow('Prefetch unavailable')
+  await body.done()
+})
+
+it('retains bodies across same-generation sync reads and purges unbound legacy caches',async () => {
+  await (await cache()).put('/v1/entries/7/content',json({text:'Unbound legacy body'}))
+  vi.mocked(fetch).mockResolvedValue(json({generation:'g1',rev:0}))
+  const first = dispatch('/v1/bootstrap')
+  await first.response;await first.done()
+  expect((await cache()).rows.has(`${origin}/v1/entries/7/content`)).toBe(false)
+  await (await cache()).put('/v1/entries/7/content',json({text:'Current body'}))
+  vi.mocked(fetch).mockResolvedValue(json({next:{generation:'g1',rev:1}}))
+  const same = dispatch('/v1/changes?cursor=g1:0')
+  await same.response;await same.done()
+  expect((await cache()).rows.has(`${origin}/v1/entries/7/content`)).toBe(true)
+  vi.mocked(fetch).mockResolvedValue(json({next:{generation:'g2',rev:0}}))
+  const changed = dispatch('/v1/changes?cursor=g2:0')
+  await changed.response;await changed.done()
+  expect((await cache()).rows.has(`${origin}/v1/entries/7/content`)).toBe(false)
+})
+
+it('fences old generation prefetch and late cursor responses',async () => {
+  vi.mocked(fetch).mockResolvedValue(json({generation:'g1',rev:0}))
+  const first = dispatch('/v1/bootstrap')
+  await first.response;await first.done()
+  let releaseContent: (response: Response) => void = () => undefined
+  let releaseCursor: (response: Response) => void = () => undefined
+  const content = new Promise<Response>(resolve => {releaseContent=resolve})
+  const cursor = new Promise<Response>(resolve => {releaseCursor=resolve})
+  vi.mocked(fetch).mockImplementation(async input => href(input as Key).endsWith('/content') ? content : href(input as Key).includes('/bootstrap') ? cursor : json({entries:[{id:7}]}))
+  const visit = dispatch('/v1/entries')
+  await visit.response
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.objectContaining({url:`${origin}/v1/entries/7/content`})))
+  const late = dispatch('/v1/bootstrap')
+  vi.mocked(fetch).mockResolvedValue(json({generation:'g2',rev:0}))
+  const restore = dispatch('/v1/bootstrap')
+  await restore.response;await restore.done()
+  await (await cache()).put('/v1/entries/8/content',json({text:'New body'}))
+  releaseContent(json({text:'Old body'}));releaseCursor(json({generation:'g1',rev:0}))
+  await visit.done();await late.response;await late.done()
+  expect((await cache()).rows.has(`${origin}/v1/entries/7/content`)).toBe(false)
+  expect((await cache()).rows.has(`${origin}/v1/entries/8/content`)).toBe(true)
+})

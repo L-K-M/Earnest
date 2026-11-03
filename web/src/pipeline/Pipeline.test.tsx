@@ -51,15 +51,19 @@ it('shows edition prose and triggers a weekly edition', async () => {
   await waitFor(() => expect(request).toHaveBeenCalledWith('/v1/editions',expect.objectContaining({method:'POST',body:expect.stringContaining('weekly')})))
 })
 
-it('toggles summary with Tab from the reader without intercepting text input', async () => {
+it('allows forward Tab navigation except when hiding a visible summary', async () => {
   vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? status : {model:'m',generated_at:'2026-01-01T00:00:00Z',claims:[]})
   mount(<><h2 tabIndex={-1}>Article</h2><input aria-label="Other input"/><Summary entryID={1} shortcuts/></>)
   await screen.findByRole('button',{name:'Summary'})
   const heading = screen.getByText('Article')
-  fireEvent.keyDown(heading,{key:'Tab'})
+  expect(fireEvent.keyDown(heading,{key:'Tab'})).toBe(true)
+  expect(screen.getByRole('button',{name:'Summary'}).getAttribute('aria-expanded')).toBe('false')
+  fireEvent.click(screen.getByRole('button',{name:'Summary'}))
   expect(await screen.findByText(/Summary · m/)).toBeTruthy()
   fireEvent.keyDown(screen.getByLabelText('Other input'),{key:'Tab'})
   expect(screen.getByText(/Summary · m/)).toBeTruthy()
-  fireEvent.keyDown(heading,{key:'Tab'})
+  expect(fireEvent.keyDown(heading,{key:'Tab',shiftKey:true})).toBe(true)
+  expect(fireEvent.keyDown(heading,{key:'Tab'})).toBe(false)
   expect(screen.queryByText(/Summary · m/)).toBeNull()
+  expect(fireEvent.keyDown(heading,{key:'Tab'})).toBe(true)
 })

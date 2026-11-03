@@ -2,6 +2,7 @@
 import {cacheKind, contentLimit, evictionKeys, maxResponseBytes, readingCache, responseLimit, shellCache, visitedContentPaths} from './policy'
 
 const worker = self as unknown as ServiceWorkerGlobalScope
+const generationKey = new URL('/__earnest_offline_generation',worker.location.origin).href
 let epoch = 0
 let writes: Promise<unknown> = Promise.resolve()
 function serialize<T>(job: () => Promise<T>): Promise<T> {
@@ -12,6 +13,20 @@ function serialize<T>(job: () => Promise<T>): Promise<T> {
 async function purge() {
   epoch++
   await serialize(async () => {await caches.delete(readingCache)})
+}
+async function bindGeneration(generation: unknown, version: number) {
+  if (typeof generation !== 'string' || generation === '') return
+  await serialize(async () => {
+    if (version !== epoch) return
+    let cache = await caches.open(readingCache)
+    const previous = await cache.match(generationKey)
+    if (previous && await previous.text() === generation) return
+    // The cache has its own binding, independent of IndexedDB and worker restarts.
+    epoch++
+    await caches.delete(readingCache)
+    cache = await caches.open(readingCache)
+    await cache.put(generationKey,new Response(generation))
+  })
 }
 async function store(request: Request, response: Response, version: number) {
   const kind = cacheKind(request.url,worker.location.origin,request.method)
@@ -67,7 +82,8 @@ worker.addEventListener('fetch',event => {
     return
   }
   const kind = cacheKind(url.href,worker.location.origin,request.method)
-  if (!kind) return
+  const generationRead = request.method === 'GET' && (url.pathname === '/v1/bootstrap' || url.pathname === '/v1/changes')
+  if (!kind && !generationRead) return
   const version = epoch
   // Register the lifetime promise synchronously; prefetch may outlive respondWith.
   let finish: () => void = () => undefined
@@ -79,6 +95,9 @@ worker.addEventListener('fetch',event => {
       response = await fetch(request)
     } catch (error) {
       finish()
+      if (generationRead) throw error
+      await writes
+      if (kind !== 'shell' && version !== epoch) throw error
       const cached = await (await caches.open(kind === 'shell' ? shellCache : readingCache)).match(request)
       if (cached) return cached
       throw error
@@ -86,6 +105,10 @@ worker.addEventListener('fetch',event => {
     let warming = false
     try {
       if (response.status === 401) {await purge();return response}
+      if (generationRead && response.ok) {
+        const cursor = await response.clone().json()
+        await bindGeneration(url.pathname === '/v1/bootstrap' ? cursor.generation : cursor.next?.generation,version)
+      }
       if (url.pathname === '/v1/me' && response.ok && version === epoch) {
         const cache = await caches.open(readingCache)
         const old = await cache.match(request)

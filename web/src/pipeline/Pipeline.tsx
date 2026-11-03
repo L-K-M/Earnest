@@ -29,7 +29,7 @@ export function Summary({entryID, shortcuts}: {entryID: number; shortcuts: boole
     finally {setBusy(false)}
   }
   useEffect(() => {
-    if (status.summary !== 'enabled' || !shortcuts) return
+    if (status.summary !== 'enabled' || !shortcuts || !visible) return
     function key(event: KeyboardEvent) {
       if (event.key !== 'Tab' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.defaultPrevented) return
       if (!(event.target instanceof Element) || event.target.closest('input, textarea, select, button, a, [contenteditable], dialog')) return
