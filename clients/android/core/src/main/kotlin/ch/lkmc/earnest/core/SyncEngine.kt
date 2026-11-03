@@ -23,6 +23,8 @@ data class CachedEntry(
     val rev: Long = 0,
     val deleted: Boolean = false,
     val raw: String = "",
+    // A metadata 404 hides the entry until a newer server projection arrives.
+    val unavailable: Boolean = false,
 )
 
 /** A revisioned resource object: subscription, folder, label, annotation or token. */
@@ -135,7 +137,7 @@ class SyncEngine(private val store: SyncStore) {
 
     fun mergeEntry(entry: CachedEntry) {
         val old = snapshot.entries.find { it.id == entry.id }
-        if (old == null || (!old.deleted && entry.rev > old.rev)) {
+        if (old == null || (entry.rev > old.rev && (!old.deleted || old.unavailable))) {
             commit(snapshot.copy(entries = snapshot.entries.filterNot { it.id == entry.id } + entry))
         }
     }
@@ -192,7 +194,7 @@ class SyncEngine(private val store: SyncStore) {
         var next = state
         change.entry?.let { item ->
             val old = next.entries.find { it.id == item.id }
-            if (old == null || (!old.deleted && item.rev > old.rev)) {
+            if (old == null || (item.rev > old.rev && (!old.deleted || old.unavailable))) {
                 next = next.copy(entries = next.entries.filterNot { it.id == item.id } + item)
             }
         }
