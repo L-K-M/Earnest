@@ -83,10 +83,13 @@ func RewriteImages(htmlStr string, rewrite func(*url.URL) (*url.URL, error)) (st
 				return err
 			}
 		}
-		for child := n.FirstChild; child != nil; child = child.NextSibling {
+		for child := n.FirstChild; child != nil; {
+			// rewriteImg may remove child; take the next sibling first.
+			next := child.NextSibling
 			if err := walk(child); err != nil {
 				return err
 			}
+			child = next
 		}
 		return nil
 	}

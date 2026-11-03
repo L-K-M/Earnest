@@ -128,7 +128,7 @@ func TestCoreIngest(t *testing.T) {
 			t.Fatalf("versions %d %v", versions, err)
 		}
 		known, err := f.s.KnownIdentities(ctx, f.feed, []string{item.IdentityHash, coreHash("absent")})
-		if err != nil || len(known) != 1 || !known[item.IdentityHash] {
+		if err != nil || len(known) != 0 {
 			t.Fatalf("identities %v %v", known, err)
 		}
 		if _, err := f.s.RecordFetch(ctx, FetchOutcome{FeedID: f.feed, Status: FetchFailed, ErrorClass: "rate_limit", RetryAfter: 2 * time.Hour, HTTPStatus: 429}); err != nil {

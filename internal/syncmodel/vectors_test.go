@@ -33,6 +33,7 @@ type step struct {
 	Actor      ID              `json:"actor,omitempty"`
 	Token      TokenKind       `json:"token,omitempty"`
 	Entry      Entry           `json:"entry,omitempty"`
+	State      State           `json:"state,omitempty"`
 	Write      Write           `json:"write,omitempty"`
 	Writes     []Write         `json:"writes,omitempty"`
 	Scope      Scope           `json:"scope,omitempty"`
@@ -57,17 +58,25 @@ type captured struct {
 	changes []Change
 	next    Revision
 }
+type response struct {
+	generation  string
+	results     []Result
+	rangeResult *RangeResult
+	opID        string
+}
 type vectorRunner struct {
 	models    map[string]*Model
 	clients   map[string]*Client
 	snapshots map[string]*Model
 	prepared  map[string]Entry
 	pages     map[string]captured
+	responses map[string]response
 }
 
 var vectorFiles = []string{
 	"01-range-exception.json", "02-queue-age.json", "03-retention-deleted.json", "04-source-ranks.json", "05-equal-time.json", "06-backdated-ingest.json", "07-publisher-clock.json", "08-expired-cursor.json", "09-restore-generation.json", "10-notification-response-lost.json", "11-shared-ingest.json", "12-offline-google-batch.json", "13-bootstrap-range-race.json", "14-ingest-commit-order.json", "15-repeated-operation.json", "16-google-unread-done.json", "17-independent-kept.json", "18-late-cluster-member.json", "19-notification-before-snapshot.json", "20-google-tradeoff.json", "21-bootstrap-newer-range-crash.json",
-	"22-native-unread-done.json", "23-batch-atomicity.json", "24-label-tombstones.json", "25-position-live.json", "26-missing-ts.json", "27-client-coalescing.json", "28-clock-boundaries.json", "29-resource-tombstones.json", "30-principal-isolation.json", "31-queued-range-client.json", "32-coalesced-done-clear.json", "33-restore-release-safety.json", "34-integer-identity.json", "35-batch-causal-shelf.json",
+	"22-native-unread-done.json", "23-batch-atomicity.json", "24-label-tombstones.json", "25-position-live.json", "26-missing-ts.json", "27-client-coalescing.json", "28-clock-boundaries.json", "29-resource-tombstones.json", "30-principal-isolation.json", "31-queued-range-client.json", "32-coalesced-done-clear.json", "33-restore-release-safety.json", "34-integer-identity.json", "35-batch-causal-shelf.json", "36-ack-out-of-order-merge.json", "37-ack-stale-generation.json",
+	"38-independent-register-merge.json",
 }
 
 func decodeVector(data []byte) (vector, error) {
@@ -109,7 +118,7 @@ func TestVectors(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			r := vectorRunner{models: map[string]*Model{}, clients: map[string]*Client{}, snapshots: map[string]*Model{}, prepared: map[string]Entry{}, pages: map[string]captured{}}
+			r := vectorRunner{models: map[string]*Model{}, clients: map[string]*Client{}, snapshots: map[string]*Model{}, prepared: map[string]Entry{}, pages: map[string]captured{}, responses: map[string]response{}}
 			steps := append(append(v.Setup, v.Operations...), v.Final...)
 			for i, s := range steps {
 				result, err := r.execute(s)
@@ -436,6 +445,48 @@ func (r *vectorRunner) execute(s step) (any, error) {
 			w.Value = SeenValue
 		}
 		return map[string]any{}, c.QueueRange(RangeWrite{Write: w, Scope: s.Scope, ThroughSeq: through})
+	case "client_merge_state":
+		if c == nil {
+			return nil, ErrInvalid
+		}
+		c.MergeState(s.State)
+		return map[string]any{}, nil
+	case "client_submit":
+		if c == nil {
+			return nil, ErrInvalid
+		}
+		pending := c.Outbox()
+		if len(pending) == 0 {
+			return nil, ErrInvalid
+		}
+		generation := c.Cursor().Generation
+		if pending[0].Range != nil {
+			request := *pending[0].Range
+			result, err := m.Through(ctx, request)
+			if err != nil {
+				return nil, err
+			}
+			r.responses[s.Name] = response{generation: generation, rangeResult: &result, opID: request.Write.OpID}
+			return result, nil
+		}
+		results, err := m.Batch(ctx, []Write{*pending[0].Write})
+		if err != nil {
+			return nil, err
+		}
+		r.responses[s.Name] = response{generation: generation, results: results}
+		return results[0], nil
+	case "client_ack":
+		if c == nil {
+			return nil, ErrInvalid
+		}
+		saved, ok := r.responses[s.Name]
+		if !ok {
+			return nil, ErrInvalid
+		}
+		if saved.rangeResult != nil {
+			return map[string]any{}, c.AcknowledgeRange(saved.opID, saved.generation, *saved.rangeResult)
+		}
+		return map[string]any{}, c.Acknowledge(saved.generation, saved.results)
 	case "client_flush":
 		if c == nil {
 			return nil, ErrInvalid
@@ -449,7 +500,9 @@ func (r *vectorRunner) execute(s step) (any, error) {
 				if err != nil {
 					return nil, err
 				}
-				c.AcknowledgeRange(request.Write.OpID, result)
+				if err := c.AcknowledgeRange(request.Write.OpID, request.Write.Base.Generation, result); err != nil {
+					return nil, err
+				}
 				out = append(out, result)
 				pending = pending[1:]
 				continue
@@ -463,7 +516,9 @@ func (r *vectorRunner) execute(s step) (any, error) {
 			if err != nil {
 				return nil, err
 			}
-			c.Acknowledge(results)
+			if err := c.Acknowledge(writes[0].Base.Generation, results); err != nil {
+				return nil, err
+			}
 			for _, result := range results {
 				out = append(out, result)
 			}

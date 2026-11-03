@@ -1,0 +1,159 @@
+{
+  "version": 1,
+  "name": "ack-out-of-order-merge",
+  "decision": "Responses merge per register revision, never as whole rows. An acknowledgement resolved before a concurrent kept write must still merge, but may not erase that newer register when the response lands late. Removing the acknowledged operation leaves the rest of the cache alone.",
+  "setup": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 1,
+        "seq": 1,
+        "rev": 1
+      }
+    },
+    {
+      "op": "bootstrap_begin",
+      "device": "phone",
+      "expect": {
+        "rev": 1
+      }
+    },
+    {
+      "op": "bootstrap_page",
+      "device": "phone",
+      "expect": {}
+    },
+    {
+      "op": "client_pull",
+      "device": "phone",
+      "expect": {
+        "rev": 1
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "client_queue",
+      "device": "phone",
+      "write": {
+        "op_id": "seen",
+        "entry_id": 1,
+        "register": "seen",
+        "value": "seen"
+      },
+      "expect": {}
+    },
+    {
+      "op": "client_submit",
+      "device": "phone",
+      "name": "ack-seen",
+      "expect": {
+        "op_id": "seen",
+        "status": "applied",
+        "state": {
+          "seen": {
+            "value": "seen",
+            "rev": 2
+          },
+          "state_rev": 2
+        }
+      }
+    },
+    {
+      "op": "write",
+      "write": {
+        "op_id": "keep",
+        "entry_id": 1,
+        "register": "kept",
+        "value": true
+      },
+      "expect": {
+        "status": "applied",
+        "state": {
+          "kept": {
+            "value": true,
+            "rev": 3
+          },
+          "state_rev": 3
+        }
+      }
+    },
+    {
+      "op": "client_pull",
+      "device": "phone",
+      "expect": {
+        "rev": 3
+      }
+    },
+    {
+      "op": "client_ack",
+      "device": "phone",
+      "name": "ack-seen",
+      "expect": {}
+    },
+    {
+      "op": "assert_client",
+      "device": "phone",
+      "expect": {
+        "outbox_size": 0
+      }
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_state",
+      "device": "phone",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen",
+            "rev": 2
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": true,
+            "rev": 3
+          },
+          "state_rev": 3
+        },
+        "unread": false,
+        "google_read": true
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": true
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_client",
+      "device": "phone",
+      "expect": {
+        "cursor": {
+          "generation": "g1",
+          "rev": 3
+        }
+      }
+    }
+  ]
+}

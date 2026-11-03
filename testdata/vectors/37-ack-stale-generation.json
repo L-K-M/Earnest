@@ -1,0 +1,175 @@
+{
+  "version": 1,
+  "name": "ack-stale-generation",
+  "decision": "An acknowledgement is accepted only in the generation its request was sent under. A response from a superseded generation is rejected whole: no state merges and the operation stays queued, so the preserved outbox still replays the intent into the new generation.",
+  "setup": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 1,
+        "seq": 1,
+        "rev": 1
+      }
+    },
+    {
+      "op": "checkpoint",
+      "name": "snap",
+      "expect": {
+        "rev": 1
+      }
+    },
+    {
+      "op": "bootstrap_begin",
+      "device": "phone",
+      "expect": {
+        "rev": 1
+      }
+    },
+    {
+      "op": "bootstrap_page",
+      "device": "phone",
+      "expect": {}
+    },
+    {
+      "op": "client_pull",
+      "device": "phone",
+      "expect": {
+        "rev": 1
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "client_queue",
+      "device": "phone",
+      "write": {
+        "op_id": "seen",
+        "entry_id": 1,
+        "register": "seen",
+        "value": "seen"
+      },
+      "expect": {}
+    },
+    {
+      "op": "client_submit",
+      "device": "phone",
+      "name": "ack-seen",
+      "expect": {
+        "op_id": "seen",
+        "status": "applied"
+      }
+    },
+    {
+      "op": "restore",
+      "name": "snap",
+      "generation": "g2",
+      "expect": {}
+    },
+    {
+      "op": "bootstrap_begin",
+      "device": "phone",
+      "expect": {
+        "generation": "g2",
+        "rev": 1
+      }
+    },
+    {
+      "op": "client_ack",
+      "device": "phone",
+      "name": "ack-seen",
+      "error": "generation",
+      "expect": {}
+    },
+    {
+      "op": "assert_client",
+      "device": "phone",
+      "expect": {
+        "outbox_size": 1
+      }
+    },
+    {
+      "op": "assert_state",
+      "device": "phone",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen",
+            "rev": 0
+          },
+          "shelf": {
+            "value": "none",
+            "rev": 0
+          },
+          "kept": {
+            "value": false,
+            "rev": 0
+          },
+          "state_rev": 0
+        },
+        "unread": true
+      }
+    },
+    {
+      "op": "bootstrap_page",
+      "device": "phone",
+      "expect": {}
+    },
+    {
+      "op": "client_flush",
+      "device": "phone",
+      "expect": [
+        {
+          "op_id": "seen",
+          "status": "applied"
+        }
+      ]
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_state",
+      "device": "phone",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen",
+            "rev": 2
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          },
+          "state_rev": 2
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_client",
+      "device": "phone",
+      "expect": {
+        "outbox_size": 0
+      }
+    }
+  ]
+}
