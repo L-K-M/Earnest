@@ -34,7 +34,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -ldflags "-s -w -X main.version=${VERSION} -X main.revision=${REVISION}" \
       -o /out/earnest ./cmd/earnest
 
-FROM alpine:3.22
+FROM alpine:3.24
 ARG VERSION REVISION CREATED
 LABEL org.opencontainers.image.title="Earnest" \
       org.opencontainers.image.description="Self-hosted RSS reader whose agent surface is governed: own identity, budget, revert log" \
