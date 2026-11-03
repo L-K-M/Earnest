@@ -56,9 +56,14 @@ type openAIChatRequest struct {
 	ResponseFormat      *openAIResponseFormat `json:"response_format,omitempty"`
 }
 
+// openAIFinishStop is the finish_reason of a complete answer; "length" and
+// "content_filter" mean the text was cut short.
+const openAIFinishStop = "stop"
+
 type openAIChatResponse struct {
 	Choices []struct {
-		Message struct {
+		FinishReason string `json:"finish_reason"`
+		Message      struct {
 			Content string `json:"content"`
 		} `json:"message"`
 	} `json:"choices"`
@@ -101,6 +106,9 @@ func (p *OpenAI) Complete(ctx context.Context, req CompleteRequest) (*Completion
 	usage := Usage{Input: response.Usage.PromptTokens, Output: response.Usage.CompletionTokens}
 	if len(response.Choices) == 0 {
 		return &Completion{Usage: usage}, fmt.Errorf("llm: provider %s returned no choices", p.name)
+	}
+	if reason := response.Choices[0].FinishReason; reason != "" && reason != openAIFinishStop {
+		return &Completion{Usage: usage}, fmt.Errorf("%w: provider %s stopped early: finish_reason %s", ErrInvalidOutput, p.name, reason)
 	}
 	text := response.Choices[0].Message.Content
 	if req.Schema != nil {

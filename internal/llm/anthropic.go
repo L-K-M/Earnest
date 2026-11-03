@@ -45,8 +45,16 @@ type anthropicRequest struct {
 	Temperature float32            `json:"temperature,omitempty"`
 }
 
+// Stop reasons of a complete answer; "max_tokens" and "refusal" mean the
+// text is cut short or absent.
+const (
+	anthropicStopEndTurn  = "end_turn"
+	anthropicStopSequence = "stop_sequence"
+)
+
 type anthropicResponse struct {
-	Content []struct {
+	StopReason string `json:"stop_reason"`
+	Content    []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"content"`
@@ -85,13 +93,19 @@ func (p *Anthropic) Complete(ctx context.Context, req CompleteRequest) (*Complet
 	if err := callJSON(ctx, p.client, p.name, p.baseURL+"/v1/messages", p.authHeader(), body, &response, p.timeout, p.extraPorts); err != nil {
 		return nil, err
 	}
+	usage := Usage{Input: response.Usage.InputTokens, Output: response.Usage.OutputTokens}
+	switch response.StopReason {
+	case "", anthropicStopEndTurn, anthropicStopSequence:
+	default:
+		return &Completion{Usage: usage}, fmt.Errorf("%w: provider %s stopped early: stop_reason %s", ErrInvalidOutput, p.name, response.StopReason)
+	}
+
 	var text strings.Builder
 	for _, block := range response.Content {
 		if block.Type == "text" {
 			text.WriteString(block.Text)
 		}
 	}
-	usage := Usage{Input: response.Usage.InputTokens, Output: response.Usage.OutputTokens}
 	if req.Schema != nil {
 		if err := req.Schema.Validate(text.String()); err != nil {
 			return &Completion{Usage: usage}, err

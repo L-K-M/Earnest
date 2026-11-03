@@ -12,6 +12,8 @@ import (
 	"github.com/L-K-M/Earnest/internal/outbound"
 )
 
+const geminiFinishStop = "STOP"
+
 // Gemini is a provider for Google's generateContent and embedContent APIs.
 // The base URL includes the API version, so an operator can move to a newer
 // one by changing configuration.
@@ -87,6 +89,9 @@ func (p *Gemini) Complete(ctx context.Context, req CompleteRequest) (*Completion
 	usage := Usage{Input: response.UsageMetadata.PromptTokenCount, Output: response.UsageMetadata.CandidatesTokenCount}
 	if len(response.Candidates) == 0 {
 		return &Completion{Usage: usage}, fmt.Errorf("llm: provider %s returned no candidates", p.name)
+	}
+	if reason := response.Candidates[0].FinishReason; reason != "" && reason != geminiFinishStop {
+		return &Completion{Usage: usage}, fmt.Errorf("%w: provider %s stopped early: finishReason %s", ErrInvalidOutput, p.name, reason)
 	}
 	var text strings.Builder
 	for _, part := range response.Candidates[0].Content.Parts {
