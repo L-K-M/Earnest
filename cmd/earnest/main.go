@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/L-K-M/Earnest/internal/api"
+	"github.com/L-K-M/Earnest/internal/cli"
 	"github.com/L-K-M/Earnest/internal/store"
 )
 
@@ -58,6 +59,11 @@ func main() {
 			slog.Error("generation rotation failed", "error", err)
 			os.Exit(1)
 		}
+	case "login", "logout", "whoami", "feeds", "entries", "read", "search",
+		"done", "later", "keep", "unread", "briefing", "annotate", "brief",
+		"notify", "triage", "revert", "activity", "changes":
+		cli.Version = version
+		os.Exit(cli.Run(os.Args[1:], os.Stdout, os.Stderr))
 	case "openapi":
 		if err := openapi(os.Stdout); err != nil {
 			slog.Error("openapi failed", "error", err)
@@ -68,7 +74,10 @@ func main() {
 	case "version", "--version", "-version":
 		fmt.Printf("earnest %s (%s)\n", version, revision)
 	default:
-		fmt.Fprintf(os.Stderr, "usage: earnest [serve|healthcheck|migrate|openapi|generation|version|user|token|compat-password]\n")
+		fmt.Fprint(os.Stderr, "usage: earnest [serve|healthcheck|migrate|openapi|generation|version|\n"+
+			"  user|token|compat-password|login|logout|whoami|feeds|entries|read|search|\n"+
+			"  done|later|keep|unread|briefing|annotate|brief|notify|triage|revert|\n"+
+			"  activity|changes]\n")
 		os.Exit(2)
 	}
 }

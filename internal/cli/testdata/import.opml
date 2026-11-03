@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <head><title>Subscriptions</title></head>
+  <body>
+    <outline text="Example" xmlUrl="https://example.com/feed.xml"/>
+    <outline text="Broken" xmlUrl="not-a-url"/>
+  </body>
+</opml>
