@@ -479,3 +479,29 @@ func TestLoginReplacesExistingSessionWithoutCSRF(t *testing.T) {
 	f.handler.ServeHTTP(denied, request)
 	requireStatus(t, denied, http.StatusForbidden)
 }
+
+func TestPublicDeviceAuthWithSessionCookie(t *testing.T) {
+	template := storetest.NewTemplate(t)
+	for _, mode := range []string{"stale", "without_csrf"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newAPIFixture(t, template)
+			credentials := requestCredentials{cookie: f.cookie}
+			if mode == "stale" {
+				credentials.cookie = &http.Cookie{Name: sessionCookie, Value: "expired"}
+			}
+			rec := f.do(t, http.MethodPost, "/v1/devices/start", deviceStart{ClientName: "Reader"}, credentials)
+			requireStatus(t, rec, http.StatusOK)
+			code := decodeBody[deviceResult](t, rec).DeviceCode
+			rec = f.do(t, http.MethodPost, "/v1/devices/poll", devicePoll{DeviceCode: code}, credentials)
+			requireStatus(t, rec, http.StatusBadRequest)
+			if !strings.Contains(rec.Body.String(), "authorization_pending") {
+				t.Fatalf("poll did not reach device authorization: %s", rec.Body)
+			}
+			// Protected writes still require a valid session and CSRF token.
+			rec = f.do(t, http.MethodPost, "/v1/folders", nameBody{Name: "Folder", OpID: "folder"}, credentials)
+			if rec.Code != http.StatusUnauthorized && rec.Code != http.StatusForbidden {
+				t.Fatalf("protected write accepted: %d", rec.Code)
+			}
+		})
+	}
+}

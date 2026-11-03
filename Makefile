@@ -9,13 +9,13 @@ REVISION ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 web-install:
 	cd web && pnpm install --frozen-lockfile
 
-web-build:
+web-build: web-install
 	cd web && pnpm build
 	rm -rf internal/web/dist
 	mkdir -p internal/web/dist
 	cp -R web/dist/. internal/web/dist/
 
-web-check:
+web-check: web-install
 	cd web && pnpm typecheck && pnpm lint && pnpm test && pnpm build && pnpm check-generated
 
 build: web-build

@@ -16,6 +16,7 @@ const (
 	ruleJobMaxAttempts = 3
 	ruleJobMaxClaim    = 1000
 	ruleJobRetryDelay  = time.Minute
+	maxRuleErrorRunes  = 1024
 )
 
 type ruleJob struct {
@@ -119,8 +120,8 @@ func (s *Service) finishRuleJob(ctx context.Context, job *claimedRuleJob, cause 
 			return nil
 		}
 		reason := cause.Error()
-		if len(reason) > 1024 {
-			reason = reason[:1024]
+		if runes := []rune(reason); len(runes) > maxRuleErrorRunes {
+			reason = string(runes[:maxRuleErrorRunes])
 		}
 		if job.attempt >= ruleJobMaxAttempts {
 			if _, err := tx.Exec(ctx, `UPDATE rules SET enabled=false,action=jsonb_set(action,'{disable_reason}',to_jsonb($3::text)) WHERE id=$1 AND user_id=$2 AND enabled`, job.payload.RuleID, job.payload.UserID, reason); err != nil {

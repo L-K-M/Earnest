@@ -162,6 +162,10 @@ func (s *server) authenticate(ctx huma.Context, next func(huma.Context)) {
 		if err == nil && r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
 			err = s.auth.VerifyCSRF(r.Context(), cookie.Value, r.Header.Get(csrfHeader))
 		}
+		if err != nil && public {
+			// Device pairing is also available before establishing a session.
+			a, err = service.Actor{}, nil
+		}
 	} else if !public {
 		err = service.ErrUnauthorized
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/L-K-M/Earnest/internal/store/storetest"
 )
@@ -76,5 +77,34 @@ func TestRuleDeliveries(t *testing.T) {
 	}
 	if count != 2 {
 		t.Fatalf("webhook jobs = %d", count)
+	}
+}
+
+func TestRuleNotificationAfterUnsubscribe(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := context.Background()
+	rule, err := f.s.CreateRule(ctx, f.a, Rule{Name: "Watch", Enabled: true, Predicate: RulePredicate{Type: RuleKeyword, Terms: []string{"funding"}}, Actions: []RuleAction{{Type: RuleNotify}}}, "rule")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := f.ingest(t, "funding")
+	entries, err := f.s.ruleEntries(ctx, f.a.UserID, time.Time{}, []int64{id})
+	if err != nil || len(entries) != 1 {
+		t.Fatal(entries, err)
+	}
+	subs, err := f.s.Subscriptions(ctx, f.a)
+	if err != nil || len(subs) != 1 {
+		t.Fatal(subs, err)
+	}
+	if err := f.s.Unsubscribe(ctx, f.a, subs[0].ID, "unsubscribe"); err != nil {
+		t.Fatal(err)
+	}
+	// Preparation can finish just before the human unsubscribes.
+	if err := f.s.applyRule(ctx, f.a, rule, entries[0]); err != nil {
+		t.Fatalf("notification for removed subscription failed the rule: %v", err)
+	}
+	notifications, err := f.s.ListNotifications(ctx, f.a, 0, 10)
+	if err != nil || len(notifications) != 0 {
+		t.Fatal(notifications, err)
 	}
 }

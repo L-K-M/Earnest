@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,48 @@ func ntfySettings(op string) PushSettingsInput {
 		QuietEnd:   "07:00",
 		Timezone:   "Europe/Berlin",
 		OpID:       op,
+	}
+}
+
+func TestPushSettingsReplayDoesNotMergeRetry(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := context.Background()
+	want, err := f.s.PutPushSettings(ctx, f.a, PushSettingsInput{OpID: "settings"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry := ntfySettings("settings")
+	retry.ShowText = true
+	got, err := f.s.PutPushSettings(ctx, f.a, retry)
+	if err != nil || got != want {
+		t.Fatalf("replayed settings = %+v, want %+v: %v", got, want, err)
+	}
+}
+
+func TestPushSettingsRejectsInvalidNtfyToken(t *testing.T) {
+	template := storetest.NewTemplate(t)
+	for _, token := range []string{"line\nbreak", "line\rbreak", "tab\t", "space token", "\x00", "\x7f", "é"} {
+		t.Run(fmt.Sprintf("%q", token), func(t *testing.T) {
+			f := newCoreFixture(t, template)
+			in := ntfySettings("token")
+			in.NtfyToken = &token
+			if _, err := f.s.PutPushSettings(context.Background(), f.a, in); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("accepted invalid bearer token: %v", err)
+			}
+		})
+	}
+}
+
+func TestNtfyTopicDotSegments(t *testing.T) {
+	for _, topic := range []string{".", ".."} {
+		if err := validNtfyTopic(topic); !errors.Is(err, ErrInvalid) {
+			t.Errorf("accepted dot segment %q: %v", topic, err)
+		}
+	}
+	for _, topic := range []string{"", ".alerts", "alerts.", "a..b", "..."} {
+		if err := validNtfyTopic(topic); err != nil {
+			t.Errorf("rejected ordinary topic %q: %v", topic, err)
+		}
 	}
 }
 
