@@ -86,7 +86,8 @@ func serve() error {
 	if err != nil {
 		return fmt.Errorf("model router: %w", err)
 	}
-	modelClient, err := llm.NewClient(router, llm.NewBudget(db, llmConfig.Limits()), llmConfig.Models)
+	modelBudget := llm.NewBudget(db, llmConfig.Limits())
+	modelClient, err := llm.NewClient(router, modelBudget, llmConfig.Models)
 	if err != nil {
 		return fmt.Errorf("model client: %w", err)
 	}
@@ -95,6 +96,9 @@ func serve() error {
 		return fmt.Errorf("pipeline: %w", err)
 	}
 	ctx = service.WithPipeline(ctx, engine)
+	if batch := pipeline.NewEditionBatch(router, modelBudget, llmConfig, egress); batch != nil {
+		ctx = pipeline.WithEditionBatch(ctx, batch)
+	}
 	pushRegistry, publicKey, err := buildPushRegistry(cfg, egress)
 	if err != nil {
 		return fmt.Errorf("push transports: %w", err)
@@ -163,6 +167,7 @@ func serve() error {
 		{"notification delivery", svc.DeliverNotifications},
 		{"webhook delivery", svc.RunWebhookJobs},
 		{"rule jobs", svc.RunRuleJobs},
+		{"edition jobs", svc.RunEditionJobs},
 	} {
 		workers.Go(func() { runDelivery(ctx, logger, job.name, job.run) })
 	}
