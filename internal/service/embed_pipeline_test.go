@@ -144,7 +144,7 @@ func TestPipelinePrivacyVocabularyAndIdempotency(t *testing.T) {
 	if err != nil || len(ids) != 1 || ids[0] != id {
 		t.Fatalf("classifier rule %v %v", ids, err)
 	}
-	if _, err := f.s.CreateRule(ctx, f.a, Rule{Name: "malicious", Predicate: predicate, Actions: []RuleAction{{Type: RuleWebhook, WebhookID: 1}}, Enabled: true}); !errors.Is(err, ErrInvalid) {
+	if _, err := f.s.CreateRule(ctx, f.a, Rule{Name: "malicious", Predicate: predicate, Actions: []RuleAction{{Type: RuleWebhook, WebhookID: 1}}, Enabled: true}, "create-rule"); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("classifier webhook accepted: %v", err)
 	}
 	var webhookJobs int

@@ -78,6 +78,12 @@ func New(db *store.Store, deps Deps) (*Service, error) {
 }
 
 func (s *Service) checkActor(ctx context.Context, a Actor, scope Scope) error {
+	return checkActorQuery(ctx, s.store.Pool(), a, scope)
+}
+
+func checkActorQuery(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, a Actor, scope Scope) error {
 	if a.UserID <= 0 || a.PrincipalID <= 0 {
 		return ErrUnauthorized
 	}
@@ -85,7 +91,7 @@ func (s *Service) checkActor(ctx context.Context, a Actor, scope Scope) error {
 		return ErrForbidden
 	}
 	var ok bool
-	err := s.store.Pool().QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM principals WHERE id=$1 AND user_id=$2 AND kind=$3)", a.PrincipalID, a.UserID, string(a.Kind)).Scan(&ok)
+	err := q.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM principals WHERE id=$1 AND user_id=$2 AND kind=$3)", a.PrincipalID, a.UserID, string(a.Kind)).Scan(&ok)
 	if err != nil {
 		return fmt.Errorf("authorize principal: %w", err)
 	}

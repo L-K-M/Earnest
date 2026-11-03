@@ -2086,11 +2086,15 @@
           "name": {
             "type": "string"
           },
+          "op_id": {
+            "type": "string"
+          },
           "predicate": {
             "$ref": "#/components/schemas/RulePredicate"
           }
         },
         "required": [
+          "op_id",
           "name",
           "predicate",
           "actions",
@@ -3433,6 +3437,28 @@
             "schema": {
               "format": "date-time",
               "type": "string"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "after_id",
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 1000,
+              "format": "int64",
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
             }
           }
         ],

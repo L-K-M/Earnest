@@ -299,6 +299,18 @@ func (s *Service) stateActivity(ctx context.Context, tx pgx.Tx, a Actor, w syncm
 
 // Through commits a resolved, inclusive range and its exception list atomically.
 func (s *Service) Through(ctx context.Context, a Actor, request ThroughRequest) (syncmodel.RangeResult, error) {
+	return s.through(ctx, a, request, "")
+}
+
+// GoogleLabelThrough marks the union of a compatibility label and folder stream.
+func (s *Service) GoogleLabelThrough(ctx context.Context, a Actor, request ThroughRequest, name string) (syncmodel.RangeResult, error) {
+	if a.Via != CredentialCompat || name == "" {
+		return syncmodel.RangeResult{}, ErrForbidden
+	}
+	return s.through(ctx, a, request, name)
+}
+
+func (s *Service) through(ctx context.Context, a Actor, request ThroughRequest, labelName string) (syncmodel.RangeResult, error) {
 	if err := s.stateActor(ctx, a); err != nil {
 		return syncmodel.RangeResult{}, err
 	}
@@ -362,9 +374,36 @@ func (s *Service) Through(ctx context.Context, a Actor, request ThroughRequest) 
 			}
 			return nil
 		}
-		subs, err := resolveStateScope(ctx, tx, a.UserID, request.Scope)
-		if err != nil {
-			return err
+		var subs []syncmodel.ID
+		if labelName == "" {
+			subs, err = resolveStateScope(ctx, tx, a.UserID, request.Scope)
+			if err != nil {
+				return err
+			}
+		} else {
+			var exists bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM folders WHERE user_id=$1 AND name=$2 AND deleted_at IS NULL) OR EXISTS(SELECT 1 FROM labels WHERE user_id=$1 AND name=$2 AND deleted_at IS NULL)`, a.UserID, labelName).Scan(&exists); err != nil {
+				return err
+			}
+			if !exists {
+				return ErrNotFound
+			}
+			rows, err := tx.Query(ctx, `SELECT s.id FROM subscriptions s JOIN folders f ON f.id=s.folder_id AND f.user_id=s.user_id WHERE s.user_id=$1 AND s.deleted_at IS NULL AND f.deleted_at IS NULL AND f.name=$2 ORDER BY s.id`, a.UserID, labelName)
+			if err != nil {
+				return err
+			}
+			for rows.Next() {
+				var id syncmodel.ID
+				if err := rows.Scan(&id); err != nil {
+					rows.Close()
+					return err
+				}
+				subs = append(subs, id)
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				return err
+			}
 		}
 		var through uint64
 		switch {
@@ -387,7 +426,7 @@ func (s *Service) Through(ctx context.Context, a Actor, request ThroughRequest) 
 		for i, id := range subs {
 			subIDs[i] = int64(id)
 		}
-		rows, err := tx.Query(ctx, `SELECT e.id FROM entries e JOIN subscriptions s ON s.feed_id=e.feed_id WHERE s.user_id=$1 AND s.id=ANY($2) AND s.deleted_at IS NULL AND e.deleted_at IS NULL AND e.seq<=$3 ORDER BY e.id`, a.UserID, subIDs, int64(through))
+		rows, err := tx.Query(ctx, `SELECT e.id FROM entries e JOIN subscriptions s ON s.feed_id=e.feed_id WHERE s.user_id=$1 AND s.deleted_at IS NULL AND e.deleted_at IS NULL AND e.seq<=$3 AND (s.id=ANY($2) OR ($4<>'' AND EXISTS(SELECT 1 FROM entry_labels el JOIN labels l ON l.id=el.label_id AND l.user_id=el.user_id WHERE el.user_id=$1 AND el.entry_id=e.id AND el.deleted_at IS NULL AND l.deleted_at IS NULL AND l.name=$4))) ORDER BY e.id`, a.UserID, subIDs, int64(through), labelName)
 		if err != nil {
 			return fmt.Errorf("range members: %w", err)
 		}

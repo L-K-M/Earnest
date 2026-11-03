@@ -1743,6 +1743,7 @@ export interface components {
             actions: components["schemas"]["RuleAction"][] | null;
             enabled: boolean;
             name: string;
+            op_id: string;
             predicate: components["schemas"]["RulePredicate"];
         };
         RuleDryRun: {
@@ -2180,6 +2181,8 @@ export interface operations {
         parameters: {
             query: {
                 since: string;
+                after_id?: number;
+                limit?: number;
             };
             header?: never;
             path?: never;

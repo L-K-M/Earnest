@@ -62,9 +62,18 @@ function ActivityRows({rows}: {rows:Activity[]}) {
   return <>{error && <p role="alert">{error}</p>}{[...groups].map(([key, items])=><section key={key}><h3>{items[0].principal_name}</h3><ul>{items.map(row=><li key={row.id}><span>{describe(row)} · {new Date(row.created_at).toLocaleString()}</span>{row.next_action === 'revert' || row.next_action === 'cancel' ? <button disabled={pending !== null} onClick={()=>{void act(row)}}>{row.next_action === 'revert' ? 'Revert' : 'Cancel'}</button> : <span> · Nothing to do{row.reason ? `: ${row.reason}` : ''}</span>}{row.action === 'notification.created' && row.reason === 'notification is delivered' && <p>Delivered notifications can't be recalled.</p>}</li>)}</ul></section>)}</>
 }
 
+async function agentChanges(since:string, signal:AbortSignal): Promise<Activity[]> {
+  const all: Activity[] = []
+  for (;;) {
+    const page = await request<Activity[] | null>(`/v1/activity/agent-changes?since=${encodeURIComponent(since)}&after_id=${all.at(-1)?.id ?? 0}&limit=1000`, {signal}) ?? []
+    all.push(...page)
+    if (page.length < 1000) return all
+  }
+}
+
 export function TodayAgents({since, onOpen}: {since:string; onOpen:(entry:Entry)=>void}) {
   const briefs = useQuery({queryKey:['briefs'],queryFn:({signal})=>request<Annotation[] | null>('/v1/briefs/today',{signal})})
-  const changes = useQuery({queryKey:['agent-changes', since], queryFn:({signal})=>request<Activity[] | null>(`/v1/activity/agent-changes?since=${encodeURIComponent(since)}`,{signal})})
+  const changes = useQuery({queryKey:['agent-changes', since], queryFn:({signal})=>agentChanges(since,signal)})
   return <><div className="agent-today">{(briefs.error || changes.error) && <p role="alert">{(briefs.error || changes.error)?.message}</p>}{(Array.isArray(briefs.data) ? briefs.data : []).map(brief=><Brief key={brief.id} brief={brief} onOpen={onOpen}/>)}{!!changes.data?.length && <details><summary>While you were out</summary><ActivityRows rows={changes.data}/></details>}</div></>
 }
 function Brief({brief,onOpen}: {brief:Annotation;onOpen:(entry:Entry)=>void}) {
@@ -73,7 +82,7 @@ function Brief({brief,onOpen}: {brief:Annotation;onOpen:(entry:Entry)=>void}) {
   return <details open={open} onToggle={event=>{const value=event.currentTarget.open;setOpen(value);localStorage.setItem(key,value ? 'open' : 'closed')}}><summary>{brief.author_name} · {new Date(brief.created_at).toLocaleString()}</summary><p style={{whiteSpace:'pre-wrap'}}>{brief.value}</p><ul>{brief.entry_ids?.map(id=><EntryLink key={id} id={id} onOpen={onOpen}/>)}</ul></details>
 }
 export function SessionChanges({since}: {since:string}) {
-  const changes = useQuery({queryKey:['agent-changes', since], queryFn:({signal})=>request<Activity[] | null>(`/v1/activity/agent-changes?since=${encodeURIComponent(since)}`,{signal}), refetchInterval:30000})
+  const changes = useQuery({queryKey:['agent-changes', since], queryFn:({signal})=>agentChanges(since,signal), refetchInterval:30000})
   return <>{changes.error && <p role="alert">Agent changes: {changes.error.message}</p>}{!!changes.data?.length && <><p>Agent changes this session:</p><ActivityRows rows={changes.data}/></>}</>
 }
 

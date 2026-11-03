@@ -1,4 +1,4 @@
-import {useState} from 'react'
+import {useRef, useState} from 'react'
 import {useQuery, useQueryClient} from '@tanstack/react-query'
 import type {components} from '../api.generated'
 import type {Entry, Subscription} from '../reader'
@@ -8,7 +8,7 @@ import {PredicateEditor} from './PredicateEditor'
 import {actionRestriction, predicateError, type Action} from './model'
 
 type Rule = components['schemas']['Rule']
-type Body = components['schemas']['RuleBody']
+type Body = Omit<components['schemas']['RuleBody'], 'op_id'>
 type Resources = {feeds: Subscription[]; folders: components['schemas']['Folder'][]; labels: components['schemas']['Label'][]}
 const initial: Body = {name:'', enabled:true, predicate:{type:'feed_in', ids:[]}, actions:[{type:'notify', budget:3}]}
 const actionTypes = [['add_label','Add label'], ['set_shelf','Set shelf'], ['notify','Notify'], ['webhook','Webhook']] as const
@@ -43,6 +43,7 @@ export function Rules(resources: Resources) {
 function RuleEditor({rule, feeds, folders, labels, pipeline, onCancel, onSaved}: Resources & {rule?: Rule; pipeline: components['schemas']['PipelineStatus']; onCancel: () => void; onSaved: () => void}) {
   const [draft, setDraft] = useState<Body>(() => rule ? {name:rule.name,predicate:rule.predicate,actions:rule.actions,enabled:rule.enabled} : initial)
   const [words, setWords] = useState('')
+  const creation = useRef<{body:string; opID:string} | null>(null)
   const [compiledFeeds, setCompiledFeeds] = useState<components['schemas']['CompiledFeed'][] | null>(null)
   const [confirmed, setConfirmed] = useState(false)
   const [preview, setPreview] = useState<{body: string; entries: Entry[]} | null>(null)
@@ -75,7 +76,9 @@ function RuleEditor({rule, feeds, folders, labels, pipeline, onCancel, onSaved}:
   async function save() {
     if (!reviewed || invalid || (compiledFeeds?.length && !confirmed)) return
     setBusy(true);setError('')
-    try {await request(rule ? `/v1/rules/${rule.id}` : '/v1/rules',{method:rule ? 'PATCH' : 'POST',body:serialized});onSaved()}
+    if (!rule && creation.current?.body !== serialized) creation.current = {body:serialized, opID:crypto.randomUUID()}
+    const body = rule ? serialized : JSON.stringify({...draft, op_id:creation.current?.opID})
+    try {await request(rule ? `/v1/rules/${rule.id}` : '/v1/rules',{method:rule ? 'PATCH' : 'POST',body});onSaved()}
     catch (error) {setError(message(error))}
     finally {setBusy(false)}
   }
