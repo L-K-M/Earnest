@@ -2,7 +2,7 @@ self.addEventListener('push', event => {
   if (!event.data) return
   let payload
   try { payload = event.data.json() } catch { return }
-  if (typeof payload.title !== 'string' || typeof payload.body !== 'string') return
+  if (!payload || typeof payload !== 'object' || typeof payload.title !== 'string' || typeof payload.body !== 'string') return
   const id = typeof payload.notification_id === 'string' && /^[1-9]\d*$/.test(payload.notification_id) ? payload.notification_id : ''
   event.waitUntil(self.registration.showNotification(payload.title, {body: payload.body, data: {id}}))
 })

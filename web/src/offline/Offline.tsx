@@ -40,11 +40,13 @@ export async function registerOffline(): Promise<void> {
 export async function clearOffline(): Promise<void> {
   // The acknowledgement fences in-flight prefetch writes before sign-out ends.
   const controller = navigator.serviceWorker?.controller
-  if (controller && new URL(controller.scriptURL).pathname === '/offline-worker.js') await new Promise<void>((resolve,reject) => {
+  const worker = controller && new URL(controller.scriptURL).pathname === '/offline-worker.js'
+    ? controller : (await navigator.serviceWorker?.getRegistration('/'))?.active
+  if (worker && new URL(worker.scriptURL).pathname === '/offline-worker.js') await new Promise<void>((resolve,reject) => {
     const channel = new MessageChannel()
     const timeout = window.setTimeout(() => {channel.port1.close();reject(new Error('Could not clear offline reading copies. Retry sign out.'))},5000)
     channel.port1.onmessage = () => {window.clearTimeout(timeout);channel.port1.close();resolve()}
-    controller.postMessage({type:'earnest:clear-offline'},[channel.port2])
+    worker.postMessage({type:'earnest:clear-offline'},[channel.port2])
   })
   if ('caches' in window) await caches.delete(readingCache)
 }

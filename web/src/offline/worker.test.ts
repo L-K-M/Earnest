@@ -19,10 +19,13 @@ async function cache(name=readingCache) {
   if(!cachesByName.has(name)) cachesByName.set(name,new TestCache())
   return cachesByName.get(name)!
 }
-function dispatch(path: string, method='GET') {
+function dispatch(path: string, method='GET', mode?: RequestMode) {
   let response: Promise<Response> | undefined
   const waits: Promise<unknown>[] = []
-  handlers.get('fetch')!({request:new Request(new URL(path,origin),{method}),respondWith:(value: Promise<Response>) => {response=value},waitUntil:(value: Promise<unknown>) => waits.push(value)})
+  const request = new Request(new URL(path,origin),{method})
+  // Node's Request constructor rejects navigate; browsers set it on document loads.
+  if (mode) Object.defineProperty(request,'mode',{value:mode})
+  handlers.get('fetch')!({request,respondWith:(value: Promise<Response>) => {response=value},waitUntil:(value: Promise<unknown>) => waits.push(value)})
   return {response,done:() => Promise.all(waits)}
 }
 beforeEach(async () => {
@@ -34,6 +37,20 @@ beforeEach(async () => {
   await import('./worker')
 })
 afterEach(() => {vi.unstubAllGlobals();vi.resetAllMocks()})
+
+it('uses the precached shell for an offline notification navigation only',async () => {
+  await (await cache(shellCache)).put('/',new Response('Saved app shell'))
+  vi.mocked(fetch).mockRejectedValue(new TypeError('Offline'))
+  const navigation = dispatch('/?notification=42','GET','navigate')
+  expect(await (await navigation.response)!.text()).toBe('Saved app shell')
+  await navigation.done()
+  const script = dispatch('/assets/missing.js')
+  await expect(script.response).rejects.toThrow('Offline')
+  await script.done()
+  const metadata = dispatch('/v1/settings')
+  await expect(metadata.response).rejects.toThrow('Offline')
+  await metadata.done()
+})
 
 it('preloads the production shell and its fingerprinted assets',async () => {
   vi.mocked(fetch).mockImplementation(async input => String(input) === '/' ? new Response('<script src="/assets/app-1.js"></script><link href="/assets/app-1.css">',{headers:{'Content-Type':'text/html'}}) : new Response('asset'))

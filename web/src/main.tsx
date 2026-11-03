@@ -31,6 +31,7 @@ function App() {
 function Session({onLogout}: {onLogout: () => void}) {
   const queryClient = useQueryClient()
   const [identity, setIdentity] = useState<Identity | null>(null)
+  const sessionRevoked = useRef(false)
   const [checking, setChecking] = useState(() => Boolean(localStorage.getItem('earnest.csrf')))
   const [resettingGeneration,setResettingGeneration] = useState(false)
   const [error, setError] = useState('')
@@ -50,6 +51,9 @@ function Session({onLogout}: {onLogout: () => void}) {
     const id = new URLSearchParams(location.search).get('notification')
     if (!identity || !id || notificationOpened.current) return
     notificationOpened.current = true
+    const url = new URL(location.href)
+    url.searchParams.delete('notification')
+    history.replaceState(history.state, '', url)
     let active = true
     if (!/^[1-9]\d*$/.test(id)) return
     void request<components['schemas']['Notification']>(`/v1/notifications/${id}`).then(async notification => {
@@ -99,6 +103,7 @@ function Session({onLogout}: {onLogout: () => void}) {
         await queryClient.resetQueries({queryKey:['position']})
         await queryClient.resetQueries({queryKey:['river']})
         invalidateResources()
+        setError('')
         setResettingGeneration(false)
       }).catch(error => setError(error instanceof Error ? error.message : 'Could not refresh offline reading copies.'))
       return
@@ -151,7 +156,11 @@ function Session({onLogout}: {onLogout: () => void}) {
   }
   async function logout() {
     try {
-      await request('/v1/session/logout', {method:'POST'})
+      // Cache clearing can need a retry after the server has revoked the session.
+      if (!sessionRevoked.current) {
+        await request('/v1/session/logout', {method:'POST'})
+        sessionRevoked.current = true
+      }
       await clearOffline()
       await queryClient.cancelQueries()
       queryClient.clear()

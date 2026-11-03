@@ -2,6 +2,15 @@ import {readFileSync} from 'node:fs'
 import {runInNewContext} from 'node:vm'
 import {expect, it, vi} from 'vitest'
 
+it.each([null, false, 42, 'text', []])('ignores a non-object push payload: %j', payload => {
+  let push: (event: unknown) => void = () => undefined
+  const showNotification = vi.fn()
+  const self = {addEventListener:(name:string, handler:(event: unknown)=>void) => {if (name === 'push') push=handler},registration:{showNotification}}
+  runInNewContext(readFileSync('public/push-worker.js','utf8'), {self})
+  expect(() => push({data:{json:() => payload},waitUntil:vi.fn()})).not.toThrow()
+  expect(showNotification).not.toHaveBeenCalled()
+})
+
 it('shows only server title and body and opens an internal notification link', async () => {
   type Event = {data?:{json:()=>unknown}; notification?:{close:()=>void;data:{id:string}}; waitUntil:(promise:Promise<unknown>)=>void}
   const listeners:Record<string,(event:Event)=>void> = {}

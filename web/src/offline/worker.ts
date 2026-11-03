@@ -98,7 +98,8 @@ worker.addEventListener('fetch',event => {
       if (generationRead) throw error
       await writes
       if (kind !== 'shell' && version !== epoch) throw error
-      const cached = await (await caches.open(kind === 'shell' ? shellCache : readingCache)).match(request)
+      const cache = await caches.open(kind === 'shell' ? shellCache : readingCache)
+      const cached = (await cache.match(request)) ?? (kind === 'shell' && request.mode === 'navigate' ? await cache.match('/') : undefined)
       if (cached) return cached
       throw error
     }

@@ -66,6 +66,7 @@ export function Search({saved, onOpen}: {saved?: SavedSearch; onOpen: (entry: En
       {pipeline.status.embed === 'enabled' && <label>Search mode<select value={mode} onChange={event => setMode(event.target.value)}><option value="fulltext">Full text</option><option value="hybrid">Hybrid: full text and meaning</option></select></label>}
       <button>Search</button>
     </form>
+    {pipeline.error && <p role="alert">Could not check whether AI search features are available.</p>}
     {effectiveMode === 'hybrid' && <p>Hybrid search can make an embedding call and searches a bounded retrieval window. Use Full text to page further.</p>}
     {(error || results.error) && <p role="alert">{error || results.error?.message}</p>}
     {results.isFetching && <p role="status">Searching…</p>}
