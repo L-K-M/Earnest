@@ -28,6 +28,9 @@ targets:
     info:
       path: Sources/Info.plist
       properties:
+        NSLocalNetworkUsageDescription: Connect to the Earnest server you configure on your local network.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
         CFBundleURLTypes:
           - CFBundleURLSchemes: [earnest]
   EarnestTests:

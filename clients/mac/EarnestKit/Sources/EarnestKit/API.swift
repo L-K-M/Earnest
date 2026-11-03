@@ -71,10 +71,10 @@ public struct ArticleContent: Codable, Sendable {
     public let source: String
     enum CodingKeys: String, CodingKey { case entryID = "entry_id", html, text, sanitizerVersion = "sanitizer_version", source }
 }
-private struct SignedContentURL: Decodable {
+struct SignedContentURL: Codable, Sendable {
     let url: URL
-    let contentOrigin: URL
-    enum CodingKeys: String, CodingKey { case url, contentOrigin = "content_origin" }
+    let expiresAt: String
+    enum CodingKeys: String, CodingKey { case url, expiresAt = "expires_at" }
 }
 public struct APIRevision: Codable, Sendable {
     public let generation: String
@@ -119,82 +119,129 @@ public final class EarnestAPI: Sendable {
     private let baseURL: URL
     private let tokenStore: any TokenStore
     private let session: URLSession
+    private let client: Client
 
-    public init(baseURL: URL, tokenStore: any TokenStore) throws {
+    public init(baseURL: URL, tokenStore: any TokenStore, session: URLSession? = nil) throws {
         guard let scheme = baseURL.scheme?.lowercased(), ["https", "http"].contains(scheme),
               baseURL.host != nil, baseURL.user == nil, baseURL.password == nil,
               baseURL.query == nil, baseURL.fragment == nil else { throw APIError.invalidBaseURL }
         self.baseURL = baseURL
         self.tokenStore = tokenStore
-        self.session = URLSession(configuration: .ephemeral, delegate: RejectRedirects(), delegateQueue: nil)
-    }
-
-    private func request<T: Decodable>(_ path: String, method: String = "GET", query: [URLQueryItem] = [], body: Data? = nil, authenticated: Bool = true) async throws -> T {
-        var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
-        if !query.isEmpty { components.queryItems = query }
-        guard let url = components.url else { throw APIError.invalidBaseURL }
-        var request = URLRequest(url: url)
-        request.httpMethod = method
-        request.httpBody = body
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
-        if authenticated, let token = try tokenStore.load() { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-        let (data, response) = try await session.data(for: request)
-        guard let response = response as? HTTPURLResponse else { throw APIError.invalidResponse }
-        guard (200..<300).contains(response.statusCode) else {
-            if let problem = try? JSONDecoder().decode(APIProblem.self, from: data) { throw problem }
-            throw APIError.httpStatus(response.statusCode)
-        }
-        return try JSONDecoder().decode(T.self, from: data)
+        let session = session ?? URLSession(configuration: .ephemeral, delegate: RejectRedirects(), delegateQueue: nil)
+        self.session = session
+        client = Client(serverURL: baseURL, transport: APITransport(session: session, tokenStore: tokenStore))
     }
 
     public func startDevice(clientName: String) async throws -> DeviceAuthorization {
-        try await request("v1/devices/start", method: "POST", body: JSONEncoder().encode(["client_name": clientName]), authenticated: false)
+        try await generated { try adapt(try await client.deviceStart(.init(body: .json(.init(clientName: clientName)))).ok.body.json) }
     }
-    /// Poll once at the server-provided interval; persist only a successful bearer token.
     public func pollDevice(deviceCode: String) async throws -> DeviceToken {
-        let token: DeviceToken = try await request("v1/devices/poll", method: "POST", body: JSONEncoder().encode(["device_code": deviceCode]), authenticated: false)
+        let token: DeviceToken = try await generated { try adapt(try await client.devicePoll(.init(body: .json(.init(deviceCode: deviceCode)))).ok.body.json) }
         guard token.tokenType.lowercased() == "bearer", !token.accessToken.isEmpty else { throw APIError.invalidResponse }
+        try Task.checkCancellation()
         try tokenStore.save(token.accessToken)
         return token
     }
-    public func entries(view: String? = nil, cursor: String? = nil) async throws -> EntriesPage {
-        var query: [URLQueryItem] = []
-        if let view { query.append(URLQueryItem(name: "view", value: view)) }
-        if let cursor { query.append(URLQueryItem(name: "cursor", value: cursor)) }
-        return try await request("v1/entries", query: query)
+    public func entries(view: String? = nil, cursor: String? = nil, cadence: String? = nil) async throws -> EntriesPage {
+        let query = Operations.ListEntries.Input.Query(view: view.flatMap { .init(rawValue: $0) }, cadence: cadence.flatMap { .init(rawValue: $0) }, cursor: cursor)
+        if view != nil && query.view == nil || cadence != nil && query.cadence == nil { throw APIError.invalidResponse }
+        return try await generated { try adapt(try await client.listEntries(.init(query: query)).ok.body.json) }
+    }
+    public func entry(id: Int64) async throws -> APIEntry {
+        guard id > 0 else { throw APIError.invalidEntryID }
+        return try await generated { try adapt(try await client.getEntry(.init(path: .init(id: id))).ok.body.json) }
     }
     public func content(entryID: Int64) async throws -> ArticleContent {
         guard entryID > 0 else { throw APIError.invalidEntryID }
-        return try await request("v1/entries/\(entryID)/content")
+        return try await generated { try adapt(try await client.entryContent(.init(path: .init(id: entryID))).ok.body.json) }
     }
-    /// Fetch a signed article without forwarding the API bearer token.
+    /// This endpoint is being added in parallel and is not yet in the committed OpenAPI document.
     public func signedContent(entryID: Int64) async throws -> String {
         guard entryID > 0 else { throw APIError.invalidEntryID }
-        let signed: SignedContentURL = try await request("v1/entries/\(entryID)/content-url")
+        var request = URLRequest(url: baseURL.appendingPathComponent("v1/entries/\(entryID)/content-url"))
+        if let token = try tokenStore.load() { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        let (data, response) = try await session.data(for: request)
+        guard let response = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        try validateHTTP(response, data: data)
+        let signed = try JSONDecoder().decode(SignedContentURL.self, from: data)
         let url = signed.url
-        let origin = signed.contentOrigin
         guard let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme),
-              let host = url.host?.lowercased(), !host.isEmpty,
-              url.user == nil, url.password == nil, url.fragment == nil,
-              origin.scheme?.lowercased() == scheme, origin.host?.lowercased() == host,
-              (origin.port ?? (scheme == "https" ? 443 : 80)) == (url.port ?? (scheme == "https" ? 443 : 80)),
-              origin.user == nil, origin.password == nil, origin.query == nil, origin.fragment == nil,
-              origin.path.isEmpty || origin.path == "/" else { throw APIError.invalidResponse }
-        let (data, response) = try await session.data(from: url)
-        guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode),
-              let html = String(data: data, encoding: .utf8) else { throw APIError.invalidResponse }
+              url.host != nil, url.user == nil, url.password == nil, url.fragment == nil,
+              let expiry = parseAPIDate(signed.expiresAt), expiry > Date() else { throw APIError.invalidResponse }
+        // The authenticated server selects its content origin. Never attach API credentials here.
+        var unsigned = URLRequest(url: url)
+        unsigned.httpShouldHandleCookies = false
+        let (htmlData, htmlResponse) = try await session.data(for: unsigned)
+        guard let http = htmlResponse as? HTTPURLResponse else { throw APIError.invalidResponse }
+        try validateHTTP(http, data: htmlData)
+        guard let html = String(data: htmlData, encoding: .utf8) else { throw APIError.invalidResponse }
         return html
     }
-    public func bootstrapCursor() async throws -> APIRevision { try await request("v1/bootstrap") }
+    public func bootstrapCursor() async throws -> APIRevision {
+        try await generated { try adapt(try await client.bootstrapCursor(.init()).ok.body.json) }
+    }
     public func bootstrapPage(kind: String, query: [URLQueryItem] = []) async throws -> APIBootstrapPage {
-        guard ["entries", "state", "subscriptions", "folders", "labels", "label_memberships", "positions"].contains(kind) else { throw APIError.invalidResponse }
-        return try await request("v1/bootstrap/\(kind)", query: query)
+        let values = Dictionary(query.map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { _, last in last })
+        return try await generated {
+            try adapt(try await client.bootstrapPage(.init(path: .init(kind: kind), query: .init(
+                afterId: values["after_id"].flatMap(Int64.init), afterPrincipal: values["after_principal"].flatMap(Int64.init),
+                afterView: values["after_view"], limit: 1000, since: values["since"].flatMap(parseAPIDate)
+            ))).ok.body.json)
+        }
     }
     public func writeBatch(_ writes: [APIValue]) async throws -> [APIValue]? {
-        try await request("v1/state:batch", method: "POST", body: JSONEncoder().encode(writes))
+        try await generated { try adapt(try await client.stateBatch(.init(body: .json(try adapt(writes)))).ok.body.json) }
+    }
+    public func writeRange(_ range: APIValue) async throws -> APIValue {
+        try await generated { try adapt(try await client.stateThrough(.init(body: .json(try adapt(range)))).ok.body.json) }
     }
     public func changes(cursor: String) async throws -> APIChangesPage {
-        try await request("v1/changes", query: [URLQueryItem(name: "cursor", value: cursor)])
+        try await generated { try adapt(try await client.getChanges(.init(query: .init(cursor: cursor, limit: 1000))).ok.body.json) }
     }
+    public func me() async throws -> APIValue {
+        try await generated { try adapt(try await client.getMe(.init()).ok.body.json) }
+    }
+    public func subscriptions() async throws -> [APIValue] {
+        try await generated { try adapt(try await client.listSubscriptions(.init()).ok.body.json ?? []) }
+    }
+    public func subscribe(url: String, cadence: String) async throws -> APIValue {
+        try await generated { try adapt(try await client.subscribe(.init(body: .json(.init(cadence: cadence, opId: UUID().uuidString, url: url)))).ok.body.json) }
+    }
+    public func setCadence(subscriptionID: Int64, cadence: String) async throws -> APIValue {
+        try await generated { try adapt(try await client.patchSubscription(.init(path: .init(id: subscriptionID), body: .json(.init(cadence: cadence, opId: UUID().uuidString)))).ok.body.json) }
+    }
+    public func unsubscribe(subscriptionID: Int64) async throws {
+        _ = try await generated { try await client.unsubscribe(.init(path: .init(id: subscriptionID), query: .init(opId: UUID().uuidString))).ok.body.json }
+    }
+    public func activity() async throws -> [APIValue] {
+        try await generated { try adapt(try await client.listActivity(.init(query: .init(limit: 1000))).ok.body.json.activities ?? []) }
+    }
+    public func agentChanges(since: Date = Date().addingTimeInterval(-86400)) async throws -> [APIValue] {
+        try await generated { try adapt(try await client.agentChanges(.init(query: .init(since: since))).ok.body.json ?? []) }
+    }
+    public func revertActivity(id: Int64) async throws -> APIValue {
+        try await generated { try adapt(try await client.revertActivity(.init(path: .init(id: id), body: .json(.init(opId: UUID().uuidString)))).ok.body.json) }
+    }
+    /// Token metadata supplies agent names without exposing token secrets.
+    public func agentNames() async throws -> [Int64: String] {
+        let tokens = try await generated { try await client.listTokens(.init()).ok.body.json ?? [] }
+        var names: [Int64: String] = [:]
+        for token in tokens where token.kind == "agent" { names[token.principalId] = token.name }
+        return names
+    }
+    public func todayBriefs() async throws -> [APIValue] {
+        try await generated { try adapt(try await client.todayBriefs(.init()).ok.body.json ?? []) }
+    }
+    public func eventHints(cursor: String? = nil) throws -> AsyncThrowingStream<APIRevision, Error> {
+        eventStream(baseURL: baseURL, token: try tokenStore.load(), cursor: cursor)
+    }
+    public func annotations(afterID: Int64 = 0) async throws -> [APIValue] {
+        try await generated { try adapt(try await client.listAnnotations(.init(query: .init(includeDeleted: true, afterId: afterID, limit: 1000))).ok.body.json ?? []) }
+    }
+}
+
+func parseAPIDate(_ text: String) -> Date? {
+    let fractional = ISO8601DateFormatter()
+    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return fractional.date(from: text) ?? ISO8601DateFormatter().date(from: text)
 }

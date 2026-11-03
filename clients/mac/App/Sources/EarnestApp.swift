@@ -1,218 +1,240 @@
 import AppKit
-import EarnestKit
+import Foundation
 import SwiftUI
+import EarnestKit
 
-enum Section: String, CaseIterable, Identifiable {
-    case today = "Today", edition = "Edition", later = "Later", kept = "Kept", done = "Done", feeds = "Feeds", activity = "Activity"
-    var id: String { rawValue }
-    var view: String? {
-        switch self {
-        case .today: return "river"
-        case .later: return "later"
-        case .kept: return "kept"
-        case .done: return "done"
-        default: return nil
-        }
-    }
-}
-
-@MainActor final class AppModel: ObservableObject {
-    @Published var server = UserDefaults.standard.string(forKey: "server") ?? ""
-    @Published var section: Section = .today
-    @Published var entries: [APIEntry] = []
-    @Published var selected: Int64?
-    @Published var html = ""
-    @Published var error: String?
-    @Published var code: DeviceAuthorization?
-    @Published var loggedIn = false
-    @Published var connected = false
-    @Published var palette = false
-    private var api: EarnestAPI?
-
-    func connect() {
-        do {
-            guard let url = URL(string: server) else { throw APIError.invalidBaseURL }
-            let store = KeychainTokens(server: url)
-            api = try EarnestAPI(baseURL: url, tokenStore: store)
-            connected = true
-            UserDefaults.standard.set(server, forKey: "server")
-            loggedIn = try store.load() != nil
-            if loggedIn { Task { await refresh() } }
-        } catch { self.error = String(describing: error) }
-    }
-
-    func signOut() {
-        do {
-            guard let url = URL(string: server) else { throw APIError.invalidBaseURL }
-            try KeychainTokens(server: url).delete()
-            loggedIn = false
-            selected = nil
-            entries = []
-            html = ""
-        } catch { self.error = String(describing: error) }
-    }
-
-    func login() async {
-        do {
-            guard let api else { return }
-            let authorization = try await api.startDevice(clientName: "Earnest for Mac")
-            code = authorization
-            if let url = URL(string: authorization.verificationURI), ["http", "https"].contains(url.scheme?.lowercased() ?? "") { NSWorkspace.shared.open(url) }
-            let deadline = Date().addingTimeInterval(TimeInterval(authorization.expiresIn))
-            var interval = max(1, authorization.interval)
-            while Date() < deadline {
-                try await Task.sleep(for: .seconds(interval))
-                do {
-                    _ = try await api.pollDevice(deviceCode: authorization.deviceCode)
-                    code = nil
-                    loggedIn = true
-                    await refresh()
-                    return
-                } catch let problem as APIProblem {
-                    if problem.error == "authorization_pending" || problem.detail == "authorization_pending" { continue }
-                    if problem.error == "slow_down" || problem.detail == "slow_down" { interval += 5; continue }
-                    throw problem
-                }
-            }
-            self.error = "The device code expired. Start again."
-            code = nil
-        } catch {
-            code = nil
-            self.error = String(describing: error)
-        }
-    }
-
-    func refresh() async {
-        let requestedSection = section
-        guard let api, let view = requestedSection.view else { entries = []; return }
-        do {
-            var all: [APIEntry] = []
-            var cursor: String?
-            var seenCursors = Set<String>()
-            repeat {
-                let page = try await api.entries(view: view, cursor: cursor)
-                all.append(contentsOf: page.entries ?? [])
-                cursor = page.nextCursor
-                if let cursor, !seenCursors.insert(cursor).inserted { throw APIError.invalidResponse }
-            } while cursor != nil && !Task.isCancelled
-            if section == requestedSection { entries = all }
-        } catch { self.error = String(describing: error) }
-    }
-
-    func open(_ id: Int64?) async {
-        html = ""
-        guard let api, let id else { return }
-        do {
-            let article: String
-            do {
-                article = try await api.signedContent(entryID: id)
-            } catch is CancellationError {
-                return
-            } catch {
-                article = try await api.content(entryID: id).html
-            }
-            if selected == id { html = article }
-        } catch { self.error = String(describing: error) }
-    }
-
-    func move(_ offset: Int) {
-        guard !entries.isEmpty else { return }
-        let current = entries.firstIndex(where: { $0.id == selected }) ?? (offset > 0 ? -1 : entries.count)
-        selected = entries[min(entries.count - 1, max(0, current + offset))].id
-    }
-
-    func openOriginal() {
-        guard let entry = entries.first(where: { $0.id == selected }), let url = URL(string: entry.url),
-              ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return }
-        NSWorkspace.shared.open(url)
-    }
-}
-
-@main struct EarnestApp: App {
+@MainActor @main struct EarnestApp: App {
     @StateObject private var model = AppModel()
+
     var body: some Scene {
-        WindowGroup {
-            ContentView().environmentObject(model)
-                .onOpenURL { url in
-                    guard let id = DeepLink.entryID(url) else { return }
-                    if model.selected == id { Task { await model.open(id) } }
-                    else { model.selected = id }
+        WindowGroup { ContentView().environmentObject(model) }
+            .commands {
+                CommandMenu("Article") {
+                    // Unmodified-letter equivalents are suspended while the
+                    // palette is open so its filter field can type them.
+                    Button("Next Article") { model.move(1) }
+                        .keyboardShortcut("j", modifiers: [])
+                        .disabled(model.palette || !model.canBrowse)
+                    Button("Previous Article") { model.move(-1) }
+                        .keyboardShortcut("k", modifiers: [])
+                        .disabled(model.palette || !model.canBrowse)
+                    Divider()
+                    Button("Done") { model.command(.done) }
+                        .keyboardShortcut("e", modifiers: [])
+                        .disabled(!model.canActOnEntry || model.palette)
+                    Button("Later") { model.command(.later) }
+                        .keyboardShortcut("s", modifiers: [])
+                        .disabled(!model.canActOnEntry || model.palette)
+                    Button("Keep") { model.command(.keep) }
+                        .keyboardShortcut("f", modifiers: [])
+                        .disabled(!model.canActOnEntry || model.palette)
+                    Button("Mark Unread") { model.command(.unread) }
+                        .keyboardShortcut("m", modifiers: [])
+                        .disabled(!model.canActOnEntry || model.palette)
+                    Divider()
+                    Button("Open Original") { model.openOriginal() }
+                        .keyboardShortcut("o", modifiers: [])
+                        .disabled(model.selected == nil || model.palette || !model.canBrowse)
+                    Button("View Original") { model.openOriginal() }
+                        .keyboardShortcut("v", modifiers: [])
+                        .disabled(model.selected == nil || model.palette || !model.canBrowse)
+                    Divider()
+                    Button("Refresh") { model.scheduleSync() }
+                        .keyboardShortcut("r", modifiers: .command)
+                        .disabled(!model.loggedIn)
+                    Button("Command Palette") { model.palette = true }
+                        .keyboardShortcut("k", modifiers: .command)
                 }
-        }
-        .commands { ReaderCommands(model: model) }
+                CommandMenu("Go") {
+                    ForEach(Section.allCases) { target in
+                        Button("Go to \(target.rawValue)") { model.section = target }
+                            .keyboardShortcut(KeyEquivalent(Character(target.keyEquivalent)), modifiers: .command)
+                            .disabled(!model.loggedIn)
+                    }
+                    Divider()
+                    Button("Sign Out") { model.signOut() }
+                        .keyboardShortcut("q", modifiers: [.command, .shift])
+                        .disabled(!model.loggedIn)
+                }
+            }
     }
 }
 
-struct ReaderCommands: Commands {
-    @ObservedObject var model: AppModel
-    var body: some Commands {
-        CommandMenu("Article") {
-            Button("Next Article") { model.move(1) }.keyboardShortcut("j", modifiers: [])
-            Button("Previous Article") { model.move(-1) }.keyboardShortcut("k", modifiers: [])
-            Button("Done") {}.keyboardShortcut("e", modifiers: []).disabled(true)
-            Button("Later") {}.keyboardShortcut("s", modifiers: []).disabled(true)
-            Button("Keep") {}.keyboardShortcut("f", modifiers: []).disabled(true)
-            Button("Mark Unread") {}.keyboardShortcut("m", modifiers: []).disabled(true)
-            Button("Open Original") { model.openOriginal() }.keyboardShortcut("o", modifiers: [])
-            Button("View Original") { model.openOriginal() }.keyboardShortcut("v", modifiers: [])
-            Divider()
-            Button("Command Palette") { model.palette = true }.keyboardShortcut("k", modifiers: .command)
-        }
-    }
-}
-
-struct ContentView: View {
+@MainActor struct ContentView: View {
     @EnvironmentObject private var model: AppModel
+
     var body: some View {
         Group {
-            if model.loggedIn {
-                NavigationSplitView {
-                    List(Section.allCases) { section in
-                        Button(section.rawValue) { model.section = section }.buttonStyle(.plain)
-                    }
-                        .navigationSplitViewColumnWidth(min: 150, ideal: 180)
-                } content: {
-                    Group {
-                        if model.section.view == nil {
-                            ContentUnavailableView("Not available yet", systemImage: "tray", description: Text("This section has not been implemented."))
-                        } else {
-                            EntryTable(entries: model.entries.map { EntryRow(id: $0.id, title: $0.title) }, selection: $model.selected)
-                        }
-                    }.navigationSplitViewColumnWidth(min: 200, ideal: 300)
-                } detail: {
-                    if model.selected != nil { Reader(html: model.html) }
-                    else { ContentUnavailableView("Select an article", systemImage: "doc.text") }
-                }
-                .toolbar {
-                    Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.refresh() } }
-                    Button("Sign Out", systemImage: "rectangle.portrait.and.arrow.right") { model.signOut() }
-                }
-                .onChange(of: model.section) { _, _ in Task { await model.refresh() } }
-                .onChange(of: model.selected) { _, id in Task { await model.open(id) } }
+            if model.loggedIn { mainView } else { loginView }
+        }
+        .frame(minWidth: 880, minHeight: 520)
+        .onAppear {
+            if !model.server.isEmpty && !model.connected { model.connect() }
+        }
+        .alert("Error", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
+            Button("OK", role: .cancel) { model.error = nil }
+        } message: {
+            Text(model.error ?? "")
+        }
+        .sheet(isPresented: $model.palette) {
+            PaletteView()
+                .environmentObject(model)
+        }
+        .onOpenURL { url in
+            guard let id = DeepLink.entryID(url) else { return }
+            model.section = .today
+            if model.selected == id { model.open(id) }
+            else { model.selected = id }
+        }
+    }
+
+    private var mainView: some View {
+        NavigationSplitView {
+            List(Section.allCases, selection: Binding(
+                get: { model.section },
+                set: { if let target = $0 { model.section = target } })) { target in
+                Label(target.rawValue, systemImage: target.icon).tag(target)
+            }
+            .listStyle(.sidebar)
+            .frame(minWidth: 170)
+        } content: {
+            contentColumn
+                .frame(minWidth: 320)
+        } detail: {
+            if model.selected != nil {
+                Reader(html: model.html)
+                    .background(Color(nsColor: .textBackgroundColor))
             } else {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Connect to Earnest").font(.title)
-                    TextField("Server URL", text: $model.server)
-                    Button("Connect") { model.connect() }
-                    if model.code == nil { Button("Sign in") { Task { await model.login() } }.disabled(!model.connected) }
-                    if let code = model.code {
-                        Text("Enter this code in your browser: \(code.userCode)").textSelection(.enabled)
-                        Text(code.verificationURI).textSelection(.enabled)
-                    }
-                }.padding().frame(width: 420)
+                ContentUnavailableView("Select an article", systemImage: "doc.text")
             }
         }
-        .onAppear { if !model.server.isEmpty { model.connect() } }
-        .alert("Earnest", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
-            Button("OK") { model.error = nil }
-        } message: { Text(model.error ?? "") }
-        .sheet(isPresented: $model.palette) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Commands").font(.headline)
-                Button("Next Article") { model.move(1); model.palette = false }
-                Button("Previous Article") { model.move(-1); model.palette = false }
-                Button("Open Original") { model.openOriginal(); model.palette = false }
-            }.padding().frame(width: 300)
+        .safeAreaInset(edge: .bottom) {
+            if let note = model.connectionNote {
+                Text(note).font(.caption).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                    .background(.regularMaterial)
+            }
         }
+        .onChange(of: model.section) { _ in model.refreshSection() }
+        .onChange(of: model.selected) { id in model.open(id) }
+        .toolbar {
+            ToolbarItemGroup {
+                if model.pendingOps > 0 {
+                    Text("\(model.pendingOps) pending")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if model.syncing {
+                    ProgressView().controlSize(.small)
+                }
+                Button("Refresh", systemImage: "arrow.clockwise") { model.scheduleSync() }
+                Button("Sign Out", systemImage: "rectangle.portrait.and.arrow.right") { model.signOut() }
+            }
+        }
+    }
+
+    @ViewBuilder private var contentColumn: some View {
+        switch model.section {
+        case .today:
+            VStack(spacing: 0) {
+                if !model.briefs.isEmpty {
+                    BriefsView(briefs: model.briefs, names: model.principalNames)
+                    Divider()
+                }
+                if model.rows.isEmpty && model.briefs.isEmpty {
+                    Spacer()
+                } else {
+                    EntryTable(entries: model.rows, selection: $model.selected)
+                }
+                if !model.endTitle.isEmpty {
+                    Divider()
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(model.endTitle).font(.callout)
+                        if !model.endDetail.isEmpty {
+                            Text(model.endDetail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                }
+            }
+        case .edition:
+            EditionListView(groups: model.editionGroups, selection: $model.selected)
+        case .later, .kept, .done:
+            if model.rows.isEmpty {
+                ContentUnavailableView("Nothing here", systemImage: "tray")
+            } else {
+                EntryTable(entries: model.rows, selection: $model.selected)
+            }
+        case .feeds:
+            FeedsView()
+        case .activity:
+            ActivityView()
+        }
+    }
+
+    private var loginView: some View {
+        VStack(spacing: 16) {
+            Text("Earnest").font(.title)
+            TextField("Server URL", text: $model.server)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 320)
+                .disabled(model.connected)
+            if let code = model.code {
+                Text("Enter \(code.userCode) at \(code.verificationURI)")
+                    .textSelection(.enabled)
+            }
+            HStack {
+                if model.connected {
+                    Button("Sign In") { model.login() }
+                        .disabled(model.loggingIn || model.server.isEmpty)
+                    if model.loggingIn || model.code != nil {
+                        Button("Cancel") { model.cancelLogin() }
+                    }
+                    Button("Change Server") { model.connected = false; model.signOut() }
+                } else {
+                    Button("Connect") { model.connect() }
+                        .disabled(model.server.isEmpty)
+                }
+            }
+            if let note = model.connectionNote {
+                Text(note).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(40)
+    }
+}
+
+@MainActor struct PaletteView: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var filter = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("Type a command", text: $filter)
+                .textFieldStyle(.roundedBorder)
+            List(model.paletteCommands().filter {
+                filter.isEmpty || $0.title.localizedCaseInsensitiveContains(filter)
+            }) { command in
+                Button {
+                    dismiss()
+                    command.action()
+                } label: {
+                    HStack {
+                        Text(command.title)
+                        Spacer()
+                        Text(command.key).foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(!command.enabled)
+            }
+        }
+        .padding(12)
+        .frame(width: 320, height: 380)
     }
 }

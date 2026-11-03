@@ -18,14 +18,15 @@ concurrency:
 jobs:
   kit:
     runs-on: ubuntu-latest
-    container: swift:6.2
+    container: swift:6.3.3
     timeout-minutes: 20
     defaults:
       run:
         working-directory: clients/mac/EarnestKit
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: swift test
+      - run: swift build -j 2
+      - run: swift test -j 2
 
   app:
     runs-on: macos-latest
@@ -40,4 +41,4 @@ jobs:
       - name: Generate project
         run: xcodegen generate
       - name: Build and test
-        run: xcodebuild build test -project Earnest.xcodeproj -scheme Earnest -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
+        run: xcodebuild build test -project Earnest.xcodeproj -scheme Earnest -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO -skipPackagePluginValidation -jobs 2
