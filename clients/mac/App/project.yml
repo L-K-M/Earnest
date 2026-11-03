@@ -1,0 +1,46 @@
+name: Earnest
+options:
+  deploymentTarget:
+    macOS: '15.0'
+packages:
+  EarnestKit:
+    path: ../EarnestKit
+  GRDB:
+    url: https://github.com/groue/GRDB.swift.git
+    exactVersion: 7.8.0
+targets:
+  Earnest:
+    type: application
+    platform: macOS
+    sources: [Sources]
+    dependencies:
+      - package: EarnestKit
+      - package: GRDB
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ch.lkmc.Earnest
+        PRODUCT_NAME: Earnest
+        SWIFT_VERSION: '5.0'
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_ENTITLEMENTS: Sources/Earnest.entitlements
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleURLTypes: ''
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleURLTypes:
+          - CFBundleURLSchemes: [earnest]
+  EarnestTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [Tests]
+    dependencies:
+      - target: Earnest
+schemes:
+  Earnest:
+    build:
+      targets:
+        Earnest: all
+        EarnestTests: [test]
+    test:
+      targets: [EarnestTests]
