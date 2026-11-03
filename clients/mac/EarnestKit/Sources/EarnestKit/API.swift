@@ -62,7 +62,17 @@ public struct APIEntry: Codable, Sendable, Identifiable {
 public struct EntriesPage: Codable, Sendable {
     public let entries: [APIEntry]?
     public let nextCursor: String?
-    enum CodingKeys: String, CodingKey { case entries, nextCursor = "next_cursor" }
+    public let status: String?
+    public let groups: [ClusterGroup]?
+    enum CodingKeys: String, CodingKey { case entries, nextCursor = "next_cursor", status, groups }
+}
+/// One story in a clustered page: its representative entry and how many
+/// other entries tell the same story ("also in 3 others").
+public struct ClusterGroup: Codable, Sendable {
+    public let entry: APIEntry
+    public let clusterID: Int64
+    public let alsoIn: Int64
+    enum CodingKeys: String, CodingKey { case entry, clusterID = "cluster_id", alsoIn = "also_in" }
 }
 public struct ArticleContent: Codable, Sendable {
     public let entryID: Int64
