@@ -16,6 +16,36 @@ func clusterItem(key, title, url string) IngestItem {
 	return IngestItem{IdentityHash: coreHash("cluster:" + key), ContentHash: coreHash("clusterbody:" + key), Title: title, URL: url, ContentHTML: "<p>" + key + "</p>", ContentText: "text " + key, SanitizerVersion: 1, ContentSource: ContentFromFeed}
 }
 
+func TestClusterPendingCountsOnlyCommittedEntries(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := context.Background()
+	clusterIngest(t, f, f.feed, "rollback", "Rollback story", "https://example.test/rollback")
+	// A deferred trigger fails after the whole pass has assigned its entries.
+	if _, err := f.db.Pool().Exec(ctx, `CREATE FUNCTION reject_cluster_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'reject cluster commit'; END $$;
+		CREATE CONSTRAINT TRIGGER reject_cluster_commit AFTER INSERT ON entry_clusters
+		DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reject_cluster_commit()`); err != nil {
+		t.Fatal(err)
+	}
+	n, err := f.s.ClusterPending(ctx, "", 100)
+	if err == nil {
+		t.Fatal("expected the commit to fail")
+	}
+	var committed int
+	if err := f.db.Pool().QueryRow(ctx, `SELECT count(*) FROM entry_clusters`).Scan(&committed); err != nil {
+		t.Fatal(err)
+	}
+	if n != committed {
+		t.Fatalf("reported %d processed entries, committed %d", n, committed)
+	}
+	if _, err := f.db.Pool().Exec(ctx, `DROP TRIGGER reject_cluster_commit ON entry_clusters`); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := f.s.ClusterPending(ctx, "", 100); err != nil || n != 1 {
+		t.Fatalf("retry after rollback: %d %v", n, err)
+	}
+}
+
 func clusterIngest(t *testing.T, f *coreFixture, feed int64, key, title, url string) int64 {
 	t.Helper()
 	ctx := context.Background()

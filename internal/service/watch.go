@@ -116,7 +116,11 @@ func (s *Service) Watches(ctx context.Context, a Actor) ([]WatchRule, error) {
 		if err := rows.Scan(&id, &w.CheckLLM, &w.CheckBudget); err != nil {
 			return nil, fmt.Errorf("scan watch: %w", err)
 		}
-		w.Rule = byID[id]
+		rule, ok := byID[id]
+		if !ok {
+			continue
+		}
+		w.Rule = rule
 		w.Status = watchStatus(ctx, w.CheckLLM)
 		out = append(out, w)
 	}
