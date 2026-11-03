@@ -46,14 +46,14 @@ final class PresentationTests: XCTestCase {
     func testFetchWithoutPendingIntentShowsNewerRegister() throws {
         let engine = try engine(synced(shelfRev: 2, shelf: .text("later")))
         let merged = try presentedState(fetched: state(shelfRev: 3, shelf: "done"), engine: engine)
-        XCTAssertEqual(merged.shelf.value, .text("done"))
+        XCTAssertEqual(merged.shelf.value, RegisterValue.text("done"))
     }
 
     func testFetchMergesRegistersIndependently() throws {
         let engine = try engine(synced(seenRev: 3, shelfRev: 1, seen: .text("unseen"), shelf: .text("later")))
-        let merged = try presentedState(fetched: state(seenRev: 2, seen: "seen", shelfRev: 4, shelf: "done"), engine: engine)
-        XCTAssertEqual(merged.seen.value, .text("unseen"))
-        XCTAssertEqual(merged.shelf.value, .text("done"))
+        let merged = try presentedState(fetched: state(seenRev: 2, shelfRev: 4, seen: "seen", shelf: "done"), engine: engine)
+        XCTAssertEqual(merged.seen.value, RegisterValue.text("unseen"))
+        XCTAssertEqual(merged.shelf.value, RegisterValue.text("done"))
     }
 
     func testPrincipalIDFlat() {
