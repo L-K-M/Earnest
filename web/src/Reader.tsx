@@ -6,6 +6,7 @@ import {request} from './request'
 import {Typography, settingsInput, type ReadingSettings} from './Settings'
 import {OfflineArticle, useOnline} from './offline/Offline'
 import {MoreLikeThis} from './search/Search'
+import {Summary} from './pipeline/Pipeline'
 
 export function Reader({entry, subscription, settings, actions, onClose, onSettings, renderBody, onOpen}: {entry: Entry; subscription?: Subscription; settings: ReadingSettings; actions: ReaderActions; onClose: () => void; onSettings: (value: ReadingSettings) => void; renderBody: (url: string) => ReactNode; onOpen?: (entry: Entry) => void}) {
   const online = useOnline()
@@ -41,6 +42,7 @@ export function Reader({entry, subscription, settings, actions, onClose, onSetti
     <header><h2 ref={title} tabIndex={-1}>{entry.title || 'Untitled'}</h2><p>{subscription?.title || 'Feed'}{entry.author && ` · ${entry.author}`}{entry.published_at && <> · <time dateTime={entry.published_at}>{new Date(entry.published_at).toLocaleString()}</time></>}</p>
       <a href={entry.url} target="_blank" rel="noopener noreferrer">Open original</a>
     </header>
+    <Summary entryID={entry.id} shortcuts={settings.single_key_shortcuts}/>
     <div className="actions" aria-label="Article actions"><button onClick={() => act('shelf', 'done')}>Done (e)</button><button aria-pressed={state.shelf.value === 'later'} onClick={() => act('shelf', state.shelf.value === 'later' ? 'none' : 'later')}>Later (s)</button><button aria-pressed={state.kept.value === true} onClick={() => act('kept', state.kept.value !== true)}>Keep (f)</button><button onClick={() => act('seen', 'unseen')}>Unread (m)</button></div>
     {error && <p role="alert">{error}</p>}
     <details><summary>Typography for this feed</summary><form onSubmit={event => {event.preventDefault();void override(overrideDraft)}}><Typography value={overrideDraft} onChange={value => setOverrideDraft({...overrideDraft, ...value})} /><button disabled={savingOverride}>Save for this feed</button></form></details>

@@ -27,11 +27,14 @@ it('connects sidebar searches, feed and label commands, and reading actions to t
     if (path === '/v1/subscriptions') return [{id:8,feed_id:42,title:'Rust',url:'https://feed.test',deleted:false}]
     if (path === '/v1/labels') return [{ID:3,Name:'Research',Deleted:false}]
     if (path === '/v1/saved-searches') return [{id:2,name:'Rust searches',query:'rust',filters:{}}]
-    if (path === '/v1/pipeline') return {embed:'disabled',classify:'disabled',semantic:'disabled',watch:'disabled'}
+    if (path === '/v1/pipeline') return {embed:'disabled',classify:'disabled',semantic:'disabled',watch:'disabled',ask:'enabled'}
     if (path.startsWith('/v1/search')) return {matches:[]}
     return []
   })
   await import('../main')
+  fireEvent.click(await screen.findByRole('button',{name:'Ask my feeds'},{timeout:10000}))
+  expect(screen.getByRole('heading',{name:'Ask my feeds'})).toBeTruthy()
+  fireEvent.click(screen.getByRole('button',{name:'Today'}))
   fireEvent.click(await screen.findByRole('button',{name:'Select article'}))
   function palette(query: string) {
     fireEvent.keyDown(document.body,{key:'k',ctrlKey:true})
@@ -44,6 +47,9 @@ it('connects sidebar searches, feed and label commands, and reading actions to t
   reactAct(() => {changes.current?.('generation')})
   await waitFor(() => expect(clearOffline).toHaveBeenCalledOnce())
   await screen.findByRole('heading',{name:'Today articles'})
+  palette('Ask my feeds')
+  expect(await screen.findByRole('heading',{name:'Ask my feeds'})).toBeTruthy()
+  await waitFor(() => expect(screen.queryByRole('dialog',{name:'Command palette'})).toBeNull())
   palette('Feed: Rust')
   expect(await screen.findByRole('heading',{name:'Rust articles'})).toBeTruthy()
   await waitFor(() => expect(screen.queryByRole('dialog',{name:'Command palette'})).toBeNull())

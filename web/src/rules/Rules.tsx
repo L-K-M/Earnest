@@ -42,6 +42,9 @@ export function Rules(resources: Resources) {
 
 function RuleEditor({rule, feeds, folders, labels, pipeline, onCancel, onSaved}: Resources & {rule?: Rule; pipeline: components['schemas']['PipelineStatus']; onCancel: () => void; onSaved: () => void}) {
   const [draft, setDraft] = useState<Body>(() => rule ? {name:rule.name,predicate:rule.predicate,actions:rule.actions,enabled:rule.enabled} : initial)
+  const [words, setWords] = useState('')
+  const [compiledFeeds, setCompiledFeeds] = useState<components['schemas']['CompiledFeed'][] | null>(null)
+  const [confirmed, setConfirmed] = useState(false)
   const [preview, setPreview] = useState<{body: string; entries: Entry[]} | null>(null)
   const [review, setReview] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -52,6 +55,17 @@ function RuleEditor({rule, feeds, folders, labels, pipeline, onCancel, onSaved}:
   const serialized = JSON.stringify(draft)
   const reviewed = preview?.body === serialized
   function changeAction(index: number, action: Action) {setDraft({...draft,actions:actions.map((old,i) => i === index ? action : old)})}
+  async function compile() {
+    setBusy(true);setError('');setPreview(null);setCompiledFeeds(null);setConfirmed(false)
+    try {
+      const result = await request<components['schemas']['CompiledRule']>('/v1/rules:compile',{method:'POST',body:JSON.stringify({text:words})})
+      const next = {...draft,predicate:result.predicate,actions:result.actions ?? []}
+      setDraft(next);setCompiledFeeds(result.feeds_to_confirm ?? [])
+      const matches = await request<components['schemas']['EntriesPage']>('/v1/rules:dry-run',{method:'POST',body:JSON.stringify({predicate:next.predicate,actions:next.actions})})
+      setPreview({body:JSON.stringify(next),entries:matches.entries ?? []})
+    } catch (error) {setError(message(error))}
+    finally {setBusy(false)}
+  }
   async function dryRun() {
     setBusy(true);setError('');setPreview(null);setReview(false)
     try { const result = await request<components['schemas']['EntriesPage']>('/v1/rules:dry-run',{method:'POST',body:JSON.stringify({predicate:draft.predicate,actions})});setPreview({body:serialized,entries:result.entries ?? []}) }
@@ -59,13 +73,14 @@ function RuleEditor({rule, feeds, folders, labels, pipeline, onCancel, onSaved}:
     finally {setBusy(false)}
   }
   async function save() {
-    if (!reviewed || invalid) return
+    if (!reviewed || invalid || (compiledFeeds?.length && !confirmed)) return
     setBusy(true);setError('')
     try {await request(rule ? `/v1/rules/${rule.id}` : '/v1/rules',{method:rule ? 'PATCH' : 'POST',body:serialized});onSaved()}
     catch (error) {setError(message(error))}
     finally {setBusy(false)}
   }
   return <section aria-label="Rule editor"><h3>{rule ? `Edit ${rule.name}` : 'New rule'}</h3><form onSubmit={event => {event.preventDefault();void dryRun()}}><fieldset disabled={busy}><legend>Rule details</legend>
+    {pipeline.compile_rule === 'enabled' && <div><label>Describe a rule<textarea value={words} onChange={event => setWords(event.target.value)}/></label><button type="button" disabled={!words.trim()} onClick={() => {void compile()}}>Compile rule</button>{compiledFeeds && <div><p>Resolved feeds:</p><ul>{compiledFeeds.map(feed => <li key={feed.id}>{feed.name} (ID {feed.id})</li>)}</ul>{compiledFeeds.length > 0 && <label><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)}/>Confirm these feeds</label>}</div>}</div>}
     <label>Name<input required maxLength={255} value={draft.name} onChange={event => setDraft({...draft,name:event.target.value})}/></label>
     <label><input type="checkbox" checked={draft.enabled} onChange={event => setDraft({...draft,enabled:event.target.checked})}/>Enabled</label>
     <PredicateEditor value={draft.predicate} onChange={predicate => setDraft({...draft,predicate})} feeds={feeds} folders={folders} pipeline={pipeline}/>
@@ -81,7 +96,7 @@ function RuleEditor({rule, feeds, folders, labels, pipeline, onCancel, onSaved}:
     <p>Shelf changes require selected feeds. Webhooks can use only selected feeds and your keywords. Notifications have a daily budget.</p>
     {invalid && <p role="note">{invalid}</p>}
     <button disabled={Boolean(invalid) || !draft.name.trim()}>Dry run on the past seven days</button>
-    {reviewed && <div role="status"><p>Would have matched {preview.entries.length} items.</p><button type="button" onClick={() => setReview(!review)}>Review them</button><button type="button" disabled={Boolean(invalid)} onClick={() => {void save()}}>Save</button></div>}
+    {reviewed && <div role="status"><p>Would have matched {preview.entries.length} items.</p><button type="button" onClick={() => setReview(!review)}>Review them</button><button type="button" disabled={Boolean(invalid) || Boolean(compiledFeeds?.length && !confirmed)} onClick={() => {void save()}}>Save</button></div>}
     {reviewed && review && <ul aria-label="Dry-run matches">{preview.entries.map(entry => <li key={entry.id}><strong>{entry.title || 'Untitled'}</strong><p>{entry.author && `${entry.author} · `}Feed: {feeds.find(feed => feed.feed_id === entry.feed_id)?.title || entry.feed_id}{entry.first_seen_at && ` · ${new Date(entry.first_seen_at).toLocaleString()}`}</p></li>)}</ul>}
     {preview && !reviewed && <p>Rule changed. Run the dry run again before saving.</p>}
     <button type="button" onClick={onCancel}>Cancel</button>
