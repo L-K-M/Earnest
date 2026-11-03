@@ -457,7 +457,8 @@ export class ReaderSync {
     const snap = await this.store.load();
     if (snap !== null) {
       this.client = SyncClient.fromSnapshot(snap);
-      this.bootstrapped = snap.bootstrapped === true;
+      // Older caches cannot distinguish gone acknowledgements from tombstones.
+      this.bootstrapped = snap.bootstrapped === true && snap.goneEntries !== undefined;
       this.rawItems = new Map(snap.rawItems ?? []);
     }
   }

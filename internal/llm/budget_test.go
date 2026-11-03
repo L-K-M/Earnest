@@ -3,21 +3,28 @@ package llm
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
 
 // fakeSpendStore records budget operations in memory.
 type fakeSpendStore struct {
-	spent    int64
-	limit    int64
-	ensure   int
-	adds     []int64
-	provider string
-	months   []time.Time
+	mu           sync.Mutex
+	reservations map[string]int64
+	next         int
+	spent        int64
+	limit        int64
+	ensure       int
+	adds         []int64
+	provider     string
+	months       []time.Time
 }
 
 func (f *fakeSpendStore) LLMEnsureMonth(ctx context.Context, provider string, month time.Time, limitUsdMicros int64) (int64, int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.ensure++
 	f.provider = provider
 	f.limit = limitUsdMicros
@@ -26,9 +33,44 @@ func (f *fakeSpendStore) LLMEnsureMonth(ctx context.Context, provider string, mo
 }
 
 func (f *fakeSpendStore) LLMAddSpend(ctx context.Context, provider string, month time.Time, costUsdMicros int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.provider = provider
 	f.adds = append(f.adds, costUsdMicros)
 	f.spent += costUsdMicros
+	return nil
+}
+
+func (f *fakeSpendStore) LLMReserveSpend(_ context.Context, provider string, _ time.Time, limit, estimate int64, _ time.Time) (string, int64, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if limit > 0 && (f.spent >= limit || estimate > limit-f.spent) {
+		return "", f.spent, false, nil
+	}
+	if f.reservations == nil {
+		f.reservations = make(map[string]int64)
+	}
+	f.next++
+	id := fmt.Sprint(f.next)
+	f.reservations[id] = estimate
+	f.spent += estimate
+	f.provider = provider
+	return id, f.spent - estimate, true, nil
+}
+
+func (f *fakeSpendStore) LLMSettleSpend(_ context.Context, provider, id string, actual int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	estimate, ok := f.reservations[id]
+	if !ok {
+		return nil
+	}
+	delete(f.reservations, id)
+	f.spent += actual - estimate
+	f.provider = provider
+	if actual > 0 {
+		f.adds = append(f.adds, actual)
+	}
 	return nil
 }
 

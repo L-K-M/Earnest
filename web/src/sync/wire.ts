@@ -101,7 +101,7 @@ export function decodeEntry(v: JsonValue): Entry {
     subscriptionId: intIn(o, "subscription_id", "entry"),
     seq: intIn(o, "seq", "entry"),
     firstSeenAt: o.first_seen_at === undefined ? ZERO_TIME : parseTime(asString(o.first_seen_at, "entry.first_seen_at")),
-    publishedAt: o.published_at === undefined ? ZERO_TIME : parseTime(asString(o.published_at, "entry.published_at")),
+    publishedAt: o.published_at == null ? ZERO_TIME : parseTime(asString(o.published_at, "entry.published_at")),
     rev: intIn(o, "rev", "entry"),
     deleted: boolIn(o, "deleted", "entry"),
   };

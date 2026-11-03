@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -21,6 +22,7 @@ import (
 // EditionBatch groups structured requests submitted ahead of an edition's deadline.
 // Implementations must route and budget submissions and expose no tools.
 type EditionBatch interface {
+	// Submit returns an opaque handle, persisted unchanged for Poll and Cancel.
 	Submit(context.Context, []llm.CompleteRequest) (string, error)
 	Poll(context.Context, string, []llm.CompleteRequest) ([]string, bool, error)
 	Cancel(context.Context, string) error
@@ -69,7 +71,7 @@ func (b *openAIEditionBatch) route() (llm.Route, llm.ProviderConfig, error) {
 }
 
 func (b *openAIEditionBatch) request(ctx context.Context, method, path, contentType string, body io.Reader) ([]byte, error) {
-	_, cfg, err := b.route()
+	route, cfg, err := b.route()
 	if err != nil {
 		return nil, err
 	}
@@ -90,12 +92,15 @@ func (b *openAIEditionBatch) request(ctx context.Context, method, path, contentT
 		ports = []uint16{uint16(port)}
 	}
 	result, err := b.outbound.Do(req, outbound.Policy{Purpose: outbound.LLM, Redirect: outbound.RedirectNone, ExtraPorts: ports, MaxBodySize: 16 << 20, Timeout: 2 * time.Minute})
-	if err != nil {
+	if result == nil || result.Response == nil {
 		return nil, fmt.Errorf("batch transport: %w", err)
 	}
 	defer result.Response.Body.Close()
 	if result.Response.StatusCode < 200 || result.Response.StatusCode >= 300 {
-		return nil, fmt.Errorf("batch HTTP %d: %w", result.Response.StatusCode, llm.ErrUnsupported)
+		return nil, &llm.Error{Provider: route.Provider.Name(), StatusCode: result.Response.StatusCode, Err: llm.ErrUnsupported}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("batch transport: %w", err)
 	}
 	data, err := io.ReadAll(result.Response.Body)
 	if err != nil {
@@ -109,9 +114,6 @@ func (b *openAIEditionBatch) Submit(ctx context.Context, requests []llm.Complete
 	if err != nil {
 		return "", err
 	}
-	if err := b.budget.Authorize(ctx, route.Provider.Name()); err != nil {
-		return "", err
-	}
 	var lines bytes.Buffer
 	price := b.models[route.Model]
 	var reserved llm.USD
@@ -119,11 +121,12 @@ func (b *openAIEditionBatch) Submit(ctx context.Context, requests []llm.Complete
 		if req.Schema == nil {
 			return "", llm.ErrInvalidOutput
 		}
+		if req.MaxTokens <= 0 {
+			req.MaxTokens = llm.DefaultMaxTokens
+		}
 		messages := []map[string]string{{"role": "system", "content": req.System}}
-		inputBytes := len(req.System) + len(req.Schema.Definition)
 		for _, m := range req.Messages {
 			messages = append(messages, map[string]string{"role": string(m.Role), "content": m.Content})
-			inputBytes += len(m.Content)
 		}
 		body := map[string]any{"model": route.Model, "messages": messages, "response_format": map[string]any{"type": "json_schema", "json_schema": map[string]any{"name": req.Schema.Name, "strict": true, "schema": req.Schema.Definition}}}
 		tokenField := "max_completion_tokens"
@@ -134,16 +137,14 @@ func (b *openAIEditionBatch) Submit(ctx context.Context, requests []llm.Complete
 		if err := json.NewEncoder(&lines).Encode(map[string]any{"custom_id": fmt.Sprint(i), "method": "POST", "url": "/v1/chat/completions", "body": body}); err != nil {
 			return "", fmt.Errorf("batch JSONL: %w", err)
 		}
-		// Reserve a conservative full-price byte-fallback upper bound before submission.
-		// Batch usage has no refund primitive in the shared spend ledger.
-		reserved += price.InputPer1M.MulTokens(inputBytes) + price.OutputPer1M.MulTokens(req.MaxTokens)
-	}
-	spend, err := b.budget.Spend(ctx, route.Provider.Name())
-	if err != nil {
-		return "", err
-	}
-	if !spend.Unlimited() && reserved > spend.Limit-spend.Spent {
-		return "", &llm.BudgetError{Provider: spend.Provider, Month: spend.Month, Spent: spend.Spent, Limit: spend.Limit}
+		estimate, err := llm.EstimateCompletion(req, price)
+		if err != nil {
+			return "", err
+		}
+		reserved, err = llm.AddEstimates(reserved, estimate)
+		if err != nil {
+			return "", err
+		}
 	}
 	var upload bytes.Buffer
 	writer := multipart.NewWriter(&upload)
@@ -160,21 +161,22 @@ func (b *openAIEditionBatch) Submit(ctx context.Context, requests []llm.Complete
 	if err := writer.Close(); err != nil {
 		return "", fmt.Errorf("batch multipart: %w", err)
 	}
-	raw, err := b.request(ctx, http.MethodPost, "/files", writer.FormDataContentType(), &upload)
+	id, err := b.budget.Reserve(ctx, route.Provider.Name(), reserved)
 	if err != nil {
 		return "", err
+	}
+	raw, err := b.request(ctx, http.MethodPost, "/files", writer.FormDataContentType(), &upload)
+	if err != nil {
+		return "", errors.Join(err, b.budget.Reconcile(context.WithoutCancel(ctx), route.Provider.Name(), id, 0))
 	}
 	var file struct {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(raw, &file); err != nil {
-		return "", fmt.Errorf("batch file response: %w", err)
+		return "", errors.Join(fmt.Errorf("batch file response: %w", err), b.budget.Reconcile(context.WithoutCancel(ctx), route.Provider.Name(), id, 0))
 	}
 	if file.ID == "" {
-		return "", llm.ErrInvalidOutput
-	}
-	if err := b.budget.Record(ctx, route.Provider.Name(), reserved); err != nil {
-		return "", err
+		return "", errors.Join(llm.ErrInvalidOutput, b.budget.Reconcile(context.WithoutCancel(ctx), route.Provider.Name(), id, 0))
 	}
 	data, err := json.Marshal(map[string]string{"input_file_id": file.ID, "endpoint": "/v1/chat/completions", "completion_window": "24h"})
 	if err != nil {
@@ -182,6 +184,10 @@ func (b *openAIEditionBatch) Submit(ctx context.Context, requests []llm.Complete
 	}
 	raw, err = b.request(ctx, http.MethodPost, "/batches", "application/json", bytes.NewReader(data))
 	if err != nil {
+		var providerErr *llm.Error
+		if errors.As(err, &providerErr) && providerErr.StatusCode >= 400 && providerErr.StatusCode < 500 && providerErr.StatusCode != http.StatusRequestTimeout {
+			return "", errors.Join(err, b.budget.Reconcile(context.WithoutCancel(ctx), route.Provider.Name(), id, 0))
+		}
 		return "", err
 	}
 	var batch struct {
@@ -193,10 +199,13 @@ func (b *openAIEditionBatch) Submit(ctx context.Context, requests []llm.Complete
 	if batch.ID == "" {
 		return "", llm.ErrInvalidOutput
 	}
-	return batch.ID, nil
+	// The reservation travels with the persisted job so another process can
+	// settle it after polling, including when submission crossed a month end.
+	return batch.ID + ":" + id, nil
 }
 
 func (b *openAIEditionBatch) Poll(ctx context.Context, id string, requests []llm.CompleteRequest) ([]string, bool, error) {
+	id, reservation, _ := strings.Cut(id, ":")
 	raw, err := b.request(ctx, http.MethodGet, "/batches/"+url.PathEscape(id), "application/json", nil)
 	if err != nil {
 		return nil, false, err
@@ -204,33 +213,56 @@ func (b *openAIEditionBatch) Poll(ctx context.Context, id string, requests []llm
 	var batch struct {
 		Status string `json:"status"`
 		Output string `json:"output_file_id"`
+		Errors string `json:"error_file_id"`
 	}
 	if err := json.Unmarshal(raw, &batch); err != nil {
 		return nil, false, fmt.Errorf("batch status: %w", err)
 	}
 	switch batch.Status {
-	case "failed", "expired", "cancelled":
-		return nil, false, llm.ErrUnsupported
-	case "completed":
+	case "failed", "expired", "cancelled", "completed":
 	default:
 		return nil, false, nil
 	}
-	if batch.Output == "" {
-		return nil, false, llm.ErrInvalidOutput
+	var rows bytes.Buffer
+	for _, file := range []string{batch.Output, batch.Errors} {
+		if file == "" {
+			continue
+		}
+		raw, err = b.request(ctx, http.MethodGet, "/files/"+url.PathEscape(file)+"/content", "application/json", nil)
+		if err != nil {
+			return nil, false, err
+		}
+		rows.Write(raw)
+		rows.WriteByte('\n')
 	}
-	raw, err = b.request(ctx, http.MethodGet, "/files/"+url.PathEscape(batch.Output)+"/content", "application/json", nil)
+	route, _, err := b.route()
 	if err != nil {
 		return nil, false, err
 	}
+	price := b.models[route.Model]
 	output := make([]string, len(requests))
-	scanner := bufio.NewScanner(bytes.NewReader(raw))
+	seen := make(map[int]bool)
+	var actual llm.USD
+	var outputErr error
+	unknown := false
+	scanner := bufio.NewScanner(&rows)
 	scanner.Buffer(make([]byte, 4096), 1<<20)
 	for scanner.Scan() {
+		if len(bytes.TrimSpace(scanner.Bytes())) == 0 {
+			continue
+		}
 		var row struct {
-			ID       string `json:"custom_id"`
+			ID    string `json:"custom_id"`
+			Error *struct {
+				Code string `json:"code"`
+			} `json:"error"`
 			Response struct {
 				Status int `json:"status_code"`
 				Body   struct {
+					Usage *struct {
+						Input  int `json:"prompt_tokens"`
+						Output int `json:"completion_tokens"`
+					} `json:"usage"`
 					Choices []struct {
 						Message struct {
 							Content string `json:"content"`
@@ -240,20 +272,58 @@ func (b *openAIEditionBatch) Poll(ctx context.Context, id string, requests []llm
 			} `json:"response"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &row); err != nil {
-			return nil, false, fmt.Errorf("batch output line: %w", err)
+			unknown = true
+			outputErr = fmt.Errorf("batch output line: %w", err)
+			continue
 		}
 		i, err := strconv.Atoi(row.ID)
-		if err != nil || i < 0 || i >= len(requests) || output[i] != "" || row.Response.Status != http.StatusOK || len(row.Response.Body.Choices) != 1 {
-			return nil, false, llm.ErrInvalidOutput
+		if err != nil || i < 0 || i >= len(requests) || seen[i] {
+			unknown = true
+			outputErr = llm.ErrInvalidOutput
+			continue
+		}
+		seen[i] = true
+		if usage := row.Response.Body.Usage; usage != nil && usage.Input >= 0 && usage.Output >= 0 {
+			cost, err := price.CompletionCost(llm.Usage{Input: usage.Input, Output: usage.Output})
+			if err != nil {
+				return nil, false, err
+			}
+			actual, err = llm.AddEstimates(actual, cost)
+			if err != nil {
+				return nil, false, err
+			}
+		} else if row.Error != nil && (row.Error.Code == "batch_expired" || row.Error.Code == "batch_cancelled") {
+			// The provider did not execute these requests; partial successes
+			// elsewhere in the same batch still contribute their billed usage.
+		} else if row.Response.Status < 400 || row.Response.Status >= 500 || row.Response.Status == http.StatusRequestTimeout {
+			unknown = true
+		}
+		if row.Response.Status != http.StatusOK || len(row.Response.Body.Choices) != 1 {
+			outputErr = llm.ErrInvalidOutput
+			continue
 		}
 		text := row.Response.Body.Choices[0].Message.Content
 		if err := requests[i].Schema.Validate(text); err != nil {
-			return nil, false, err
+			outputErr = err
+			continue
 		}
 		output[i] = text
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, false, fmt.Errorf("scan batch: %w", err)
+	}
+	// A failed batch without output never passed provider validation. Other
+	// terminal batches may have billed partial work; refund only known usage.
+	if reservation != "" && ((!unknown && len(seen) == len(requests)) || (batch.Status == "failed" && batch.Output == "" && batch.Errors == "")) {
+		if err := b.budget.Reconcile(context.WithoutCancel(ctx), route.Provider.Name(), reservation, actual); err != nil {
+			return nil, false, errors.Join(outputErr, err)
+		}
+	}
+	if batch.Status != "completed" {
+		return nil, false, errors.Join(outputErr, llm.ErrUnsupported)
+	}
+	if outputErr != nil {
+		return nil, false, outputErr
 	}
 	for _, text := range output {
 		if text == "" {
@@ -264,6 +334,9 @@ func (b *openAIEditionBatch) Poll(ctx context.Context, id string, requests []llm
 }
 
 func (b *openAIEditionBatch) Cancel(ctx context.Context, id string) error {
+	id, _, _ = strings.Cut(id, ":")
+	// Cancellation is asynchronous and can include billed partial work. Its
+	// estimate remains charged until terminal usage is known or the hold expires.
 	_, err := b.request(ctx, http.MethodPost, "/batches/"+url.PathEscape(id)+"/cancel", "application/json", strings.NewReader("{}"))
 	return err
 }

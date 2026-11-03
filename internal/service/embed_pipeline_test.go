@@ -221,8 +221,9 @@ func TestPipelineDisabledAndBudgetPause(t *testing.T) {
 		if err != nil || len(pending) != 1 {
 			t.Fatalf("lost pending work: %v %v", pending, err)
 		}
-		// Raising the configured cap resumes exactly the same durable work.
-		ctx = pipelineTestContext(t, f.db, p, []llm.Task{llm.TaskEmbed, llm.TaskClassify}, 1000)
+		// The raised cap must cover the conservative input/output reservation,
+		// not just the fake provider's much smaller final usage.
+		ctx = pipelineTestContext(t, f.db, p, []llm.Task{llm.TaskEmbed, llm.TaskClassify}, 10000)
 		if n, err := f.s.RunPipeline(ctx, 10); err != nil || n != 2 {
 			t.Fatalf("resume %d %v", n, err)
 		}

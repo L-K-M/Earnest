@@ -206,7 +206,7 @@ func TestSummaryInjectionConsentDisabledAndBudget(t *testing.T) {
 		{name: "image", output: summaryOutput("![beacon](https://attack.invalid/pixel)", "Beacon"), want: llm.ErrInvalidOutput},
 		{name: "fabricated passage", output: summaryOutput("An unsupported claim.", "this was never published")},
 		{name: "disabled", disabled: true, want: ErrPipelineDisabled},
-		{name: "budget", limit: 1, output: summaryOutput("Beacon.", "Beacon")},
+		{name: "budget", limit: 1, output: summaryOutput("Beacon.", "Beacon"), want: ErrPipelinePaused},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			f := newCoreFixture(t, template)
@@ -232,6 +232,9 @@ func TestSummaryInjectionConsentDisabledAndBudget(t *testing.T) {
 				t.Fatal("failed claim disappeared or passed")
 			}
 			if test.limit > 0 {
+				if len(p.payloads()) != 0 {
+					t.Fatal("request exceeding the remaining cap reached the provider")
+				}
 				next := f.ingest(t, "Another Beacon article.")
 				if _, err := f.s.SummarizeEntry(ctx, f.a, next, AnnotationSummary); !errors.Is(err, ErrPipelinePaused) {
 					t.Fatalf("budget did not pause: %v", err)
