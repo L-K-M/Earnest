@@ -4,12 +4,13 @@ import {useVirtualizer} from '@tanstack/react-virtual'
 import {emptyCopy} from './copy'
 import {entryQuery, orderEntries, shortcutsAllowed, viewKey, type Entry, type ReaderActions, type Subscription, type View} from './reader'
 import {request} from './request'
+import {TodayAgents, SessionChanges} from './agents/Surfaces'
 
 type Page = {entries: Entry[]; next_cursor?: string}
 type PageParam = {direction: 'forward' | 'backward'; cursor?: string; after?: number}
 export type SessionSummary = {done: number; later: number; kept: number; seen: number}
 
-export function River({view, subscriptions, actions, selected, onSelect, onOpen, shortcuts, counts, summary, onHelp}: {view: View; subscriptions: Subscription[]; actions: ReaderActions; selected: Entry | null; onSelect: (entry: Entry) => void; onOpen: (entry: Entry) => void; shortcuts: boolean; counts: boolean; summary: SessionSummary; onHelp: () => void}) {
+export function River({view, subscriptions, actions, selected, onSelect, onOpen, shortcuts, counts, summary, onHelp, since = '1970-01-01T00:00:00Z', sessionStart = '1970-01-01T00:00:00Z'}: {since?:string; sessionStart?:string; view: View; subscriptions: Subscription[]; actions: ReaderActions; selected: Entry | null; onSelect: (entry: Entry) => void; onOpen: (entry: Entry) => void; shortcuts: boolean; counts: boolean; summary: SessionSummary; onHelp: () => void}) {
   const key = viewKey(view)
   const scroller = useRef<HTMLDivElement>(null)
   const heading = useRef<HTMLHeadingElement>(null)
@@ -104,6 +105,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     {(error || position.error || list.error) && <p role="alert">{error || position.error?.message || list.error?.message} <button onClick={() => { void (position.isError ? position.refetch() : list.refetch()) }}>Try again</button></p>}
     {(position.isPending || list.isPending) && <p role="status">Finding your place…</p>}
     <div className="river-scroll" ref={scroller} tabIndex={0} aria-label="Article list">
+      {view.kind === 'today' && <TodayAgents since={since} onOpen={onOpen}/>}
       <button disabled={!list.isSuccess || list.isFetchingPreviousPage} onClick={() => { void list.fetchPreviousPage() }}>Earlier articles</button>
       <div className="virtual-list" style={{height: virtual.getTotalSize()}} role="list">
         {visible.map(row => {
@@ -118,7 +120,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
         })}
       </div>
       {list.hasNextPage && <button disabled={list.isFetchingNextPage} onClick={() => { void list.fetchNextPage() }}>More articles</button>}
-      {list.isSuccess && !list.hasNextPage && <section className="session-end" aria-label="Session end"><h3>{entries.length ? 'That is everything in this view.' : emptyCopy()}</h3><p>Your choices this session: {summary.seen} seen, {summary.done} Done, {summary.later} Later, {summary.kept} Keep. Sync status shows any actions still waiting.</p><p>You can leave the rest here.</p></section>}
+      {list.isSuccess && !list.hasNextPage && <section className="session-end" aria-label="Session end"><h3>{entries.length ? 'That is everything in this view.' : emptyCopy()}</h3><p>Your choices this session: {summary.seen} seen, {summary.done} Done, {summary.later} Later, {summary.kept} Keep. Sync status shows any actions still waiting.</p><SessionChanges since={sessionStart}/><p>You can leave the rest here.</p></section>}
     </div>
   </main>
 }

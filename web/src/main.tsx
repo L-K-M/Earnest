@@ -9,6 +9,7 @@ import {Reader} from './Reader'
 import {Settings, defaultSettings, type ReadingSettings} from './Settings'
 import {Feeds} from './Feeds'
 import {Onboarding} from './Onboarding'
+import {ActivityScreen, Notifications} from './agents/Surfaces'
 import {useReaderSync} from './syncBridge'
 import {type Entry, type ReaderActions, type Subscription, type View, viewKey} from './reader'
 import './style.css'
@@ -22,12 +23,15 @@ function App() {
   const [checking, setChecking] = useState(() => Boolean(localStorage.getItem('earnest.csrf')))
   const [error, setError] = useState('')
   const [view, setView] = useState<View>(standardViews[0])
-  const [panel, setPanel] = useState<'river' | 'feeds' | 'settings'>('river')
+  const [panel, setPanel] = useState<'river' | 'feeds' | 'settings' | 'activity' | 'notifications'>('river')
   const [selected, setSelected] = useState<Entry | null>(null)
   const [opened, setOpened] = useState(false)
   const [onboarded, setOnboarded] = useState(false)
   const [onboardingStarted, setOnboardingStarted] = useState(false)
   const [summary, setSummary] = useState<SessionSummary>({seen:0,done:0,later:0,kept:0})
+  const [sessionStart] = useState(() => new Date().toISOString())
+  const [since] = useState(() => localStorage.getItem('earnest.lastVisit') ?? new Date(0).toISOString())
+  useEffect(() => { const save = () => localStorage.setItem('earnest.lastVisit', new Date().toISOString()); window.addEventListener('pagehide', save); return () => window.removeEventListener('pagehide', save) }, [])
   const help = useRef<HTMLDialogElement>(null)
   const palette = useRef<HTMLDialogElement>(null)
   const signedIn = identity !== null
@@ -91,7 +95,7 @@ function App() {
       {(subscriptions.data ?? []).length > 0 && <details open><summary>Feeds</summary>{subscriptions.data?.map(sub => <button key={sub.id} onClick={() => choose({kind:'feed', id:sub.id, title:sub.title})}>{sub.title || sub.url}{settings.reading_mode === 'unread_counts' && unreadCounts.data && ` (${unreadCounts.data.byFeed[String(sub.id)] ?? 0})`}</button>)}</details>}
       {(folders.data ?? []).length > 0 && <details><summary>Folders</summary>{folders.data?.map(folder => <button key={folder.id} onClick={() => choose({kind:'folder', id:folder.id, title:folder.name})}>{folder.name}</button>)}</details>}
       {(labels.data ?? []).length > 0 && <details><summary>Labels</summary>{labels.data?.filter(label => !label.Deleted).map(label => <button key={label.ID} onClick={() => choose({kind:'label', id:label.ID, title:label.Name})}>{label.Name}</button>)}</details>}
-      <button onClick={() => {setPanel('feeds');setOpened(false)}}>Manage feeds</button><button onClick={() => {setPanel('settings');setOpened(false)}}>Settings</button><button onClick={() => help.current?.showModal()}>Keyboard help (?)</button><button onClick={() => palette.current?.showModal()}>Go to… (Ctrl+K)</button><button onClick={() => {void logout()}}>Sign out</button>
+      <button onClick={() => {setPanel('activity');setOpened(false)}}>Activity</button><button onClick={() => {setPanel('notifications');setOpened(false)}}>Notifications</button><button onClick={() => {setPanel('feeds');setOpened(false)}}>Manage feeds</button><button onClick={() => {setPanel('settings');setOpened(false)}}>Settings</button><button onClick={() => help.current?.showModal()}>Keyboard help (?)</button><button onClick={() => palette.current?.showModal()}>Go to… (Ctrl+K)</button><button onClick={() => {void logout()}}>Sign out</button>
     </nav>
     <div id="workspace" tabIndex={-1} className={`workspace ${panel === 'river' && !firstRun ? 'with-reader' : ''}`}>
       <div className="sync-messages">
@@ -101,8 +105,8 @@ function App() {
       <p className="sync-status" role="status">{sync.status}</p>
       {sync.error && <p role="alert">{sync.error} <button onClick={sync.retry}>Retry sync</button></p>}
       </div>
-      {firstRun ? <main onChangeCapture={() => setOnboardingStarted(true)} onClickCapture={() => setOnboardingStarted(true)}><Onboarding onComplete={() => {setOnboarded(true);refreshResources();void queryClient.invalidateQueries({queryKey:['position']});choose(standardViews[0])}} /></main> : panel === 'feeds' ? <main key="feeds" tabIndex={-1} ref={focusPanel}><h2>Feeds</h2><Feeds onChanged={refreshResources} /></main> : panel === 'settings' ? <main key="settings" tabIndex={-1} ref={focusPanel}><Settings key={settings.rev} settings={settings} onSaved={savedSettings} /></main> : <>
-        <River key={viewKey(view)} view={view} subscriptions={subscriptions.data ?? []} actions={actions} selected={selected} onSelect={setSelected} onOpen={entry => {setSelected(entry);setOpened(true)}} shortcuts={settings.single_key_shortcuts && preferences.isSuccess} counts={settings.reading_mode === 'unread_counts'} summary={summary} onHelp={() => help.current?.showModal()} />
+      {firstRun ? <main onChangeCapture={() => setOnboardingStarted(true)} onClickCapture={() => setOnboardingStarted(true)}><Onboarding onComplete={() => {setOnboarded(true);refreshResources();void queryClient.invalidateQueries({queryKey:['position']});choose(standardViews[0])}} /></main> : panel === 'feeds' ? <main key="feeds" tabIndex={-1} ref={focusPanel}><h2>Feeds</h2><Feeds onChanged={refreshResources} /></main> : panel === 'activity' ? <ActivityScreen /> : panel === 'notifications' ? <Notifications onOpen={entry => {choose(standardViews[0]);setSelected(entry);setOpened(true)}} /> : panel === 'settings' ? <main key="settings" tabIndex={-1} ref={focusPanel}><Settings key={settings.rev} settings={settings} onSaved={savedSettings} /></main> : <>
+        <River since={since} sessionStart={sessionStart} key={viewKey(view)} view={view} subscriptions={subscriptions.data ?? []} actions={actions} selected={selected} onSelect={setSelected} onOpen={entry => {setSelected(entry);setOpened(true)}} shortcuts={settings.single_key_shortcuts && preferences.isSuccess} counts={settings.reading_mode === 'unread_counts'} summary={summary} onHelp={() => help.current?.showModal()} />
         {selected && opened ? <Reader key={selected.id} entry={selected} subscription={subscriptions.data?.find(sub => sub.id === selected.subscription_id)} settings={settings} actions={actions} onSettings={savedSettings} renderBody={url => <iframe title="Article body" src={url} sandbox="allow-popups allow-popups-to-escape-sandbox" />} onClose={() => {setOpened(false);window.requestAnimationFrame(() => document.querySelector<HTMLElement>('.river h2')?.focus())}} /> : <article className="reader-placeholder" aria-label="Reader"><p>Choose an article. It has been waiting patiently.</p></article>}
       </>}
     </div>
