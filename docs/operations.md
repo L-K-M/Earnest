@@ -1,17 +1,89 @@
 # Operations
 
+## NAS deployment and HTTPS
+
+Follow the [quick start](../README.md), keep `.env` private, and retain both secrets off the NAS with your backups. Compose publishes app and content ports on all host interfaces by default. Restrict access to those ports with your NAS firewall, including on LAN interfaces; Tailscale Serve alone does not hide the published ports. Postgres binds to loopback by default.
+
+Install Tailscale on the NAS, connect it to your tailnet, enable HTTPS certificates and use its MagicDNS name. For example, with the default Compose ports:
+
+```sh
+tailscale serve --bg --https=443 8080
+tailscale serve --bg --https=8443 8081
+tailscale serve status
+```
+
+Set `EARNEST_BASE_URL=https://<nas>.<tailnet>.ts.net` and `EARNEST_CONTENT_ORIGIN=https://<nas>.<tailnet>.ts.net:8443` in `.env`, substituting the actual name shown by Tailscale, then run `docker compose up -d`. Both URLs must be reachable from your browser. A different port makes a different browser origin: article HTML and images run on the content origin so untrusted publisher content is isolated from the app. Do not proxy both listeners onto the same origin. See [Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/serve) and [web](web.md).
+
+Web Push and UnifiedPush need stable VAPID keys. Compose does not mount the generated key file persistently by default, so supply a persistent mounted key file through a Compose override, or provide the explicit key pair in `.env`; back it up securely. See [configuration](configuration.md).
+
+## Users and clients
+
+Create a user on the NAS and enter a password at the prompt:
+
+```sh
+docker compose exec earnest earnest user create <name>
+```
+
+Sign in to the web app and import OPML in onboarding. To connect a Google Reader client, generate its separate compatibility password:
+
+```sh
+docker compose exec earnest earnest compat-password --user <name>
+```
+
+Store the printed password securely. In NetNewsWire or Capy Reader use the HTTPS app URL with `/api/greader`, your username and that password. See [Google Reader](greader.md).
+
+Create a scoped agent token for MCP, recording the secret shown once:
+
+```sh
+docker compose exec earnest earnest token create --user <name> --kind agent --name "Reader agent" --scope entries:read,annotations:write --audience mcp --budget 3
+```
+
+Configure your MCP client with the HTTPS app URL plus `/mcp` and the token as a bearer credential. For the CLI use an `api` audience token instead, or run `earnest login` and approve the device flow in the web app. Set `EARNEST_URL` to your HTTPS app origin on the CLI host. Use `earnest whoami` to check identity; token commands, scopes, revocation and client examples are in [agents](agents.md) and [CLI](cli.md). Agent tokens can read all subscriptions, including private feeds.
+
 ## Backups and restore
 
-Compose starts a backup container that makes a custom-format `pg_dump` on startup and every 24 hours. It keeps the newest 14 successful dumps by default. Set `EARNEST_BACKUP_KEEP` to change the count and `EARNEST_BACKUP_VOLUME` to an absolute directory to store dumps outside the named `backups` volume. The backup service dumps the Compose `postgres` database; if `EARNEST_DATABASE_URL` points elsewhere, arrange separate backups for that database. The restore script likewise targets Compose Postgres. Store copies on another machine and protect them and `EARNEST_SECRET_KEY`: dumps contain private reading data and encrypted credentials need the original key.
+Compose's backup service dumps its Postgres database on startup and every 24 hours, retaining 14 successful custom-format dumps by default. `EARNEST_BACKUP_KEEP` and `EARNEST_BACKUP_VOLUME` change retention and location. If `EARNEST_DATABASE_URL` targets an external database, arrange separate backups and restore for it: these scripts target Compose Postgres. Copy dumps off host and protect them along with the original `EARNEST_SECRET_KEY` and any VAPID keys.
 
-To restore, first stop every external application and notification worker using the database. From the deployment checkout run `scripts/restore.sh /path/to/earnest-….dump`. It stops the Compose application, restores with `pg_restore --clean --if-exists --exit-on-error`, and rotates the generation before allowing the application to be restarted. If either command fails, leave the application stopped and investigate; do not serve an unrotated restore. After a successful restore, run `docker compose up -d earnest`. Clients must bootstrap again; restored pending notifications are withheld or marked uncertain. See [sync](sync.md#restore-and-notification-delivery).
+Test recovery periodically on a separate disposable stack and database, never by overwriting production. Stop all other applications and notification workers using the target database, copy in the original secret and a dump, then from that stack's checkout run:
 
-Periodically test this procedure against a separate disposable stack and database, then verify restored entries, generation rotation and withheld notifications before relying on a backup. Do not test by overwriting the production database.
+```sh
+scripts/restore.sh /path/to/earnest-backup.dump
+docker compose up -d earnest
+```
 
-## Metrics and logs
+The script stops Earnest, restores with `pg_restore` and rotates the generation before the app can restart. If restore or rotation fails, leave the app stopped and investigate. Verify users and entries, and that clients bootstrap again under the new generation. In the web app's Notifications screen, select **Release current notifications** after checking the restore. Delivery is withheld until that action; pending notifications restored from the old generation remain withheld permanently. Reissue any wanted message as a new operation. See [sync](sync.md#restore-and-notification-delivery). This procedure must be tested in your own environment before relying on the backups.
 
-The fetcher metrics registry exposes Prometheus text through its HTTP handler, including fetch results, duration, ingested items and queue depth. The application server does not yet mount the handler. Inspect container logs with `docker compose logs --tail=100 earnest` or `docker compose logs backup`. Feed credentials and secrets must not be logged.
+## Updates, metrics and logs
 
-## Update
+Run `./update.sh` in the deployment checkout, optionally followed by a branch name. It syncs the branch, pulls external images, rebuilds the local image with fresh base layers and recreates the stack. See [CICD.md](../CICD.md). Check `docker compose ps` and `docker compose logs --tail=100 earnest` after an update; `docker compose logs backup` shows backup failures. The main listener exposes Prometheus metrics at `/metrics` and liveness at `/healthz`; restrict access with the rest of the service.
 
-Run `./update.sh` from the deployment checkout. It updates the source, pulls external images, rebuilds the locally owned application image with fresh base layers, and recreates the stack. See [CICD.md](../CICD.md).
+## Outbound access and models
+
+Outbound requests to private addresses are denied unless the exact destination is listed in `EARNEST_OUTBOUND_ALLOW_PRIVATE`, for example `ollama:11434,ntfy:80`. Use names and ports reachable from the Earnest container; do not include schemes or paths. Configure ntfy's server, topic and optional token in your user push settings. Only allow destinations you trust. Public endpoints still pass the outbound address and redirect checks.
+
+The model pipeline is disabled by default. To enable it:
+
+1. Choose a provider and model, and understand what feed content will be sent. Credentialed feeds require explicit human opt-in even for local providers.
+2. In `.env`, set `EARNEST_LLM_PROVIDER_<NAME>_KIND` and `_BASE_URL`, plus `_API_KEY` if needed. Add a private server to the outbound allowlist. Set a positive `_LIMIT_USD`; zero means unlimited.
+3. Check the model's price and embedding dimensions in the built-in table or add an `EARNEST_LLM_MODELS` JSON overlay. Configure `EARNEST_LLM_TASK_EMBED_PROVIDER` and `_MODEL`, or the corresponding `CLASSIFY` pair, to start the worker. Add other tasks only as needed.
+4. Recreate with `docker compose up -d`, check logs and `GET /v1/pipeline`, and monitor spending. The monthly threshold can be exceeded by concurrent in-flight calls; Gemini embedding usage is not metered. Watch rules have separate daily notification and confirmation budgets.
+
+Full-text search works without models. See [pipeline](pipeline.md) and [LLM providers](llm-providers.md) for routes, prices, task names and privacy controls.
+
+## Feed health
+
+Use the web feed list or `GET /v1/feeds/{id}/health` to inspect health and the last error. The stored classes guide the next check:
+
+| Class | Check |
+| --- | --- |
+| `dns` | DNS resolution from the container and the feed hostname. |
+| `network` | Routing, connectivity and the remote server. |
+| `tls` | Certificate validity, hostname and system clock. |
+| `timeout` | Remote latency and connectivity; retry after the server recovers. |
+| `policy` | URL and private-address rules; explicitly allow only trusted private host and port pairs. |
+| `size` | Feed or response exceeds a size limit. |
+| `gone` | The feed returned a gone or missing response; check its URL. |
+| `rate_limit` | The server rate-limited requests; allow backoff to run. |
+| `challenge` | The server refused access, for example with a challenge or authorization failure. |
+| `http` | Other HTTP or redirect failure; inspect the source server. |
+| `parse` | Invalid or unsupported feed or response encoding; inspect the feed. |
