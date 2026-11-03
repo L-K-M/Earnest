@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -297,5 +299,239 @@ func TestEditionWorkerDoesNotOverlapExpiredLease(t *testing.T) {
 	firstErr := <-done
 	if err != nil || firstErr != nil || processed != 0 || batch.calls.Load() != 1 {
 		t.Fatalf("overlap processed=%d calls=%d errors=%v/%v", processed, batch.calls.Load(), err, firstErr)
+	}
+}
+
+type pollingErrorBatch struct{ testEditionBatch }
+
+func (b *pollingErrorBatch) Poll(context.Context, string, []llm.CompleteRequest) ([]string, bool, error) {
+	b.poll++
+	if !b.ready {
+		return nil, false, context.DeadlineExceeded
+	}
+	return []string{b.output}, true, nil
+}
+
+func TestEditionTransientPollKeepsBatch(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	id := f.ingest(t, "Beacon.")
+	if _, err := f.db.Pool().Exec(t.Context(), `UPDATE subscriptions SET cadence='week' WHERE id=$1`, f.subscription); err != nil {
+		t.Fatal(err)
+	}
+	output := groundedOutput(id, coreHash("bodyBeacon."), "Beacon.", "Beacon.")
+	p := &generatedProvider{outputs: map[string]string{"edition": output}}
+	ctx := generatedContext(t, f, p, []llm.Task{llm.TaskEdition}, 0)
+	batch := &pollingErrorBatch{testEditionBatch: testEditionBatch{output: output}}
+	ctx = pipeline.WithEditionBatch(ctx, batch)
+	if _, err := f.s.TriggerEdition(ctx, f.a, EditionWeekly, f.s.now().Add(time.Hour), "poll-timeout"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.RunEditionJobs(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		f.clock.Add(int64(time.Minute))
+		if n, err := f.s.RunEditionJobs(ctx, 1); err != nil || n != 1 {
+			t.Fatalf("poll jobs=%d err=%v", n, err)
+		}
+		var saved string
+		var attempts int
+		if err := f.db.Pool().QueryRow(ctx, `SELECT coalesce(payload->>'batch_id',''),attempts FROM jobs WHERE kind='edition'`).Scan(&saved, &attempts); err != nil {
+			t.Fatal(err)
+		}
+		if batch.cancel != 0 || saved != "batch-one" || attempts != 0 {
+			t.Fatalf("transient poll: cancellations=%d handle=%q attempts=%d", batch.cancel, saved, attempts)
+		}
+	}
+	batch.ready = true
+	f.clock.Add(int64(time.Minute))
+	if _, err := f.s.RunEditionJobs(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	latest, err := f.s.LatestEdition(ctx, f.a)
+	if err != nil || latest.Status != "ready" || len(p.payloads()) != 0 || batch.poll != 4 {
+		t.Fatalf("collection status=%s calls=%d polls=%d err=%v", latest.Status, len(p.payloads()), batch.poll, err)
+	}
+}
+
+func TestEditionChangedSourcesCancellationFailureFallsBack(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	keep := f.ingest(t, "Current consenting article.")
+	remove := f.ingest(t, "Removed article.")
+	if _, err := f.db.Pool().Exec(t.Context(), `UPDATE subscriptions SET cadence='week' WHERE id=$1`, f.subscription); err != nil {
+		t.Fatal(err)
+	}
+	p := &generatedProvider{outputs: map[string]string{"edition": groundedOutput(keep, coreHash("bodyCurrent consenting article."), "Current article.", "Current consenting article.")}}
+	ctx := generatedContext(t, f, p, []llm.Task{llm.TaskEdition}, 0)
+	batch := &cancellingBatch{}
+	batch.ready = true
+	batch.output = groundedOutput(remove, coreHash("bodyRemoved article."), "Stale result.", "Removed article.")
+	ctx = pipeline.WithEditionBatch(ctx, batch)
+	if _, err := f.s.TriggerEdition(ctx, f.a, EditionWeekly, f.s.now().Add(time.Hour), "changed-cancel"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.RunEditionJobs(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.Pool().Exec(ctx, `UPDATE entries SET deleted_at=now() WHERE id=$1`, remove); err != nil {
+		t.Fatal(err)
+	}
+	// Cancellation fails before the deadline too; it must not consume failure attempts.
+	f.clock.Add(int64(time.Minute))
+	if _, err := f.s.RunEditionJobs(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	f.clock.Add(int64(time.Hour))
+	for range 3 {
+		if _, err := f.s.RunEditionJobs(ctx, 1); err != nil {
+			t.Fatal(err)
+		}
+		f.clock.Add(int64(time.Minute))
+	}
+	latest, err := f.s.LatestEdition(ctx, f.a)
+	if err != nil || latest.Status != "ready" || !strings.Contains(latest.Error, "cancellation") || len(p.payloads()) != 1 || batch.poll != 0 {
+		t.Fatalf("changed fallback: status=%s warning=%q calls=%d polls=%d err=%v", latest.Status, latest.Error, len(p.payloads()), batch.poll, err)
+	}
+	if len(latest.Sections[0].Sources) != 1 || latest.Sections[0].Sources[0].EntryID != keep {
+		t.Fatal("stale sources reused", latest.Sections[0].Sources)
+	}
+}
+
+func TestEditionRetryReusesCompletedSections(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	secondFeed := entriesTestFeed(t, f.db, "https://second.test/edition", 0)
+	entriesTestSub(t, f.db, f.a.UserID, secondFeed, "week")
+	if _, err := f.s.RecordFetch(t.Context(), FetchOutcome{FeedID: secondFeed, Status: FetchOK, Items: []IngestItem{coreItem("Second article.")}}); err != nil {
+		t.Fatal(err)
+	}
+	var second int64
+	if err := f.db.Pool().QueryRow(t.Context(), `SELECT id FROM entries WHERE feed_id=$1`, secondFeed).Scan(&second); err != nil {
+		t.Fatal(err)
+	}
+	first := f.ingest(t, "First article.")
+	var folder int64
+	if err := f.db.Pool().QueryRow(t.Context(), `INSERT INTO folders(user_id,name) VALUES($1,'A first section') RETURNING id`, f.a.UserID).Scan(&folder); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.Pool().Exec(t.Context(), `UPDATE subscriptions SET cadence='week',folder_id=$2 WHERE id=$1`, f.subscription, folder); err != nil {
+		t.Fatal(err)
+	}
+	p := &generatedProvider{outputs: map[string]string{"edition": groundedOutput(first, coreHash("bodyFirst article."), "First claim.", "First article.")}}
+	// One full reservation fits; its actual usage leaves too little for another.
+	req, err := pipeline.GroundedRequest(llm.TaskEdition, "This week", []pipeline.Source{{EntryID: first, ContentHash: coreHash("bodyFirst article."), Text: "First article."}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	limit, err := llm.EstimateCompletion(req, llm.ModelInfo{InputPer1M: 1000000, OutputPer1M: 1000000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := generatedContext(t, f, p, []llm.Task{llm.TaskEdition}, limit)
+	if _, err := f.s.TriggerEdition(ctx, f.a, EditionWeekly, time.Time{}, "section-retry"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.RunEditionJobs(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	paused, err := f.s.LatestEdition(ctx, f.a)
+	if err != nil || paused.Status != "paused" || len(p.payloads()) != 1 || len(paused.Sections[0].Claims) == 0 {
+		t.Fatalf("pause: status=%s calls=%d err=%v", paused.Status, len(p.payloads()), err)
+	}
+	p.set("edition", groundedOutput(second, coreHash("bodySecond article."), "Second claim.", "Second article."))
+	ctx = generatedContext(t, f, p, []llm.Task{llm.TaskEdition}, 10000)
+	f.clock.Add(int64(time.Minute))
+	if _, err := f.s.RunEditionJobs(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	latest, err := f.s.LatestEdition(ctx, f.a)
+	if err != nil || latest.Status != "ready" || len(p.payloads()) != 2 {
+		t.Fatalf("resume: status=%s total_provider_calls=%d want=2 err=%v", latest.Status, len(p.payloads()), err)
+	}
+	if latest.Sections[0].Claims[0].Text != "First claim." || latest.Sections[1].Claims[0].Text != "Second claim." {
+		t.Fatal("section progress not preserved", latest.Sections)
+	}
+}
+
+func TestEditionCompletedSectionInvalidation(t *testing.T) {
+	template := storetest.NewTemplate(t)
+	for _, change := range []string{"model", "prompt", "consent", "deleted source"} {
+		t.Run(change, func(t *testing.T) {
+			f := newCoreFixture(t, template)
+			feed := f.feed
+			var id int64
+			if change == "consent" {
+				feed = entriesTestFeed(t, f.db, "https://private.test/progress", f.a.UserID)
+				entriesTestSub(t, f.db, f.a.UserID, feed, "week")
+				if _, err := f.db.Pool().Exec(t.Context(), `UPDATE feeds SET llm_allowed=true WHERE id=$1`, feed); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := f.s.RecordFetch(t.Context(), FetchOutcome{FeedID: feed, Status: FetchOK, Items: []IngestItem{coreItem("Beacon.")}}); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.db.Pool().QueryRow(t.Context(), `SELECT id FROM entries WHERE feed_id=$1`, feed).Scan(&id); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				id = f.ingest(t, "Beacon.")
+			}
+			if _, err := f.db.Pool().Exec(t.Context(), `UPDATE subscriptions SET cadence='week' WHERE id=$1`, f.subscription); err != nil {
+				t.Fatal(err)
+			}
+			p := &generatedProvider{outputs: map[string]string{"edition": groundedOutput(id, coreHash("bodyBeacon."), "Old prose.", "Beacon.")}}
+			ctx := generatedContext(t, f, p, []llm.Task{llm.TaskEdition}, 0)
+			out, err := f.s.TriggerEdition(ctx, f.a, EditionWeekly, time.Time{}, "invalidate-section")
+			if err != nil {
+				t.Fatal(err)
+			}
+			job, err := f.s.claimEdition(ctx)
+			if err != nil || job == nil {
+				t.Fatal(job, err)
+			}
+			if err := f.s.generateEdition(ctx, job, &out); err != nil {
+				t.Fatal(err)
+			}
+			p.set("edition", groundedOutput(id, coreHash("bodyBeacon."), "New prose.", "Beacon."))
+			var other *pipelineProvider
+			switch change {
+			case "model":
+				other = &pipelineProvider{classifier: groundedOutput(id, coreHash("bodyBeacon."), "New prose.", "Beacon.")}
+				ctx = pipelineTestContext(t, f.db, other, []llm.Task{llm.TaskEdition}, 0)
+			case "prompt":
+				// Recreate persisted progress from a worker using an older prompt.
+				out.PromptVersion = "edition-old"
+				data, err := json.Marshal(struct {
+					Model, PromptVersion string
+					Sources              []pipeline.Source
+				}{out.Model, out.PromptVersion, out.Sections[0].Sources})
+				if err != nil {
+					t.Fatal(err)
+				}
+				job.job.CompletedSections[0] = fmt.Sprintf("%x", sha256.Sum256(data))
+			case "consent":
+				if _, err := f.db.Pool().Exec(ctx, `UPDATE feeds SET llm_allowed=false WHERE id=$1`, feed); err != nil {
+					t.Fatal(err)
+				}
+			case "deleted source":
+				if _, err := f.db.Pool().Exec(ctx, `UPDATE entries SET deleted_at=now() WHERE id=$1`, id); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := f.s.generateEdition(ctx, job, &out); err != nil {
+				t.Fatal(err)
+			}
+			calls := len(p.payloads())
+			if other != nil {
+				calls += len(other.requests())
+			}
+			if change == "consent" || change == "deleted source" {
+				if calls != 1 || len(out.Sections[0].Claims) != 0 || len(out.Sections[0].Sources) != 0 {
+					t.Fatalf("revoked prose reused: calls=%d section=%+v", calls, out.Sections[0])
+				}
+				return
+			}
+			if calls != 2 || out.Sections[0].Claims[0].Text != "New prose." || out.PromptVersion != pipeline.EditionPromptVersion {
+				t.Fatalf("changed %s reused prose: calls=%d edition=%+v", change, calls, out)
+			}
+		})
 	}
 }

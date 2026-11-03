@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/L-K-M/Earnest/internal/llm"
 	"github.com/L-K-M/Earnest/internal/store"
 	"github.com/L-K-M/Earnest/internal/store/storetest"
 	"github.com/L-K-M/Earnest/internal/syncmodel"
@@ -324,5 +325,84 @@ func TestGoogleLabelThroughIncludesFolderAndLabel(t *testing.T) {
 		if err != nil || state.Seen.Value != syncmodel.SeenValue {
 			t.Fatalf("entry %d: %v %v", id, state, err)
 		}
+	}
+}
+
+func TestEditedRulePreparesNewModelPredicates(t *testing.T) {
+	template := storetest.NewTemplate(t)
+	for _, tc := range []struct {
+		name      string
+		predicate RulePredicate
+		task      llm.Task
+	}{
+		{"classifier disabled", RulePredicate{Type: RuleClassifierIn, Terms: []string{"news"}}, ""},
+		{"semantic disabled", RulePredicate{Type: RuleSemantic, Value: "news"}, ""},
+		{"classifier pending", RulePredicate{Type: RuleClassifierIn, Terms: []string{"news"}}, llm.TaskClassify},
+		{"semantic pending", RulePredicate{Type: RuleSemantic, Value: "news"}, llm.TaskEmbed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCoreFixture(t, template)
+			ctx := t.Context()
+			if tc.task != "" {
+				ctx = generatedContext(t, f, &generatedProvider{outputs: map[string]string{}}, []llm.Task{tc.task}, 0)
+			}
+			id := f.ingest(t, "article")
+			old, err := f.s.CreateRule(ctx, f.a, Rule{Name: "Edited", Enabled: true, Predicate: RulePredicate{Type: RuleFeedIn, IDs: []int64{f.feed}}, Actions: []RuleAction{{Type: RuleSetShelf, Shelf: "done"}}}, "edited-model-rule")
+			if err != nil {
+				t.Fatal(err)
+			}
+			entries, err := f.s.ruleEntries(ctx, f.a.UserID, time.Time{}, []int64{id})
+			if err != nil || len(entries) != 1 {
+				t.Fatal(entries, err)
+			}
+			prepared, ready, err := f.s.prepareModelPredicates(ctx, f.a.UserID, old.Predicate, entries[0])
+			if err != nil || !ready {
+				t.Fatal(ready, err)
+			}
+			// Interleave the edit after preparation and before the locked application.
+			edited := old
+			edited.Predicate = RulePredicate{Type: RuleAnd, Children: []RulePredicate{old.Predicate, {Type: RuleNot, Children: []RulePredicate{tc.predicate}}}}
+			if err := f.s.UpdateRule(ctx, f.a, edited); err != nil {
+				t.Fatal(err)
+			}
+			err = f.s.applyRule(ctx, f.a, old, prepared)
+			if tc.task == "" && err != nil || tc.task != "" && !errors.Is(err, ErrPipelinePaused) {
+				t.Fatalf("edited predicate preparation: %v", err)
+			}
+			state, err := store.LoadState(ctx, f.db.Pool(), f.a.PrincipalID, id)
+			if err != nil || state.Shelf.Value != syncmodel.None {
+				t.Fatalf("disabled model changed shelf: %v err=%v", state.Shelf.Value, err)
+			}
+		})
+	}
+}
+
+func TestLegacyRuleJobMigratesAndExecutes(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := t.Context()
+	_, err := f.s.CreateRule(ctx, f.a, Rule{Name: "Legacy", Enabled: true, Predicate: RulePredicate{Type: RuleFeedIn, IDs: []int64{f.feed}}, Actions: []RuleAction{{Type: RuleNotify, Budget: 3}}}, "legacy-rule")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.ingest(t, "legacy pending article")
+	if _, err := f.db.Pool().Exec(ctx, `UPDATE jobs SET payload=payload-'generation' WHERE kind='rule'`); err != nil {
+		t.Fatal(err)
+	}
+	// Recreate the upgrade boundary with a pending pre-generation job.
+	if _, err := f.db.Pool().Exec(ctx, `DELETE FROM schema_migrations WHERE name='0009_rule_job_generation.sql'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := f.s.RunRuleJobs(ctx, 10); err != nil || n != 1 {
+		t.Fatalf("jobs=%d err=%v", n, err)
+	}
+	var notifications, pending int
+	if err := f.db.Pool().QueryRow(ctx, `SELECT (SELECT count(*) FROM notifications),(SELECT count(*) FROM jobs WHERE kind='rule')`).Scan(&notifications, &pending); err != nil {
+		t.Fatal(err)
+	}
+	if notifications != 1 || pending != 0 {
+		t.Fatalf("notifications=%d pending=%d", notifications, pending)
 	}
 }

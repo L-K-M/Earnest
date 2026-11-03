@@ -16,20 +16,23 @@ import (
 )
 
 const (
-	editionJobLease     = 10 * time.Minute
-	editionPollDelay    = time.Minute
-	editionMaxSources   = 8
-	editionMaxAttempts  = 3
-	editionMaxClaim     = 1000
-	editionWorkerLockID = 570231120
+	editionJobLease            = 10 * time.Minute
+	editionPollDelay           = time.Minute
+	editionMaxSources          = 8
+	editionMaxAttempts         = 3
+	editionMaxClaim            = 1000
+	editionWorkerLockID        = 570231120
+	editionCancellationWarning = "Batch cancellation could not be confirmed; the provider may still charge for it."
 )
 
 type editionJob struct {
-	UserID       int64  `json:"user_id"`
-	EditionID    int64  `json:"edition_id"`
-	BatchID      string `json:"batch_id,omitempty"`
-	BatchTried   bool   `json:"batch_tried,omitempty"`
-	BatchSources string `json:"batch_sources,omitempty"`
+	UserID                  int64          `json:"user_id"`
+	EditionID               int64          `json:"edition_id"`
+	BatchID                 string         `json:"batch_id,omitempty"`
+	BatchTried              bool           `json:"batch_tried,omitempty"`
+	BatchSources            string         `json:"batch_sources,omitempty"`
+	CancellationUnconfirmed bool           `json:"cancellation_unconfirmed,omitempty"`
+	CompletedSections       map[int]string `json:"completed_sections,omitempty"`
 }
 
 type claimedEdition struct {
@@ -122,10 +125,18 @@ func (s *Service) generateEdition(ctx context.Context, job *claimedEdition, out 
 		return pipelineError(err)
 	}
 	out.Model = model
+	out.PromptVersion = pipeline.EditionPromptVersion
 	out.Error = ""
+	if job.job.CancellationUnconfirmed {
+		out.Error = editionCancellationWarning
+	}
+	if job.job.CompletedSections == nil {
+		job.job.CompletedSections = map[int]string{}
+	}
 	requests := []llm.CompleteRequest{}
 	indexes := []int{}
 	sets := [][]pipeline.Source{}
+	fingerprints := []string{}
 	for i := range out.Sections {
 		section := &out.Sections[i]
 		section.Sources = []pipeline.Source{}
@@ -177,10 +188,24 @@ func (s *Service) generateEdition(ctx context.Context, job *claimedEdition, out 
 				break
 			}
 		}
-		if len(section.Sources) == 0 {
-			section.Claims = []pipeline.GroundedClaim{}
+		fingerprintData, err := json.Marshal(struct {
+			Model, PromptVersion string
+			Sources              []pipeline.Source
+		}{model, pipeline.EditionPromptVersion, section.Sources})
+		if err != nil {
+			return fmt.Errorf("edition section fingerprint: %w", err)
+		}
+		fingerprint := fmt.Sprintf("%x", sha256.Sum256(fingerprintData))
+		if job.job.CompletedSections[i] == fingerprint && len(section.Claims) > 0 {
 			continue
 		}
+		// Consent, content, model and prompt changes invalidate saved prose.
+		delete(job.job.CompletedSections, i)
+		section.Claims = []pipeline.GroundedClaim{}
+		if len(section.Sources) == 0 {
+			continue
+		}
+		fingerprints = append(fingerprints, fingerprint)
 		req, err := pipeline.GroundedRequest(llm.TaskEdition, "This week", section.Sources)
 		if err != nil {
 			return err
@@ -190,18 +215,22 @@ func (s *Service) generateEdition(ctx context.Context, job *claimedEdition, out 
 		sets = append(sets, section.Sources)
 	}
 	fingerprintData, err := json.Marshal(struct {
-		Model   string
-		Sources [][]pipeline.Source
-	}{model, sets})
+		Model, PromptVersion string
+		Sources              [][]pipeline.Source
+	}{model, pipeline.EditionPromptVersion, sets})
 	if err != nil {
 		return fmt.Errorf("edition batch fingerprint: %w", err)
 	}
 	fingerprint := fmt.Sprintf("%x", sha256.Sum256(fingerprintData))
 	batch := pipeline.EditionBatchFrom(ctx)
 	if job.job.BatchID != "" && (job.job.BatchSources != fingerprint || batch == nil) {
-		if batch != nil {
+		if batch == nil {
+			job.job.CancellationUnconfirmed = true
+			out.Error = editionCancellationWarning
+		} else {
 			if err := batch.Cancel(ctx, job.job.BatchID); err != nil {
-				return fmt.Errorf("cancel changed batch: %w", err)
+				job.job.CancellationUnconfirmed = true
+				out.Error = editionCancellationWarning
 			}
 		}
 		job.job.BatchID = ""
@@ -227,13 +256,15 @@ func (s *Service) generateEdition(ctx context.Context, job *claimedEdition, out 
 			out.Status = "ready"
 			return nil
 		}
-		if s.now().Before(out.ReadyAt) && err == nil {
+		// Keep the durable handle through transient polling failures until due.
+		if s.now().Before(out.ReadyAt) {
 			out.Status = "pending"
 			return nil
 		}
 		// A missed cancellation must not prevent a due paper from using its fallback.
 		if err := batch.Cancel(ctx, job.job.BatchID); err != nil {
-			out.Error = "Batch cancellation could not be confirmed; synchronous generation was used."
+			job.job.CancellationUnconfirmed = true
+			out.Error = editionCancellationWarning
 		}
 		job.job.BatchID = ""
 		job.job.BatchSources = ""
@@ -265,6 +296,7 @@ func (s *Service) generateEdition(ctx context.Context, job *claimedEdition, out 
 			return err
 		}
 		out.Sections[indexes[j]].Claims = claims
+		job.job.CompletedSections[indexes[j]] = fingerprints[j]
 	}
 	out.Status = "ready"
 	return nil
@@ -298,11 +330,18 @@ func (s *Service) finishEdition(ctx context.Context, job *claimedEdition, out *E
 				out.Error = "Edition generation failed. The original list is available."
 			}
 		}
+		if job.job.CancellationUnconfirmed {
+			if out.Error == "" {
+				out.Error = editionCancellationWarning
+			} else if out.Error != editionCancellationWarning {
+				out.Error += " " + editionCancellationWarning
+			}
+		}
 		data, err := json.Marshal(out.Sections)
 		if err != nil {
 			return fmt.Errorf("encode generated edition: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `UPDATE editions SET status=$3,sections=$4,model=$5,error=$6 WHERE user_id=$1 AND id=$2`, job.job.UserID, job.job.EditionID, out.Status, data, out.Model, out.Error); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE editions SET status=$3,sections=$4,model=$5,error=$6,prompt_version=$7 WHERE user_id=$1 AND id=$2`, job.job.UserID, job.job.EditionID, out.Status, data, out.Model, out.Error, out.PromptVersion); err != nil {
 			return fmt.Errorf("save edition: %w", err)
 		}
 		if out.Status == "ready" || out.Status == "failed" {

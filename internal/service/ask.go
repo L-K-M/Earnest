@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/L-K-M/Earnest/internal/llm"
@@ -37,6 +38,10 @@ type AskResult struct {
 func (s *Service) Ask(ctx context.Context, a Actor, question string) (AskResult, error) {
 	if err := s.checkActor(ctx, a, ScopeEntriesRead); err != nil {
 		return AskResult{}, err
+	}
+	// Use the same egress gate as hybrid search for caller-controlled text.
+	if a.Kind != PrincipalHuman {
+		return AskResult{}, ErrForbidden
 	}
 	if !utf8.ValidString(question) || strings.TrimSpace(question) == "" || len(question) > 4096 {
 		return AskResult{}, ErrInvalid
@@ -122,7 +127,15 @@ func askPassage(text, question string) string {
 			continue
 		}
 		if at := strings.Index(lower, word); at >= 0 {
-			start = max(0, at-askPassageBytes/4)
+			// Lowercasing may change byte widths; map the match back to publisher text.
+			foldedOffset := 0
+			for offset, r := range text {
+				if foldedOffset >= at {
+					start = max(0, offset-askPassageBytes/4)
+					break
+				}
+				foldedOffset += utf8.RuneLen(unicode.ToLower(r))
+			}
 			break
 		}
 	}

@@ -55,7 +55,9 @@ Everything else is human-only: `feeds:write`, `webhooks:write`,
 in the service layer, so REST, MCP and CLI callers get the same answer.
 Device registration additionally requires a human principal, not merely
 the scope: a push endpoint is a destination the server posts to, so it
-stays yours only, like a webhook URL.
+stays yours only, like a webhook URL. Hybrid search and Ask my feeds also
+require a human principal: both send the query text to a model provider,
+and an agent could copy private text into it.
 
 ## Notification budget
 

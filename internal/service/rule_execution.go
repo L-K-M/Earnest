@@ -3,13 +3,17 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/L-K-M/Earnest/internal/store"
 	"github.com/L-K-M/Earnest/internal/syncmodel"
 	"github.com/jackc/pgx/v5"
 )
+
+var errRulePredicateChanged = errors.New("rule predicate changed during preparation")
 
 // executeRuleJob isolates failures to one rule, so other rules can still run.
 func (s *Service) executeRuleJob(ctx context.Context, userID, ruleID, feedID int64, ids []int64, generation ...string) error {
@@ -74,9 +78,32 @@ func (s *Service) executeRuleJob(ctx context.Context, userID, ruleID, feedID int
 }
 
 func (s *Service) applyRule(ctx context.Context, human Actor, rule Rule, entry ruleEntry, generation ...string) error {
+	for {
+		err := s.applyPreparedRule(ctx, human, &rule, entry, generation...)
+		if !errors.Is(err, errRulePredicateChanged) {
+			return err
+		}
+
+		var ready bool
+		entry, ready, err = s.prepareModelPredicates(ctx, human.UserID, rule.Predicate, entry)
+		if err != nil || !ready {
+			return err
+		}
+		if !matchesRule(rule.Predicate, entry) {
+			return nil
+		}
+		confirmed, err := s.confirmWatch(ctx, human.UserID, rule, entry)
+		if err != nil || !confirmed {
+			return err
+		}
+	}
+}
+
+func (s *Service) applyPreparedRule(ctx context.Context, human Actor, rule *Rule, entry ruleEntry, generation ...string) error {
 	if err := ValidateRule(rule.Predicate, rule.Actions); err != nil {
 		return err
 	}
+	preparedPredicate := rule.Predicate
 	return s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
 			return err
@@ -115,6 +142,10 @@ func (s *Service) applyRule(ctx context.Context, human Actor, rule Rule, entry r
 		rule.Actions = wrapper.Actions
 		if err := ValidateRule(rule.Predicate, rule.Actions); err != nil {
 			return err
+		}
+		// Model data belongs to the predicate prepared outside this transaction.
+		if !reflect.DeepEqual(preparedPredicate, rule.Predicate) {
+			return errRulePredicateChanged
 		}
 		if !matchesRule(rule.Predicate, entry) {
 			return nil
@@ -206,7 +237,7 @@ func (s *Service) applyRule(ctx context.Context, human Actor, rule Rule, entry r
 					return fmt.Errorf("record rule label activity: %w", err)
 				}
 			case RuleNotify:
-				if err := s.ruleNotificationTx(ctx, tx, actor, rule, entry, action.Budget); err != nil {
+				if err := s.ruleNotificationTx(ctx, tx, actor, *rule, entry, action.Budget); err != nil {
 					return err
 				}
 			case RuleWebhook:

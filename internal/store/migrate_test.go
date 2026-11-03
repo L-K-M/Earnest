@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"io/fs"
 	"os"
 	"testing"
 	"testing/fstest"
@@ -103,5 +104,68 @@ func TestRejectUnknownSchemaBeforeApplying(t *testing.T) {
 	var exists bool
 	if err := db.pool.QueryRow(ctx, "SELECT to_regclass('should_not_exist') IS NOT NULL").Scan(&exists); err != nil || exists {
 		t.Fatalf("modified unsupported database: %v %v", exists, err)
+	}
+}
+
+func TestMigrationBindsOnlyLegacyRuleJobs(t *testing.T) {
+	db := migrationDatabase(t)
+	ctx := t.Context()
+	// Apply the real schema immediately before the generation backfill.
+	before := fstest.MapFS{}
+	names, err := fs.Glob(migrations, "migrations/*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if name >= "migrations/0009_" {
+			continue
+		}
+		data, err := fs.ReadFile(migrations, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[name] = &fstest.MapFile{Data: data}
+	}
+	if err := db.migrate(ctx, before); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.pool.Exec(ctx, `INSERT INTO jobs(kind,payload,unique_key) VALUES
+	 ('rule','{"entry_ids":[42]}','legacy'),
+	 ('rule','{"generation":"stale","entry_ids":[42]}','stale'),
+	 ('rule','{"generation":"","entry_ids":[42]}','empty'),
+	 ('edition','{"edition_id":42}','other')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var legacy, stale, empty string
+	var otherHasGeneration bool
+	if err := db.pool.QueryRow(ctx, `SELECT
+	 (SELECT payload->>'generation' FROM jobs WHERE unique_key='legacy'),
+	 (SELECT payload->>'generation' FROM jobs WHERE unique_key='stale'),
+	 (SELECT payload->>'generation' FROM jobs WHERE unique_key='empty'),
+	 (SELECT payload ? 'generation' FROM jobs WHERE unique_key='other')`).Scan(&legacy, &stale, &empty, &otherHasGeneration); err != nil {
+		t.Fatal(err)
+	}
+	current, err := db.Generation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy != current || stale != "stale" || empty != "" || otherHasGeneration {
+		t.Fatalf("legacy=%q current=%q stale=%q empty=%q other=%v", legacy, current, stale, empty, otherHasGeneration)
+	}
+	if _, err := db.RotateGeneration(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var replay string
+	if err := db.pool.QueryRow(ctx, `SELECT payload->>'generation' FROM jobs WHERE unique_key='legacy'`).Scan(&replay); err != nil {
+		t.Fatal(err)
+	}
+	if replay != legacy {
+		t.Fatal("migration rebound a restored job", replay, legacy)
 	}
 }

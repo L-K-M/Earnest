@@ -112,3 +112,30 @@ func TestAskUsesHybridRetrievalWhenEmbeddingsEnabled(t *testing.T) {
 		t.Fatalf("hybrid %+v %v", out, err)
 	}
 }
+
+func TestAskRejectsAgentBeforeQuotaOrProvider(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	agent := entriesTestAgent(t, f.db, f.a.UserID, "Ask agent", ScopeEntriesRead)
+	p := &generatedProvider{outputs: map[string]string{}}
+	ctx := generatedContext(t, f, p, []llm.Task{llm.TaskEmbed, llm.TaskAsk}, 0)
+	_, err := f.s.Ask(ctx, agent, "PRIVATE_QUESTION_SENTINEL")
+	var attempts int
+	if dbErr := f.db.Pool().QueryRow(ctx, `SELECT coalesce(sum(attempts),0) FROM ask_daily_usage WHERE user_id=$1`, f.a.UserID).Scan(&attempts); dbErr != nil {
+		t.Fatal(dbErr)
+	}
+	if !errors.Is(err, ErrForbidden) || attempts != 0 || len(p.payloads()) != 0 {
+		t.Fatalf("agent ask: err=%v attempts=%d provider_calls=%d", err, attempts, len(p.payloads()))
+	}
+}
+
+func TestAskPassageUnicodeOffsets(t *testing.T) {
+	for _, prefix := range []string{"Ⱥ", "K", "İ", "芽"} {
+		t.Run(prefix, func(t *testing.T) {
+			text := strings.Repeat(prefix, 3000) + " NeEdLe "
+			passage := askPassage(text, "needle")
+			if len(passage) > askPassageBytes || !strings.Contains(passage, "NeEdLe") || !pipeline.VerifyPassages(text, []string{passage}) {
+				t.Fatalf("invalid passage: bytes=%d contains_match=%v", len(passage), strings.Contains(passage, "NeEdLe"))
+			}
+		})
+	}
+}
