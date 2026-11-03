@@ -296,8 +296,14 @@ func (c *Client) State(principal, entry ID) State {
 }
 
 // Acknowledge removes only the exact operation, preserving a newer coalesced
-// replacement when an earlier in-flight response arrives.
-func (c *Client) Acknowledge(results []Result) {
+// replacement when an earlier in-flight response arrives. generation is the
+// generation the request was sent under; a response from a superseded
+// generation is rejected whole, before merging or outbox removal, so the
+// preserved intent still replays into the new generation.
+func (c *Client) Acknowledge(generation string, results []Result) error {
+	if generation != c.cursor.Generation {
+		return ErrGeneration
+	}
 	for _, r := range results {
 		c.MergeState(r.State)
 		if r.Status == Gone {
@@ -308,12 +314,18 @@ func (c *Client) Acknowledge(results []Result) {
 		}
 		c.pending = slices.DeleteFunc(c.pending, func(p Pending) bool { return p.operation().OpID == r.OpID })
 	}
+	return nil
 }
 
-// AcknowledgeRange adopts resolved states and removes this exact queued range.
-func (c *Client) AcknowledgeRange(opID string, r RangeResult) {
+// AcknowledgeRange adopts resolved states and removes this exact queued
+// range. Its generation rule matches Acknowledge.
+func (c *Client) AcknowledgeRange(opID, generation string, r RangeResult) error {
+	if generation != c.cursor.Generation {
+		return ErrGeneration
+	}
 	for _, result := range r.Results {
 		c.MergeState(result.State)
 	}
 	c.pending = slices.DeleteFunc(c.pending, func(p Pending) bool { return p.operation().OpID == opID })
+	return nil
 }

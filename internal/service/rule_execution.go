@@ -47,7 +47,7 @@ func (s *Service) executeRuleJob(ctx context.Context, userID, ruleID, feedID int
 }
 
 func (s *Service) applyRule(ctx context.Context, human Actor, rule Rule, entry ruleEntry) error {
-	return s.store.WithTx(ctx, func(tx pgx.Tx) error {
+	return s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
 			return err
 		}
@@ -142,7 +142,7 @@ func (s *Service) applyRule(ctx context.Context, human Actor, rule Rule, entry r
 					return err
 				}
 				obj := labelObject(actor, membership, entry.ID, label.Name, uint64(rev), false)
-				if err := store.InsertChange(ctx, tx, human.UserID, rev, string(syncmodel.LabelAdded), map[string]any{"object": obj, "label_id": action.LabelID}, now); err != nil {
+				if err := insertEvent(ctx, tx, human.UserID, rev, string(syncmodel.LabelAdded), map[string]any{"object": obj, "label_id": action.LabelID}, now); err != nil {
 					return err
 				}
 				if _, err = tx.Exec(ctx, `INSERT INTO activity(user_id,principal_id,action,target,created_at) VALUES($1,$2,'label.added',$3,$4)`, human.UserID, principal, map[string]any{"rule_id": rule.ID, "rule_name": rule.Name, "entry_id": entry.ID, "label_id": action.LabelID}, now); err != nil {

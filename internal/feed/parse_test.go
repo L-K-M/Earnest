@@ -230,6 +230,46 @@ func TestParseAtomXHTMLContent(t *testing.T) {
 	}
 }
 
+func TestParseAtomXHTMLWithoutDiv(t *testing.T) {
+	t.Parallel()
+
+	// The xhtml div wrapper is required by the spec, but feeds omit it or
+	// carry plain text; the parser must not panic on either.
+	doc := `<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title type="xhtml"/>
+  <entry>
+    <title type="xhtml">Text without a div</title>
+    <id>urn:uuid:2</id>
+    <content type="xhtml"/>
+  </entry>
+  <entry>
+    <id>urn:uuid:3</id>
+    <content type="xhtml">Text without a div</content>
+  </entry>
+</feed>`
+	feed, err := Parse([]byte(doc), ParseOptions{BaseURL: "https://example.com/atom.xml"})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if feed.Title != "" {
+		t.Fatalf("feed title = %q", feed.Title)
+	}
+	if len(feed.Items) != 2 {
+		t.Fatalf("items = %d", len(feed.Items))
+	}
+	it := feed.Items[0]
+	if it.Title != "Text without a div" {
+		t.Fatalf("title = %q", it.Title)
+	}
+	if it.ContentHTML != "" {
+		t.Fatalf("content = %q", it.ContentHTML)
+	}
+	if got := feed.Items[1].ContentHTML; got != "Text without a div" {
+		t.Fatalf("text-only content = %q", got)
+	}
+}
+
 const atom03Sample = `<?xml version="1.0" encoding="utf-8"?>
 <feed version="0.3" xmlns="http://purl.org/atom/ns#">
   <title>Old Atom</title>
