@@ -209,6 +209,52 @@ func TestLoadInvalidModelsJSON(t *testing.T) {
 	}
 }
 
+func TestLoadModelsOversizedDimensions(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		raw     string
+		model   string
+		wantErr bool
+	}{
+		{"custom truncatable", `{"wide":{"dimensions":1536,"truncatable":true}}`, "wide", false},
+		{"inherited truncatable", `{"text-embedding-3-small":{"dimensions":1536}}`, "text-embedding-3-small", false},
+		{"not truncatable", `{"wide":{"dimensions":1536}}`, "wide", true},
+		{"explicitly not truncatable", `{"text-embedding-3-small":{"dimensions":1536,"truncatable":false}}`, "text-embedding-3-small", true},
+		{"negative", `{"wide":{"dimensions":-1,"truncatable":true}}`, "wide", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clearLLMEnv(t)
+			t.Setenv(envModels, tc.raw)
+			cfg, err := Load()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("invalid dimensions accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			info := cfg.Models[tc.model]
+			if info.Dimensions != 1536 || !info.Truncatable {
+				t.Fatalf("geometry=%+v", info)
+			}
+
+			provider := &fakeProvider{name: "local", embed: func(req EmbedRequest) (*EmbedResult, error) {
+				if req.Dimensions != StorageDimensions {
+					t.Errorf("requested dimensions=%d, want %d", req.Dimensions, StorageDimensions)
+				}
+				return &EmbedResult{Vectors: [][]float32{make([]float32, info.Dimensions)}}, nil
+			}}
+			client, _ := newTestClient(t, provider, nil, map[string]ModelInfo{"test-model": info})
+			vectors, _, err := client.Embed(t.Context(), TaskBlurb, EmbedRequest{Texts: []string{"article"}})
+			if err != nil || len(vectors) != 1 || len(vectors[0].Values) != StorageDimensions {
+				t.Fatalf("embedding count=%d error=%v", len(vectors), err)
+			}
+		})
+	}
+}
+
 func TestParseUSD(t *testing.T) {
 	tests := []struct {
 		in   string

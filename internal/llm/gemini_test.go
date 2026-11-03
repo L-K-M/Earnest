@@ -1,10 +1,42 @@
 package llm
 
 import (
+	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 )
+
+func TestGeminiFinishReason(t *testing.T) {
+	for _, reason := range []string{"", "STOP", "MAX_TOKENS", "SAFETY", "RECITATION", "OTHER"} {
+		t.Run("reason="+reason, func(t *testing.T) {
+			server, _ := newCapture(t, func(w http.ResponseWriter, r *http.Request) {
+				io.WriteString(w, `{"candidates":[{"finishReason":`+quoteJSON(reason)+`,"content":{"parts":[{"text":"{\"label\":\"news\"}"}]}}],"usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":6}}`)
+			})
+			provider := newTestProvider(t, KindGemini, server.URL)
+			result, err := provider.Complete(t.Context(), CompleteRequest{Model: "test-model", Schema: labelSchema(t)})
+			if reason == "" || reason == "STOP" {
+				if err != nil || result == nil || result.Text != `{"label":"news"}` {
+					t.Fatalf("result=%+v error=%v", result, err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrInvalidOutput) || !strings.Contains(err.Error(), reason) {
+				t.Fatalf("finishReason=%s accepted: error=%v", reason, err)
+			}
+			if result == nil || result.Text != "" || result.Usage != (Usage{Input: 12, Output: 6}) {
+				t.Fatalf("rejected result must retain usage only: %+v", result)
+			}
+
+			client, spend := newTestClient(t, provider, nil, map[string]ModelInfo{"test-model": {InputPer1M: 1000000, OutputPer1M: 1000000}})
+			completion, err := client.Complete(t.Context(), TaskBlurb, CompleteRequest{Schema: labelSchema(t)})
+			if !errors.Is(err, ErrInvalidOutput) || completion != nil || spend.spent != 18 {
+				t.Fatalf("completion=%+v spend=%d error=%v", completion, spend.spent, err)
+			}
+		})
+	}
+}
 
 func TestGeminiComplete(t *testing.T) {
 	server, cap := newCapture(t, func(w http.ResponseWriter, r *http.Request) {
