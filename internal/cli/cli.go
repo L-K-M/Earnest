@@ -187,6 +187,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		err = a.revert(ctx, args[1:])
 	case "activity":
 		err = a.activity(ctx, args[1:])
+	case "saved-searches":
+		err = a.savedSearches(ctx, args[1:])
 	case "changes":
 		err = a.changes(ctx, args[1:])
 	case "help", "--help", "-h":
@@ -242,7 +244,7 @@ Token:  EARNEST_TOKEN or the config written by earnest login
 
   entries list [flags]      list entries (--view, --unread, --feed, --limit, --cursor)
   read <id>                 print the stored plain text
-  search <query>            search entries and notes
+  search [flags] <query>    search entries and notes (--feed, --folder, --limit, --cursor)
   briefing                  entries new since this principal's position
 
   done|later|keep|unread <id>...
@@ -252,11 +254,20 @@ Token:  EARNEST_TOKEN or the config written by earnest login
   brief --text <text> <id>...
                             write a brief over entries
 
-  notify --note <text> [--entry <id>] [--category alert]
+  saved-searches list       list named search views
+  saved-searches add <name> <query> [--feed id] [--folder id] [--limit n]
+                            save a named search view
+  saved-searches show <id>  open a saved search (--cursor)
+  saved-searches rename <id> <name>
+                            rename a saved search
+  saved-searches remove <id>
+                            delete a saved search
+
+  notify --note <text> --entry <id> [--category alert]
                             send a notification
   triage done|seen <id>...  change human state as an agent, returns a revert handle
   revert <handle>           undo a triage
-  activity                  list agent and pipeline activity
+  activity                  list agent and pipeline activity (--grouped)
 
   changes [--cursor <c>]    read the change feed
 

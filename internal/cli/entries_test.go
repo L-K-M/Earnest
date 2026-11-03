@@ -106,7 +106,7 @@ func TestReadJSON(t *testing.T) {
 	}
 }
 
-func TestSearchNormalisesArrayResponse(t *testing.T) {
+func TestSearchTable(t *testing.T) {
 	code, out, errOut, _ := runStub(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/search" {
 			http.NotFound(w, r)
@@ -118,7 +118,7 @@ func TestSearchNormalisesArrayResponse(t *testing.T) {
 		if r.URL.Query().Get("limit") != "20" {
 			t.Errorf("limit = %q", r.URL.Query().Get("limit"))
 		}
-		writeJSON(w, []searchHit{{ID: 3, Title: "Rustls advisory", Snippet: "a CVE", Author: "agent"}})
+		writeJSON(w, searchPage{Matches: []searchMatch{{Kind: "entry", EntryID: 3, Title: "Rustls advisory", Snippet: "a CVE"}}})
 	}, testToken, "search", "--limit", "20", "rustls")
 	requireCode(t, code, exitOK, errOut)
 	if !strings.Contains(out, "Rustls advisory") || !strings.Contains(out, "a CVE") {
@@ -126,18 +126,32 @@ func TestSearchNormalisesArrayResponse(t *testing.T) {
 	}
 }
 
-func TestSearchNormalisesWrappedResponseAndJSON(t *testing.T) {
+func TestSearchFiltersAndCursor(t *testing.T) {
+	code, _, errOut, log := runStub(t, func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		if query.Get("subscription_id") != "5" || query.Get("folder_id") != "2" || query.Get("cursor") != "next" {
+			t.Errorf("query = %v", query)
+		}
+		writeJSON(w, searchPage{Matches: []searchMatch{{Kind: "agent_note", EntryID: 3, Title: "Entry", Snippet: "a note", AgentName: "Morning Agent"}, {Kind: "entry", EntryID: 4, Title: "Other"}}, NextCursor: "next-2"})
+	}, testToken, "search", "--feed", "5", "--folder", "2", "--cursor", "next", "note")
+	requireCode(t, code, exitOK, errOut)
+	if requests := log.snapshot(); len(requests) != 1 {
+		t.Fatalf("requests = %d", len(requests))
+	}
+}
+
+func TestSearchJSON(t *testing.T) {
 	code, out, errOut, _ := runStub(t, func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"hits": []searchHit{{ID: 3, Value: "a note", Kind: "note", AuthorName: "Morning Agent"}}})
+		writeJSON(w, searchPage{Matches: []searchMatch{{Kind: "agent_note", EntryID: 3, Title: "Entry", Snippet: "a note", AgentName: "Morning Agent"}}})
 	}, testToken, "--json", "search", "note")
 	requireCode(t, code, exitOK, errOut)
 	var decoded struct {
-		Hits []map[string]any `json:"hits"`
+		Matches []map[string]any `json:"matches"`
 	}
 	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
 		t.Fatalf("not JSON: %v\n%s", err, out)
 	}
-	if len(decoded.Hits) != 1 || decoded.Hits[0]["value"] != "a note" {
+	if len(decoded.Matches) != 1 || decoded.Matches[0]["agent_name"] != "Morning Agent" {
 		t.Fatalf("decoded = %v", decoded)
 	}
 }

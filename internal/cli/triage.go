@@ -8,13 +8,14 @@ import (
 
 type triageBody struct {
 	OpID       string  `json:"op_id"`
-	EntryIDs   []int64 `json:"entry_ids"`
 	Generation string  `json:"generation"`
+	EntryIDs   []int64 `json:"entry_ids"`
+	Action     string  `json:"action"`
 }
 
 type revertBody struct {
-	Handle string `json:"handle"`
-	OpID   string `json:"op_id"`
+	RevertHandle string `json:"revert_handle"`
+	OpID         string `json:"op_id"`
 }
 
 // triage changes human state as an agent and returns the expiring revert
@@ -47,10 +48,11 @@ func (a *app) triage(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	raw, err := c.send(ctx, http.MethodPost, "/v1/triage/"+string(action), nil, triageBody{
+	raw, err := c.send(ctx, http.MethodPost, "/v1/triage", nil, triageBody{
 		OpID:       opID,
-		EntryIDs:   ids,
 		Generation: generation.Generation,
+		EntryIDs:   ids,
+		Action:     string(action),
 	})
 	if err != nil {
 		return err
@@ -87,7 +89,7 @@ func (a *app) revert(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	raw, err := c.send(ctx, http.MethodPost, "/v1/triage:revert", nil, revertBody{Handle: handle, OpID: opID})
+	raw, err := c.send(ctx, http.MethodPost, "/v1/triage:revert", nil, revertBody{RevertHandle: handle, OpID: opID})
 	if err != nil {
 		return err
 	}

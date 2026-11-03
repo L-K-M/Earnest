@@ -232,17 +232,25 @@ type notificationBudget struct {
 	LimitToday int `json:"limit_today"`
 }
 
+type notificationWhy struct {
+	Sender         string             `json:"sender"`
+	Budget         notificationBudget `json:"budget"`
+	MatchingRuleID int64              `json:"matching_rule_id,omitempty"`
+}
+
 type notification struct {
-	ID         int64              `json:"id"`
-	Note       string             `json:"note"`
-	EntryIDs   []int64            `json:"entry_ids"`
-	Category   string             `json:"category"`
-	Status     string             `json:"status"`
-	HeldUntil  *time.Time         `json:"held_until,omitempty"`
-	Budget     notificationBudget `json:"budget"`
-	Generation string             `json:"generation"`
-	CreatedAt  time.Time          `json:"created_at"`
-	Replay     bool               `json:"replay"`
+	ID          int64              `json:"id"`
+	PrincipalID int64              `json:"principal_id"`
+	Note        string             `json:"note"`
+	EntryIDs    []int64            `json:"entry_ids"`
+	Category    string             `json:"category"`
+	Status      string             `json:"status"`
+	HeldUntil   *time.Time         `json:"held_until,omitempty"`
+	Budget      notificationBudget `json:"budget"`
+	Why         notificationWhy    `json:"why"`
+	Generation  string             `json:"generation"`
+	CreatedAt   time.Time          `json:"created_at"`
+	Replay      bool               `json:"replay"`
 }
 
 type triageResult struct {
@@ -265,6 +273,17 @@ type activity struct {
 	Reason        string          `json:"reason,omitempty"`
 }
 
+type activityGroup struct {
+	PrincipalID   int64      `json:"principal_id"`
+	PrincipalName string     `json:"principal_name"`
+	Activities    []activity `json:"activities"`
+}
+
+type activityPage struct {
+	Activities []activity      `json:"activities,omitempty"`
+	Groups     []activityGroup `json:"groups,omitempty"`
+}
+
 type changeRecord struct {
 	Rev     uint64          `json:"rev"`
 	Type    string          `json:"type"`
@@ -277,56 +296,39 @@ type changesPage struct {
 	NextCursor string         `json:"next_cursor"`
 }
 
-// searchHit carries entry hits and annotation hits: the search endpoint shape
-// is still settling, so rendering tolerates both.
-type searchHit struct {
-	ID             int64      `json:"id"`
-	SubscriptionID int64      `json:"subscription_id"`
-	FeedID         int64      `json:"feed_id"`
-	Seq            uint64     `json:"seq"`
-	Title          string     `json:"title"`
-	URL            string     `json:"url"`
-	Author         string     `json:"author"`
-	PublishedAt    *time.Time `json:"published_at,omitempty"`
-	Snippet        string     `json:"snippet"`
-	Value          string     `json:"value"`
-	Kind           string     `json:"kind"`
-	EntryIDs       []int64    `json:"entry_ids"`
-	AuthorName     string     `json:"author_name"`
-	Untrusted      bool       `json:"untrusted"`
-	Score          float64    `json:"score"`
+// searchMatch is one entry or agent-note hit from the search endpoint.
+type searchMatch struct {
+	Kind           string  `json:"kind"`
+	EntryID        int64   `json:"entry_id"`
+	SubscriptionID int64   `json:"subscription_id"`
+	FeedID         int64   `json:"feed_id"`
+	Seq            int64   `json:"seq"`
+	Title          string  `json:"title"`
+	URL            string  `json:"url"`
+	Snippet        string  `json:"snippet"`
+	Rank           float64 `json:"rank"`
+	AnnotationID   int64   `json:"annotation_id,omitempty"`
+	AgentName      string  `json:"agent_name,omitempty"`
+	Untrusted      bool    `json:"untrusted"`
 }
 
-// searchResponse accepts a bare array or an object wrapping the hit list,
-// then normalises it for --json.
-type searchResponse struct {
-	Hits []searchHit `json:"hits"`
+type searchPage struct {
+	Matches    []searchMatch `json:"matches"`
+	NextCursor string        `json:"next_cursor,omitempty"`
 }
 
-func (s *searchResponse) UnmarshalJSON(data []byte) error {
-	trimmed := bytes.TrimSpace(data)
-	s.Hits = []searchHit{}
-	if len(trimmed) == 0 || string(trimmed) == "null" {
-		return nil
-	}
-	if trimmed[0] == '[' {
-		return json.Unmarshal(trimmed, &s.Hits)
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(trimmed, &raw); err != nil {
-		return fmt.Errorf("decode search response: %w", err)
-	}
-	for _, key := range []string{"hits", "entries", "results"} {
-		item, ok := raw[key]
-		if !ok {
-			continue
-		}
-		if err := json.Unmarshal(item, &s.Hits); err != nil {
-			return fmt.Errorf("decode search %s: %w", key, err)
-		}
-		return nil
-	}
-	return fmt.Errorf("search response has no hits array")
+// searchFilter narrows a saved search to a subscription or folder.
+type searchFilter struct {
+	SubscriptionID int64 `json:"subscription_id,omitempty"`
+	FolderID       int64 `json:"folder_id,omitempty"`
+	Limit          int   `json:"limit,omitempty"`
+}
+
+type savedSearch struct {
+	ID      int64        `json:"id"`
+	Name    string       `json:"name"`
+	Query   string       `json:"query"`
+	Filters searchFilter `json:"filters"`
 }
 
 // problem is the RFC 9457 body the API returns on failure.

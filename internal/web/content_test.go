@@ -16,20 +16,21 @@ import (
 
 func TestTicketValidation(t *testing.T) {
 	now := time.Unix(100, 0)
-	c := &Content{key: []byte("01234567890123456789012345678901"), now: func() time.Time { return now }}
-	valid := ticket{UserID: 1, PrincipalID: 2, EntryID: 3, Expires: 101, Mode: "click"}
-	sig := c.sign(valid)
+	s := &TicketSigner{key: []byte("01234567890123456789012345678901"), now: func() time.Time { return now }}
+	valid := Ticket{UserID: 1, PrincipalID: 2, Kind: service.PrincipalHuman, EntryID: 3, Expires: 101, Mode: ImageClickToLoad}
+	sig := s.Sign(valid)
 	for _, tc := range []struct {
 		name, sig string
 		want      bool
 	}{
 		{"valid", sig, true},
 		{"tampered", sig + "x", false},
-		{"expired", c.sign(ticket{UserID: 1, PrincipalID: 2, EntryID: 3, Expires: 100, Mode: "click"}), false},
-		{"invalid mode", c.sign(ticket{UserID: 1, PrincipalID: 2, EntryID: 3, Expires: 101, Mode: "other"}), false},
+		{"expired", s.Sign(Ticket{UserID: 1, PrincipalID: 2, Kind: service.PrincipalHuman, EntryID: 3, Expires: 100, Mode: ImageClickToLoad}), false},
+		{"invalid mode", s.Sign(Ticket{UserID: 1, PrincipalID: 2, Kind: service.PrincipalHuman, EntryID: 3, Expires: 101, Mode: "other"}), false},
+		{"invalid kind", s.Sign(Ticket{UserID: 1, PrincipalID: 2, Kind: "other", EntryID: 3, Expires: 101, Mode: ImageClickToLoad}), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, ok := c.verify(tc.sig)
+			_, ok := s.Verify(tc.sig)
 			if ok != tc.want {
 				t.Fatalf("verify = %v", ok)
 			}
@@ -63,8 +64,8 @@ func TestContentPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &Content{svc: fakeContent{}, proxy: proxy, origin: "https://content.example", key: []byte(strings.Repeat("x", 32)), now: func() time.Time { return time.Unix(100, 0) }}
-	sig := c.sign(ticket{UserID: 1, PrincipalID: 2, EntryID: 3, Expires: 101, Mode: "proxied"})
+	c := &Content{svc: fakeContent{}, proxy: proxy, signer: &TicketSigner{key: []byte(strings.Repeat("x", 32)), origin: "https://content.example", now: func() time.Time { return time.Unix(100, 0) }}}
+	sig := c.signer.Sign(Ticket{UserID: 1, PrincipalID: 2, Kind: service.PrincipalHuman, EntryID: 3, Expires: 101, Mode: ImageProxied})
 	w := httptest.NewRecorder()
 	c.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/content/3?sig="+sig, nil))
 	if w.Code != http.StatusOK {

@@ -220,7 +220,7 @@ func buildMux(baseURL string, svc *service.Service, auth *service.Auth, logger *
 }
 
 func buildMuxWithWeb(baseURL, contentOrigin string, svc *service.Service, auth *service.Auth, logger *slog.Logger, registry *metrics.Registry, content *web.Content, vapidPublicKey ...string) *http.ServeMux {
-	apiHandler := api.New(svc, auth, logger, baseURL, vapidPublicKey...)
+	apiHandler := api.New(svc, auth, logger, baseURL, content, vapidPublicKey...)
 	mux := http.NewServeMux()
 	mux.Handle("/v1/", apiHandler)
 	mux.Handle("/openapi.json", apiHandler)

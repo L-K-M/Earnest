@@ -3,33 +3,39 @@ package cli
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 )
 
 func TestAnnotateSendsOpID(t *testing.T) {
 	code, out, errOut, log := runStub(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/annotations/note" || r.Method != http.MethodPut {
+		if r.Method != http.MethodPut || !strings.HasPrefix(r.URL.Path, "/v1/entries/") || !strings.HasSuffix(r.URL.Path, "/annotations/note") {
 			http.NotFound(w, r)
 			return
 		}
 		var body annotationBody
 		decodeBody(t, r, &body)
-		if body.OpID == "" {
-			t.Error("annotation body has no op_id")
-		}
-		if len(body.EntryIDs) != 2 || body.Value != "remember" {
+		if body.OpID == "" || body.Value != "remember" {
 			t.Errorf("body = %+v", body)
 		}
-		writeJSON(w, annotation{ID: 3, Kind: "note", EntryIDs: body.EntryIDs, Value: body.Value, Rev: 2})
+		idText, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/v1/entries/"), "/")
+		id, err := strconv.ParseInt(idText, 10, 64)
+		if err != nil {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		writeJSON(w, annotation{ID: id, Kind: "note", EntryIDs: []int64{id}, Value: body.Value, Rev: 2})
 	}, testToken, "annotate", "1", "2", "--kind", "note", "--text", "remember")
 	requireCode(t, code, exitOK, errOut)
-	if !strings.Contains(out, "note recorded on 2 entries (id 3)") {
+	if !strings.Contains(out, "note recorded on entry 1 (id 1)") || !strings.Contains(out, "note recorded on entry 2 (id 2)") {
 		t.Fatalf("output = %q", out)
 	}
 	requests := log.snapshot()
-	if len(requests) != 1 || requests[0].method != http.MethodPut {
+	if len(requests) != 2 || requests[0].method != http.MethodPut {
 		t.Fatalf("requests = %+v", requests)
+	}
+	if requests[0].path != "/v1/entries/1/annotations/note" || requests[1].path != "/v1/entries/2/annotations/note" {
+		t.Fatalf("paths = %s, %s", requests[0].path, requests[1].path)
 	}
 }
 
@@ -53,21 +59,43 @@ func TestAnnotateRejectsBadKindAndEmptyText(t *testing.T) {
 }
 
 func TestBriefWritesBriefKind(t *testing.T) {
-	code, out, errOut, _ := runStub(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/annotations/brief" || r.Method != http.MethodPut {
+	code, out, errOut, log := runStub(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/briefs" || r.Method != http.MethodPost {
 			http.NotFound(w, r)
 			return
 		}
-		var body annotationBody
+		var body briefBody
 		decodeBody(t, r, &body)
-		if len(body.EntryIDs) != 3 || body.OpID == "" {
+		if len(body.EntryIDs) != 3 || body.OpID == "" || body.Value != "morning summary" {
 			t.Errorf("body = %+v", body)
 		}
-		writeJSON(w, annotation{ID: 8, Kind: "brief"})
+		writeJSON(w, annotation{ID: 8, Kind: "brief", EntryIDs: body.EntryIDs})
 	}, testToken, "brief", "--text", "morning summary", "1", "2", "3")
 	requireCode(t, code, exitOK, errOut)
-	if !strings.Contains(out, "brief recorded on 3 entries") {
+	if !strings.Contains(out, "brief recorded on 3 entries (id 8)") {
 		t.Fatalf("output = %q", out)
+	}
+	if requests := log.snapshot(); len(requests) != 1 || requests[0].path != "/v1/briefs" {
+		t.Fatalf("requests = %+v", requests)
+	}
+}
+
+func TestAnnotateBriefUsesBriefsEndpoint(t *testing.T) {
+	code, _, errOut, log := runStub(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/briefs" || r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		var body briefBody
+		decodeBody(t, r, &body)
+		if len(body.EntryIDs) != 1 || body.OpID == "" {
+			t.Errorf("body = %+v", body)
+		}
+		writeJSON(w, annotation{ID: 9, Kind: "brief"})
+	}, testToken, "annotate", "1", "--kind", "brief", "--text", "summary")
+	requireCode(t, code, exitOK, errOut)
+	if requests := log.snapshot(); len(requests) != 1 {
+		t.Fatalf("requests = %+v", requests)
 	}
 }
 
@@ -98,11 +126,13 @@ func TestNotifySuccess(t *testing.T) {
 			t.Errorf("entry ids = %v", body.EntryIDs)
 		}
 		writeJSON(w, notification{
-			ID:        551,
-			Status:    "held",
-			Category:  "alert",
-			Budget:    notificationBudget{UsedToday: 1, LimitToday: 3},
-			HeldUntil: timePtr("2026-11-02T19:00:00Z"),
+			ID:          551,
+			PrincipalID: 9,
+			Status:      "held",
+			Category:    "alert",
+			Budget:      notificationBudget{UsedToday: 1, LimitToday: 3},
+			Why:         notificationWhy{Sender: "Morning Agent", Budget: notificationBudget{UsedToday: 1, LimitToday: 3}},
+			HeldUntil:   timePtr("2026-11-02T19:00:00Z"),
 		})
 	}, testToken, "notify", "--note", "CVE in rustls", "--entry", "12", "--category", "alert")
 	requireCode(t, code, exitOK, errOut)
@@ -133,7 +163,7 @@ func TestNotifyBudgetProblemShowsBudget(t *testing.T) {
 			Detail: "notification budget 3/3",
 			Budget: json.RawMessage(`{"used_today":3,"limit_today":3}`),
 		})
-	}, testToken, "notify", "--note", "again")
+	}, testToken, "notify", "--note", "again", "--entry", "12")
 	requireCode(t, code, exitFailure, errOut)
 	if strings.Contains(out, "notification") {
 		t.Fatalf("reported success: %q", out)
@@ -152,15 +182,25 @@ func TestNotifyRequiresNote(t *testing.T) {
 	requireCode(t, code, exitUsage, errOut)
 }
 
+func TestNotifyRequiresEntry(t *testing.T) {
+	code, _, errOut, _ := runStub(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("server should not be called")
+	}, testToken, "notify", "--note", "no entry")
+	requireCode(t, code, exitUsage, errOut)
+	if !strings.Contains(errOut, "--entry") {
+		t.Fatalf("stderr = %q", errOut)
+	}
+}
+
 func TestTriageSendsGenerationAndAction(t *testing.T) {
 	code, out, errOut, log := runStub(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/bootstrap":
 			writeJSON(w, revision{Generation: "gen-7", Rev: 21})
-		case "/v1/triage/done":
+		case "/v1/triage":
 			var body triageBody
 			decodeBody(t, r, &body)
-			if body.OpID == "" || body.Generation != "gen-7" || len(body.EntryIDs) != 2 {
+			if body.OpID == "" || body.Generation != "gen-7" || len(body.EntryIDs) != 2 || body.Action != "done" {
 				t.Errorf("body = %+v", body)
 			}
 			writeJSON(w, triageResult{
@@ -183,7 +223,7 @@ func TestTriageSendsGenerationAndAction(t *testing.T) {
 		t.Fatalf("output = %q", out)
 	}
 	requests := log.snapshot()
-	if len(requests) != 2 || requests[1].path != "/v1/triage/done" {
+	if len(requests) != 2 || requests[1].path != "/v1/triage" {
 		t.Fatalf("requests = %+v", requests)
 	}
 }
@@ -203,7 +243,7 @@ func TestRevertPostsHandle(t *testing.T) {
 		}
 		var body revertBody
 		decodeBody(t, r, &body)
-		if body.Handle != "handle-9" || body.OpID == "" {
+		if body.RevertHandle != "handle-9" || body.OpID == "" {
 			t.Errorf("body = %+v", body)
 		}
 		writeJSON(w, struct{}{})
@@ -227,14 +267,14 @@ func TestActivityTable(t *testing.T) {
 		if r.URL.Query().Get("limit") != "25" {
 			t.Errorf("limit = %q", r.URL.Query().Get("limit"))
 		}
-		writeJSON(w, []activity{{
+		writeJSON(w, activityPage{Activities: []activity{{
 			ID:            42,
 			PrincipalName: "Morning Agent",
 			Action:        "annotation.updated",
 			Target:        json.RawMessage(`{"id":3}`),
 			NextAction:    "revert",
 			CreatedAt:     parseTestTime("2026-11-02T07:00:00Z"),
-		}})
+		}}})
 	}, testToken, "activity", "--limit", "25")
 	requireCode(t, code, exitOK, errOut)
 	if !strings.Contains(out, "Morning Agent") || !strings.Contains(out, "annotation.updated") {
