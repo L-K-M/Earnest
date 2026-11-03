@@ -276,6 +276,8 @@ data class OpBody(
 data class Annotation(
     val id: Long,
     @SerialName("principal_id") val principalId: Long,
+    @SerialName("author_name") val authorName: String,
+    @SerialName("created_at") val createdAt: String,
     val kind: String,
     @SerialName("entry_ids") val entryIds: List<Long>?,
     val value: String,
@@ -419,6 +421,7 @@ data class NotificationWhy(
 data class Notification(
     val id: Long,
     @SerialName("principal_id") val principalId: Long,
+    val muted: Boolean,
     val note: String,
     @SerialName("entry_ids") val entryIds: List<Long>?,
     val category: String,

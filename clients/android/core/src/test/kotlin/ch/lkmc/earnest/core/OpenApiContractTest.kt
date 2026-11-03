@@ -62,7 +62,7 @@ class OpenApiContractTest {
         "Put-positionRequest" to encode(PutPosition.serializer(), PutPosition(2, "op")),
         "NameBody" to encode(NameBody.serializer(), NameBody("name", "op")),
         "OpBody" to encode(OpBody.serializer(), OpBody("op")),
-        "Annotation" to encode(Annotation.serializer(), Annotation(1, 2, "note", listOf(3), "text", 4, true, false)),
+        "Annotation" to encode(Annotation.serializer(), Annotation(1, 2, "Morning Agent", "2026-11-03T06:00:00Z", "note", listOf(3), "text", 4, true, false)),
         "AnnotationBody" to encode(AnnotationBody.serializer(), AnnotationBody("op", "text")),
         "MeResult" to encode(MeResult.serializer(), MeResult(1, 2, "human", listOf("entries:read"))),
         "Token" to encode(
@@ -279,6 +279,7 @@ class OpenApiContractTest {
     private fun notification() = Notification(
         1,
         2,
+        false,
         "note",
         listOf(3),
         "alert",
