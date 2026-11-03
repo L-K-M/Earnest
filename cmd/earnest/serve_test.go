@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +24,76 @@ type fakeProber struct {
 	called bool
 	url    string
 	meta   service.FeedMeta
+}
+
+func TestWebMakeTargetsInstallDependencies(t *testing.T) {
+	for _, target := range []string{"web-build", "web-check"} {
+		t.Run(target, func(t *testing.T) {
+			output, err := exec.Command("make", "-n", "-C", "../..", target).CombinedOutput()
+			if err != nil {
+				t.Fatalf("make dry run: %v\n%s", err, output)
+			}
+			commands := string(output)
+			install := strings.Index(commands, "pnpm install --frozen-lockfile")
+			if install < 0 || install > strings.Index(commands, "pnpm build") {
+				t.Fatalf("%s does not install dependencies before building", target)
+			}
+		})
+	}
+}
+
+func TestShutdownServersDrainsTogetherAndClosesOnTimeout(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var servers []*http.Server
+	var started []<-chan struct{}
+	var requests []<-chan error
+	for range 2 {
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			close(entered)
+			select {
+			case <-r.Context().Done():
+			case <-release:
+			}
+		}))
+		t.Cleanup(func() { close(release); s.Close() })
+		shutdown := make(chan struct{})
+		s.Config.RegisterOnShutdown(func() { close(shutdown) })
+		started = append(started, shutdown)
+		servers = append(servers, s.Config)
+		done := make(chan error, 1)
+		requests = append(requests, done)
+		go func() {
+			res, err := s.Client().Get(s.URL)
+			if res != nil {
+				res.Body.Close()
+			}
+			done <- err
+		}()
+		<-entered
+	}
+	finished := make(chan struct{})
+	go func() { shutdownServers(ctx, servers...); close(finished) }()
+	for i, ch := range started {
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			t.Errorf("server %d did not begin draining before the shared deadline", i)
+		}
+	}
+	<-finished
+	for i, ch := range requests {
+		select {
+		case err := <-ch:
+			if err == nil {
+				t.Errorf("server %d did not force-close its active request", i)
+			}
+		case <-time.After(time.Second):
+			t.Errorf("server %d left its active request open after timeout", i)
+		}
+	}
 }
 
 func (f *fakeProber) Probe(context.Context, string, *service.FeedCredentials) (string, service.FeedMeta, []service.IngestItem, error) {

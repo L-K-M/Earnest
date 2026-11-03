@@ -411,7 +411,11 @@ func (s *Service) MuteAgent(ctx context.Context, a Actor, principal int64, mode 
 		if err != nil {
 			return err
 		}
-		if !muted {
+		if muted {
+			if _, err := tx.Exec(ctx, "UPDATE notifications SET status='held',held_until=$3 WHERE recipient_user_id=$1 AND sender_principal_id=$2 AND status IN ('held','queued')", a.UserID, principal, time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+				return err
+			}
+		} else {
 			if _, err := tx.Exec(ctx, "UPDATE notifications SET held_until=$3 WHERE recipient_user_id=$1 AND sender_principal_id=$2 AND status='held'", a.UserID, principal, s.now()); err != nil {
 				return err
 			}

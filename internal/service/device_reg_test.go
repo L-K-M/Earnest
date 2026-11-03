@@ -26,6 +26,17 @@ var (
 	testAuth = base64.RawURLEncoding.EncodeToString(make([]byte, 16))
 )
 
+func TestPushEndpointDottedIPLiteral(t *testing.T) {
+	for _, host := range []string{"127.0.0.1.", "10.0.0.1.", "192.168.1.2.", "169.254.169.254.", "100.64.0.1."} {
+		if _, err := pushEndpoint("https://" + host + "/push"); !errors.Is(err, ErrInvalid) {
+			t.Errorf("accepted private dotted IP %s: %v", host, err)
+		}
+	}
+	if _, err := pushEndpoint("https://8.8.8.8./push"); err != nil {
+		t.Fatalf("public dotted IP: %v", err)
+	}
+}
+
 func webpushReg(op string) DeviceRegistration {
 	return DeviceRegistration{
 		Kind:       push.KindWebPush,

@@ -196,8 +196,7 @@ func serve() error {
 		<-ctx.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 		defer cancel()
-		_ = srv.Shutdown(ctx)
-		_ = contentServer.Shutdown(ctx)
+		shutdownServers(ctx, srv, contentServer)
 	}()
 
 	logger.Info("earnest listening", "addr", cfg.HTTPAddr, "version", version, "revision", revision)
@@ -215,6 +214,18 @@ func serve() error {
 		return listenErr
 	}
 	return nil
+}
+
+func shutdownServers(ctx context.Context, servers ...*http.Server) {
+	var draining sync.WaitGroup
+	for _, server := range servers {
+		draining.Go(func() {
+			if err := server.Shutdown(ctx); err != nil {
+				_ = server.Close()
+			}
+		})
+	}
+	draining.Wait()
 }
 
 // buildMux mounts the surfaces the binary serves. api.New already applies
