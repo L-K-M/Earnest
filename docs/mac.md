@@ -87,26 +87,15 @@ Agent briefs, notes and notification notes render with plain SwiftUI `Text`,
 without HTML or Markdown interpretation. Deep links accept only positive
 internal 64-bit entry IDs in `earnest://entry/<id>`.
 
-## Server changes needed
+## Article content
 
-`GET /web/content-url/{id}` requires a browser session. Native apps authenticate
-with bearer tokens and cannot use that endpoint. The required native operation
-is `GET /v1/entries/{id}/content-url`, with the same bearer authentication and
-entry authorization as `GET /v1/entries/{id}/content`, returning:
-
-```json
-{"url":"https://content.example/article?...","expires_at":"2026-11-03T12:05:00Z"}
-```
-
-`url` must be a short-lived signed HTTP(S) URL on the configured content origin
-that needs no bearer token or browser session. `expires_at` must be an RFC 3339
-UTC timestamp. No `content_origin` field is required: the authenticated server
-selects the origin in `url`, and the app rejects credentials, fragments, expired
-URLs and redirects before rendering through its restricted custom scheme.
-This endpoint is being implemented in parallel. No server or API file was
-changed by this client task. Until it appears in the committed OpenAPI document,
-the repository implements this one request explicitly and tests its exact shape
-and absence of Authorization on the signed URL request.
+The reader asks `GET /v1/entries/{id}/content-url` with the app's bearer token
+and receives `{"url": ..., "expires_at": ...}`: a short-lived signed URL on the
+server's content origin that needs no token or session. The app rejects URLs
+with credentials or fragments, expired URLs and redirects, then renders through
+its restricted custom scheme with JavaScript off. If the content origin can't be
+reached, it falls back to the sanitised HTML from
+`GET /v1/entries/{id}/content`.
 
 ## Distribution later
 
