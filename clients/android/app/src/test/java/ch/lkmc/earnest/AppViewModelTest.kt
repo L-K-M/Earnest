@@ -30,8 +30,14 @@ class AppViewModelTest {
     private val app get() = ApplicationProvider.getApplicationContext<Application>()
     private val identity = AccountIdentity("https://nas.test", 1, 1)
     private val calls = CopyOnWriteArrayList<String>()
-    private class Sessions(var value: AuthenticatedSession?) : SessionStore {
-        override fun current() = value
+    private class Sessions(@Volatile var value: AuthenticatedSession?) : SessionStore {
+        @Volatile var onRead: (() -> Unit)? = null
+        override fun current(): AuthenticatedSession? {
+            val callback = onRead
+            onRead = null
+            callback?.invoke()
+            return value
+        }
         override fun clearToken() { value = null }
     }
     @Before fun setup() {
@@ -72,5 +78,65 @@ class AppViewModelTest {
         assertTrue("refresh never requested agent changes", calls.contains("/v1/activity/agent-changes"))
         assertEquals("Morning Agent", model.state.value.agentChanges.single().principalName)
         assertEquals(listOf(7L), model.state.value.sessionAgentChanges.map { it.id })
+    }
+
+    @Test fun accountSwitchBeforeContentRequestCannotWriteOtherAccountsContent() = runBlocking(Dispatchers.IO) {
+        val sessionA = AuthenticatedSession(identity, "account-a")
+        val sessionB = AuthenticatedSession(AccountIdentity(identity.server, 2, 2), "account-b")
+        val sessions = Sessions(sessionA)
+        val cacheA = SessionCache(app, sessionA.identity)
+        val cacheB = SessionCache(app, sessionB.identity)
+        for (cache in listOf(cacheA, cacheB)) {
+            cache.withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        }
+        var offline = false
+        val model = AppViewModel(app, sessions) { session ->
+            EarnestApi(session.identity.server, session.token, OkHttpClient.Builder().addInterceptor { chain ->
+                if (offline) throw java.io.IOException("offline")
+                val path = chain.request().url.encodedPath
+                calls += "${session.token}:$path"
+                val body = when (path) {
+                    "/v1/changes" -> """{"changes":[],"next":{"generation":"g1","rev":0},"next_cursor":"g1:0"}"""
+                    "/v1/entries/2/content" -> """{"entry_id":2,"html":"<p>${session.token}</p>","text":"${session.token}","sanitizer_version":1,"source":"feed"}"""
+                    "/v1/entries/2/content-url" -> """{"url":"https://content.test/${session.token}","expires_at":"2026-11-03T01:00:00Z"}"""
+                    else -> "[]"
+                }
+                Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("test")
+                    .body(body.toResponseBody()).build()
+            }.build())
+        }
+        suspend fun awaitRefresh(session: AuthenticatedSession) {
+            withTimeout(15000) {
+                model.state.first {
+                    it.accountKey == session.identity.cacheKey && !it.loading &&
+                        calls.contains("${session.token}:/v1/activity/agent-changes")
+                }
+            }
+        }
+        awaitRefresh(sessionA)
+
+        // Switch while openEntry has A's cache and session, before its session-store read returns.
+        sessions.onRead = {
+            sessions.value = sessionB
+            model.onLoggedIn()
+            runBlocking { awaitRefresh(sessionB) }
+        }
+        assertNull(model.openEntry(2))
+        assertNull("B's content was persisted in A's database", cacheA.db.content().get(2))
+        assertNull(cacheB.db.content().get(2))
+        assertFalse(calls.any { it.endsWith("/content") || it.endsWith("/content-url") })
+
+        offline = true
+        sessions.value = sessionA
+        model.onLoggedIn()
+        withTimeout(15000) { model.state.first { it.accountKey == identity.cacheKey && it.error != null } }
+        assertNull("A must not see B's content offline", model.openEntry(2))
+
+        offline = false
+        assertEquals("https://content.test/account-a", model.openEntry(2)?.url)
+        offline = true
+        val cached = model.openEntry(2)
+        assertEquals("<p>account-a</p>", cached?.cachedHtml)
+        assertNull(cached?.url)
     }
 }

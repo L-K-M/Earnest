@@ -224,7 +224,7 @@ class SyncRepository(
         )
     }
 
-    /** Resolves a deep link absent from the snapshot, retaining a 404 as a tombstone. */
+    /** Resolves a deep link absent from the snapshot, hiding a 404 until a newer projection. */
     suspend fun loadEntry(id: Long): CachedEntry? {
         val cached = engine.snapshot().entries.firstOrNull { it.id == id }
         if (cached != null) return cached.takeUnless { it.deleted }
@@ -242,7 +242,7 @@ class SyncRepository(
             cachedEntry(value.jsonObject, value)
         } catch (error: ApiException) {
             if (error.status != 404) throw error
-            entry.copy(deleted = true)
+            entry.copy(deleted = true, unavailable = true)
         }
     }
 

@@ -162,6 +162,87 @@ class SyncRepositoryTest {
         assertEquals(1L, engine.snapshot().cursor.rev)
     }
 
+    private fun reload(engine: SyncEngine): SyncEngine {
+        val encoded = json.encodeToString(SyncSnapshot.serializer(), engine.snapshot())
+        return SyncEngine(Store(json.decodeFromString(SyncSnapshot.serializer(), encoded)))
+    }
+
+    @Test
+    fun missingNotificationMetadataRecoversAfterNewerLiveBackfill() = runBlocking {
+        var engine = engine()
+        assertNull(SyncRepository(api { 404 to "{}" }, engine).loadEntry(2))
+        engine = reload(engine)
+        assertTrue(engine.snapshot().entries.single().deleted)
+        val state = SyncEngine.initialState(1, 2).let {
+            it.copy(seen = it.seen.copy(value = JsonPrimitive("seen"), rev = 2), stateRev = 2)
+        }
+        val result = json.encodeToString(Result.serializer(), Result("backfill", "applied", state, false))
+        val api = api { request ->
+            when {
+                request.url.encodedPath == "/v1/entries/2" -> 200 to detail
+                request.url.queryParameter("rev") == "0" -> 200 to """{"changes":[{"rev":1,"type":"entry.created","payload":{"entry":$event}},{"rev":2,"type":"state.updated","payload":{"results":[$result]}}],"next":{"generation":"g1","rev":2},"next_cursor":"g1:2"}"""
+                else -> 200 to """{"changes":[],"next":{"generation":"g1","rev":2},"next_cursor":"g1:2"}"""
+            }
+        }
+        SyncRepository(api, engine).pull()
+        assertFalse("metadata 404 suppressed newer live backfill", engine.snapshot().entries.single().deleted)
+        assertEquals("Headline", engine.snapshot().entries.single().title)
+        assertEquals(JsonPrimitive("seen"), engine.state(1, 2).seen.value)
+        assertEquals("Headline", SyncRepository(api, engine).loadEntry(2)?.title)
+    }
+
+    @Test
+    fun missingHydrationRecoversAfterNewerLiveBackfill() = runBlocking {
+        var engine = engine(entries = listOf(CachedEntry(2, title = "Old headline")))
+        SyncRepository(api { request ->
+            if (request.url.encodedPath == "/v1/entries/2") 404 to "{}"
+            else changes(request, """{"entry":$event}""")
+        }, engine).pull()
+        engine = reload(engine)
+        val api = api { request ->
+            when {
+                request.url.encodedPath == "/v1/entries/2" -> 200 to detail
+                request.url.queryParameter("rev") == "1" -> 200 to """{"changes":[{"rev":2,"type":"entry.created","payload":{"entry":${event.replace("\"rev\":1", "\"rev\":2")}}}],"next":{"generation":"g1","rev":2},"next_cursor":"g1:2"}"""
+                else -> 200 to """{"changes":[],"next":{"generation":"g1","rev":2},"next_cursor":"g1:2"}"""
+            }
+        }
+        SyncRepository(api, engine).pull()
+        assertFalse("hydration 404 suppressed newer live backfill", engine.snapshot().entries.single().deleted)
+        assertEquals("Headline", engine.snapshot().entries.single().title)
+        assertEquals(2L, engine.snapshot().cursor.rev)
+    }
+
+    @Test
+    fun metadata404OnlyAcceptsNewerProjections() = runBlocking {
+        for (rev in listOf(0L, 1L, 2L)) {
+            val engine = engine()
+            SyncRepository(api { request ->
+                if (request.url.encodedPath == "/v1/entries/2") 404 to "{}"
+                else changes(request, """{"entry":$event}""")
+            }, engine).pull()
+            val restored = reload(engine)
+            restored.mergeBootstrap(SyncChange(0, entry = CachedEntry(2, title = "Live", rev = rev)))
+            assertEquals("projection rev=$rev", rev <= 1L, restored.entry(2)!!.deleted)
+        }
+    }
+
+    @Test
+    fun authoritativeDeletionCannotBeResurrected() = runBlocking {
+        for (incremental in listOf(false, true)) {
+            val engine = engine()
+            assertNull(SyncRepository(api { 404 to "{}" }, engine).loadEntry(2))
+            SyncRepository(api { request ->
+                assertEquals("/v1/changes", request.url.encodedPath)
+                changes(request, """{"entry":${event.replace("false", "true")}}""")
+            }, engine).pull()
+            val restored = reload(engine)
+            val live = SyncChange(2, entry = CachedEntry(2, title = "Live", rev = 2))
+            if (incremental) restored.applyPage(listOf(live), Revision("g1", 2))
+            else restored.mergeBootstrap(live)
+            assertTrue("authoritative tombstone was resurrected", restored.entry(2)!!.deleted)
+        }
+    }
+
     @Test
     fun hydrationFailureDoesNotAdvancePage() = runBlocking {
         val engine = engine(entries = listOf(CachedEntry(2, title = "Old headline")))

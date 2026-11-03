@@ -298,7 +298,8 @@ class AppViewModel internal constructor(
     suspend fun openEntry(entryId: Long): ContentUrlResult? = withContext(Dispatchers.IO) {
         val cache = account ?: return@withContext null
         val session = activeSession ?: return@withContext null
-        val api = api() ?: return@withContext null
+        if (!isCurrent(session, cache)) return@withContext null
+        val api = apiFactory(session)
         val cached = cache.db.content().get(entryId)
         val content = runCatching { api.content(entryId) }.getOrNull()
         content?.let {
