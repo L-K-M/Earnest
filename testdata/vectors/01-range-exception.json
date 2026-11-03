@@ -1,0 +1,174 @@
+{
+  "version": 1,
+  "name": "range-exception",
+  "decision": "A stale mark-all uses its original action time. The resolved exception list protects a newer deliberate unread on every client.",
+  "setup": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 1,
+        "seq": 1,
+        "rev": 1
+      }
+    },
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 2,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 2,
+        "seq": 2,
+        "rev": 2
+      }
+    },
+    {
+      "op": "bootstrap_begin",
+      "device": "phone",
+      "expect": {
+        "generation": "g1"
+      }
+    },
+    {
+      "op": "bootstrap_page",
+      "device": "phone",
+      "expect": {}
+    },
+    {
+      "op": "client_pull",
+      "device": "phone",
+      "expect": {
+        "generation": "g1"
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "write",
+      "write": {
+        "op_id": "unread",
+        "entry_id": 1,
+        "register": "seen",
+        "value": "unseen"
+      },
+      "at": "2026-11-02T11:00:00Z",
+      "expect": {
+        "status": "applied"
+      }
+    },
+    {
+      "op": "range",
+      "write": {
+        "op_id": "all",
+        "occurred_at": "2026-11-02T10:00:00Z"
+      },
+      "scope": {
+        "kind": "all"
+      },
+      "expect": {
+        "status": "applied",
+        "subscriptions": [
+          1
+        ],
+        "through_seq": 2,
+        "except": [
+          1
+        ],
+        "results": [
+          {
+            "status": "superseded"
+          },
+          {
+            "status": "applied"
+          }
+        ]
+      }
+    },
+    {
+      "op": "client_pull",
+      "device": "phone",
+      "expect": {}
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": true
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 2,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "device": "phone",
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": true
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 2,
+      "device": "phone",
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": false
+      }
+    }
+  ]
+}

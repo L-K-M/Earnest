@@ -1,0 +1,135 @@
+{
+  "version": 1,
+  "name": "shared-ingest",
+  "decision": "The model schedules prepared ingests and atomic commits for two users sharing one feed. Gapless per-user revisions and equal ingest order are proven here; database lock order and deadlock freedom require store integration tests.",
+  "setup": [
+    {
+      "op": "prepare_ingest",
+      "name": "slow",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "seq": 0,
+        "rev": 0
+      }
+    },
+    {
+      "op": "prepare_ingest",
+      "name": "fast",
+      "entry": {
+        "id": 2,
+        "subscription_id": 1
+      },
+      "expect": {
+        "seq": 0,
+        "rev": 0
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "commit_ingest",
+      "name": "fast",
+      "expect": {
+        "seq": 1,
+        "rev": 1
+      }
+    },
+    {
+      "op": "ingest",
+      "server": "other-user",
+      "entry": {
+        "id": 2,
+        "subscription_id": 2,
+        "seq": 1
+      },
+      "expect": {
+        "seq": 1,
+        "rev": 1
+      }
+    },
+    {
+      "op": "commit_ingest",
+      "name": "slow",
+      "expect": {
+        "seq": 2,
+        "rev": 2
+      }
+    },
+    {
+      "op": "ingest",
+      "server": "other-user",
+      "entry": {
+        "id": 1,
+        "subscription_id": 2,
+        "seq": 2
+      },
+      "expect": {
+        "seq": 2,
+        "rev": 2
+      }
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_log",
+      "expect": {
+        "revs": [
+          1,
+          2
+        ],
+        "gapless": true
+      }
+    },
+    {
+      "op": "assert_log",
+      "server": "other-user",
+      "expect": {
+        "revs": [
+          1,
+          2
+        ],
+        "gapless": true
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": true
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "server": "other-user",
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "name": "notification-before-snapshot",
+  "decision": "Generation checks cover notification acceptance even when the restored snapshot contains neither the notification nor its op_id. New-generation notifications remain withheld until explicit release.",
+  "setup": [
+    {
+      "op": "checkpoint",
+      "name": "before",
+      "expect": {
+        "rev": 0
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "accept_notification",
+      "op_id": "lost",
+      "expect": {
+        "status": "pending"
+      }
+    },
+    {
+      "op": "attempt_notification",
+      "op_id": "lost",
+      "expect": {
+        "status": "uncertain"
+      }
+    },
+    {
+      "op": "complete_notification",
+      "op_id": "lost",
+      "expect": {}
+    },
+    {
+      "op": "restore",
+      "name": "before",
+      "generation": "g2",
+      "expect": {}
+    },
+    {
+      "op": "accept_notification",
+      "op_id": "lost",
+      "generation": "g1",
+      "error": "generation",
+      "expect": {}
+    },
+    {
+      "op": "accept_notification",
+      "op_id": "fresh",
+      "generation": "g2",
+      "expect": {
+        "status": "pending"
+      }
+    },
+    {
+      "op": "attempt_notification",
+      "op_id": "fresh",
+      "error": "withheld",
+      "expect": {
+        "status": "pending"
+      }
+    },
+    {
+      "op": "release_notifications",
+      "expect": {}
+    },
+    {
+      "op": "attempt_notification",
+      "op_id": "fresh",
+      "expect": {
+        "status": "uncertain"
+      }
+    },
+    {
+      "op": "attempt_notification",
+      "op_id": "fresh",
+      "error": "attempted",
+      "expect": {
+        "status": "uncertain"
+      }
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_log",
+      "expect": {
+        "rev": 0,
+        "generation": "g2"
+      }
+    }
+  ]
+}

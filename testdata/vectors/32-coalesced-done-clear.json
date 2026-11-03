@@ -1,0 +1,153 @@
+{
+  "version": 1,
+  "name": "coalesced-done-clear",
+  "decision": "An unread overlay on Done also queues a shelf-none intent with op_id suffixed /clear-done. Coalescing unseen into seen retains that shelf intent, so the client and server do not resurrect Done.",
+  "setup": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 1,
+        "seq": 1,
+        "rev": 1
+      }
+    },
+    {
+      "op": "write",
+      "write": {
+        "op_id": "done",
+        "entry_id": 1,
+        "register": "shelf",
+        "value": "done"
+      },
+      "expect": {
+        "status": "applied"
+      }
+    },
+    {
+      "op": "bootstrap_begin",
+      "device": "phone",
+      "expect": {
+        "generation": "g1"
+      }
+    },
+    {
+      "op": "bootstrap_page",
+      "device": "phone",
+      "expect": {}
+    },
+    {
+      "op": "client_pull",
+      "device": "phone",
+      "expect": {
+        "generation": "g1"
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "client_queue",
+      "device": "phone",
+      "write": {
+        "op_id": "unread",
+        "entry_id": 1,
+        "register": "seen",
+        "value": "unseen"
+      },
+      "expect": {}
+    },
+    {
+      "op": "client_queue",
+      "device": "phone",
+      "write": {
+        "op_id": "read-again",
+        "entry_id": 1,
+        "register": "seen",
+        "value": "seen"
+      },
+      "expect": {}
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "device": "phone",
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "client_flush",
+      "device": "phone",
+      "expect": [
+        {
+          "op_id": "unread/clear-done",
+          "status": "applied"
+        },
+        {
+          "op_id": "read-again",
+          "status": "applied"
+        }
+      ]
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "device": "phone",
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_client",
+      "device": "phone",
+      "expect": {
+        "outbox_size": 0
+      }
+    }
+  ]
+}

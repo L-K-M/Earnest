@@ -1,0 +1,22 @@
+{
+  "feed": {
+    "title": "Default permalink",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "https://example.com/posts/guid-only",
+      "url": "https://example.com/posts/guid-only",
+      "title": "Guid only",
+      "author": "",
+      "summary_html": "No link element",
+      "content_html": "",
+      "language": "",
+      "identity": "f736b82fd7659d83701579f8b9a8d3e9019e89e6fd8d22a6e989dfbcbfa17336",
+      "content_hash": "fe6099d2c5186f1e913babcd708cdb6a1920fcb1b9336fe55d9851d9a20bc4b0"
+    }
+  ]
+}

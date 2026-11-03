@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "name": "ingest-commit-order",
+  "decision": "Parsing is prepared outside the commit. Seq is assigned only at commit, so the slow parser never reserves a lower visible seq or creates a missing revision.",
+  "setup": [
+    {
+      "op": "prepare_ingest",
+      "name": "slow",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "seq": 0
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 2,
+        "subscription_id": 1
+      },
+      "expect": {
+        "seq": 1,
+        "rev": 1
+      }
+    },
+    {
+      "op": "assert_entry",
+      "entry_id": 1,
+      "expect": {
+        "exists": false
+      }
+    },
+    {
+      "op": "commit_ingest",
+      "name": "slow",
+      "expect": {
+        "seq": 2,
+        "rev": 2
+      }
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_entry",
+      "entry_id": 1,
+      "expect": {
+        "entry": {
+          "seq": 2
+        }
+      }
+    },
+    {
+      "op": "assert_entry",
+      "entry_id": 2,
+      "expect": {
+        "entry": {
+          "seq": 1
+        }
+      }
+    },
+    {
+      "op": "assert_log",
+      "expect": {
+        "revs": [
+          1,
+          2
+        ],
+        "gapless": true
+      }
+    }
+  ]
+}

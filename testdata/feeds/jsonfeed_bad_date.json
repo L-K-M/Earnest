@@ -1,0 +1,9 @@
+{
+  "version": "https://jsonfeed.org/version/1.1",
+  "title": "Bad dates",
+  "items": [
+    {"id": "1", "title": "Words", "date_published": "recently"},
+    {"id": "2", "title": "Impossible", "date_modified": "2026-02-30T00:00:00Z"},
+    {"id": "3", "title": "No dates"}
+  ]
+}

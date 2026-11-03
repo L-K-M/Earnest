@@ -11,10 +11,11 @@ FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
 ENV GOTOOLCHAIN=local
 ARG TARGETOS TARGETARCH VERSION REVISION
 WORKDIR /src
-# No go.sum is copied: the scaffold is stdlib-only and the file does not
-# exist yet. Add it back to this COPY when the first dependency lands.
-COPY go.mod ./
+# Modules first, so dependency downloads are cached apart from source edits.
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY cmd/ cmd/
+COPY internal/ internal/
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
@@ -25,7 +26,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM alpine:3.22
 ARG VERSION REVISION CREATED
 LABEL org.opencontainers.image.title="Earnest" \
-      org.opencontainers.image.description="Self-hosted RSS reader whose agent surface is governed: own identity, allowlist, budget, revert log" \
+      org.opencontainers.image.description="Self-hosted RSS reader whose agent surface is governed: own identity, budget, revert log" \
       org.opencontainers.image.url="https://github.com/L-K-M/Earnest" \
       org.opencontainers.image.documentation="https://github.com/L-K-M/Earnest/tree/main/docs" \
       org.opencontainers.image.source="https://github.com/L-K-M/Earnest" \

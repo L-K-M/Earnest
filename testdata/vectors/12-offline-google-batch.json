@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "name": "offline-google-batch",
+  "decision": "Google Reader receipt-time passive reads cannot override deliberate native unreads. Two thousand results commit in one compact event, including superseded items.",
+  "setup": [
+    {
+      "op": "repeat_ingest",
+      "repeat": 2000,
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "rev": 2000,
+        "seq": 2000
+      }
+    },
+    {
+      "op": "write",
+      "write": {
+        "op_id": "native-first",
+        "entry_id": 1,
+        "register": "seen",
+        "value": "unseen"
+      },
+      "at": "2026-10-27T12:00:00Z",
+      "expect": {
+        "status": "applied"
+      }
+    },
+    {
+      "op": "write",
+      "write": {
+        "op_id": "native-last",
+        "entry_id": 2000,
+        "register": "seen",
+        "value": "unseen"
+      },
+      "at": "2026-10-27T12:00:00Z",
+      "expect": {
+        "status": "applied"
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "google_batch",
+      "repeat": 2000,
+      "op_id": "week-offline",
+      "entry_id": 1,
+      "action": "read",
+      "expect": {
+        "applied": 1998,
+        "superseded": 2,
+        "gone": 0,
+        "expired": 0
+      }
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": true
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 2000,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": true
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 2,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_log",
+      "expect": {
+        "rev": 2003,
+        "count": 2003,
+        "gapless": true
+      }
+    }
+  ]
+}

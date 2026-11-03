@@ -1,0 +1,22 @@
+{
+  "feed": {
+    "title": "CDATA plain \u0026 simple",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "https://example.com/cdata",
+      "url": "https://example.com/cdata",
+      "title": "A bold title",
+      "author": "",
+      "summary_html": "\u003cp\u003eHello \u003cem\u003ethere\u003c/em\u003e\u003c/p\u003e",
+      "content_html": "\u003cp\u003eFull body with \u003ca href=\"https://example.com/relative\"\u003erelative link\u003c/a\u003e\u003c/p\u003e",
+      "language": "",
+      "identity": "256b6ebcd94f2fe6959979ff5fced77e2eb43fef25cfe9a09587c960f3d97b19",
+      "content_hash": "4755af0bd55959989ba24ab989a6ca55214ab9ec537aac9ea16adb75074774ec"
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "feed": {
+    "title": "Non-permalink guids",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "session-abc123",
+      "url": "https://example.com/opaque",
+      "title": "Opaque rotating id",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "language": "",
+      "identity": "44459c39c29bdfea0d2ecdf29c32c67e6f2e4a3e07baac2129e2e983e4464eba",
+      "content_hash": "8ccc086a119563515964f8354bb7d7a42c3c0e2c6441a5aa0a7fac913086e4a5"
+    },
+    {
+      "guid": "urn:uuid:123e4567-e89b-12d3-a456-426614174000",
+      "url": "https://example.com/urn",
+      "title": "URN uuid",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "language": "",
+      "identity": "86916e63131f932604fc709b55a72d5d37b4c6a7eb848933298d67d6d357545b",
+      "content_hash": "a98ed68865369bcde2c060044496037f1aedf790da5c107c491d7d4abbea5cd5"
+    },
+    {
+      "guid": "123e4567-e89b-12d3-a456-426614174000",
+      "url": "https://example.com/bare",
+      "title": "Bare UUID",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "language": "",
+      "identity": "7d36a079003e71032ccd12336949cd11ea1ceeee35f893ac3908e0b5041e607c",
+      "content_hash": "e6b249b6fa01998f015368f3f569321803eb81a679dd7404f562e9ee26f10639"
+    },
+    {
+      "guid": "tag:example.com,2006:1",
+      "url": "https://example.com/tag",
+      "title": "Tag uri",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "language": "",
+      "identity": "425fb5f2595a10ae21d7360331adefd8cad9090f36f6eb02ffb55f5bc208911c",
+      "content_hash": "51ec9f5e4f1e2171dcdddcfbf26325b6e45041de11382bf2dab33c8b1d3a6b94"
+    },
+    {
+      "guid": "https://example.com/canonical",
+      "url": "https://example.com/urlshaped",
+      "title": "Url shaped but marked false",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "language": "",
+      "identity": "d99809c3ac753ced539d9879636e94c5534c2268b7fdfe634a3ce8292cddfabf",
+      "content_hash": "e8a60912b0c75310d1130b3837272ad5d6872be4f9bee73bd9f52e3ae24d39f0"
+    }
+  ]
+}

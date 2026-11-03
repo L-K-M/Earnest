@@ -1,0 +1,33 @@
+{
+  "feed": {
+    "title": "Item base",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.com/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "based-1",
+      "url": "https://cdn.example.com/posts/1",
+      "title": "Based item",
+      "author": "",
+      "summary_html": "\u003cimg src=\"https://cdn.example.com/posts/thumb.png\"/\u003e",
+      "content_html": "",
+      "language": "",
+      "identity": "a7c301788b4a4f4a93d8814b707220258b12d343347329a62f8de7f6b6bff893",
+      "content_hash": "3b32a50a723b00fe1e5e944407265b0dc039f07c779a1c8b4b65f71628b7565b"
+    },
+    {
+      "guid": "plain-1",
+      "url": "https://example.com/plain",
+      "title": "Unbased item",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "language": "",
+      "identity": "3098a7b17d0f81a0019f030f9f40d770db985d8658869cda07219706cdb689cb",
+      "content_hash": "e303a3a859cbbc2e0c8af67da6c1b8762c61df9817be322392c0dd4bb180d494"
+    }
+  ]
+}

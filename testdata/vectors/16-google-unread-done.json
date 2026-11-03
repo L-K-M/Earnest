@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "name": "google-unread-done",
+  "decision": "Removing read or adding kept-unread is deliberate, clears Done through the shared server rule, and makes the item unread on the next read.",
+  "setup": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 1,
+        "seq": 1,
+        "rev": 1
+      }
+    },
+    {
+      "op": "write",
+      "write": {
+        "op_id": "done",
+        "entry_id": 1,
+        "register": "shelf",
+        "value": "done"
+      },
+      "expect": {
+        "status": "applied"
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "google",
+      "op_id": "unread",
+      "action": "unread",
+      "entry_id": 1,
+      "expect": {
+        "status": "applied"
+      }
+    },
+    {
+      "op": "bootstrap_begin",
+      "device": "phone",
+      "expect": {
+        "generation": "g1"
+      }
+    },
+    {
+      "op": "bootstrap_page",
+      "device": "phone",
+      "expect": {}
+    },
+    {
+      "op": "client_pull",
+      "device": "phone",
+      "expect": {
+        "generation": "g1"
+      }
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": true
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "device": "phone",
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": true
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "google_read": false
+      }
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "version": "https://jsonfeed.org/version/1.1",
+  "title": "Numeric ids",
+  "items": [
+    {"id": 12345678901234567890, "title": "Big number"},
+    {"id": 7, "title": "Small number"}
+  ]
+}

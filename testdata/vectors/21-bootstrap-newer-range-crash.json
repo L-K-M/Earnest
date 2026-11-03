@@ -1,0 +1,207 @@
+{
+  "version": 1,
+  "name": "bootstrap-newer-range-crash",
+  "decision": "Clients merge per register, not only state_rev. A newer kept page does not hide an older unseen-to-seen range, and newer deliberate unseen survives range replay. A partial page with a final cursor is rejected atomically; replay after a crash is safe. Range preparation chunks are never externally visible.",
+  "setup": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 1,
+        "seq": 1,
+        "rev": 1
+      }
+    },
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 2,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 2,
+        "seq": 2,
+        "rev": 2
+      }
+    },
+    {
+      "op": "bootstrap_begin",
+      "device": "phone",
+      "expect": {
+        "rev": 2
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "range",
+      "write": {
+        "op_id": "all"
+      },
+      "scope": {
+        "kind": "all"
+      },
+      "expect": {
+        "status": "applied"
+      }
+    },
+    {
+      "op": "write",
+      "write": {
+        "op_id": "new-unread",
+        "entry_id": 1,
+        "register": "seen",
+        "value": "unseen"
+      },
+      "expect": {
+        "status": "applied"
+      }
+    },
+    {
+      "op": "write",
+      "write": {
+        "op_id": "keep",
+        "entry_id": 2,
+        "register": "kept",
+        "value": true
+      },
+      "expect": {
+        "status": "applied"
+      }
+    },
+    {
+      "op": "bootstrap_page",
+      "device": "phone",
+      "expect": {}
+    },
+    {
+      "op": "capture_changes",
+      "name": "replay",
+      "cursor": {
+        "generation": "g1",
+        "rev": 2
+      },
+      "expect": {
+        "revs": [
+          3,
+          4,
+          5
+        ]
+      }
+    },
+    {
+      "op": "client_apply",
+      "device": "phone",
+      "name": "replay",
+      "count": 1,
+      "error": "invalid",
+      "expect": {
+        "rev": 2
+      }
+    },
+    {
+      "op": "client_apply",
+      "device": "phone",
+      "name": "replay",
+      "expect": {
+        "rev": 5
+      }
+    },
+    {
+      "op": "client_apply",
+      "device": "phone",
+      "name": "replay",
+      "expect": {
+        "rev": 5
+      }
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": true
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "device": "phone",
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": true
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 2,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": true
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 2,
+      "device": "phone",
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": true
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_client",
+      "device": "phone",
+      "expect": {
+        "cursor": {
+          "rev": 5
+        }
+      }
+    }
+  ]
+}

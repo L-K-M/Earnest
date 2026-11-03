@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "name": "integer-identity",
+  "decision": "JSON numbers must retain signed 64-bit ID precision. A client must not round identities through binary floating point, even though ordinary test IDs are small.",
+  "setup": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 9007199254740993,
+        "subscription_id": 9223372036854775807
+      },
+      "expect": {
+        "id": 9007199254740993,
+        "seq": 1
+      }
+    },
+    {
+      "op": "bootstrap_begin",
+      "device": "phone",
+      "expect": {
+        "generation": "g1"
+      }
+    },
+    {
+      "op": "bootstrap_page",
+      "device": "phone",
+      "expect": {}
+    },
+    {
+      "op": "client_pull",
+      "device": "phone",
+      "expect": {
+        "generation": "g1"
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "write",
+      "write": {
+        "op_id": "large-id",
+        "entry_id": 9007199254740993,
+        "register": "seen",
+        "value": "seen"
+      },
+      "expect": {
+        "status": "applied"
+      }
+    },
+    {
+      "op": "client_pull",
+      "device": "phone",
+      "expect": {}
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_state",
+      "entry_id": 9007199254740993,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 9007199254740993,
+      "device": "phone",
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_entry",
+      "entry_id": 9007199254740993,
+      "device": "phone",
+      "expect": {
+        "entry": {
+          "id": 9007199254740993,
+          "subscription_id": 9223372036854775807
+        }
+      }
+    }
+  ]
+}

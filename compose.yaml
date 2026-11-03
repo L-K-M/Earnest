@@ -42,6 +42,24 @@ services:
       timeout: 3s
       retries: 10
 
+  backup:
+    <<: *service-defaults
+    image: pgvector/pgvector:pg18
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: earnest
+      PGDATABASE: earnest
+      PGPASSWORD: ${EARNEST_DB_PASSWORD:-earnest}
+      BACKUP_KEEP: ${EARNEST_BACKUP_KEEP:-14}
+    volumes:
+      - ${EARNEST_BACKUP_VOLUME:-backups}:/backups
+      - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["while true; do sh /usr/local/bin/backup.sh || echo 'backup failed' >&2; sleep 86400; done"]
+
   earnest:
     <<: *service-defaults
     image: earnest:local
@@ -54,9 +72,17 @@ services:
         condition: service_healthy
     environment:
       EARNEST_HTTP_ADDR: ":8080"
-      # Wired now so the deployment contract is real; the scaffold accepts it
-      # and reports it at startup but does not query the database yet.
-      EARNEST_DATABASE_URL: postgres://earnest:${EARNEST_DB_PASSWORD:-earnest}@postgres:5432/earnest
+      # Override for an external database; otherwise use this stack's Postgres.
+      EARNEST_DATABASE_URL: ${EARNEST_DATABASE_URL:-postgres://earnest:${EARNEST_DB_PASSWORD:-earnest}@postgres:5432/earnest}
+      # Required for signing and encrypted stored credentials. Keep with backups.
+      EARNEST_SECRET_KEY: ${EARNEST_SECRET_KEY:?Set EARNEST_SECRET_KEY to at least 32 bytes}
+      # Provision the distinct content origin before enabling article frames.
+      EARNEST_BASE_URL: "${EARNEST_BASE_URL:-http://localhost:8080}"
+      EARNEST_CONTENT_ORIGIN: "${EARNEST_CONTENT_ORIGIN:-http://localhost:8081}"
+      EARNEST_OUTBOUND_ALLOW_PRIVATE: "${EARNEST_OUTBOUND_ALLOW_PRIVATE:-}"
+      EARNEST_FETCH_MIN_INTERVAL: "${EARNEST_FETCH_MIN_INTERVAL:-15m}"
+      EARNEST_FETCH_MAX_INTERVAL: "${EARNEST_FETCH_MAX_INTERVAL:-24h}"
+      EARNEST_RETENTION_DAYS: "${EARNEST_RETENTION_DAYS:-90}"
       EARNEST_LOG_LEVEL: "${EARNEST_LOG_LEVEL:-info}"
     ports:
       - "${EARNEST_PORT:-8080}:8080"
@@ -72,3 +98,4 @@ services:
 # host path, postgres bind-mounts instead and this goes unreferenced.
 volumes:
   pgdata:
+  backups:

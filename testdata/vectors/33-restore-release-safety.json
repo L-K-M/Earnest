@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "name": "restore-release-safety",
+  "decision": "A restored pending row might have been delivered after the snapshot. Releasing the global hold permits only current-generation requests; original-generation pending rows stay withheld permanently. A user wishing to send again must create a new operation, acknowledging the possibility of duplicate content.",
+  "setup": [
+    {
+      "op": "accept_notification",
+      "op_id": "old",
+      "expect": {
+        "status": "pending",
+        "replay": false
+      }
+    },
+    {
+      "op": "checkpoint",
+      "name": "pending",
+      "expect": {
+        "rev": 0
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "attempt_notification",
+      "op_id": "old",
+      "expect": {
+        "status": "uncertain"
+      }
+    },
+    {
+      "op": "complete_notification",
+      "op_id": "old",
+      "expect": {}
+    },
+    {
+      "op": "restore",
+      "name": "pending",
+      "generation": "g2",
+      "expect": {}
+    },
+    {
+      "op": "release_notifications",
+      "expect": {}
+    },
+    {
+      "op": "attempt_notification",
+      "op_id": "old",
+      "error": "withheld",
+      "expect": {
+        "status": "pending"
+      }
+    },
+    {
+      "op": "accept_notification",
+      "op_id": "new",
+      "generation": "g2",
+      "expect": {
+        "status": "pending",
+        "replay": false
+      }
+    },
+    {
+      "op": "accept_notification",
+      "op_id": "new",
+      "generation": "g2",
+      "expect": {
+        "status": "pending",
+        "replay": true
+      }
+    },
+    {
+      "op": "attempt_notification",
+      "op_id": "new",
+      "expect": {
+        "status": "uncertain"
+      }
+    },
+    {
+      "op": "attempt_notification",
+      "op_id": "new",
+      "error": "attempted",
+      "expect": {
+        "status": "uncertain"
+      }
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_log",
+      "expect": {
+        "rev": 0,
+        "generation": "g2"
+      }
+    }
+  ]
+}

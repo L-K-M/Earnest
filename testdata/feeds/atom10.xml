@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en">
+  <title>Atom ten</title>
+  <subtitle>Comprehensive</subtitle>
+  <link rel="self" href="https://example.com/atom.xml"/>
+  <link rel="alternate" type="text/html" href="/"/>
+  <icon>/icon.png</icon>
+  <logo>/logo.png</logo>
+  <entry>
+    <title>Entry one</title>
+    <id>tag:example.com,2006:1</id>
+    <link rel="alternate" type="text/html" href="/posts/1"/>
+    <link rel="enclosure" href="/media/1.mp3" type="audio/mpeg" length="123"/>
+    <author><name>Ada</name><email>ada@example.com</email></author>
+    <published>2006-01-02T15:04:05Z</published>
+    <updated>2006-01-02T16:04:05Z</updated>
+    <summary type="text">Short summary</summary>
+    <content type="html">&lt;p&gt;Hello &lt;b&gt;world&lt;/b&gt;&lt;/p&gt;</content>
+    <category term="tech"/>
+  </entry>
+  <entry>
+    <title>Entry two</title>
+    <id>tag:example.com,2006:2</id>
+    <link rel="alternate" type="text/html" href="https://example.com/posts/2"/>
+    <author><name>Grace</name></author>
+    <updated>2006-01-03T15:04:05Z</updated>
+    <content type="text">Plain text body &amp; more</content>
+  </entry>
+</feed>

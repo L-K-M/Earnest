@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <title>Item base</title>
+  <link>https://example.com/</link>
+  <item xml:base="https://cdn.example.com/posts/">
+    <title>Based item</title>
+    <link>1</link>
+    <guid>based-1</guid>
+    <description>&lt;img src="thumb.png"&gt;</description>
+  </item>
+  <item>
+    <title>Unbased item</title>
+    <link>/plain</link>
+    <guid>plain-1</guid>
+  </item>
+</channel></rss>

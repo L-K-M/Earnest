@@ -1,0 +1,200 @@
+{
+  "version": 1,
+  "name": "bootstrap-range-race",
+  "decision": "Read the cursor before paging. Replaying an older range after a newer page is idempotent, and reaches the continuously connected client state.",
+  "setup": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 1,
+        "seq": 1,
+        "rev": 1
+      }
+    },
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 2,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 2,
+        "seq": 2,
+        "rev": 2
+      }
+    },
+    {
+      "op": "bootstrap_begin",
+      "device": "online",
+      "expect": {
+        "generation": "g1"
+      }
+    },
+    {
+      "op": "bootstrap_page",
+      "device": "online",
+      "expect": {}
+    },
+    {
+      "op": "client_pull",
+      "device": "online",
+      "expect": {
+        "generation": "g1"
+      }
+    },
+    {
+      "op": "bootstrap_begin",
+      "device": "returning",
+      "expect": {
+        "rev": 2
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "range",
+      "write": {
+        "op_id": "all"
+      },
+      "scope": {
+        "kind": "all"
+      },
+      "expect": {
+        "status": "applied"
+      }
+    },
+    {
+      "op": "bootstrap_page",
+      "device": "returning",
+      "expect": {}
+    },
+    {
+      "op": "client_pull",
+      "device": "returning",
+      "expect": {}
+    },
+    {
+      "op": "client_pull",
+      "device": "online",
+      "expect": {}
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 2,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "device": "online",
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "device": "returning",
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 2,
+      "device": "online",
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 2,
+      "device": "returning",
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": false
+      }
+    }
+  ]
+}

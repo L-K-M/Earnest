@@ -30,12 +30,11 @@ Postgres + pgvector.
 
 ## Layout and stack
 
-- Go 1.27, one binary at `cmd/earnest`, stdlib only so far — no `go.sum`.
-  `CGO_ENABLED=0`, `log/slog` only. New code belongs under `internal/`
-  (api/compat/mcp/service/fetcher per `docs/research/tech-stack.md`).
+- Go 1.27, one binary at `cmd/earnest`. `CGO_ENABLED=0`, `log/slog` only.
+  Packages live under `internal/`; the map and layering rules are in
+  `docs/architecture.md`.
 - `Dockerfile`: `golang:1.27-alpine` → `alpine:3.22`, version/revision stamped
-  by `-ldflags` at build time. Add `go.sum` back to its first `COPY` when the
-  first dependency lands.
+  by `-ldflags` at build time.
 - `compose.yaml`: `earnest` (`image:` + `build:` + `pull_policy: build`) and
   `postgres` (`pgvector/pgvector:pg18`).
 

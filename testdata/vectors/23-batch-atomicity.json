@@ -1,0 +1,152 @@
+{
+  "version": 1,
+  "name": "batch-atomicity",
+  "decision": "Invalid syntax, generation, or repeated register targets rejects the entire batch with no state, event or dedupe writes. Gone and expired are valid per-item outcomes, not transaction failures.",
+  "setup": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 1,
+        "seq": 1,
+        "rev": 1
+      }
+    },
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 2,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 2,
+        "seq": 2,
+        "rev": 2
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "batch",
+      "writes": [
+        {
+          "op_id": "a",
+          "entry_id": 1,
+          "register": "seen",
+          "value": "seen"
+        },
+        {
+          "op_id": "b",
+          "entry_id": 2,
+          "register": "shelf",
+          "value": "invalid"
+        }
+      ],
+      "error": "invalid",
+      "expect": null
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "unread": true
+      }
+    },
+    {
+      "op": "batch",
+      "writes": [
+        {
+          "op_id": "a",
+          "entry_id": 1,
+          "register": "seen",
+          "value": "seen"
+        },
+        {
+          "op_id": "b",
+          "entry_id": 2,
+          "register": "shelf",
+          "value": "later"
+        },
+        {
+          "op_id": "missing",
+          "entry_id": 999,
+          "register": "seen",
+          "value": "seen"
+        }
+      ],
+      "expect": [
+        {
+          "status": "applied",
+          "state": {
+            "state_rev": 3
+          }
+        },
+        {
+          "status": "applied",
+          "state": {
+            "state_rev": 3
+          }
+        },
+        {
+          "status": "gone"
+        }
+      ]
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "seen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 2,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "later"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": true
+      }
+    },
+    {
+      "op": "assert_log",
+      "expect": {
+        "revs": [
+          1,
+          2,
+          3
+        ],
+        "types": [
+          "entry.created",
+          "entry.created",
+          "state.updated"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "name": "queue-age",
+  "decision": "Exactly 30 days is accepted. A 29-day range loses to a newer deliberate unread; a 31-day range expires without a change event.",
+  "setup": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 1,
+        "seq": 1,
+        "rev": 1
+      }
+    },
+    {
+      "op": "write",
+      "write": {
+        "op_id": "new-unread",
+        "entry_id": 1,
+        "register": "seen",
+        "value": "unseen"
+      },
+      "at": "2026-11-01T12:00:00Z",
+      "expect": {
+        "status": "applied"
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "range",
+      "write": {
+        "op_id": "29-days",
+        "occurred_at": "2026-10-04T12:00:00Z"
+      },
+      "scope": {
+        "kind": "all"
+      },
+      "expect": {
+        "status": "applied",
+        "except": [
+          1
+        ],
+        "results": [
+          {
+            "status": "superseded"
+          }
+        ]
+      }
+    },
+    {
+      "op": "range",
+      "write": {
+        "op_id": "31-days",
+        "occurred_at": "2026-10-02T12:00:00Z"
+      },
+      "scope": {
+        "kind": "all"
+      },
+      "expect": {
+        "status": "expired",
+        "results": []
+      }
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": true
+      }
+    },
+    {
+      "op": "assert_log",
+      "expect": {
+        "rev": 3,
+        "gapless": true
+      }
+    }
+  ]
+}

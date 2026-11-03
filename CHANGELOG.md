@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Server foundation: the executable sync model with 35 shared test
+  vectors (`docs/sync.md`), the full Postgres schema and migrations,
+  users, sessions, app and agent tokens and the device flow, the
+  outbound client with SSRF controls, feed parsing and OPML, the HTML
+  sanitiser and full-text extraction, the fetcher, the service core for
+  feeds, entries, state and sync, notification transports, metrics and
+  backups. `docs/architecture.md` describes the layout.
 - Decisions on licence, code reuse, the agent model and the round 9 sync
   and security gaps, in `docs/research/decisions.md`.
 - Preliminary research: competitor survey, feature set, UX, tech stack

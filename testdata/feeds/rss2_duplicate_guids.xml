@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Duplicates</title>
+    <link>https://example.com/</link>
+    <item>
+      <title>Same guid first</title>
+      <guid>dupe-guid</guid>
+      <link>https://example.com/a</link>
+      <description>Original body</description>
+    </item>
+    <item>
+      <title>Same guid edited</title>
+      <guid>dupe-guid</guid>
+      <link>https://example.com/b</link>
+      <description>Edited body</description>
+    </item>
+  </channel>
+</rss>

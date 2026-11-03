@@ -1,0 +1,136 @@
+{
+  "version": 1,
+  "name": "late-cluster-member",
+  "decision": "A cluster mark snapshots current membership as one atomic state.updated batch. A later member remains unread until read-time suppression exists at step 10.",
+  "setup": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 1,
+        "seq": 1,
+        "rev": 1
+      }
+    },
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 2,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 2,
+        "seq": 2,
+        "rev": 2
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "cluster",
+      "writes": [
+        {
+          "op_id": "cluster-1",
+          "entry_id": 1,
+          "register": "shelf",
+          "value": "done"
+        },
+        {
+          "op_id": "cluster-2",
+          "entry_id": 2,
+          "register": "shelf",
+          "value": "done"
+        }
+      ],
+      "expect": [
+        {
+          "status": "applied"
+        },
+        {
+          "status": "applied"
+        }
+      ]
+    },
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 3,
+        "subscription_id": 1
+      },
+      "expect": {
+        "seq": 3,
+        "rev": 4
+      }
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "done"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 2,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "done"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": false
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 3,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": true
+      }
+    },
+    {
+      "op": "assert_log",
+      "expect": {
+        "types": [
+          "entry.created",
+          "entry.created",
+          "state.updated",
+          "entry.created"
+        ]
+      }
+    }
+  ]
+}

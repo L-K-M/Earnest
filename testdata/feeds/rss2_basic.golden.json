@@ -1,0 +1,35 @@
+{
+  "feed": {
+    "title": "Basic",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "en",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "https://example.com/1",
+      "url": "https://example.com/1",
+      "title": "First",
+      "author": "",
+      "published": "2006-01-03T15:04:05Z",
+      "summary_html": "Description one",
+      "content_html": "",
+      "language": "en",
+      "identity": "a30961ceb834d247a3b1366d7ed87de632689a19ffb37045dff4e4dff80c9694",
+      "content_hash": "56b44022b3a5dbe4e050642c761ef8d7c379eab740e231d9f3304796de9c4a6c"
+    },
+    {
+      "guid": "second-tag",
+      "url": "https://example.com/2",
+      "title": "Second",
+      "author": "",
+      "published": "2006-01-04T06:07:08Z",
+      "summary_html": "Description two",
+      "content_html": "",
+      "language": "en",
+      "identity": "09ed408c222df1e1bbebfffd53255f304b4f3fb05da719dcb4bb2a7e48a0ff99",
+      "content_hash": "91a69de8a2893b1aff513deb7743c4a264022861427a6f9ac3c7f4868b4c1c1c"
+    }
+  ]
+}

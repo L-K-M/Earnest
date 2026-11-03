@@ -1,0 +1,153 @@
+{
+  "version": 1,
+  "name": "position-live",
+  "decision": "Position is last receipt/commit wins, even when moving backwards. position.updated syncs it live; it never claims any entry was rendered or seen.",
+  "setup": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 1,
+        "seq": 1,
+        "rev": 1
+      }
+    },
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 2,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 2,
+        "seq": 2,
+        "rev": 2
+      }
+    },
+    {
+      "op": "bootstrap_begin",
+      "device": "phone",
+      "expect": {
+        "generation": "g1"
+      }
+    },
+    {
+      "op": "bootstrap_page",
+      "device": "phone",
+      "expect": {}
+    },
+    {
+      "op": "client_pull",
+      "device": "phone",
+      "expect": {
+        "generation": "g1"
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "position",
+      "position": {
+        "principal": 1,
+        "view": "today",
+        "seq": 2
+      },
+      "expect": {
+        "rev": 3
+      }
+    },
+    {
+      "op": "position",
+      "position": {
+        "principal": 1,
+        "view": "today",
+        "seq": 1
+      },
+      "expect": {
+        "rev": 4
+      }
+    },
+    {
+      "op": "client_pull",
+      "device": "phone",
+      "expect": {}
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_position",
+      "position": {
+        "view": "today"
+      },
+      "expect": {
+        "position": {
+          "seq": 1,
+          "rev": 4
+        }
+      }
+    },
+    {
+      "op": "assert_position",
+      "position": {
+        "view": "today"
+      },
+      "device": "phone",
+      "expect": {
+        "position": {
+          "seq": 1,
+          "rev": 4
+        }
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": true
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 2,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": false
+          }
+        },
+        "unread": true
+      }
+    },
+    {
+      "op": "assert_log",
+      "expect": {
+        "types": [
+          "entry.created",
+          "entry.created",
+          "position.updated",
+          "position.updated"
+        ]
+      }
+    }
+  ]
+}

@@ -1,7 +1,6 @@
 // Earnest is an RSS reader for web, Mac and Android, with an API that LLMs
-// can use. This binary is the deployment scaffold: it serves /healthz and
-// reports its build version so the Docker, Compose and update chain is real
-// before the service layer lands (docs/research/ sequence, step 2).
+// can use. It migrates the database before serving /healthz and reports its
+// build version. The service layer adds the reader operations.
 //
 // The container image runs `earnest serve` and probes `earnest healthcheck`
 // for liveness — the runtime image ships no curl on purpose.
@@ -18,6 +17,9 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/L-K-M/Earnest/internal/config"
+	"github.com/L-K-M/Earnest/internal/store"
 )
 
 // Build metadata, stamped via -ldflags "-X main.version=… -X main.revision=…"
@@ -40,21 +42,45 @@ func main() {
 			slog.Error("serve failed", "error", err)
 			os.Exit(1)
 		}
+	case "migrate":
+		if err := migrate(); err != nil {
+			slog.Error("migrate failed", "error", err)
+			os.Exit(1)
+		}
+	case "user", "token", "compat-password":
+		if err := authCommand(os.Args[1:]); err != nil {
+			slog.Error("identity command failed", "error", err)
+			os.Exit(1)
+		}
+	case "generation":
+		if err := rotateGeneration(os.Args[2:]); err != nil {
+			slog.Error("generation rotation failed", "error", err)
+			os.Exit(1)
+		}
 	case "healthcheck":
 		os.Exit(healthcheck())
 	case "version", "--version", "-version":
 		fmt.Printf("earnest %s (%s)\n", version, revision)
 	default:
-		fmt.Fprintf(os.Stderr, "usage: earnest [serve|healthcheck|version]\n")
+		fmt.Fprintf(os.Stderr, "usage: earnest [serve|healthcheck|migrate|version|user|token|compat-password]\n")
 		os.Exit(2)
 	}
 }
 
 func serve() error {
-	addr := os.Getenv("EARNEST_HTTP_ADDR")
-	if addr == "" {
-		addr = ":8080"
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("configuration: %w", err)
 	}
+	slog.SetLogLoggerLevel(cfg.LogLevel)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	db, err := openDatabase(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	addr := cfg.HTTPAddr
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthzHandler)
@@ -66,26 +92,47 @@ func serve() error {
 	}
 
 	go func() {
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-		<-sig
+		<-ctx.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(ctx)
 	}()
 
-	// Wired by compose today, unused by the scaffold — the service layer picks
-	// it up when it lands. Reported (not hidden) so a missing value is visible.
-	db := "not configured"
-	if os.Getenv("EARNEST_DATABASE_URL") != "" {
-		db = "configured"
-	}
-	slog.Info("earnest listening", "addr", addr, "version", version, "revision", revision, "database", db)
+	slog.Info("earnest listening", "addr", addr, "version", version, "revision", revision)
 
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}
 	return nil
+}
+
+// migrate needs only database access, so maintenance does not require app secrets.
+func migrate() error {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	dsn := os.Getenv("EARNEST_DATABASE_URL")
+	if dsn == "" {
+		return fmt.Errorf("EARNEST_DATABASE_URL is required")
+	}
+	db, err := openDatabase(ctx, dsn)
+	if err != nil {
+		return err
+	}
+	db.Close()
+	slog.Info("database migrations complete")
+	return nil
+}
+
+func openDatabase(ctx context.Context, dsn string) (*store.Store, error) {
+	db, err := store.Open(ctx, dsn)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.Migrate(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return db, nil
 }
 
 func healthzHandler(w http.ResponseWriter, _ *http.Request) {
@@ -122,4 +169,27 @@ func healthcheck() int {
 		return 1
 	}
 	return 0
+}
+
+// rotateGeneration invalidates restored cursors before the server starts.
+func rotateGeneration(args []string) error {
+	if len(args) != 1 || args[0] != "rotate" {
+		return fmt.Errorf("usage: earnest generation rotate")
+	}
+	dsn := os.Getenv("EARNEST_DATABASE_URL")
+	if dsn == "" {
+		return fmt.Errorf("EARNEST_DATABASE_URL is required")
+	}
+	ctx := context.Background()
+	db, err := store.Open(ctx, dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	generation, err := db.RotateGeneration(ctx)
+	if err != nil {
+		return fmt.Errorf("rotate generation: %w", err)
+	}
+	fmt.Println(generation)
+	return nil
 }

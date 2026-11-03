@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xml:lang="en-GB">
+  <channel>
+    <title>Languages</title>
+    <link>https://example.com/</link>
+    <item xml:lang="fr">
+      <title>French item</title>
+      <link>https://example.com/fr</link>
+      <guid>fr-1</guid>
+    </item>
+    <item>
+      <title>Inherits feed language</title>
+      <link>https://example.com/en</link>
+      <guid>en-1</guid>
+    </item>
+  </channel>
+</rss>

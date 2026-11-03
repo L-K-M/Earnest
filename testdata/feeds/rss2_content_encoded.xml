@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Content encoded</title>
+    <link>https://example.com/news/</link>
+    <item>
+      <title>Full content</title>
+      <link>https://example.com/news/1</link>
+      <guid>ce-1</guid>
+      <description>&lt;p&gt;Summary with &lt;a href="/about"&gt;link&lt;/a&gt;&lt;/p&gt;</description>
+      <content:encoded><![CDATA[<p>Body with <img src="photo.jpg"> and <a href="more.html">more</a></p>]]></content:encoded>
+    </item>
+  </channel>
+</rss>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <title>Default permalink</title>
+  <link>https://example.com/</link>
+  <item>
+    <title>Guid only</title>
+    <guid>https://example.com/posts/guid-only</guid>
+    <description>No link element</description>
+  </item>
+</channel></rss>

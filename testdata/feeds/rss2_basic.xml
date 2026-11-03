@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Basic</title>
+    <link>https://example.com/</link>
+    <description>Basic feed</description>
+    <language>en</language>
+    <item>
+      <title>First</title>
+      <link>https://example.com/1</link>
+      <guid>https://example.com/1</guid>
+      <pubDate>Tue, 03 Jan 2006 15:04:05 GMT</pubDate>
+      <description>Description one</description>
+    </item>
+    <item>
+      <title>Second</title>
+      <link>https://example.com/2</link>
+      <guid isPermaLink="false">second-tag</guid>
+      <pubDate>2006-01-04T06:07:08Z</pubDate>
+      <description>Description two</description>
+    </item>
+  </channel>
+</rss>

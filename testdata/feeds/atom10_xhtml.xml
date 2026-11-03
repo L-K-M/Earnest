@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>XHTML Atom</title>
+  <entry>
+    <title type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">A <b>bold</b> title &amp; more</div></title>
+    <id>urn:uuid:123e4567-e89b-12d3-a456-426614174000</id>
+    <summary type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">Summary <em>text</em></div></summary>
+    <content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml"><p>Body <a href="page.html">link</a> <img src="pic.png"></p></div></content>
+  </entry>
+</feed>

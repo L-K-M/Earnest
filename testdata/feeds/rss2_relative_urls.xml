@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Relative</title>
+    <link>https://example.com/blog/</link>
+    <image><url>img/logo.png</url><title>Logo</title><link>https://example.com/blog/</link></image>
+    <item>
+      <title>Relative item</title>
+      <link>post/1</link>
+      <guid>relative-1</guid>
+      <description>&lt;a href="/root"&gt;root&lt;/a&gt; and &lt;img src="pic.jpg"&gt;</description>
+      <enclosure url="media/a.mp3" type="audio/mpeg" length="10"/>
+    </item>
+  </channel>
+</rss>

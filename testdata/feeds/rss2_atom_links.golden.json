@@ -1,0 +1,22 @@
+{
+  "feed": {
+    "title": "Atom links",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.com/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "atom-link-item",
+      "url": "https://example.com/posts/1",
+      "title": "Atom link item",
+      "author": "",
+      "summary_html": "No plain link here",
+      "content_html": "",
+      "language": "",
+      "identity": "e86893636e87f219391fee16f6c3f74043af4de15a073283ec23ef0af5be49b0",
+      "content_hash": "fd384a235c0455fcba403d55a76a58a070e0801d566b07682f6a6103e4efb585"
+    }
+  ]
+}

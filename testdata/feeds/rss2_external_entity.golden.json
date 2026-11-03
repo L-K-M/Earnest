@@ -1,0 +1,11 @@
+{
+  "error": "feed: DTD declarations are not allowed",
+  "feed": {
+    "title": "",
+    "site_url": "",
+    "feed_url": "",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": null
+}

@@ -1,0 +1,115 @@
+{
+  "version": 1,
+  "name": "label-tombstones",
+  "decision": "A label object identifies one entry-label membership. Removal retains its rev tombstone; old pages and duplicate event replay cannot resurrect it.",
+  "setup": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 1,
+        "seq": 1,
+        "rev": 1
+      }
+    },
+    {
+      "op": "bootstrap_begin",
+      "device": "phone",
+      "expect": {
+        "generation": "g1"
+      }
+    },
+    {
+      "op": "bootstrap_page",
+      "device": "phone",
+      "expect": {}
+    },
+    {
+      "op": "client_pull",
+      "device": "phone",
+      "expect": {
+        "generation": "g1"
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "object",
+      "object": {
+        "kind": "label",
+        "id": 10,
+        "principal": 1,
+        "entry_id": 1,
+        "name": "work"
+      },
+      "expect": {
+        "rev": 2,
+        "deleted": false
+      }
+    },
+    {
+      "op": "object",
+      "object": {
+        "kind": "label",
+        "id": 10,
+        "principal": 1,
+        "entry_id": 1,
+        "name": "work",
+        "deleted": true
+      },
+      "expect": {
+        "rev": 3,
+        "deleted": true
+      }
+    },
+    {
+      "op": "client_pull",
+      "device": "phone",
+      "expect": {}
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_object",
+      "object": {
+        "kind": "label",
+        "id": 10
+      },
+      "expect": {
+        "exists": true,
+        "object": {
+          "deleted": true,
+          "rev": 3
+        }
+      }
+    },
+    {
+      "op": "assert_object",
+      "object": {
+        "kind": "label",
+        "id": 10
+      },
+      "device": "phone",
+      "expect": {
+        "exists": true,
+        "object": {
+          "deleted": true,
+          "rev": 3
+        }
+      }
+    },
+    {
+      "op": "assert_log",
+      "expect": {
+        "types": [
+          "entry.created",
+          "label.added",
+          "label.removed"
+        ]
+      }
+    }
+  ]
+}

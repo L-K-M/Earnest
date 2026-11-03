@@ -1,0 +1,125 @@
+{
+  "version": 1,
+  "name": "clock-boundaries",
+  "decision": "Future action clocks clamp to receipt, including over 24 hours ahead. Exactly 30 days is accepted and older is expired. A current base applies even when its deliberate clock is slow.",
+  "setup": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 1,
+        "seq": 1,
+        "rev": 1
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "write",
+      "write": {
+        "op_id": "future",
+        "entry_id": 1,
+        "register": "seen",
+        "value": "seen",
+        "occurred_at": "2026-11-04T12:00:00Z"
+      },
+      "expect": {
+        "status": "applied"
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "occurred_at": "2026-11-02T12:00:00Z"
+          }
+        }
+      }
+    },
+    {
+      "op": "write",
+      "write": {
+        "op_id": "exactly-30",
+        "entry_id": 1,
+        "register": "kept",
+        "value": true,
+        "occurred_at": "2026-10-03T12:00:00Z"
+      },
+      "expect": {
+        "status": "applied"
+      }
+    },
+    {
+      "op": "write",
+      "write": {
+        "op_id": "over-30",
+        "entry_id": 1,
+        "register": "shelf",
+        "value": "done",
+        "occurred_at": "2026-10-03T11:59:59Z"
+      },
+      "expect": {
+        "status": "expired"
+      }
+    },
+    {
+      "op": "write",
+      "write": {
+        "op_id": "slow-current",
+        "entry_id": 1,
+        "register": "seen",
+        "value": "unseen",
+        "base_rev": {
+          "generation": "g1",
+          "rev": 2
+        },
+        "occurred_at": "2026-11-02T11:00:00Z"
+      },
+      "expect": {
+        "status": "applied"
+      }
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "value": "unseen"
+          },
+          "shelf": {
+            "value": "none"
+          },
+          "kept": {
+            "value": true
+          }
+        },
+        "unread": true
+      }
+    },
+    {
+      "op": "assert_state",
+      "entry_id": 1,
+      "expect": {
+        "state": {
+          "seen": {
+            "occurred_at": "2026-11-02T11:00:00Z"
+          }
+        }
+      }
+    },
+    {
+      "op": "assert_log",
+      "expect": {
+        "rev": 4
+      }
+    }
+  ]
+}

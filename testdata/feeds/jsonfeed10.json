@@ -1,0 +1,24 @@
+{
+  "version": "https://jsonfeed.org/version/1",
+  "title": "JSON ten",
+  "home_page_url": "https://example.com/",
+  "feed_url": "https://example.com/feed.json",
+  "description": "A JSON feed",
+  "icon": "https://example.com/icon.png",
+  "author": {"name": "Ada", "url": "https://example.com/ada"},
+  "items": [
+    {
+      "id": "1",
+      "url": "https://example.com/posts/1",
+      "title": "JSON item",
+      "content_text": "Plain text body",
+      "summary": "A summary",
+      "date_published": "2026-01-02T03:04:05Z",
+      "date_modified": "2026-01-03T03:04:05Z",
+      "tags": ["tech", "json"],
+      "attachments": [
+        {"url": "https://example.com/file.pdf", "mime_type": "application/pdf", "size_in_bytes": 2048, "title": "Paper"}
+      ]
+    }
+  ]
+}
