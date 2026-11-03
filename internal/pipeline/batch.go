@@ -30,6 +30,8 @@ type EditionBatch interface {
 
 type batchKey struct{}
 
+const openAIBatchFinishStop = "stop"
+
 // WithEditionBatch installs an optional governed batch transport on a worker context.
 func WithEditionBatch(ctx context.Context, batch EditionBatch) context.Context {
 	return context.WithValue(ctx, batchKey{}, batch)
@@ -264,7 +266,8 @@ func (b *openAIEditionBatch) Poll(ctx context.Context, id string, requests []llm
 						Output int `json:"completion_tokens"`
 					} `json:"usage"`
 					Choices []struct {
-						Message struct {
+						FinishReason string `json:"finish_reason"`
+						Message      struct {
 							Content string `json:"content"`
 						} `json:"message"`
 					} `json:"choices"`
@@ -300,6 +303,10 @@ func (b *openAIEditionBatch) Poll(ctx context.Context, id string, requests []llm
 		}
 		if row.Response.Status != http.StatusOK || len(row.Response.Body.Choices) != 1 {
 			outputErr = llm.ErrInvalidOutput
+			continue
+		}
+		if reason := row.Response.Body.Choices[0].FinishReason; reason != "" && reason != openAIBatchFinishStop {
+			outputErr = fmt.Errorf("%w: provider %s stopped early: finish_reason %s", llm.ErrInvalidOutput, route.Provider.Name(), reason)
 			continue
 		}
 		text := row.Response.Body.Choices[0].Message.Content

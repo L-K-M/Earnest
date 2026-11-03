@@ -213,15 +213,31 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 // extractJSONFlag pulls the machine-output flag out of any position so both
 // "earnest --json feeds list" and "earnest feeds list --json" work.
+// Values and arguments after -- remain literal, even when they spell --json.
 func extractJSONFlag(args []string) ([]string, bool) {
 	out := make([]string, 0, len(args))
 	found := false
-	for _, arg := range args {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			out = append(out, args[i:]...)
+			break
+		}
 		if arg == "--json" || arg == "-json" {
 			found = true
 			continue
 		}
 		out = append(out, arg)
+		name, hasValue := flagName(arg)
+		if hasValue || i+1 == len(args) {
+			continue
+		}
+		// These are the value-taking flags registered by the client commands.
+		switch name {
+		case "text", "kind", "note", "entry", "category", "dedupe-key", "view", "feed", "folder", "limit", "cursor", "action", "principal", "since":
+			i++
+			out = append(out, args[i])
+		}
 	}
 	return out, found
 }
