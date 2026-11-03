@@ -113,11 +113,17 @@ func parseJSONFeed(data []byte, opts ParseOptions) (*Feed, error) {
 	}
 
 	for _, raw := range itemRaws {
+		if !deadline.IsZero() && time.Now().After(deadline) {
+			return nil, ErrParseTimeout
+		}
 		m, err := decodeJSONObject(raw)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrMalformed, err)
 		}
 		feed.Items = append(feed.Items, jsonFeedItem(m, base, feed.Language))
+	}
+	if !deadline.IsZero() && time.Now().After(deadline) {
+		return nil, ErrParseTimeout
 	}
 	return feed, nil
 }

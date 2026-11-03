@@ -528,6 +528,15 @@ func TestParseLimits(t *testing.T) {
 	}
 }
 
+func TestJSONFeedMappingDeadline(t *testing.T) {
+	// The single raw item is cheap to scan, but mapping its HTML is expensive.
+	// No later top-level key or raw item can supply a deadline check.
+	doc := `{"items":[{"id":"1","content_html":"` + strings.Repeat("<p>x</p>", 100000) + `"}]}`
+	if _, err := Parse([]byte(doc), ParseOptions{Limits: Limits{Timeout: time.Millisecond}}); !errors.Is(err, ErrParseTimeout) {
+		t.Fatalf("JSON item mapping error = %v, want ErrParseTimeout", err)
+	}
+}
+
 func TestParseTrailingGarbageIsRejected(t *testing.T) {
 	t.Parallel()
 

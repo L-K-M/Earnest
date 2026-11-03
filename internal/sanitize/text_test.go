@@ -14,6 +14,11 @@ func TestText(t *testing.T) {
 			want:  "",
 		},
 		{
+			name:  "sentinel bytes in text are stripped",
+			input: "<p>a\x01b<br>c</p><p>d</p>",
+			want:  "ab\nc\n\nd",
+		},
+		{
 			name:  "plain text",
 			input: "hello world",
 			want:  "hello world",

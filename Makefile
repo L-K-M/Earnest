@@ -25,6 +25,7 @@ build: web-build
 
 test:
 	$(GO) test -race -count=1 ./...
+	sh scripts/backup_test.sh
 
 lint:
 	test -z "$$(gofmt -l cmd internal)"

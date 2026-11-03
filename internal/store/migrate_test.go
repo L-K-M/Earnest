@@ -107,6 +107,27 @@ func TestRejectUnknownSchemaBeforeApplying(t *testing.T) {
 	}
 }
 
+func TestRejectOutOfOrderMigrationBeforeApplying(t *testing.T) {
+	db := migrationDatabase(t)
+	ctx := t.Context()
+	files := fstest.MapFS{
+		"migrations/0001_first.sql": {Data: []byte("CREATE TABLE first_table(id bigint)")},
+		"migrations/0004_later.sql": {Data: []byte("CREATE TABLE later_table(id bigint)")},
+	}
+	if err := db.migrate(ctx, files); err != nil {
+		t.Fatal(err)
+	}
+	files["migrations/0002_inserted.sql"] = &fstest.MapFile{Data: []byte("CREATE TABLE should_not_exist(id bigint)")}
+	files["migrations/0005_latest.sql"] = &fstest.MapFile{Data: []byte("CREATE TABLE latest_table(id bigint)")}
+	if err := db.migrate(ctx, files); err == nil {
+		t.Error("migration predating an applied version was accepted")
+	}
+	var mutated bool
+	if err := db.pool.QueryRow(ctx, "SELECT to_regclass('should_not_exist') IS NOT NULL OR to_regclass('latest_table') IS NOT NULL").Scan(&mutated); err != nil || mutated {
+		t.Fatalf("out-of-order migration set changed the database: %v %v", mutated, err)
+	}
+}
+
 func TestMigrationBindsOnlyLegacyRuleJobs(t *testing.T) {
 	db := migrationDatabase(t)
 	ctx := t.Context()

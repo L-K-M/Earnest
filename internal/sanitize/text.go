@@ -15,10 +15,11 @@ const (
 )
 
 var (
-	textSpace   = regexp.MustCompile("[ \t\n\r\f\v]+")
-	textParaPad = regexp.MustCompile(" *" + paraMark + " *")
-	textLinePad = regexp.MustCompile(" *" + lineMark + " *")
-	textBlank   = regexp.MustCompile("\n{3,}")
+	textSentinels = strings.NewReplacer(paraMark, "", lineMark, "")
+	textSpace     = regexp.MustCompile("[ \t\n\r\f\v]+")
+	textParaPad   = regexp.MustCompile(" *" + paraMark + " *")
+	textLinePad   = regexp.MustCompile(" *" + lineMark + " *")
+	textBlank     = regexp.MustCompile("\n{3,}")
 )
 
 // Text returns the visible text of sanitised HTML with paragraph breaks:
@@ -42,7 +43,7 @@ func Text(htmlStr string) string {
 func writeText(b *strings.Builder, n *html.Node) {
 	switch n.Type {
 	case html.TextNode:
-		b.WriteString(n.Data)
+		b.WriteString(textSentinels.Replace(n.Data))
 
 	case html.ElementNode:
 		if _, skip := invisibleElements[n.Data]; skip {

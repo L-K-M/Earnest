@@ -18,6 +18,82 @@ type subscriptionsProber struct {
 	probe func(context.Context, string, *FeedCredentials) (string, FeedMeta, []IngestItem, error)
 }
 
+func TestNormalizedFeedURLDefaultPorts(t *testing.T) {
+	for _, tc := range []struct{ raw, want string }{
+		{"http://EXAMPLE.test:80", "http://example.test/"},
+		{"https://EXAMPLE.test:443/feed?q=1#fragment", "https://example.test/feed?q=1"},
+		{"http://[2001:db8::1]:80/feed", "http://[2001:db8::1]/feed"},
+		{"https://[2001:db8::1]:443/feed", "https://[2001:db8::1]/feed"},
+		{"https://example.test:80/feed", "https://example.test:80/feed"},
+		{"http://example.test:443/feed", "http://example.test:443/feed"},
+		{"https://example.test:8443/feed", "https://example.test:8443/feed"},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			got, err := normalizedFeedURL(tc.raw)
+			if err != nil || got != tc.want {
+				t.Fatalf("normalized URL = %q, want %q: %v", got, tc.want, err)
+			}
+		})
+	}
+}
+
+func TestSubscribeDeduplicatesDefaultPorts(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	f.s.prober = &subscriptionsProber{}
+	ctx := t.Context()
+	first, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/rss", SubscribeOptions{OpID: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := f.s.Subscribe(ctx, f.a, "https://feeds.test:443/rss", SubscribeOptions{OpID: "second"})
+	if err != nil || first.ID != second.ID || first.FeedID != second.FeedID {
+		t.Fatalf("equivalent URL created another subscription: %+v %+v %v", first, second, err)
+	}
+}
+
+func TestRebindPreservesCanonicalFeedMetadata(t *testing.T) {
+	template := storetest.NewTemplate(t)
+	for _, private := range []bool{false, true} {
+		t.Run(fmt.Sprintf("initial_private_%v", private), func(t *testing.T) {
+			f := newCoreFixture(t, template)
+			ctx := t.Context()
+			f.s.prober = &subscriptionsProber{}
+			opts := SubscribeOptions{Title: "Personal title", OpID: "subscribe"}
+			creds := &FeedCredentials{Username: "reader", Password: "secret"}
+			if private {
+				opts.Credentials = creds
+			}
+			sub, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/rebind", opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.db.Pool().Exec(ctx, "UPDATE feeds SET title='Publisher title',site_url='https://publisher.test/',language='fr' WHERE id=$1", sub.FeedID); err != nil {
+				t.Fatal(err)
+			}
+			update := UpdateSubscriptionOptions{CredentialsSet: true, OpID: "rebind"}
+			if !private {
+				update.Credentials = creds
+			}
+			rebound, err := f.s.UpdateSubscription(ctx, f.a, sub.ID, update)
+			if err != nil || rebound.Title != opts.Title || rebound.FeedID == sub.FeedID {
+				t.Fatalf("rebind: %+v %v", rebound, err)
+			}
+			var title, site, language string
+			if err := f.db.Pool().QueryRow(ctx, "SELECT title,site_url,language FROM feeds WHERE id=$1", rebound.FeedID).Scan(&title, &site, &language); err != nil {
+				t.Fatal(err)
+			}
+			if title != "Publisher title" || site != "https://publisher.test/" || language != "fr" {
+				t.Fatalf("canonical metadata polluted by subscription: title=%q site=%q language=%q", title, site, language)
+			}
+			empty := ""
+			cleared, err := f.s.UpdateSubscription(ctx, f.a, sub.ID, UpdateSubscriptionOptions{Title: &empty, OpID: "clear-title"})
+			if err != nil || cleared.Title != "Publisher title" {
+				t.Fatalf("removing override did not reveal publisher title: %+v %v", cleared, err)
+			}
+		})
+	}
+}
+
 func (p *subscriptionsProber) Probe(ctx context.Context, raw string, credentials *FeedCredentials) (string, FeedMeta, []IngestItem, error) {
 	p.calls.Add(1)
 	if p.probe != nil {

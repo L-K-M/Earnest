@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/L-K-M/Earnest/internal/store"
@@ -61,7 +63,9 @@ func (s *Service) ClaimDueFeeds(ctx context.Context, now time.Time, limit int, l
 			f.Interval = time.Duration(seconds * float64(time.Second))
 			f.Credentials, err = s.openCredentials(encrypted)
 			if err != nil {
-				return err
+				// Keep its lease so bad credentials cannot starve other feeds or spin.
+				slog.Error("skip feed with unreadable credentials", "feed_id", f.FeedID)
+				continue
 			}
 			feeds = append(feeds, f)
 		}
@@ -410,7 +414,7 @@ func (s *Service) fetchHealth(ctx context.Context, tx pgx.Tx, o FetchOutcome, re
 		errorClass = o.ErrorClass
 		message := o.ErrorMessage
 		if len(message) > 1024 {
-			message = message[:1024]
+			message = strings.ToValidUTF8(message[:1024], "")
 		}
 		if private {
 			message = "private feed fetch failed (" + o.ErrorClass + ")"

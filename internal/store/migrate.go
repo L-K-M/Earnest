@@ -82,6 +82,7 @@ func (s *Store) migrate(ctx context.Context, files fs.FS) error {
 		return fmt.Errorf("read migration ledger: %w", err)
 	}
 	applied := make(map[int64]bool)
+	var highestApplied int64
 	for rows.Next() {
 		var version int64
 		var name string
@@ -100,6 +101,7 @@ func (s *Store) migrate(ctx context.Context, files fs.FS) error {
 			return fmt.Errorf("migration %s differs from applied version", file.name)
 		}
 		applied[version] = true
+		highestApplied = max(highestApplied, version)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -108,6 +110,9 @@ func (s *Store) migrate(ctx context.Context, files fs.FS) error {
 	for _, file := range pending {
 		if applied[file.version] {
 			continue
+		}
+		if file.version < highestApplied {
+			return fmt.Errorf("migration %d predates applied migration %d; refusing to apply out of order", file.version, highestApplied)
 		}
 		if err := pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
 			if _, err := tx.Exec(ctx, string(file.body)); err != nil {
