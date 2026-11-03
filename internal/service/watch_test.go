@@ -58,6 +58,75 @@ func TestWatchPausesThenNotifiesWithinBudget(t *testing.T) {
 	}
 }
 
+func TestWatchesSkipRulesCreatedBetweenListQueries(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	initial, err := f.s.CreateWatch(ctx, f.a, WatchRule{Rule: Rule{
+		Name: "Initial watch", Predicate: RulePredicate{Type: RuleSemantic, Value: "beacon"},
+		Actions: []RuleAction{{Type: RuleNotify, Budget: 1}}, Enabled: true,
+	}}, "initial-watch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := f.db.Pool().Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background())
+	if _, err := tx.Exec(ctx, `LOCK TABLE watch_rules IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		watches []WatchRule
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		watches, err := f.s.Watches(ctx, f.a)
+		done <- result{watches, err}
+	}()
+	// Wait until Rules has returned and the watch-policy query is blocked.
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var waiting bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE relation='watch_rules'::regclass AND NOT granted)`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("watch-policy query never waited for the table lock")
+		case <-ticker.C:
+		}
+	}
+	var added int64
+	if err := tx.QueryRow(ctx, `INSERT INTO rules(user_id,source,ast,action,enabled,created_by)
+		SELECT user_id,'Concurrent watch',ast,action,enabled,created_by FROM rules WHERE id=$1 RETURNING id`, initial.ID).Scan(&added); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO watch_rules(rule_id,check_llm,check_budget) VALUES($1,false,3)`, added); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	listed := <-done
+	if listed.err != nil {
+		t.Fatal(listed.err)
+	}
+	if len(listed.watches) != 1 || listed.watches[0].ID != initial.ID {
+		t.Fatalf("list included a watch without a loaded rule: %+v", listed.watches)
+	}
+	// The concurrent watch is complete and visible on the next listing.
+	if watches, err := f.s.Watches(ctx, f.a); err != nil || len(watches) != 2 || watches[1].ID != added {
+		t.Fatalf("next watch listing: %+v %v", watches, err)
+	}
+}
+
 func TestWatchCreationConcurrentReplay(t *testing.T) {
 	f := newCoreFixture(t, storetest.NewTemplate(t))
 	ctx := context.Background()

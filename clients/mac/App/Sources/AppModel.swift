@@ -192,7 +192,7 @@ import AppKit
             if delay > 0 { try? await Task.sleep(for: .milliseconds(Int(delay * 1000))) }
             guard let self, self.session == s, self.loggedIn, !Task.isCancelled else { return }
             self.syncing = true
-            defer { self.syncing = false }
+            defer { if !Task.isCancelled, self.session == s { self.syncing = false } }
             do {
                 let report = try await coordinator.synchronize()
                 guard !Task.isCancelled, self.session == s, self.loggedIn else { return }
