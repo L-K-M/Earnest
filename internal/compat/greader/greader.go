@@ -325,7 +325,7 @@ func (h *handler) editTag(w http.ResponseWriter, r *http.Request, a service.Acto
 			} else {
 				_, err = h.svc.RemoveLabel(r.Context(), a, id, entry, opID())
 			}
-			if err != nil {
+			if err != nil && (act.add || !errors.Is(err, service.ErrNotFound)) {
 				return err
 			}
 		}
@@ -336,6 +336,7 @@ func (h *handler) editTag(w http.ResponseWriter, r *http.Request, a service.Acto
 func (h *handler) markAll(w http.ResponseWriter, r *http.Request, a service.Actor) error {
 	scope := syncmodel.Scope{Kind: syncmodel.ScopeAll}
 	s := r.Form.Get("s")
+	var streamLabel string
 	if s != "" && s != statePrefix+"reading-list" {
 		if strings.HasPrefix(s, "feed/") {
 			subs, err := h.svc.Subscriptions(r.Context(), a)
@@ -352,19 +353,7 @@ func (h *handler) markAll(w http.ResponseWriter, r *http.Request, a service.Acto
 				return service.ErrNotFound
 			}
 		} else if name, ok := labelName(s); ok {
-			folders, err := h.svc.Folders(r.Context(), a)
-			if err != nil {
-				return err
-			}
-			for _, f := range folders {
-				if f.Name == name {
-					scope = syncmodel.Scope{Kind: syncmodel.ScopeFolder, IDs: []syncmodel.ID{syncmodel.ID(f.ID)}}
-					break
-				}
-			}
-			if scope.Kind == syncmodel.ScopeAll {
-				return service.ErrNotFound
-			}
+			streamLabel = name
 		} else {
 			return service.ErrInvalid
 		}
@@ -383,7 +372,12 @@ func (h *handler) markAll(w http.ResponseWriter, r *http.Request, a service.Acto
 		t := time.UnixMicro(n).UTC()
 		req.At = &t
 	}
-	if _, err = h.svc.Through(r.Context(), a, req); err != nil {
+	if streamLabel != "" {
+		_, err = h.svc.GoogleLabelThrough(r.Context(), a, req, streamLabel)
+	} else {
+		_, err = h.svc.Through(r.Context(), a, req)
+	}
+	if err != nil {
 		return err
 	}
 	_, _ = fmt.Fprint(w, "OK")

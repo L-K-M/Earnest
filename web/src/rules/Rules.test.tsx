@@ -106,3 +106,31 @@ it('compiles into the editor, dry runs, and requires confirmation before saving'
   expect((screen.getByRole('button',{name:'Save'}) as HTMLButtonElement).disabled).toBe(false)
   expect(vi.mocked(request).mock.calls.some(([path,options]) => path === '/v1/rules/1' && options?.method === 'PATCH')).toBe(false)
 })
+
+it('retains the operation ID when rule creation is retried', async () => {
+  mount()
+  fireEvent.click(await screen.findByRole('button',{name:'New rule'}))
+  fireEvent.change(screen.getByLabelText('Name'),{target:{value:'Retry'}})
+  const selection = screen.getByLabelText('Condition selection') as HTMLSelectElement
+  selection.options[0].selected = true
+  fireEvent.change(selection)
+  fireEvent.click(screen.getByRole('button',{name:/Dry run/}))
+  await screen.findByText('Would have matched 1 items.')
+  const original = vi.mocked(request).getMockImplementation()!
+  let attempts = 0
+  const bodies: string[] = []
+  vi.mocked(request).mockImplementation(async (path,options) => {
+    if (path === '/v1/rules' && options?.method === 'POST') {
+      bodies.push(String(options.body)); attempts++
+      if (attempts === 1) throw new Error('Lost response')
+      return {}
+    }
+    return original(path,options)
+  })
+  fireEvent.click(screen.getByRole('button',{name:'Save'}))
+  await screen.findByText('Lost response')
+  fireEvent.click(screen.getByRole('button',{name:'Save'}))
+  await waitFor(() => expect(bodies).toHaveLength(2))
+  expect(JSON.parse(bodies[0]).op_id).toBeTruthy()
+  expect(bodies[1]).toBe(bodies[0])
+}, 15000)

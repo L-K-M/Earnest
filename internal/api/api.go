@@ -157,7 +157,7 @@ func (s *server) authenticate(ctx huma.Context, next func(huma.Context)) {
 		} else {
 			a, err = s.auth.ResolveToken(r.Context(), token, service.AudienceAPI)
 		}
-	} else if cookie, cookieErr := r.Cookie(sessionCookie); cookieErr == nil {
+	} else if cookie, cookieErr := r.Cookie(sessionCookie); cookieErr == nil && ctx.Operation().OperationID != "session-login" {
 		a, err = s.auth.ResolveSession(r.Context(), cookie.Value)
 		if err == nil && r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
 			err = s.auth.VerifyCSRF(r.Context(), cookie.Value, r.Header.Get(csrfHeader))

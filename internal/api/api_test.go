@@ -465,3 +465,17 @@ func TestOpenAPIIsCurrent(t *testing.T) {
 		t.Fatal("served OpenAPI differs from command output")
 	}
 }
+
+func TestLoginReplacesExistingSessionWithoutCSRF(t *testing.T) {
+	template := storetest.NewTemplate(t)
+	f := newAPIFixture(t, template)
+	rec := f.do(t, http.MethodPost, "/v1/session/login", loginBody{Username: "reader", Password: "password"}, requestCredentials{cookie: f.cookie})
+	requireStatus(t, rec, http.StatusOK)
+	request := httptest.NewRequest(http.MethodPost, "/v1/session/login", strings.NewReader(`{"username":"reader","password":"password"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", "https://attacker.example")
+	request.AddCookie(f.cookie)
+	denied := httptest.NewRecorder()
+	f.handler.ServeHTTP(denied, request)
+	requireStatus(t, denied, http.StatusForbidden)
+}

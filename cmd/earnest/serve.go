@@ -115,7 +115,7 @@ func serve() error {
 		return fmt.Errorf("recover notification attempts: %w", err)
 	}
 
-	proxy, err := imageproxy.New(cfg.SecretKey, egress, cfg.ContentOrigin)
+	proxy, err := imageproxy.New(cfg.SecretKey, egress, cfg.ContentOrigin, privatePorts(cfg.OutboundAllowPrivate)...)
 	if err != nil {
 		return fmt.Errorf("image proxy: %w", err)
 	}

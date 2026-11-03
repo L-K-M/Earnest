@@ -117,3 +117,47 @@ func TestRewriteModes(t *testing.T) {
 		}
 	}
 }
+
+func TestRewriteDropsUnsupportedImageSources(t *testing.T) {
+	c, err := outbound.New(outbound.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := New([]byte(strings.Repeat("s", 32)), c, "https://reader.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []Mode{Proxied, ClickToLoad} {
+		out, err := p.Rewrite(`<p>Article</p><img src="https://user:pass@example.com/a"><img src="https://example.com/b">`, mode)
+		if err != nil || !strings.Contains(out, "Article") || strings.Contains(out, "user:pass") || !strings.Contains(out, "/img/") {
+			t.Fatalf("mode %d: %q %v", mode, out, err)
+		}
+	}
+}
+
+func TestConfiguredExtraPort(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "\x89PNG\r\n\x1a\n"+strings.Repeat("x", 20))
+	}))
+	defer s.Close()
+	c, err := outbound.New(outbound.Config{AllowHosts: []string{s.Listener.Addr().String()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := url.Parse(s.URL)
+	n, _ := strconv.Atoi(u.Port())
+	without, err := New([]byte(strings.Repeat("s", 32)), c, "https://reader.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := request(t, without, s.URL); w.Code != http.StatusBadGateway {
+		t.Fatalf("without configured port: %d", w.Code)
+	}
+	p, err := New([]byte(strings.Repeat("s", 32)), c, "https://reader.example", uint16(n))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := request(t, p, s.URL); w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+}

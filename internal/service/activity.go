@@ -151,6 +151,19 @@ func (s *Service) activityNext(ctx context.Context, tx pgx.Tx, a Actor, row *Act
 			row.Reason = "annotation changed after this action"
 			return nil
 		}
+		if row.Action == "annotation.deleted" {
+			var replaced bool
+			err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM annotations old JOIN annotations current
+ ON current.user_id=old.user_id AND current.principal_id=old.principal_id AND current.kind=old.kind AND current.entry_ids=old.entry_ids
+ WHERE old.id=$1 AND current.id<>old.id AND current.deleted_at IS NULL)`, target.ID).Scan(&replaced)
+			if err != nil {
+				return fmt.Errorf("check annotation replacement: %w", err)
+			}
+			if replaced {
+				row.Reason = "annotation was replaced"
+				return nil
+			}
+		}
 		row.NextAction = ActivityRevert
 	case "position.updated":
 		var after struct {
@@ -293,10 +306,12 @@ func (s *Service) revertTx(ctx context.Context, tx pgx.Tx, a Actor, id int64, op
 	}
 	if row.PrincipalID != a.PrincipalID {
 		var kind PrincipalKind
-		if err := tx.QueryRow(ctx, "SELECT kind FROM principals WHERE id=$1", row.PrincipalID).Scan(&kind); err != nil {
+		var name string
+		if err := tx.QueryRow(ctx, "SELECT kind,name FROM principals WHERE id=$1 AND user_id=$2", row.PrincipalID, a.UserID).Scan(&kind, &name); err != nil {
 			return err
 		}
-		if a.Kind != PrincipalHuman || kind != PrincipalAgent {
+		ruleState := kind == PrincipalPipeline && name == "Rules" && row.Action == "state.updated"
+		if a.Kind != PrincipalHuman || (kind != PrincipalAgent && !ruleState) {
 			return ErrForbidden
 		}
 	}
@@ -308,7 +323,11 @@ func (s *Service) revertTx(ctx context.Context, tx pgx.Tx, a Actor, id int64, op
 	}
 	switch row.Action {
 	case "state.updated":
-		if err := s.stateActor(ctx, a); err != nil {
+		scope := ScopeStateWrite
+		if a.Kind == PrincipalAgent {
+			scope = ScopeStateWriteHuman
+		}
+		if err := checkActorQuery(ctx, tx, a, scope); err != nil {
 			return err
 		}
 		var before, after syncmodel.State
@@ -340,7 +359,7 @@ func (s *Service) revertTx(ctx context.Context, tx pgx.Tx, a Actor, id int64, op
 			return syncError(err)
 		}
 	case "annotation.updated", "annotation.deleted":
-		if err := s.checkActor(ctx, a, ScopeAnnotationsWrite); err != nil {
+		if err := checkActorQuery(ctx, tx, a, ScopeAnnotationsWrite); err != nil {
 			return err
 		}
 		var target struct{ ID int64 }
@@ -388,7 +407,7 @@ func (s *Service) revertTx(ctx context.Context, tx pgx.Tx, a Actor, id int64, op
 		if a.Kind == PrincipalAgent {
 			scope = ScopePositionOwn
 		}
-		if err := s.checkActor(ctx, a, scope); err != nil {
+		if err := checkActorQuery(ctx, tx, a, scope); err != nil {
 			return err
 		}
 		var target struct {
@@ -430,31 +449,52 @@ func (s *Service) revertTx(ctx context.Context, tx pgx.Tx, a Actor, id int64, op
 }
 
 // AgentChangesToUnseen reports changes whose human seen register was unseen before the action.
-func (s *Service) AgentChangesToUnseen(ctx context.Context, a Actor, since time.Time) ([]Activity, error) {
+func (s *Service) AgentChangesToUnseen(ctx context.Context, a Actor, since time.Time, pages ...ActivityFilter) ([]Activity, error) {
 	if a.Kind != PrincipalHuman {
 		return nil, ErrForbidden
 	}
-	rows, err := s.ListActivity(ctx, a, ActivityFilter{Action: "state.updated", Since: since, Limit: 1000})
-	if err != nil {
+	if err := s.checkActor(ctx, a, ScopeEntriesRead); err != nil {
 		return nil, err
 	}
-	out := []Activity{}
-	for _, r := range rows {
-		var before syncmodel.State
-		if err := json.Unmarshal(r.Before, &before); err != nil {
-			return nil, err
-		}
-		if int64(before.Principal) == a.PrincipalID && before.Seen.Value == syncmodel.Unseen {
-			var agent bool
-			if err := s.store.Pool().QueryRow(ctx, "SELECT kind='agent' FROM principals WHERE id=$1", r.PrincipalID).Scan(&agent); err != nil {
-				return nil, err
-			}
-			if agent {
-				out = append(out, r)
-			}
-		}
+	f := ActivityFilter{Limit: 1000}
+	if len(pages) > 0 {
+		f = pages[0]
 	}
-	return out, nil
+	if f.Limit == 0 {
+		f.Limit = 1000
+	}
+	if f.Limit < 1 || f.Limit > 1000 || f.AfterID < 0 {
+		return nil, ErrInvalid
+	}
+	out := []Activity{}
+	err := s.store.WithTx(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT a.id,a.principal_id,p.name,a.action,a.target,a.before,a.after,a.generation::text,a.created_at
+ FROM activity a JOIN principals p ON p.id=a.principal_id
+ WHERE a.user_id=$1 AND p.kind='agent' AND a.action='state.updated' AND a.created_at >= $2 AND a.id > $3
+ AND a.before->>'principal'=$4 AND a.before->'seen'->>'value'='unseen' ORDER BY a.id LIMIT $5`, a.UserID, since, f.AfterID, fmt.Sprint(a.PrincipalID), f.Limit)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var r Activity
+			if err := rows.Scan(&r.ID, &r.PrincipalID, &r.PrincipalName, &r.Action, &r.Target, &r.Before, &r.After, &r.Generation, &r.CreatedAt); err != nil {
+				rows.Close()
+				return err
+			}
+			out = append(out, r)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for i := range out {
+			if err := s.activityNext(ctx, tx, a, &out[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return out, err
 }
 
 // Human undo of an agent's own register uses the same resolver after ownership

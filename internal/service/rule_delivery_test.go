@@ -22,7 +22,7 @@ func TestRuleDeliveries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rule, err := f.s.CreateRule(ctx, f.a, Rule{Name: "Funding watch", Enabled: true, Predicate: RulePredicate{Type: RuleKeyword, Terms: []string{"funding"}}, Actions: []RuleAction{{Type: RuleNotify, Budget: 1}, {Type: RuleWebhook, WebhookID: hook.ID}}})
+	rule, err := f.s.CreateRule(ctx, f.a, Rule{Name: "Funding watch", Enabled: true, Predicate: RulePredicate{Type: RuleKeyword, Terms: []string{"funding"}}, Actions: []RuleAction{{Type: RuleNotify, Budget: 1}, {Type: RuleWebhook, WebhookID: hook.ID}}}, "create-rule")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -43,7 +43,8 @@ type Proxy struct {
 
 // New creates a proxy using a deployment secret and the public origin at
 // which /img/ is served. The secret must have at least 32 bytes of entropy.
-func New(secret []byte, client *outbound.Client, origin string) (*Proxy, error) {
+// Extra ports must correspond to explicitly allowed outbound destinations.
+func New(secret []byte, client *outbound.Client, origin string, extraPorts ...uint16) (*Proxy, error) {
 	if len(secret) < 32 || client == nil {
 		return nil, errors.New("imageproxy: secret or client missing")
 	}
@@ -55,7 +56,7 @@ func New(secret []byte, client *outbound.Client, origin string) (*Proxy, error) 
 	if err != nil {
 		return nil, fmt.Errorf("derive image key: %w", err)
 	}
-	return &Proxy{key: key, client: client, base: u}, nil
+	return &Proxy{key: key, client: client, base: u, extraPorts: append([]uint16(nil), extraPorts...)}, nil
 }
 
 // URL returns a signed proxy URL for a source image.
@@ -77,7 +78,12 @@ func (p *Proxy) Rewrite(input string, mode Mode) (string, error) {
 	if mode != Proxied && mode != ClickToLoad {
 		return "", errors.New("imageproxy: invalid mode")
 	}
-	rewritten, err := sanitize.RewriteImages(input, p.URL)
+	rewritten, err := sanitize.RewriteImages(input, func(source *url.URL) (*url.URL, error) {
+		if source.User != nil || source.Host == "" || (source.Scheme != "http" && source.Scheme != "https") {
+			return nil, nil
+		}
+		return p.URL(source)
+	})
 	if err != nil {
 		return "", fmt.Errorf("rewrite images: %w", err)
 	}
