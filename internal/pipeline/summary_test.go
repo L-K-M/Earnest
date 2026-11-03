@@ -80,6 +80,9 @@ func TestGenerateBlurb(t *testing.T) {
 	if err != nil || !claim.Verified || claim.Text != "A small finding." {
 		t.Fatalf("claim %+v, error %v", claim, err)
 	}
+	if f.task != llm.TaskBlurb {
+		t.Fatalf("blurb task = %s, want %s", f.task, llm.TaskBlurb)
+	}
 	for _, response := range []string{
 		`{"claims":[{"text":"Two\nlines","passages":["small finding"]}]}`,
 		`{"claims":[{"text":"Link https://evil.test","passages":["small finding"]}]}`,

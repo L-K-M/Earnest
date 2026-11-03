@@ -258,6 +258,17 @@ public final class SyncEngine {
         for state in states { merge(state, into: &data.states) }
         try store.save(data)
     }
+    /// Merge a fetched list or individual entry response only into its request's generation.
+    public func mergeEntries(_ entries: [APIEntry], generation: String) throws {
+        var data = try store.load()
+        guard data.cursor?.generation == generation else { throw SyncError.generationMismatch }
+        for entry in entries {
+            let item = try JSONDecoder().decode(APIValue.self, from: JSONEncoder().encode(entry))
+            merge(entry: try require(SyncEntry(item), "entries"), into: &data)
+            merge(state: try require(State(item["state"] ?? .null), "state"), into: &data)
+        }
+        try store.save(data)
+    }
     /// Merge one `/v1/bootstrap/{kind}` page. Kinds are the endpoint's names:
     /// "entries", "state", "subscriptions", "folders", "labels",
     /// "label_memberships", "positions". Pages merge idempotently by revision.

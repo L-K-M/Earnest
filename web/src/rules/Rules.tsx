@@ -114,9 +114,19 @@ function Watches({watches, onChanged}: {watches: components['schemas']['WatchRul
   const [checkBudget,setCheckBudget] = useState(3)
   const [error,setError] = useState('')
   const [busy,setBusy] = useState(false)
-  async function submit(path: string, method: string, body?: components['schemas']['WatchBody']) {
+  const pendingCreation = useRef<{payload:string; opID:string} | null>(null)
+  async function submit(path: string, method: string, body?: Omit<components['schemas']['WatchBody'],'op_id'>) {
     setBusy(true);setError('')
-    try {await request(path,{method,body:body && JSON.stringify(body)});onChanged();if(body){setName('');setDescription('')}}
+    try {
+      let serializedBody: string | undefined
+      if (body) {
+        const payload = JSON.stringify(body)
+        if (pendingCreation.current?.payload !== payload) pendingCreation.current = {payload,opID:crypto.randomUUID()}
+        serializedBody = JSON.stringify({...body,op_id:pendingCreation.current.opID})
+      }
+      await request(path,{method,body:serializedBody});onChanged()
+      if(body){pendingCreation.current=null;setName('');setDescription('')}
+    }
     catch(error) {setError(message(error))}
     finally {setBusy(false)}
   }

@@ -51,12 +51,13 @@ public struct APIEntry: Codable, Sendable, Identifiable {
     public let id, subscriptionID, feedID, seq: Int64
     public let firstSeenAt, title, url, author: String
     public let publishedAt, updatedAt: String?
+    public let blurb: String?
     public let rev: Int64
     public let deleted: Bool
     public let state: APIState
     enum CodingKeys: String, CodingKey {
         case id, subscriptionID = "subscription_id", feedID = "feed_id", seq, firstSeenAt = "first_seen_at"
-        case title, url, author, publishedAt = "published_at", updatedAt = "updated_at", rev, deleted, state
+        case title, url, author, publishedAt = "published_at", updatedAt = "updated_at", blurb, rev, deleted, state
     }
 }
 public struct EntriesPage: Codable, Sendable {
@@ -224,7 +225,21 @@ public final class EarnestAPI: Sendable {
         _ = try await generated { try await client.unsubscribe(.init(path: .init(id: subscriptionID), query: .init(opId: UUID().uuidString))).ok.body.json }
     }
     public func activity() async throws -> [APIValue] {
-        try await generated { try adapt(try await client.listActivity(.init(query: .init(limit: 1000))).ok.body.json.activities ?? []) }
+        let limit = 1000
+        var afterID: Int64 = 0
+        var all: [APIValue] = []
+        while true {
+            try Task.checkCancellation()
+            let page: [APIValue] = try await generated {
+                try adapt(try await client.listActivity(.init(query: .init(afterId: afterID, limit: Int64(limit)))).ok.body.json.activities ?? [])
+            }
+            if let last = page.last {
+                guard let next = last["id"]?.int64Value, next > afterID else { throw APIError.invalidResponse }
+                afterID = next
+            }
+            all.append(contentsOf: page)
+            if page.count < limit { return all }
+        }
     }
     public func agentChanges(since: Date = Date().addingTimeInterval(-86400)) async throws -> [APIValue] {
         try await generated { try adapt(try await client.agentChanges(.init(query: .init(since: since))).ok.body.json ?? []) }

@@ -168,11 +168,17 @@ func (s *Service) RunPipeline(ctx context.Context, limit int) (int, error) {
 				break
 			}
 			if err != nil {
-				return processed, err
+				if deferErr := s.deferClassifier(ctx, entry, model); deferErr != nil {
+					return processed, deferErr
+				}
+				continue
 			}
 			hash := content.Hash()
 			if err := s.store.ClassifySave(ctx, entry, model, pipeline.ClassifierPromptVersion, hash[:], labels); err != nil {
 				return processed, err
+			}
+			if _, err := s.store.Pool().Exec(ctx, `DELETE FROM jobs WHERE unique_key=$1 AND kind='classify'`, classifierRetryKey(entry.ID)); err != nil {
+				return processed, fmt.Errorf("clear classifier retry: %w", err)
 			}
 			processed++
 		}

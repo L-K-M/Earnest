@@ -52,6 +52,10 @@ func (s *Service) Search(ctx context.Context, a Actor, query string, f SearchFil
 		return nil, ErrInvalid
 	}
 	if f.Mode == SearchHybrid {
+		// Agent-controlled queries must never be sent to a model provider.
+		if a.Kind != PrincipalHuman {
+			return nil, ErrForbidden
+		}
 		return s.hybridSearch(ctx, a, query, f, cursor)
 	}
 	limit := f.Limit

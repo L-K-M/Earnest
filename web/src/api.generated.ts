@@ -1995,6 +1995,7 @@ export interface components {
             description: string;
             enabled: boolean;
             name: string;
+            op_id: string;
         };
         WatchRule: {
             actions: components["schemas"]["RuleAction"][] | null;

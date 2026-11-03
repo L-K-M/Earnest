@@ -22,9 +22,14 @@ func (s *Store) EmbedPending(ctx context.Context, model string, limit int) ([]Em
 	return s.pipelinePending(ctx, `NOT EXISTS(SELECT 1 FROM embeddings x WHERE x.entry_id=e.id AND x.model=$1 AND x.content_hash=e.content_hash AND x.input_title=e.title)`, model, "", limit)
 }
 
-// ClassifyPending returns current entries not classified with this prompt/model.
+// ClassifyPending returns current entries not classified with this prompt/model,
+// excluding failed inputs until their durable retry delay has elapsed.
 func (s *Store) ClassifyPending(ctx context.Context, model, version string, limit int) ([]EmbedEntry, error) {
-	return s.pipelinePending(ctx, `NOT EXISTS(SELECT 1 FROM classifier_results x WHERE x.entry_id=e.id AND x.model=$1 AND x.prompt_version=$3 AND x.content_hash=e.content_hash AND x.input_title=e.title)`, model, version, limit)
+	return s.pipelinePending(ctx, `NOT EXISTS(SELECT 1 FROM classifier_results x WHERE x.entry_id=e.id AND x.model=$1 AND x.prompt_version=$3 AND x.content_hash=e.content_hash AND x.input_title=e.title)
+ AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.unique_key='classify/'||e.id::text AND j.kind='classify'
+ AND j.payload->>'model'=$1 AND j.payload->>'prompt_version'=$3
+ AND j.payload->>'content_hash'=encode(e.content_hash,'hex') AND j.payload->>'input_title'=e.title
+ AND j.run_at>now())`, model, version, limit)
 }
 
 func (s *Store) pipelinePending(ctx context.Context, predicate, model, version string, limit int) ([]EmbedEntry, error) {

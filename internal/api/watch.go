@@ -10,6 +10,7 @@ import (
 // A watch is a notify-only semantic rule: the embedded description matches
 // continuously, optionally confirmed by an LLM check within a daily budget.
 type watchBody struct {
+	OpID        string `json:"op_id" minLength:"1" maxLength:"1024"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Enabled     bool   `json:"enabled"`
@@ -34,7 +35,7 @@ func (s *server) watchRoutes() {
 			},
 			CheckLLM:    b.CheckLLM,
 			CheckBudget: b.CheckBudget,
-		})
+		}, b.OpID)
 		return watch, pipelineErr(err)
 	})
 	route(s, http.MethodDelete, "/v1/watch-rules/{id}", "delete-watch-rule", func(ctx context.Context, in *idInput) (empty, error) {
