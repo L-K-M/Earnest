@@ -101,7 +101,7 @@ jobs:
           # time without carrying logic: the OpenAPI document and its generated
           # client are checked for staleness in CI, and fixtures are exercised by
           # the tests that read them. The sync vectors stay in scope.
-          EXCLUDE_PATTERNS: "api/openapi.json,web/src/api.generated.ts,**/pnpm-lock.yaml,go.sum,testdata/feeds/**,testdata/sanitize/**,internal/web/dist/**,clients/android/gradle/**,clients/android/gradlew,clients/android/gradlew.bat"
+          EXCLUDE_PATTERNS: "api/openapi.json,web/src/api.generated.ts,**/pnpm-lock.yaml,go.sum,**/go.sum,testdata/feeds/**,testdata/sanitize/**,internal/web/dist/**,clients/android/gradle/**,clients/android/gradlew,clients/android/gradlew.bat"
           ZAI_REVIEWER_NAME: GLM 5.3 Code Review
           GITHUB_TOKEN: ${{ github.token }}
 
