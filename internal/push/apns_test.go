@@ -164,7 +164,7 @@ func TestAPNsProductionHost(t *testing.T) {
 		wantHost string
 	}{
 		{"production", false, "https://api.push.apple.com"},
-		{"sandbox", true, "https://api.sandbox.apple.com"},
+		{"sandbox", true, "https://api.sandbox.push.apple.com"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

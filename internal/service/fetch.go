@@ -73,7 +73,11 @@ func (s *Service) ClaimDueFeeds(ctx context.Context, now time.Time, limit int, l
 	return feeds, nil
 }
 
-// KnownIdentities includes retention tombstones so a refresh cannot resurrect them.
+// KnownIdentities reports which feed identities need no extraction work.
+// Live entries count as known only when their current content already caches
+// an extracted version; feed-sourced entries stay unknown so the caller can
+// retry extraction. Every retention tombstone is always known so a refresh
+// can neither resurrect it nor fetch it again.
 func (s *Service) KnownIdentities(ctx context.Context, feedID int64, hashes []string) (map[string]bool, error) {
 	if feedID <= 0 || len(hashes) > maxFetchItems {
 		return nil, ErrInvalid
@@ -86,7 +90,10 @@ func (s *Service) KnownIdentities(ctx context.Context, feedID int64, hashes []st
 			return nil, err
 		}
 	}
-	rows, err := s.store.Pool().Query(ctx, "SELECT identity_hash FROM entries WHERE feed_id=$1 AND identity_hash=ANY($2::bytea[])", feedID, raw)
+	rows, err := s.store.Pool().Query(ctx, `SELECT e.identity_hash FROM entries e
+ WHERE e.feed_id=$1 AND e.identity_hash=ANY($2::bytea[])
+ AND (e.deleted_at IS NOT NULL OR EXISTS(SELECT 1 FROM contents c
+  WHERE c.entry_id=e.id AND c.content_hash=e.content_hash AND c.source='extracted'))`, feedID, raw)
 	if err != nil {
 		return nil, fmt.Errorf("known identities: %w", err)
 	}
@@ -191,8 +198,14 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 		var intervalSeconds float64
 		var failures int
 		var private bool
-		if err := tx.QueryRow(ctx, `SELECT extract(epoch FROM fetch_interval)::double precision,consecutive_failures,owner_user_id IS NOT NULL FROM feeds WHERE id=$1 FOR UPDATE`, outcome.FeedID).Scan(&intervalSeconds, &failures, &private); err != nil {
+		var oldTitle, oldSite string
+		if err := tx.QueryRow(ctx, `SELECT extract(epoch FROM fetch_interval)::double precision,consecutive_failures,owner_user_id IS NOT NULL,title,coalesce(site_url,'') FROM feeds WHERE id=$1 FOR UPDATE`, outcome.FeedID).Scan(&intervalSeconds, &failures, &private, &oldTitle, &oldSite); err != nil {
 			return domainError(err)
+		}
+		titleChanged, siteChanged := false, false
+		if outcome.Status != FetchFailed && outcome.Feed != nil {
+			titleChanged = oldTitle != outcome.Feed.Title
+			siteChanged = oldSite != outcome.Feed.SiteURL
 		}
 		changes := make([]ingestChange, 0, len(prepared))
 		for _, p := range prepared {
@@ -236,27 +249,30 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 			changes = append(changes, p)
 			summary.Updated++
 		}
-		rows, err := tx.Query(ctx, "SELECT user_id,id,initial_fetch_pending FROM subscriptions WHERE feed_id=$1 AND deleted_at IS NULL ORDER BY user_id", outcome.FeedID)
+		rows, err := tx.Query(ctx, "SELECT user_id,id,initial_fetch_pending,title_override IS NULL FROM subscriptions WHERE feed_id=$1 AND deleted_at IS NULL ORDER BY user_id", outcome.FeedID)
 		if err != nil {
 			return fmt.Errorf("ingest subscribers: %w", err)
 		}
 		type subscriber struct {
 			user, id       int64
 			initialPending bool
+			update         bool
 		}
 		subscribers := []subscriber{}
 		counts := map[int64]int64{}
 		for rows.Next() {
 			var sub subscriber
-			if err := rows.Scan(&sub.user, &sub.id, &sub.initialPending); err != nil {
+			var inheritsTitle bool
+			if err := rows.Scan(&sub.user, &sub.id, &sub.initialPending, &inheritsTitle); err != nil {
 				rows.Close()
 				return err
 			}
+			sub.update = (sub.initialPending && outcome.Status == FetchOK) || siteChanged || (titleChanged && inheritsTitle)
 			subscribers = append(subscribers, sub)
 			if len(changes) > 0 {
 				counts[sub.user] = int64(len(changes))
 			}
-			if sub.initialPending && outcome.Status == FetchOK {
+			if sub.update {
 				counts[sub.user]++
 			}
 		}
@@ -313,16 +329,24 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 				return err
 			}
 		}
+		interval := time.Duration(intervalSeconds * float64(time.Second))
+		if err := s.fetchHealth(ctx, tx, outcome, receipt, interval, failures, private, summary); err != nil {
+			return err
+		}
 
 		// Finalise only the initial cohort. Later backdated arrivals remain new
 		// by first_seen, regardless of the publisher's display timestamp.
 		for _, sub := range subscribers {
-			if !sub.initialPending || outcome.Status != FetchOK {
+			if !sub.update {
 				continue
 			}
 			rev := allocation.Revs[sub.user].First + int64(len(changes))
-			if _, err := tx.Exec(ctx, `UPDATE subscriptions SET initial_through_seq=(SELECT coalesce(max(seq),0) FROM entries WHERE feed_id=$2),initial_fetch_pending=false,rev=$3 WHERE id=$1`, sub.id, outcome.FeedID, rev); err != nil {
-				return fmt.Errorf("initial subscription boundary: %w", err)
+			if sub.initialPending && outcome.Status == FetchOK {
+				if _, err := tx.Exec(ctx, `UPDATE subscriptions SET initial_through_seq=(SELECT coalesce(max(seq),0) FROM entries WHERE feed_id=$2),initial_fetch_pending=false,rev=$3 WHERE id=$1`, sub.id, outcome.FeedID, rev); err != nil {
+					return fmt.Errorf("initial subscription boundary: %w", err)
+				}
+			} else if _, err := tx.Exec(ctx, "UPDATE subscriptions SET rev=$2 WHERE id=$1", sub.id, rev); err != nil {
+				return fmt.Errorf("subscription metadata revision: %w", err)
 			}
 			subscription, err := subscriptionTx(ctx, tx, sub.user, sub.id)
 			if err != nil {
@@ -332,8 +356,7 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 				return err
 			}
 		}
-		interval := time.Duration(intervalSeconds * float64(time.Second))
-		return s.fetchHealth(ctx, tx, outcome, receipt, interval, failures, private, summary)
+		return nil
 	})
 	if err != nil {
 		return IngestSummary{}, err

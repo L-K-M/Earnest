@@ -309,6 +309,13 @@ func (s *Service) Through(ctx context.Context, a Actor, request ThroughRequest) 
 		return syncmodel.RangeResult{}, ErrInvalid
 	}
 	receipt := s.now().UTC()
+	// A plain MVCC read excludes ingest still holding the mutation lock.
+	var receiptSeq uint64
+	if request.ThroughSeq == nil && request.At == nil {
+		if err := s.store.Pool().QueryRow(ctx, "SELECT value FROM seq_counter WHERE singleton").Scan(&receiptSeq); err != nil {
+			return syncmodel.RangeResult{}, fmt.Errorf("receipt range boundary: %w", err)
+		}
+	}
 	var result syncmodel.RangeResult
 	err := s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
@@ -366,7 +373,7 @@ func (s *Service) Through(ctx context.Context, a Actor, request ThroughRequest) 
 		case request.At != nil:
 			err = tx.QueryRow(ctx, `SELECT coalesce(max(e.seq),0) FROM entries e JOIN subscriptions s ON e.feed_id=s.feed_id WHERE s.user_id=$1 AND s.deleted_at IS NULL AND e.first_seen_at<=$2`, a.UserID, *request.At).Scan(&through)
 		default:
-			err = tx.QueryRow(ctx, "SELECT value FROM seq_counter WHERE singleton").Scan(&through)
+			through = receiptSeq
 		}
 		if err != nil {
 			return fmt.Errorf("range boundary: %w", err)

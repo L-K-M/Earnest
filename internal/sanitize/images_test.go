@@ -158,6 +158,23 @@ func TestRewriteImages(t *testing.T) {
 		}
 	})
 
+	t.Run("siblings after a dropped image still processed", func(t *testing.T) {
+		input := `<img src="https://e.example/a.png"><p>x</p><img src="https://e.example/b.png">`
+		got, err := RewriteImages(input, func(u *url.URL) (*url.URL, error) {
+			if strings.Contains(u.String(), "a.png") {
+				return nil, nil
+			}
+			return proxy(u)
+		})
+		if err != nil {
+			t.Fatalf("RewriteImages: %v", err)
+		}
+		want := `<p>x</p><img src="https://proxy.example/i?u=https%3A%2F%2Fe.example%2Fb.png"/>`
+		if got != want {
+			t.Errorf("got  %q\nwant %q", got, want)
+		}
+	})
+
 	t.Run("rewrite error propagated", func(t *testing.T) {
 		wantErr := "boom"
 		_, err := RewriteImages(`<img src="https://e.example/a.png">`, func(*url.URL) (*url.URL, error) {

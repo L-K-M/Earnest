@@ -148,13 +148,20 @@ per principal and view, last committed writer wins, including backward moves.
 (25). Folder and annotation update events complete their bootstrap lifecycle
 (29).
 
+Subscribing or rebinding to a shared feed atomically emits entry backfill events
+with fresh entry revisions, including tombstones. This covers entries whose
+IDs an ongoing bootstrap already passed. Feed title and site URL changes emit
+subscription updates with fresh revisions for each affected subscriber;
+an overridden title alone does not change when the feed title changes.
+
 Read the current cursor first, then replace the local server cache and page all
 resources by stable ID, including cached-window entries and state. Preserve the
 pending outbox. Merge pages and replayed changes by the higher object revision;
 merge state independently by each register revision, taking the maximum
 `state_rev`. An older range can fill an older register while leaving newer
-registers alone (13, 21). Do not create state for unknown or deleted entry IDs
-when replaying state events.
+registers alone (13, 21, 38), and a stale response row cannot erase a register
+a newer row already delivered (36). Do not create state for unknown or deleted
+entry IDs when replaying state events.
 
 Persist a whole change page and its cursor atomically. Check contiguous
 revisions before applying it. A partial page with the final cursor is invalid;
@@ -172,10 +179,13 @@ Retain it if a later seen action coalesces away that unread, so Done cannot
 reappear (32). Reserve this generated ID suffix in client operation IDs. Do not
 replace an operation already in flight: retain its exact payload for retries,
 and queue a new ID for a subsequent action. An acknowledgement removes only its
-own ID, so a late response cannot erase a newer replacement. Ranges are tagged
-outbox items with their original scope, action clock and fixed boundary. Keep
-them in order with register writes and overlay them only on locally cached
-members. Do not expand them into cached IDs because the server also holds
+own ID, so a late response cannot erase a newer replacement. Accept a response
+only in the generation its request was sent under: a response from a superseded
+generation is rejected whole, before merging results or removing the operation,
+so the preserved outbox item still replays into the new generation (37). Ranges
+are tagged outbox items with their original scope, action clock and fixed
+boundary. Keep them in order with register writes and overlay them only on
+locally cached members. Do not expand them into cached IDs because the server also holds
 uncached members (31). Report expired or gone operations to the user when dropping them (27).
 
 After generation rotation, clear server caches and bootstrap anew. Preserve

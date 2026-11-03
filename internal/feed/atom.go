@@ -262,9 +262,8 @@ func unwrapXHTMLDiv(n *node) string {
 			elements = append(elements, p.child)
 		}
 	}
-	div := elements[0]
-	if len(elements) == 1 && div.name.Local == "div" && (div.name.Space == nsXHTML || div.name.Space == "") {
-		return serializeChildren(div)
+	if len(elements) == 1 && elements[0].name.Local == "div" && (elements[0].name.Space == nsXHTML || elements[0].name.Space == "") {
+		return serializeChildren(elements[0])
 	}
 	return serializeChildren(n)
 }

@@ -27,6 +27,7 @@ import (
 // The notification and mixed annotation/token fixture belong to later packages.
 var coreVectorFiles = []string{
 	"01-range-exception.json", "02-queue-age.json", "03-retention-deleted.json", "04-source-ranks.json", "05-equal-time.json", "06-backdated-ingest.json", "07-publisher-clock.json", "08-expired-cursor.json", "09-restore-generation.json", "10-notification-response-lost.json", "11-shared-ingest.json", "12-offline-google-batch.json", "13-bootstrap-range-race.json", "14-ingest-commit-order.json", "15-repeated-operation.json", "16-google-unread-done.json", "17-independent-kept.json", "18-late-cluster-member.json", "19-notification-before-snapshot.json", "20-google-tradeoff.json", "21-bootstrap-newer-range-crash.json", "22-native-unread-done.json", "23-batch-atomicity.json", "24-label-tombstones.json", "25-position-live.json", "26-missing-ts.json", "27-client-coalescing.json", "28-clock-boundaries.json", "29-resource-tombstones.json", "30-principal-isolation.json", "31-queued-range-client.json", "32-coalesced-done-clear.json", "33-restore-release-safety.json", "34-integer-identity.json", "35-batch-causal-shelf.json",
+	"36-ack-out-of-order-merge.json", "37-ack-stale-generation.json", "38-independent-register-merge.json",
 }
 
 type coreVector struct {
@@ -46,6 +47,7 @@ type coreStep struct {
 	Actor      syncmodel.ID           `json:"actor,omitempty"`
 	Token      syncmodel.TokenKind    `json:"token,omitempty"`
 	Entry      syncmodel.Entry        `json:"entry,omitempty"`
+	State      syncmodel.State        `json:"state,omitempty"`
 	Write      syncmodel.Write        `json:"write,omitempty"`
 	Writes     []syncmodel.Write      `json:"writes,omitempty"`
 	Scope      syncmodel.Scope        `json:"scope,omitempty"`
@@ -69,6 +71,12 @@ type coreCaptured struct {
 	changes []syncmodel.Change
 	next    syncmodel.Revision
 }
+type coreResponse struct {
+	generation  string
+	results     []syncmodel.Result
+	rangeResult *syncmodel.RangeResult
+	opID        string
+}
 type coreVectorRunner struct {
 	t           *testing.T
 	f           *coreFixture
@@ -76,6 +84,7 @@ type coreVectorRunner struct {
 	clients     map[string]*syncmodel.Client
 	prepared    map[string]syncmodel.Entry
 	pages       map[string]coreCaptured
+	responses   map[string]coreResponse
 	generations map[string]string
 	generation  string
 	objects     map[string]syncmodel.Object
@@ -119,7 +128,7 @@ func TestServiceVectors(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			r := &coreVectorRunner{t: t, f: f, actors: map[string]Actor{"main": f.a}, clients: map[string]*syncmodel.Client{}, prepared: map[string]syncmodel.Entry{}, pages: map[string]coreCaptured{}, generations: map[string]string{"g1": generation}, generation: "g1", objects: map[string]syncmodel.Object{}, snapshots: map[string]map[string][]json.RawMessage{}}
+			r := &coreVectorRunner{t: t, f: f, actors: map[string]Actor{"main": f.a}, clients: map[string]*syncmodel.Client{}, prepared: map[string]syncmodel.Entry{}, pages: map[string]coreCaptured{}, responses: map[string]coreResponse{}, generations: map[string]string{"g1": generation}, generation: "g1", objects: map[string]syncmodel.Object{}, snapshots: map[string]map[string][]json.RawMessage{}}
 			steps := append(append(v.Setup, v.Operations...), v.Final...)
 			// Shared-feed fixtures have both subscriptions before the first ingest.
 			for _, step := range steps {
@@ -325,7 +334,7 @@ func (r *coreVectorRunner) changes(a Actor, cursor syncmodel.Revision) ([]syncmo
 
 func (r *coreVectorRunner) execute(step coreStep) (any, error) {
 	switch step.Op {
-	case "ingest", "prepare_ingest", "commit_ingest", "repeat_ingest", "write", "batch", "cluster", "range", "google", "google_batch", "delete", "update_entry", "retain", "changes", "capture_changes", "bootstrap_begin", "bootstrap_page", "client_pull", "client_apply", "client_queue", "client_queue_range", "client_flush", "position", "object", "checkpoint", "restore", "assert_state", "assert_entry", "assert_position", "assert_object", "assert_client", "assert_log":
+	case "ingest", "prepare_ingest", "commit_ingest", "repeat_ingest", "write", "batch", "cluster", "range", "google", "google_batch", "delete", "update_entry", "retain", "changes", "capture_changes", "bootstrap_begin", "bootstrap_page", "client_pull", "client_apply", "client_queue", "client_queue_range", "client_merge_state", "client_submit", "client_ack", "client_flush", "position", "object", "checkpoint", "restore", "assert_state", "assert_entry", "assert_position", "assert_object", "assert_client", "assert_log":
 	default:
 		return nil, fmt.Errorf("unknown vector operation %q: %w", step.Op, ErrInvalid)
 	}
@@ -579,6 +588,44 @@ func (r *coreVectorRunner) execute(step coreStep) (any, error) {
 			}
 		}
 		return map[string]any{}, client.QueueRange(syncmodel.RangeWrite{Write: w, Scope: step.Scope, ThroughSeq: through})
+	case "client_merge_state":
+		if client == nil {
+			return nil, ErrInvalid
+		}
+		client.MergeState(step.State)
+		return map[string]any{}, nil
+	case "client_submit":
+		if client == nil || len(client.Outbox()) == 0 {
+			return nil, ErrInvalid
+		}
+		pending := client.Outbox()[0]
+		if pending.Range != nil {
+			request := *pending.Range
+			result, err := r.f.s.Through(ctx, a, ThroughRequest{Write: request.Write, Scope: request.Scope, ThroughSeq: &request.ThroughSeq})
+			if err != nil {
+				return nil, err
+			}
+			r.responses[step.Name] = coreResponse{generation: request.Write.Base.Generation, rangeResult: &result, opID: request.Write.OpID}
+			return result, nil
+		}
+		results, err := r.f.s.Batch(ctx, a, []syncmodel.Write{*pending.Write})
+		if err != nil {
+			return nil, err
+		}
+		r.responses[step.Name] = coreResponse{generation: pending.Write.Base.Generation, results: results}
+		return results[0], nil
+	case "client_ack":
+		if client == nil {
+			return nil, ErrInvalid
+		}
+		saved, ok := r.responses[step.Name]
+		if !ok {
+			return nil, ErrInvalid
+		}
+		if saved.rangeResult != nil {
+			return map[string]any{}, client.AcknowledgeRange(saved.opID, saved.generation, *saved.rangeResult)
+		}
+		return map[string]any{}, client.Acknowledge(saved.generation, saved.results)
 	case "client_flush":
 		if client == nil {
 			return nil, ErrInvalid
@@ -592,7 +639,9 @@ func (r *coreVectorRunner) execute(step coreStep) (any, error) {
 				if err != nil {
 					return nil, err
 				}
-				client.AcknowledgeRange(request.Write.OpID, result)
+				if err := client.AcknowledgeRange(request.Write.OpID, request.Write.Base.Generation, result); err != nil {
+					return nil, err
+				}
 				out = append(out, result)
 				pending = pending[1:]
 				continue
@@ -606,7 +655,9 @@ func (r *coreVectorRunner) execute(step coreStep) (any, error) {
 			if err != nil {
 				return nil, err
 			}
-			client.Acknowledge(results)
+			if err := client.Acknowledge(writes[0].Base.Generation, results); err != nil {
+				return nil, err
+			}
 			for _, result := range results {
 				out = append(out, result)
 			}

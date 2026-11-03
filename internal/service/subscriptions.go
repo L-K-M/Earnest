@@ -89,6 +89,18 @@ func normalizedFeedURL(raw string) (string, error) {
 	}
 	return u.String(), nil
 }
+
+func credentialOrigin(raw string) string {
+	u, _ := url.Parse(raw) // Callers have already validated and normalized the URL.
+	port := u.Port()
+	if port == "" {
+		port = "80"
+		if u.Scheme == "https" {
+			port = "443"
+		}
+	}
+	return u.Scheme + "://" + u.Hostname() + ":" + port
+}
 func validCadence(c Cadence) bool { return c == CadenceNow || c == CadenceToday || c == CadenceWeek }
 func subscriptionExtract(mode ExtractMode) (string, error) {
 	switch mode {
@@ -239,6 +251,9 @@ func (s *Service) Subscribe(ctx context.Context, a Actor, rawURL string, options
 	if err != nil {
 		return Subscription{}, err
 	}
+	if options.Credentials != nil && credentialOrigin(rawURL) != credentialOrigin(resolved) {
+		return Subscription{}, fmt.Errorf("credentials require same-origin feed discovery: %w", ErrInvalid)
+	}
 	encrypted, err := s.sealCredentials(options.Credentials)
 	if err != nil {
 		return Subscription{}, err
@@ -313,15 +328,14 @@ func (s *Service) subscribeTx(ctx context.Context, tx pgx.Tx, a Actor, rawURL st
  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,(SELECT coalesce(max(seq),0) FROM entries WHERE feed_id=$2),NOT EXISTS(SELECT 1 FROM entries WHERE feed_id=$2)) RETURNING id`, a.UserID, feedID, title, folder, string(cadence), mode, rev, s.now().UTC(), s.now().UTC().Add(-24*time.Hour)).Scan(&id); err != nil {
 		return Subscription{}, err
 	}
-	// Shared entries predate this user's subscription, so seed their bootstrap stamp.
-	if _, err := tx.Exec(ctx, `INSERT INTO entry_revisions(user_id,entry_id,rev) SELECT $1,e.id,$3 FROM entries e WHERE e.feed_id=$2 ON CONFLICT DO NOTHING`, a.UserID, feedID, rev); err != nil {
-		return Subscription{}, err
-	}
 	sub, err := subscriptionTx(ctx, tx, a.UserID, id)
 	if err != nil {
 		return sub, err
 	}
 	if err := s.emitChange(ctx, tx, a.UserID, rev, syncmodel.SubscriptionCreated, "subscription", sub); err != nil {
+		return sub, err
+	}
+	if err := s.backfillSubscription(ctx, tx, a.UserID, sub); err != nil {
 		return sub, err
 	}
 	seq, err := store.CurrentSeq(ctx, tx)
@@ -347,6 +361,49 @@ func (s *Service) subscribeTx(ctx context.Context, tx pgx.Tx, a Actor, rawURL st
 		}
 	}
 	return sub, nil
+}
+
+// Backfill events cover entries whose IDs a concurrent bootstrap already passed.
+func (s *Service) backfillSubscription(ctx context.Context, tx pgx.Tx, user int64, sub Subscription) error {
+	rows, err := tx.Query(ctx, `SELECT id,seq,first_seen_at,published_at,deleted_at IS NOT NULL FROM entries WHERE feed_id=$1 ORDER BY id`, sub.FeedID)
+	if err != nil {
+		return fmt.Errorf("subscription backfill: %w", err)
+	}
+	entries := []syncmodel.Entry{}
+	for rows.Next() {
+		e := syncmodel.Entry{SubscriptionID: syncmodel.ID(sub.ID)}
+		var published *time.Time
+		if err := rows.Scan(&e.ID, &e.Seq, &e.FirstSeenAt, &published, &e.Deleted); err != nil {
+			rows.Close()
+			return fmt.Errorf("read subscription backfill: %w", err)
+		}
+		if published != nil {
+			e.PublishedAt = *published
+		}
+		entries = append(entries, e)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read subscription backfill: %w", err)
+	}
+	for _, e := range entries {
+		rev, err := changeRev(ctx, tx, user)
+		if err != nil {
+			return err
+		}
+		e.Rev = uint64(rev)
+		if _, err := tx.Exec(ctx, `INSERT INTO entry_revisions(user_id,entry_id,rev) VALUES($1,$2,$3) ON CONFLICT(user_id,entry_id) DO UPDATE SET rev=EXCLUDED.rev`, user, int64(e.ID), rev); err != nil {
+			return fmt.Errorf("stamp subscription backfill: %w", err)
+		}
+		kind := syncmodel.EntryCreated
+		if e.Deleted {
+			kind = syncmodel.EntryDeleted
+		}
+		if err := s.emitChange(ctx, tx, user, rev, kind, "entry", e); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func ensureFeed(ctx context.Context, tx pgx.Tx, user int64, rawURL string, meta FeedMeta, encrypted []byte, now time.Time, id *int64) error {
@@ -434,6 +491,7 @@ func (s *Service) UpdateSubscription(ctx context.Context, a Actor, id int64, opt
 				return domainError(err)
 			}
 		}
+		previousFeed := sub.FeedID
 		var folder, title any
 		if options.FolderID != nil && *options.FolderID != 0 {
 			folder = *options.FolderID
@@ -453,11 +511,13 @@ func (s *Service) UpdateSubscription(ctx context.Context, a Actor, id int64, opt
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO entry_revisions(user_id,entry_id,rev) SELECT $1,e.id,$3 FROM entries e WHERE e.feed_id=$2 ON CONFLICT DO NOTHING`, a.UserID, sub.FeedID, rev); err != nil {
-			return err
-		}
 		if err := s.emitChange(ctx, tx, a.UserID, rev, syncmodel.SubscriptionUpdated, "subscription", sub); err != nil {
 			return err
+		}
+		if sub.FeedID != previousFeed {
+			if err := s.backfillSubscription(ctx, tx, a.UserID, sub); err != nil {
+				return err
+			}
 		}
 		return store.FinishOp(ctx, tx, a.PrincipalID, options.OpID, sub)
 	})
