@@ -424,8 +424,20 @@ public final class SyncEngine {
         var data = try store.load()
         guard let cursor = data.cursor, cursor.generation == next.generation else { throw SyncError.generationMismatch }
         if next.rev <= cursor.rev { return }
-        guard next.rev - cursor.rev == Int64(changes.count), changes.enumerated().allSatisfy({ $0.element.rev == cursor.rev + Int64($0.offset) + 1 }) else { throw SyncError.invalidPage }
-        for change in changes { merge(change.state, into: &data.states) }
+        var expected = cursor.rev
+        var previous: Int64?
+        for change in changes {
+            if let previous {
+                guard previous < Int64.max, change.rev == previous + 1 else { throw SyncError.invalidPage }
+            }
+            previous = change.rev
+            if change.rev > cursor.rev {
+                guard expected < Int64.max, change.rev == expected + 1 else { throw SyncError.invalidPage }
+                expected = change.rev
+            }
+        }
+        guard next.rev == expected else { throw SyncError.invalidPage }
+        for change in changes where change.rev > cursor.rev { merge(change.state, into: &data.states) }
         data.cursor = next
         try store.save(data)
     }

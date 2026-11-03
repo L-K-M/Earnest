@@ -5,16 +5,17 @@ import FoundationNetworking
 
 /// SSE carries cursor hints only. The coordinator always reads the durable change feed.
 struct EventHintParser {
+    private static let maxBufferedBytes = 65536
     private var buffer = Data()
     private var event = ""
     private var payload: [String] = []
 
     mutating func append(_ data: Data) throws -> [APIRevision] {
         buffer.append(data)
-        guard buffer.count <= 65536 else { throw APIError.invalidResponse }
         var hints: [APIRevision] = []
         while let newline = buffer.firstIndex(of: 10) {
             var lineData = buffer.prefix(upTo: newline)
+            guard lineData.count <= Self.maxBufferedBytes else { throw APIError.invalidResponse }
             if lineData.last == 13 { lineData = lineData.dropLast() }
             guard let line = String(data: lineData, encoding: .utf8) else { throw APIError.invalidResponse }
             buffer.removeSubrange(...newline)
@@ -32,9 +33,10 @@ struct EventHintParser {
             if parts[0] == "event" { event = value }
             if parts[0] == "data" {
                 payload.append(value)
-                guard payload.reduce(0, { $0 + $1.utf8.count }) <= 65536 else { throw APIError.invalidResponse }
+                guard payload.reduce(0, { $0 + $1.utf8.count }) <= Self.maxBufferedBytes else { throw APIError.invalidResponse }
             }
         }
+        guard buffer.count <= Self.maxBufferedBytes else { throw APIError.invalidResponse }
         return hints
     }
 }

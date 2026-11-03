@@ -35,6 +35,7 @@ final class ScriptedHTTP: URLProtocol {
         return URLSession(configuration: configuration)
     }
     static func assertFinished() { #expect(lock.withLock { replies.isEmpty }) }
+    static var pendingCount: Int { lock.withLock { replies.count } }
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
@@ -97,6 +98,22 @@ final class ScriptedHTTP: URLProtocol {
 }
 
 extension NetworkTests {
+    @Test @MainActor func syncRejectsNonAdvancingChangesPage() async throws {
+        let engine = SyncEngine(store: MemorySyncStore())
+        try engine.bootstrap(Cursor(generation: "g1", rev: 1))
+        try engine.finishBootstrap()
+        let session = ScriptedHTTP.install([
+            .init(path: "/v1/changes", body: #"{"changes":[{"rev":1,"type":"entry.created","payload":{"entry":{"id":1,"rev":1}}}],"next":{"generation":"g1","rev":1},"next_cursor":"g1:1"}"#),
+            // Bound the old retry loop so the regression fails without hanging.
+            .init(path: "/v1/changes", status: 500, body: "{}"),
+        ])
+        defer { session.invalidateAndCancel() }
+        let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: TestTokens(), session: session)
+        await #expect(throws: SyncError.self) { try await SyncCoordinator(engine: engine, api: api).synchronize() }
+        #expect(ScriptedHTTP.pendingCount == 1)
+        #expect(try engine.snapshot().cursor == Cursor(generation: "g1", rev: 1))
+    }
+
     @Test @MainActor func generationRecoveryReplaysOutboxOnce() async throws {
         let engine = SyncEngine(store: MemorySyncStore())
         try engine.bootstrap(Cursor(generation: "old", rev: 10))

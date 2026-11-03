@@ -22,6 +22,33 @@ import Testing
     #expect(throws: (any Error).self) { try parser.append(Data(repeating: 65, count: 65537)) }
 }
 
+@Test func eventHintsDrainLargeChunksBeforeCheckingRemainder() throws {
+    let frame = "event: changes\ndata: {\"generation\":\"g1\",\"rev\":9}\n\n"
+    let frames = String(repeating: frame, count: 1500)
+    #expect(frames.utf8.count > 65536)
+    var parser = EventHintParser()
+    let hints = try parser.append(Data((frames + "event: chan").utf8))
+    #expect(hints.count == 1500)
+    #expect(hints.allSatisfy { $0.generation == "g1" && $0.rev == 9 })
+    #expect(try parser.append(Data("ges\ndata: {\"generation\":\"g1\",\"rev\":10}\n\n".utf8)).first?.rev == 10)
+}
+
+@Test func eventHintsBoundLinesAndAccumulatedPayload() throws {
+    var partial = EventHintParser()
+    #expect(try partial.append(Data(repeating: 65, count: 65536)).isEmpty)
+    #expect(throws: APIError.self) { try partial.append(Data([65])) }
+
+    var complete = EventHintParser()
+    #expect(throws: APIError.self) {
+        try complete.append(Data((":" + String(repeating: "a", count: 65536) + "\n").utf8))
+    }
+
+    var payload = EventHintParser()
+    #expect(try payload.append(Data(("data: " + String(repeating: "a", count: 32768) + "\n").utf8)).isEmpty)
+    #expect(try payload.append(Data(("data: " + String(repeating: "b", count: 32768) + "\n").utf8)).isEmpty)
+    #expect(throws: APIError.self) { try payload.append(Data("data: c\n".utf8)) }
+}
+
 @Test func signedURLUsesNativeExpiryShape() throws {
     let payload = Data(#"{"url":"https://content.example/article/1?signature=x","expires_at":"2099-01-01T00:00:00.123Z"}"#.utf8)
     let signed = try JSONDecoder().decode(SignedContentURL.self, from: payload)

@@ -87,8 +87,10 @@ public struct SyncReport: Sendable {
             guard let cursor = try engine.snapshot().cursor else { throw SyncError.invalidPage }
             let page = try await api.changes(cursor: "\(cursor.generation):\(cursor.rev)")
             try Task.checkCancellation()
-            try engine.apply(page.changes ?? [], next: Cursor(generation: page.next.generation, rev: page.next.rev))
+            let next = Cursor(generation: page.next.generation, rev: page.next.rev)
+            try engine.apply(page.changes ?? [], next: next)
             if (page.changes ?? []).isEmpty { return }
+            guard next.rev > cursor.rev else { throw SyncError.invalidPage }
         }
     }
 
