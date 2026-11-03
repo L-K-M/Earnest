@@ -28,6 +28,7 @@ import ch.lkmc.earnest.core.DeviceResult
 import ch.lkmc.earnest.core.EarnestApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 
 /** Device authorization: start, show the code, then poll automatically. */
 @Composable
@@ -47,8 +48,8 @@ internal fun LoginScreen(onLoggedIn: () -> Unit) {
             try {
                 val api = EarnestApi(server)
                 val token = api.devicePoll(current.deviceCode)
-                Secrets(context).server = server
-                Secrets(context).saveToken(token.accessToken)
+                val me = EarnestApi(server, token.accessToken).me()
+                SyncAccess.mutex.withLock { Secrets(context).saveSession(server, token.accessToken, me) }
                 onLoggedIn()
                 SyncWorker.schedule(context)
                 EarnestPushService.register(context)
@@ -79,6 +80,7 @@ internal fun LoginScreen(onLoggedIn: () -> Unit) {
             onValueChange = { server = it },
             label = { Text("HTTPS server origin") },
             singleLine = true,
+            enabled = authorization == null,
             modifier = Modifier.fillMaxWidth(),
         )
         Button(

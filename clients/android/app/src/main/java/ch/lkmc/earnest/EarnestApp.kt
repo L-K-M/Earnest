@@ -46,7 +46,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -123,7 +122,8 @@ private fun MainScaffold(
 ) {
     val navigator = rememberListDetailPaneScaffoldNavigator<Long>()
     var view by remember { mutableStateOf(View.TODAY) }
-    var readerEntry by remember { mutableStateOf<CachedEntry?>(null) }
+    val readerEntry = state.snapshot.entries.firstOrNull { it.id == navigator.currentDestination?.contentKey && !it.deleted }
+    var readerError by remember { mutableStateOf<String?>(null) }
     var readerContent by remember { mutableStateOf<ContentUrlResult?>(null) }
     var readerLoading by remember { mutableStateOf(false) }
     var activityGroups by remember { mutableStateOf<List<ch.lkmc.earnest.core.ActivityGroup>>(emptyList()) }
@@ -135,19 +135,32 @@ private fun MainScaffold(
     LaunchedEffect(initialEntry) {
         initialEntry?.let { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, it) }
     }
-    LaunchedEffect(notificationId) {
+    LaunchedEffect(notificationId, state.accountKey) {
+        if (state.accountKey == null) return@LaunchedEffect
         val id = notificationId ?: return@LaunchedEffect
         model.notificationEntry(id)?.let { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, it) }
     }
-    LaunchedEffect(selected) {
-        val id = selected ?: return@LaunchedEffect
-        readerEntry = state.snapshot.entries.firstOrNull { it.id == id }
+    LaunchedEffect(selected, state.accountKey) {
         readerContent = null
+        readerError = null
+        val id = selected ?: return@LaunchedEffect
         readerLoading = true
-        readerContent = model.openEntry(id)
-        readerLoading = false
+        if (state.accountKey == null) return@LaunchedEffect
+        try {
+            if (model.loadEntry(id) == null) {
+                readerError = "This entry is no longer available."
+            } else {
+                readerContent = model.openEntry(id)
+            }
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            readerError = error.message ?: "Could not load this entry."
+        } finally {
+            readerLoading = false
+        }
     }
-    LaunchedEffect(view) {
+    LaunchedEffect(view, state.accountKey) {
         if (view == View.ACTIVITY) {
             val since = Instant.now().minusSeconds(7 * 24 * 3600).toString()
             model.activity(since).collect { page ->
@@ -162,14 +175,10 @@ private fun MainScaffold(
             .filter { it.kind == SyncEngine.OBJECT_SUBSCRIPTION }
             .associate { it.id to it.name }
     }
-    val lists = remember(state.snapshot, state.states, state.cadences) {
+    val lists = remember(state.snapshot, state.states, state.cadences, state.todayEntryIds) {
         val visible = entries.filterNot { it.deleted }
         fun stateOf(id: Long) = state.states[id] ?: SyncEngine.initialState(state.principalId, id)
-        val today = visible.filter {
-            stateOf(it.id).shelf.value != kotlinx.serialization.json.JsonPrimitive(SyncEngine.VALUE_DONE) &&
-                stateOf(it.id).seen.value == kotlinx.serialization.json.JsonPrimitive(SyncEngine.VALUE_UNSEEN) &&
-                state.cadences[it.subscriptionId] in listOf("now", "today")
-        }
+        val today = todayEntries(state)
         val edition = visible.filter { state.cadences[it.subscriptionId] == "week" }
         val later = visible.filter { stateOf(it.id).shelf.value == kotlinx.serialization.json.JsonPrimitive(SyncEngine.VALUE_LATER) }
         val kept = visible.filter { stateOf(it.id).kept.value == kotlinx.serialization.json.JsonPrimitive(true) }
@@ -213,6 +222,7 @@ private fun MainScaffold(
             snackbarHost = { SnackbarHost(snackbar) },
         ) { padding ->
             Column(Modifier.fillMaxSize().padding(padding)) {
+                state.cacheNotice?.let { Text(it, modifier = Modifier.padding(8.dp)) }
                 state.error?.let {
                     Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(8.dp))
                 }
@@ -239,6 +249,11 @@ private fun MainScaffold(
                                     subscriptionTitles = subscriptionTitles,
                                     briefs = if (view == View.TODAY) state.briefs else emptyList(),
                                     principalNames = state.principals,
+                                    entryTitles = state.snapshot.entries.associate { it.id to it.title },
+                                    agentChanges = if (view == View.TODAY) state.agentChanges else emptyList(),
+                                    sessionChanges = if (view == View.TODAY) state.sessionAgentChanges else emptyList(),
+                                    agentChangesError = if (view == View.TODAY) state.agentChangesError else null,
+                                    onRevert = model::revert,
                                     onOpen = { entryId ->
                                         scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
                                     },
@@ -256,7 +271,11 @@ private fun MainScaffold(
                             val entry = readerEntry
                             if (entry == null) {
                                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                    Text("Select an entry")
+                                    when {
+                                        selected == null -> Text("Select an entry")
+                                        readerLoading -> CircularProgressIndicator()
+                                        else -> Text(readerError ?: "Couldn't load this entry. Check your connection and try again.")
+                                    }
                                 }
                             } else {
                                 Column(Modifier.fillMaxSize()) {
@@ -277,7 +296,7 @@ private fun MainScaffold(
                                             CircularProgressIndicator()
                                         }
                                         content == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                            Text("Couldn't load this entry. Check your connection and try again.")
+                                            Text(readerError ?: "Couldn't load this entry. Check your connection and try again.")
                                         }
                                         else -> Reader(
                                             url = content.url,
@@ -379,6 +398,11 @@ private fun EntryListScreen(
     subscriptionTitles: Map<Long, String>,
     briefs: List<ch.lkmc.earnest.db.BriefEntity>,
     principalNames: Map<Long, String>,
+    entryTitles: Map<Long, String>,
+    agentChanges: List<ch.lkmc.earnest.core.Activity>,
+    sessionChanges: List<ch.lkmc.earnest.core.Activity>,
+    agentChangesError: String?,
+    onRevert: (Long) -> Unit,
     onOpen: (Long) -> Unit,
     onLater: (Long) -> Unit,
     onDone: (Long) -> Unit,
@@ -399,6 +423,11 @@ private fun EntryListScreen(
                         )
                     }
                 }
+            }
+        }
+        if (agentChanges.isNotEmpty() || agentChangesError != null) {
+            item(key = "agent-changes") {
+                AgentChangesNotice("While you were out", agentChanges, entryTitles, agentChangesError, onOpen, onRevert)
             }
         }
         items(entries, key = { it.id }) { entry ->
@@ -428,6 +457,9 @@ private fun EntryListScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.fillMaxWidth().padding(24.dp),
             )
+            if (sessionChanges.isNotEmpty() || agentChangesError != null) {
+                AgentChangesNotice("Agent changes this session", sessionChanges, entryTitles, agentChangesError, onOpen, onRevert)
+            }
         }
     }
 }
@@ -441,7 +473,7 @@ private fun MarkSeenOnRender(
 ) {
     // Resetting with the principal keeps offline launches from losing marks:
     // rows are marked again once the principal is known.
-    val marked = remember(principalId) { mutableStateListOf<Long>() }
+    val marked = remember(principalId) { mutableSetOf<Long>() }
     LaunchedEffect(listState, entries, principalId) {
         if (principalId == 0L) return@LaunchedEffect
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.map { it.key } }

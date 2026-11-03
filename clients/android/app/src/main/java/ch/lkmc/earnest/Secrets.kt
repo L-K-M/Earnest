@@ -15,9 +15,9 @@ import javax.crypto.spec.GCMParameterSpec
  * The server origin and bearer token. The token is encrypted with an
  * Android Keystore key, so it cannot be read from a backup or another process.
  */
-internal class Secrets(context: Context) {
+internal class Secrets(context: Context) : SessionStore {
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-    private val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+    private val keyStore by lazy { KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) } }
     private val key: SecretKey
         get() {
             (keyStore.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
@@ -31,42 +31,55 @@ internal class Secrets(context: Context) {
             return generator.generateKey()
         }
 
-    var server: String
-        get() = prefs.getString(KEY_SERVER, "").orEmpty()
-        set(value) {
-            val trimmed = value.trim().trimEnd('/')
-            require(trimmed.isEmpty() || trimmed.startsWith("https://")) { "Enter an HTTPS server origin" }
-            prefs.edit { putString(KEY_SERVER, trimmed) }
-        }
+    val server: String get() = prefs.getString(KEY_SERVER, "").orEmpty()
 
-    fun saveToken(value: String) {
+    /** Save identity and encrypted credentials together, after verifying /v1/me. */
+    fun saveSession(server: String, token: String, me: ch.lkmc.earnest.core.MeResult) {
+        require(me.kind == "human") { "Sign in with a human account" }
+        val origin = server.trim().trimEnd('/')
+        AccountIdentity(origin, me.userId, me.principalId)
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, key)
-        val payload = cipher.iv + cipher.doFinal(value.toByteArray(Charsets.UTF_8))
-        prefs.edit { putString(KEY_TOKEN, Base64.encodeToString(payload, Base64.NO_WRAP)) }
+        val payload = cipher.iv + cipher.doFinal(token.toByteArray(Charsets.UTF_8))
+        check(prefs.edit().putString(KEY_SERVER, origin)
+            .putString(KEY_TOKEN, Base64.encodeToString(payload, Base64.NO_WRAP))
+            .putLong(KEY_USER, me.userId).putLong(KEY_PRINCIPAL, me.principalId).commit()) {
+            "Could not save the authenticated session"
+        }
     }
 
     /** Cheap check for whether a token exists, without touching the Keystore. */
     fun hasToken(): Boolean = prefs.contains(KEY_TOKEN)
 
-    fun token(): String? {
-        val encoded = prefs.getString(KEY_TOKEN, null) ?: return null
+    private fun decrypt(encoded: String): String? = runCatching {
         val payload = Base64.decode(encoded, Base64.NO_WRAP)
         if (payload.size <= IV_BYTES) return null
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, payload.copyOfRange(0, IV_BYTES)))
-        return runCatching { cipher.doFinal(payload.copyOfRange(IV_BYTES, payload.size)).toString(Charsets.UTF_8) }
-            .getOrNull()
+        cipher.doFinal(payload.copyOfRange(IV_BYTES, payload.size)).toString(Charsets.UTF_8)
+    }.getOrNull()
+
+    override fun current(): AuthenticatedSession? {
+        // One preference snapshot binds the token to exactly the identity saved with it.
+        val values = prefs.all
+        val user = values[KEY_USER] as? Long ?: return null
+        val principal = values[KEY_PRINCIPAL] as? Long ?: return null
+        val server = values[KEY_SERVER] as? String ?: return null
+        val encoded = values[KEY_TOKEN] as? String ?: return null
+        val identity = runCatching { AccountIdentity(server, user, principal) }.getOrNull() ?: return null
+        return decrypt(encoded)?.let { AuthenticatedSession(identity, it) }
     }
 
-    fun clearToken() {
-        prefs.edit { remove(KEY_TOKEN) }
+    override fun clearToken() {
+        prefs.edit(commit = true) { remove(KEY_TOKEN); remove(KEY_USER); remove(KEY_PRINCIPAL) }
     }
 
     companion object {
         private const val PREFS = "connection"
         private const val KEY_SERVER = "server"
         private const val KEY_TOKEN = "token"
+        private const val KEY_USER = "user_id"
+        private const val KEY_PRINCIPAL = "principal_id"
         private const val KEY_ALIAS = "earnest-token"
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"

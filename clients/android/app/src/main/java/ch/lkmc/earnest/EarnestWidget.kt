@@ -87,9 +87,11 @@ internal object WidgetData {
 
     /** Reads the cached snapshot once; the widget has no network access. */
     fun headlines(context: Context): List<CachedEntry> {
-        val row = runBlocking { AppDatabase.get(context).snapshot().load() } ?: return emptyList()
+        val session = Secrets(context).current() ?: return emptyList()
+        val row = runBlocking { AppDatabase.get(context, session.identity.cacheKey).snapshot().load() } ?: return emptyList()
         val snapshot = runCatching { json.decodeFromString(SyncSnapshot.serializer(), row.json) }
             .getOrNull() ?: return emptyList()
+        if (Secrets(context).current() != session) return emptyList()
         return headlines(snapshot)
     }
 

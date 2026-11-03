@@ -27,7 +27,18 @@ Open the app, enter the HTTPS origin and start device sign in. The app shows
 an eight-character code and polls the server at the interval the server
 returned, honouring `slow_down` by waiting longer. Enter the code at the
 server's `/device` page in a browser where you are signed in, then approve.
-The app stores the issued token in the Android Keystore and signs in.
+The app verifies the token with `/v1/me` before attaching any cached state,
+then stores the token encrypted with the Android Keystore. Snapshot, outbox,
+content, briefs and session preferences are isolated by HTTPS server origin,
+user ID and human principal ID. Returning to that account restores its own
+pending actions. Signing in again clears the displayed state before attaching
+the verified account.
+
+The old unscoped `earnest.db` and `session` preferences are retained on upgrade,
+but never attached to a new login or replayed into another account. Their
+ownership cannot be established safely. Preserve those files if pending
+actions need manual recovery; the app reports a retained legacy cache. No Room
+schema changes or destructive migrations are used.
 
 ## Reading offline
 
@@ -36,13 +47,35 @@ and caches article content when you open it. Lists work without a connection;
 the reader falls back to the cached content when the signed content URL cannot
 be fetched. Swipe a row left a short distance for Later, or a long distance
 for Done; the label appears during the gesture and an undo action is offered
-in a snackbar. Rows mark themselves seen as they render. Today shows the
-newest brief from each agent at the top with the agent's name, and ends with
-the end-of-river statement.
+in a snackbar. Rows mark themselves seen as they render, while Today keeps
+its session membership stable. Passive seen updates do not remove rows or
+expose more rows to automatic marking. Later and Done remove rows immediately;
+refresh starts a new membership from the current effective state. Cached
+subscription cadences are restored before a network request, so Today and
+Edition also work on an offline cold launch.
+
+Today shows the newest brief from each agent at the top with the agent's name.
+It also lists agent changes to unseen articles under "While you were out" and
+again at session end for changes made during the session. Each change names
+the agent, article and action, and offers Revert only when the server permits
+it. Failure to refresh this list is reported. The last successful list remains
+available offline. Background sync caches the same notices; an interrupted or
+failed refresh leaves a visible warning on the next offline launch.
 
 The reader loads the signed content URL in a WebView with JavaScript, file
 access and content access disabled, and allows only that origin; other links
-open in the browser. Agent text is shown as plain text, never as HTML.
+open in the browser. All signed content URLs request `mode=click`, including
+notification-selected articles, so automatic image loading cannot reveal an
+agent's article selection. On a main-frame network or HTTP failure, the reader
+loads the cached HTML once through the local asset origin. Subresource failures
+do not replace the article, and local fallback content cannot load network
+resources. Agent text is shown as plain text, never as HTML.
+
+Notifications and deep links resolve missing metadata through `/v1/entries/{id}`;
+selection follows the current snapshot as cold-launch loading and sync complete.
+Incremental entry events are hydrated before their page and cursor are committed.
+A metadata 404 is retained as a tombstone; other failures leave the cursor for
+retry.
 
 ## Feeds and activity
 
@@ -73,8 +106,14 @@ permission must be granted on Android 13+.
 ## Verification
 
 `:core:test` runs the shared sync vectors and the OpenAPI contract test;
-`:app:testDebugUnitTest` covers deep-link parsing, brief labels, widget
-headline selection, theme persistence, notification channels and the
-notification's server text. There is no emulator in CI, so the device-flow
+`:app:testDebugUnitTest` covers snapshot replacement failure, concurrent
+foreground/background writes, account isolation, offline cadence restoration,
+Today session membership, missing notification metadata, agent-change retrieval,
+WebView error fallback, deep-link parsing, brief labels, widget headline
+selection, theme persistence, notification channels and server notification text.
+Core repository tests exercise real wire payloads, batch boundaries, in-flight
+retries, entry hydration and sibling subscription projections. Room regressions
+use Robolectric's legacy SQLite mode because the native SQLite runtime stalled
+on this shared build host. There is no emulator in CI, so the device-flow
 approval, UnifiedPush delivery, widget rendering and WebView reading have not
 been verified on a device.
