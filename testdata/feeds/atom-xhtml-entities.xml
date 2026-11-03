@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">Feed &amp; &lt;b&gt; text</div></title>
+  <entry>
+    <id>urn:example:entities</id>
+    <title type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">Title &amp; &lt;b&gt; text <b>bold</b></div></title>
+    <summary type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">Summary &amp; &lt;b&gt; text</div></summary>
+    <content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">Content &amp; &lt;b&gt; text <b>bold</b></div></content>
+  </entry>
+  <entry>
+    <id>urn:example:text-only</id>
+    <title type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">Plain &amp; &lt;b&gt; text</div></title>
+    <content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">Content &amp; &lt;b&gt; text</div></content>
+  </entry>
+</feed>

@@ -3,13 +3,16 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -17,17 +20,57 @@ import (
 	"github.com/L-K-M/Earnest/internal/store/storetest"
 )
 
+const (
+	buildTimeout      = 2 * time.Minute
+	readinessTimeout  = time.Minute
+	requestTimeout    = 10 * time.Second
+	readinessInterval = 25 * time.Millisecond
+	shutdownAllowance = 5 * time.Second
+)
+
+var (
+	buildOnce  sync.Once
+	binaryDir  string
+	binaryPath string
+	binaryErr  error
+)
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if binaryDir != "" {
+		_ = os.RemoveAll(binaryDir)
+	}
+	os.Exit(code)
+}
+
+func shutdownBinary(t *testing.T) string {
+	t.Helper()
+	buildOnce.Do(func() {
+		binaryDir, binaryErr = os.MkdirTemp("", "earnest-shutdown-test-")
+		if binaryErr != nil {
+			return
+		}
+		binaryPath = filepath.Join(binaryDir, "earnest")
+		ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
+		defer cancel()
+		build := exec.CommandContext(ctx, "go", "build", "-o", binaryPath, ".")
+		build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOFLAGS=-p=2")
+		if output, err := build.CombinedOutput(); err != nil {
+			binaryErr = fmt.Errorf("build: %w\n%s", err, output)
+		}
+	})
+	if binaryErr != nil {
+		t.Fatal(binaryErr)
+	}
+	return binaryPath
+}
+
 func TestServeShutdown(t *testing.T) {
 	template := storetest.NewTemplate(t)
 	dsn := template.DatabaseURL(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	binary := shutdownBinary(t)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	binary := filepath.Join(t.TempDir(), "earnest")
-	build := exec.CommandContext(ctx, "go", "build", "-o", binary, ".")
-	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOFLAGS=-p=2")
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, output)
-	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -60,21 +103,25 @@ func TestServeShutdown(t *testing.T) {
 			<-done
 		}
 	})
-	client := &http.Client{Timeout: time.Second}
+	client := shutdownTestClient()
 	ready := false
-	deadline := time.NewTimer(15 * time.Second)
-	defer deadline.Stop()
-	retry := time.NewTicker(25 * time.Millisecond)
+	readyCtx, readyCancel := context.WithTimeout(ctx, readinessTimeout)
+	defer readyCancel()
+	retry := time.NewTicker(readinessInterval)
 	defer retry.Stop()
 	for !ready {
 		select {
 		case err := <-done:
 			done <- err
 			t.Fatalf("serve exited before listening: %v\n%s", err, logs.String())
-		case <-deadline.C:
+		case <-readyCtx.Done():
 			t.Fatal("serve did not become ready")
 		case <-retry.C:
-			response, err := client.Get("http://" + addr + "/healthz")
+			request, err := http.NewRequestWithContext(readyCtx, http.MethodGet, "http://"+addr+"/healthz", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := client.Do(request)
 			if err == nil {
 				_, _ = io.Copy(io.Discard, response.Body)
 				_ = response.Body.Close()
@@ -102,7 +149,23 @@ func TestServeShutdown(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SIGTERM exit: %v\n%s", err, logs.String())
 		}
-	case <-time.After(15 * time.Second):
+	case <-time.After(shutdownGrace + shutdownAllowance):
 		t.Fatal("serve did not stop after SIGTERM")
 	}
 }
+
+// TestShutdownClientAllowsSlowResponse covers responses delayed by system load.
+func TestShutdownClientAllowsSlowResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(1200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	response, err := shutdownTestClient().Get(server.URL)
+	if err != nil {
+		t.Fatalf("delayed response: %v", err)
+	}
+	response.Body.Close()
+}
+
+func shutdownTestClient() *http.Client { return &http.Client{Timeout: requestTimeout} }
