@@ -155,7 +155,7 @@ class EarnestApi(
 
     suspend fun content(id: Long): Content = get(url("/v1/entries/$id/content")).decode()
 
-    suspend fun contentUrl(id: Long): ContentUrl = get(url("/v1/entries/$id/content-url")).decode()
+    suspend fun contentUrl(id: Long): ContentUrl = get(url("/v1/entries/$id/content-url") { it.addQueryParameter("mode", "click") }).decode()
 
     suspend fun subscriptions(): List<Subscription> = get(url("/v1/subscriptions")).decode()
 
@@ -224,8 +224,12 @@ class EarnestApi(
         return get(url).decode()
     }
 
-    suspend fun agentChanges(since: String): List<Activity> =
-        get(url("/v1/activity/agent-changes") { it.addQueryParameter("since", since) }).decode()
+    suspend fun agentChanges(since: String, afterId: Long = 0, limit: Int = 1000): List<Activity> =
+        get(url("/v1/activity/agent-changes") {
+            it.addQueryParameter("since", since)
+            it.addQueryParameter("after_id", afterId.toString())
+            it.addQueryParameter("limit", limit.toString())
+        }).decode<List<Activity>?>().orEmpty()
 
     suspend fun revertActivity(id: Long, opId: String): Empty =
         post(url("/v1/activity/$id:revert"), json.encodeToJsonElement(OpBody.serializer(), OpBody(opId))).decode()

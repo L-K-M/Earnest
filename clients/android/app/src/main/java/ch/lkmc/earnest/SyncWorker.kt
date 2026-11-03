@@ -11,9 +11,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import ch.lkmc.earnest.core.ApiException
 import ch.lkmc.earnest.core.EarnestApi
-import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.core.SyncRepository
-import ch.lkmc.earnest.db.AppDatabase
 import java.time.Instant
 import java.util.concurrent.TimeUnit
 
@@ -21,19 +19,24 @@ import java.util.concurrent.TimeUnit
 internal class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val secrets = Secrets(applicationContext)
-        val token = secrets.token() ?: return Result.failure()
-        val store = RoomSyncStore(AppDatabase.get(applicationContext))
-        val engine = SyncEngine(store)
-        val repository = SyncRepository(EarnestApi(secrets.server, token), engine)
+        val session = secrets.current() ?: return Result.failure()
+        val cache = SessionCache(applicationContext, session.identity)
         return try {
-            repository.pull()
-            val rejected = repository.flush()
-            rejected.forEach { Log.i(TAG, "server rejected ${it.opId}: ${it.status}") }
-            engine.expire(Instant.now()).forEach { Log.i(TAG, "expired ${it.operation.opId}") }
-            engine.flush()
+            cache.withEngine { engine ->
+                if (secrets.current() != session) return@withEngine
+                val api = EarnestApi(session.identity.server, session.token)
+                val repository = SyncRepository(api, engine)
+                cache.markAgentChangesStale()
+                repository.pull()
+                val rejected = repository.flush()
+                rejected.forEach { Log.i(TAG, "server rejected ${it.opId}: ${it.status}") }
+                engine.expire(Instant.now()).forEach { Log.i(TAG, "expired ${it.operation.opId}") }
+                engine.flush()
+                cache.refreshAgentChanges(api)
+            }
             Result.success()
         } catch (error: ApiException) {
-            if (error.isUnauthorized) secrets.clearToken()
+            if (error.isUnauthorized && secrets.current() == session) secrets.clearToken()
             Result.retry()
         } catch (error: Exception) {
             Result.retry()

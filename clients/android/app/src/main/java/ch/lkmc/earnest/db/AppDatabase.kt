@@ -16,14 +16,16 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun briefs(): BriefDao
 
     companion object {
-        @Volatile
-        private var instance: AppDatabase? = null
+        private val instances = mutableMapOf<String, AppDatabase>()
 
-        fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
-            instance ?: Room.databaseBuilder(context, AppDatabase::class.java, "earnest.db")
-                .fallbackToDestructiveMigration(dropAllTables = true)
-                .build()
-                .also { instance = it }
+        fun get(context: Context, accountKey: String): AppDatabase = synchronized(this) {
+            require(accountKey.matches(Regex("[0-9a-f]{64}"))) { "invalid account cache key" }
+            val name = "earnest-$accountKey.db"
+            val path = context.getDatabasePath(name).absolutePath
+            instances.getOrPut(path) {
+                Room.databaseBuilder(context.applicationContext, AppDatabase::class.java, name)
+                    .build()
+            }
         }
     }
 }

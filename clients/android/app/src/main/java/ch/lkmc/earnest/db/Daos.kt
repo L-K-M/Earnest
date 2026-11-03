@@ -12,9 +12,6 @@ interface SyncSnapshotDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     fun save(entity: SyncSnapshotEntity)
-
-    @Query("DELETE FROM sync_snapshot")
-    fun clear()
 }
 
 @Dao

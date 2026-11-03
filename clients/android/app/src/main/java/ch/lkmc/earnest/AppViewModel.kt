@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import ch.lkmc.earnest.core.Activity
 import ch.lkmc.earnest.core.Annotation
 import ch.lkmc.earnest.core.ApiException
 import ch.lkmc.earnest.core.EarnestApi
@@ -16,27 +17,19 @@ import ch.lkmc.earnest.core.SubscriptionPatch
 import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.core.SyncRepository
 import ch.lkmc.earnest.core.SyncSnapshot
-import ch.lkmc.earnest.db.AppDatabase
 import ch.lkmc.earnest.db.BriefEntity
 import ch.lkmc.earnest.db.ContentEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import java.time.Instant
 
 data class UiState(
@@ -44,6 +37,12 @@ data class UiState(
     val principalId: Long = 0,
     val states: Map<Long, State> = emptyMap(),
     val cadences: Map<Long, String> = emptyMap(),
+    val todayEntryIds: Set<Long> = initialTodayIds(snapshot, states, cadences),
+    val accountKey: String? = null,
+    val cacheNotice: String? = null,
+    val agentChanges: List<Activity> = emptyList(),
+    val sessionAgentChanges: List<Activity> = emptyList(),
+    val agentChangesError: String? = null,
     val briefs: List<BriefEntity> = emptyList(),
     val principals: Map<Long, String> = emptyMap(),
     val loading: Boolean = false,
@@ -53,105 +52,136 @@ data class UiState(
 )
 
 /**
- * Owns the sync engine and the cached reader state. All engine access is
- * serialized on one dispatcher; the UI only sees [UiState].
+ * Publishes account-scoped reader state. Foreground and background writers
+ * share the reload-through-flush critical section in [SessionCache].
  */
-class AppViewModel(application: Application) : AndroidViewModel(application) {
-    private val secrets = Secrets(application)
-    private val db = AppDatabase.get(application)
+class AppViewModel internal constructor(
+    application: Application,
+    private val sessions: SessionStore,
+    private val apiFactory: (AuthenticatedSession) -> EarnestApi,
+) : AndroidViewModel(application) {
+    constructor(application: Application) : this(application, Secrets(application), {
+        EarnestApi(it.identity.server, it.token)
+    })
+
+    @Volatile private var account: SessionCache? = null
+    @Volatile private var activeSession: AuthenticatedSession? = null
+    private var sessionStartedAt = Instant.now()
+    private var changesSince = Instant.EPOCH.toString()
     private val json = Json { ignoreUnknownKeys = true }
-    private val mutex = Mutex()
-    private var engine: SyncEngine? = null
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
-    private val _loggedIn = MutableStateFlow(secrets.token() != null)
+    private val _loggedIn = MutableStateFlow(sessions.current() != null)
     val loggedIn: StateFlow<Boolean> = _loggedIn.asStateFlow()
 
     init {
-        if (_loggedIn.value) {
-            viewModelScope.launch(Dispatchers.IO) {
-                val store = RoomSyncStore(db)
-                val syncEngine = SyncEngine(store)
-                mutex.withLock {
-                    engine = syncEngine
-                    _state.value = _state.value.copy(
-                        snapshot = syncEngine.snapshot(),
-                        principalId = principalId(),
-                        states = effectiveStates(syncEngine, principalId()),
-                    )
-                }
-                refresh()
-            }
-        }
+        if (_loggedIn.value) onLoggedIn()
     }
 
-    /** Called after a successful device authorization. */
+    /** Called only after /v1/me established the authenticated account. */
     fun onLoggedIn() {
-        _loggedIn.value = true
+        account = null
+        activeSession = null
+        _state.value = UiState()
         viewModelScope.launch(Dispatchers.IO) {
-            val store = RoomSyncStore(db)
-            val syncEngine = SyncEngine(store)
-            mutex.withLock {
-                engine = syncEngine
-                _state.value = _state.value.copy(
-                    snapshot = syncEngine.snapshot(),
-                    principalId = principalId(),
-                    states = effectiveStates(syncEngine, principalId()),
-                )
+            val session = sessions.current() ?: return@launch
+            val cache = SessionCache(getApplication(), session.identity)
+            try {
+                cache.withEngine { syncEngine ->
+                    if (sessions.current() != session) return@withEngine
+                    account = cache
+                    activeSession = session
+                    sessionStartedAt = Instant.now()
+                    changesSince = cache.preferences.getString(SessionCache.KEY_CHANGES_SINCE, null)
+                        ?.takeIf { runCatching { Instant.parse(it) }.isSuccess } ?: Instant.EPOCH.toString()
+                    val changes = cache.agentChanges().filter { Instant.parse(it.createdAt) >= Instant.parse(changesSince) }
+                    _state.value = restoredState(syncEngine, session.identity.principalId).copy(
+                        accountKey = session.identity.cacheKey,
+                        cacheNotice = if (cache.legacyCacheRetained) "An older cache is retained on this device. Its unsent actions need manual recovery because their account is unknown." else null,
+                        briefs = cache.db.briefs().get(),
+                        principals = cachedPrincipalNames(cache),
+                        agentChanges = changes,
+                        agentChangesError = if (cache.agentChangesStale) "Agent changes could not be refreshed. Reconnect to check automated actions." else null,
+                    )
+                    _loggedIn.value = true
+                }
+            } catch (error: Exception) {
+                if (sessions.current() == session) {
+                    _state.value = UiState(error = "Could not restore the account cache: ${error.message}")
+                    _loggedIn.value = true
+                }
+                return@launch
             }
             refresh()
         }
     }
 
     fun logout() {
-        secrets.clearToken()
+        sessions.clearToken()
+        activeSession = null
+        account = null
+        _state.value = UiState()
         _loggedIn.value = false
     }
 
     /** Pulls change pages, flushes the outbox and refreshes the cached briefs. */
     fun refresh() {
         viewModelScope.launch(Dispatchers.IO) {
-            val syncEngine = engine ?: return@launch
+            val cache = account ?: return@launch
+            val session = activeSession ?: return@launch
+            if (!isCurrent(session, cache)) return@launch
             _state.value = _state.value.copy(loading = true, error = null)
             try {
-                val api = api() ?: return@launch
-                mutex.withLock {
-                    syncEngine.reload()
+                val api = apiFactory(session)
+                cache.withEngine { syncEngine ->
+                    if (!isCurrent(session, cache)) return@withEngine
                     val repository = SyncRepository(api, syncEngine)
+                    cache.markAgentChangesStale()
                     repository.pull()
                     val rejected = repository.flush()
                     val expired = syncEngine.expire(Instant.now()).map { it.operation.opId }
                     syncEngine.flush()
-                    val me = runCatching { api.me() }.getOrNull()
-                    me?.let { savePrincipal(it.principalId) }
                     val briefs = runCatching { api.todaysBriefs() }.getOrNull()
-                    if (briefs != null) cacheBriefs(briefs)
-                    val cached = briefs?.map { BriefEntity(it.principalId, it.value, it.rev) } ?: db.briefs().get()
+                    if (briefs != null) cacheBriefs(cache, briefs)
+                    val cached = briefs?.map { BriefEntity(it.principalId, it.value, it.rev) } ?: cache.db.briefs().get()
                     val names = principalNames(api)
-                    savePrincipalNames(names)
+                    savePrincipalNames(cache, names)
+                    val changesResult = runCatching { cache.refreshAgentChanges(api, changesSince) }
+                    changesResult.getOrNull()?.let {
+                        cache.preferences.edit {
+                            putString(SessionCache.KEY_CHANGES_SINCE, sessionStartedAt.toString())
+                        }
+                    }
+                    if (!isCurrent(session, cache)) return@withEngine
+                    val restored = restoredState(syncEngine, cache.identity.principalId)
+                    val changes = changesResult.getOrNull() ?: _state.value.agentChanges
                     _state.value = _state.value.copy(
                         snapshot = syncEngine.snapshot(),
-                        principalId = me?.principalId ?: principalId(),
-                        states = effectiveStates(syncEngine, me?.principalId ?: principalId()),
-                        cadences = cadences(syncEngine),
+                        principalId = cache.identity.principalId,
+                        states = effectiveStates(syncEngine, cache.identity.principalId),
+                        cadences = restored.cadences,
+                        todayEntryIds = restored.todayEntryIds,
+                        agentChanges = changes,
+                        sessionAgentChanges = changes.filter { Instant.parse(it.createdAt) >= sessionStartedAt },
+                        agentChangesError = changesResult.exceptionOrNull()?.let { "Could not refresh agent changes: ${it.message}" },
                         briefs = cached,
-                        principals = names.ifEmpty { cachedPrincipalNames() },
+                        principals = names.ifEmpty { cachedPrincipalNames(cache) },
                         rejected = rejected,
                         expired = expired,
                     )
                 }
             } catch (error: ApiException) {
+                if (!isCurrent(session, cache)) return@launch
                 if (error.isUnauthorized) {
-                    secrets.clearToken()
-                    _loggedIn.value = false
+                    logout()
                 }
                 _state.value = _state.value.copy(error = error.message)
             } catch (error: Exception) {
-                _state.value = _state.value.copy(error = error.message)
+                if (isCurrent(session, cache)) _state.value = _state.value.copy(error = error.message)
             } finally {
-                _state.value = _state.value.copy(loading = false)
+                if (isCurrent(session, cache)) _state.value = _state.value.copy(loading = false)
             }
         }
     }
@@ -186,12 +216,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun queue(entryId: Long, register: String, value: JsonElement, kind: String, action: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            val syncEngine = engine ?: return@launch
-            mutex.withLock {
-                val principal = principalId()
+            val cache = account ?: return@launch
+            val session = activeSession ?: return@launch
+            cache.withEngine { syncEngine ->
+                if (!isCurrent(session, cache)) return@withEngine
+                val principal = cache.identity.principalId
                 if (principal == 0L || syncEngine.snapshot().cursor.generation.isEmpty()) {
                     _state.value = _state.value.copy(error = "Still signing in; the action was not saved.")
-                    return@launch
+                    return@withEngine
                 }
                 val current = syncEngine.state(principal, entryId)
                 val base = when (register) {
@@ -200,7 +232,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     else -> current.seen.rev
                 }
                 val write = StateWrite(
-                    opId = "$action-$entryId-${System.currentTimeMillis()}",
+                    opId = "$action-$entryId-${java.util.UUID.randomUUID()}",
                     principal = principal,
                     entryId = entryId,
                     register = register,
@@ -214,6 +246,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _state.value = _state.value.copy(
                     snapshot = syncEngine.snapshot(),
                     states = effectiveStates(syncEngine, principal),
+                    cadences = restoredState(syncEngine, principal).cadences,
+                    agentChanges = cache.agentChanges(),
+                    sessionAgentChanges = cache.agentChanges().filter { Instant.parse(it.createdAt) >= sessionStartedAt },
                 )
             }
         }
@@ -261,11 +296,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      * null when the server cannot be reached and nothing is cached.
      */
     suspend fun openEntry(entryId: Long): ContentUrlResult? = withContext(Dispatchers.IO) {
+        val cache = account ?: return@withContext null
+        val session = activeSession ?: return@withContext null
         val api = api() ?: return@withContext null
-        val cached = db.content().get(entryId)
+        val cached = cache.db.content().get(entryId)
         val content = runCatching { api.content(entryId) }.getOrNull()
         content?.let {
-            db.content().save(
+            cache.db.content().save(
                 ContentEntity(
                     entryId = entryId,
                     html = it.html,
@@ -278,6 +315,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
         val url = runCatching { api.contentUrl(entryId) }.getOrNull()
         val fallback = content?.html ?: cached?.html
+        if (!isCurrent(session, cache)) return@withContext null
         when {
             url != null -> ContentUrlResult(url.url, url.expiresAt, fallback)
             fallback != null -> ContentUrlResult(null, null, fallback)
@@ -292,23 +330,35 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Resolves a stored notification to the entry it should open. */
     suspend fun notificationEntry(notificationId: Long): Long? = withContext(Dispatchers.IO) {
+        val cache = account ?: return@withContext null
+        val session = activeSession ?: return@withContext null
         val api = api() ?: return@withContext null
-        runCatching { api.notification(notificationId).entryIds?.firstOrNull() }.getOrNull()
+        val entry = runCatching { api.notification(notificationId).entryIds?.firstOrNull() }.getOrNull()
+        entry.takeIf { isCurrent(session, cache) }
     }
+
+    internal suspend fun loadEntry(entryId: Long): ch.lkmc.earnest.core.CachedEntry? = withContext(Dispatchers.IO) {
+        val cache = account ?: return@withContext null
+        val session = activeSession ?: return@withContext null
+        cache.withEngine { engine ->
+            if (!isCurrent(session, cache)) return@withEngine null
+            val entry = SyncRepository(apiFactory(session), engine).loadEntry(entryId)
+            if (!isCurrent(session, cache)) return@withEngine null
+            _state.value = _state.value.copy(
+                snapshot = engine.snapshot(),
+                states = effectiveStates(engine, cache.identity.principalId),
+            )
+            entry
+        }
+    }
+
+    private fun isCurrent(session: AuthenticatedSession, cache: SessionCache): Boolean =
+        account === cache && activeSession == session && sessions.current() == session
 
     private fun api(): EarnestApi? {
-        val token = secrets.token() ?: return null
-        return EarnestApi(secrets.server, token)
-    }
-
-    private fun principalId(): Long {
-        val prefs = getApplication<Application>().getSharedPreferences(PREFS, Application.MODE_PRIVATE)
-        return prefs.getLong(KEY_PRINCIPAL, 0L)
-    }
-
-    private fun savePrincipal(principalId: Long) {
-        getApplication<Application>().getSharedPreferences(PREFS, Application.MODE_PRIVATE)
-            .edit { putLong(KEY_PRINCIPAL, principalId) }
+        val session = sessions.current() ?: return null
+        if (session.identity != account?.identity) return null
+        return apiFactory(session)
     }
 
     /** Maps principal IDs to the names agents chose for themselves. */
@@ -318,26 +368,26 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             .associate { it.principalId to it.name }
 
     /** Keeps the last known agent names so briefs stay labelled offline. */
-    private fun savePrincipalNames(names: Map<Long, String>) {
+    private fun savePrincipalNames(cache: SessionCache, names: Map<Long, String>) {
         if (names.isEmpty()) return
         val encoded = runCatching {
             json.encodeToString(MapSerializer(Long.serializer(), String.serializer()), names)
         }.getOrNull() ?: return
-        getApplication<Application>().getSharedPreferences(PREFS, Application.MODE_PRIVATE)
+        cache.preferences
             .edit { putString(KEY_PRINCIPALS, encoded) }
     }
 
-    private fun cachedPrincipalNames(): Map<Long, String> {
-        val encoded = getApplication<Application>().getSharedPreferences(PREFS, Application.MODE_PRIVATE)
+    private fun cachedPrincipalNames(cache: SessionCache): Map<Long, String> {
+        val encoded = cache.preferences
             .getString(KEY_PRINCIPALS, null) ?: return emptyMap()
         return runCatching {
             json.decodeFromString(MapSerializer(Long.serializer(), String.serializer()), encoded)
         }.getOrDefault(emptyMap())
     }
 
-    private suspend fun cacheBriefs(briefs: List<Annotation>) {
-        db.briefs().clear()
-        db.briefs().saveAll(briefs.map { BriefEntity(it.principalId, it.value, it.rev) })
+    private suspend fun cacheBriefs(cache: SessionCache, briefs: List<Annotation>) {
+        cache.db.briefs().clear()
+        cache.db.briefs().saveAll(briefs.map { BriefEntity(it.principalId, it.value, it.rev) })
     }
 
     private fun effectiveStates(syncEngine: SyncEngine, principal: Long): Map<Long, State> {
@@ -347,20 +397,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             .associate { it.id to syncEngine.state(principal, it.id) }
     }
 
-    private fun cadences(syncEngine: SyncEngine): Map<Long, String> =
-        syncEngine.snapshot().objects
-            .filter { it.kind == SyncEngine.OBJECT_SUBSCRIPTION && !it.deleted && it.raw.isNotEmpty() }
-            .associate { obj ->
-                val cadence = runCatching { json.parseToJsonElement(obj.raw).jsonObject["cadence"]?.jsonPrimitive?.contentOrNull }
-                    .getOrNull() ?: "today"
-                obj.id to cadence
-            }
-
     private fun opId(action: String) = "$action-${System.currentTimeMillis()}"
 
     companion object {
-        private const val PREFS = "session"
-        private const val KEY_PRINCIPAL = "principal_id"
         private const val KEY_PRINCIPALS = "principal_names"
     }
 }

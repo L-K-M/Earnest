@@ -22,8 +22,7 @@ class RoomSyncStore(private val db: AppDatabase) : SyncStore {
 
     override fun load(): SyncSnapshot {
         val row = runBlocking { db.snapshot().load() } ?: return SyncSnapshot(Revision("", 0))
-        return runCatching { json.decodeFromString(SyncSnapshot.serializer(), row.json) }
-            .getOrDefault(SyncSnapshot(Revision("", 0)))
+        return json.decodeFromString(SyncSnapshot.serializer(), row.json)
     }
 
     override fun save(snapshot: SyncSnapshot) {
@@ -34,7 +33,6 @@ class RoomSyncStore(private val db: AppDatabase) : SyncStore {
         mutex.withLock {
             pending?.let { snapshot ->
                 val encoded = json.encodeToString(SyncSnapshot.serializer(), snapshot)
-                db.snapshot().clear()
                 db.snapshot().save(SyncSnapshotEntity(json = encoded))
             }
             pending = null

@@ -66,8 +66,8 @@ class EarnestPushService : PushService() {
 
     private suspend fun registerEndpoint(url: String, keys: PublicKeySet) {
         val secrets = Secrets(this)
-        val token = secrets.token() ?: return
-        val api = EarnestApi(secrets.server, token)
+        val session = secrets.current() ?: return
+        val api = EarnestApi(session.identity.server, session.token)
         val body = DeviceBody(
             kind = KIND_UNIFIEDPUSH,
             endpoint = url,

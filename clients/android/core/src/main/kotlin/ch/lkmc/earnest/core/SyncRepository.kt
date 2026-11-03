@@ -62,7 +62,7 @@ class SyncRepository(
                 continue
             }
             val changes = page.changes.orEmpty()
-            engine.applyPage(changes.map(::change), page.next)
+            engine.applyPage(changes.map { change(it) }, page.next)
             engine.flush()
             if (changes.isEmpty()) return
         }
@@ -81,8 +81,10 @@ class SyncRepository(
             val range = item.range
             if (range != null) {
                 engine.markInFlight(range.write.opId)
+                engine.flush()
                 val result = api.through(ThroughBody(range.write, range.scope, range.throughSeq))
                 engine.acknowledgeRange(range.write.opId, generation, result)
+                engine.flush()
                 if (result.status == SyncEngine.STATUS_EXPIRED || result.status == SyncEngine.STATUS_GONE) {
                     rejected += RejectedOperation(range.write.opId, result.status)
                 }
@@ -90,21 +92,26 @@ class SyncRepository(
             }
 
             val writes = mutableListOf<StateWrite>()
-            while (writes.size < BATCH_LIMIT) {
-                val next = engine.snapshot().outbox.firstOrNull() ?: break
+            val targets = mutableSetOf<Triple<Long, Long, String>>()
+            val ids = mutableSetOf<String>()
+            for (next in engine.snapshot().outbox.take(BATCH_LIMIT)) {
                 if (next.range != null) break
-                if (next.operation.base.generation != generation) break
-                writes += next.operation
-                engine.markInFlight(next.operation.opId)
+                val operation = next.operation
+                if (operation.base.generation != generation) break
+                if (!targets.add(Triple(operation.principal, operation.entryId, operation.register))) break
+                if (!ids.add(operation.opId)) break
+                writes += operation
+                engine.markInFlight(operation.opId)
             }
+            engine.flush()
             require(writes.isNotEmpty()) { "outbox advanced without a request" }
             val results = api.batch(writes)
             require(results.size == writes.size) { "batch acknowledgement size mismatch" }
             engine.acknowledge(generation, results)
+            engine.flush()
             results.filter { it.status == SyncEngine.STATUS_GONE || it.status == SyncEngine.STATUS_EXPIRED }
                 .forEach { rejected += RejectedOperation(it.opId, it.status) }
         }
-        engine.flush()
     }
 
     /** Drops queue items older than 30 days and returns them for reporting. */
@@ -175,14 +182,14 @@ class SyncRepository(
         }
     }
 
-    private fun change(record: ChangeRecord): SyncChange {
+    private suspend fun change(record: ChangeRecord): SyncChange {
         val payload = record.payload.jsonObject
-        val entry = payload["entry"]?.let { cachedEntry(it.jsonObject, it) }
+        val entry = payload["entry"]?.let { hydrate(cachedEntry(it.jsonObject, it)) }
         val position = payload["position"]?.let {
             val item = it.jsonObject
             CachedPosition(long(item, "principal"), string(item, "view"), long(item, "seq"), long(item, "rev"))
         }
-        val obj = payload["object"]?.let { parseObject(it) }
+        val obj = payload["object"]?.let { parseObject(it, payload) }
         val results = payload["results"] ?: payload["range"]?.jsonObject?.get("results")
         val states = results?.takeUnless { it is JsonNull }?.let { element ->
             json.decodeFromJsonElement(
@@ -194,14 +201,14 @@ class SyncRepository(
     }
 
     /** Parses a protocol object and keeps its native companion projection in [SyncObject.raw]. */
-    private fun parseObject(value: JsonElement): SyncObject {
+    private fun parseObject(value: JsonElement, payload: JsonObject): SyncObject {
         val item = value.jsonObject
         val kind = string(item, "kind")
         val companion = when (kind) {
-            SyncEngine.OBJECT_SUBSCRIPTION -> item["subscription"]
-            SyncEngine.OBJECT_FOLDER -> item["folder"]
-            SyncEngine.OBJECT_LABEL -> item["label"]
-            SyncEngine.OBJECT_ANNOTATION -> item["annotation"]
+            SyncEngine.OBJECT_SUBSCRIPTION -> payload["subscription"]
+            SyncEngine.OBJECT_FOLDER -> payload["folder"]
+            SyncEngine.OBJECT_LABEL -> payload["label"]
+            SyncEngine.OBJECT_ANNOTATION -> payload["annotation"]
             else -> null
         }
         return SyncObject(
@@ -215,6 +222,28 @@ class SyncRepository(
             deleted = boolean(item, "deleted"),
             raw = companion?.toString() ?: value.toString(),
         )
+    }
+
+    /** Resolves a deep link absent from the snapshot, retaining a 404 as a tombstone. */
+    suspend fun loadEntry(id: Long): CachedEntry? {
+        val cached = engine.snapshot().entries.firstOrNull { it.id == id }
+        if (cached != null) return cached.takeUnless { it.deleted }
+
+        val entry = hydrate(CachedEntry(id))
+        engine.mergeEntry(entry)
+        engine.flush()
+        return entry.takeUnless { it.deleted }
+    }
+
+    private suspend fun hydrate(entry: CachedEntry): CachedEntry {
+        if (entry.deleted) return entry
+        return try {
+            val value = json.encodeToJsonElement(Entry.serializer(), api.entry(entry.id))
+            cachedEntry(value.jsonObject, value)
+        } catch (error: ApiException) {
+            if (error.status != 404) throw error
+            entry.copy(deleted = true)
+        }
     }
 
     private fun cachedEntry(item: JsonObject, raw: JsonElement): CachedEntry = CachedEntry(
