@@ -26,6 +26,7 @@ import AppKit
     @Published private(set) var imageOrigin: URL?
     @Published private(set) var imageMode: ArticleImageMode = .proxied
     @Published private(set) var readingEntry: APIEntry?
+    @Published private(set) var offlineCopy = false
     @Published var error: String?
     @Published var connectionNote: String?
     @Published var code: DeviceAuthorization?
@@ -43,6 +44,10 @@ import AppKit
     private var api: EarnestAPI?
     private var tokens: KeychainTokens?
     private var serverURL: URL?
+    private let identities: IdentityStore
+    private let cacheDirectory: URL?
+    private var identity: AccountIdentity?
+    private var cache: Cache?
     private var engine: SyncEngine?
     private var coordinator: SyncCoordinator?
     private var principalID: Int64 = 0
@@ -51,7 +56,11 @@ import AppKit
     private var tasks: [String: Task<Void, Never>] = [:]
     private var sessionActions = SessionCounts()
 
-    init(api: EarnestAPI? = nil, engine: SyncEngine? = nil, principalID: Int64 = 0) {
+    init(api: EarnestAPI? = nil, engine: SyncEngine? = nil, principalID: Int64 = 0,
+         serverURL: URL? = nil, identities: IdentityStore = IdentityStore(), cacheDirectory: URL? = nil) {
+        self.serverURL = serverURL
+        self.identities = identities
+        self.cacheDirectory = cacheDirectory
         self.api = api
         self.engine = engine
         self.principalID = principalID
@@ -77,6 +86,8 @@ import AppKit
         tasks.values.forEach { $0.cancel() }
         tasks.removeAll()
         engine = nil
+        cache = nil
+        identity = nil
         coordinator = nil
         principalID = 0
         entries = []
@@ -94,6 +105,7 @@ import AppKit
         imageOrigin = nil
         imageMode = .proxied
         readingEntry = nil
+        offlineCopy = false
         code = nil
         loggingIn = false
         loggedIn = false
@@ -129,65 +141,117 @@ import AppKit
     }
 
     func signOut() {
+        if let serverURL { identities.remove(server: serverURL) }
         endSession()
         do { try tokens?.delete() } catch { report(error) }
     }
 
-    /// A new session resolves the principal once, then builds the persisted
-    /// cache, sync engine and network coordinator around it.
+    /// Retry identity verification without letting an offline credential send
+    /// the remembered account's outbox under a different principal.
     private func startSession() {
         let s = session
         runTask("session") { [weak self] in
-            guard let self, let api = self.api else { return }
-            do {
-                let me = try await api.me()
-                guard self.session == s, self.loggedIn else { return }
-                guard let principal = parsePrincipalID(me), let url = self.serverURL else { throw APIError.invalidResponse }
-                self.principalID = principal
-                let engine = SyncEngine(store: try Cache(server: url, principal: principal))
-                self.engine = engine
-                self.coordinator = SyncCoordinator(engine: engine, api: api)
-                self.refreshPrincipalNames()
-                await self.refresh()
-                self.startEvents()
-                self.scheduleSync()
-            } catch is CancellationError {
-            } catch { if self.session == s { self.report(error) } }
+            while !Task.isCancelled {
+                guard let self, self.session == s, self.loggedIn else { return }
+                do {
+                    if try await self.establishSession() {
+                        guard self.session == s, !Task.isCancelled else { return }
+                        self.refreshPrincipalNames()
+                        self.startEvents()
+                        self.scheduleSync()
+                        return
+                    }
+                } catch is CancellationError {
+                    return
+                } catch {
+                    guard self.session == s, !Task.isCancelled else { return }
+                    self.report(error)
+                    if !ErrorPresentation.isConnection(error) { return }
+                }
+                try? await Task.sleep(for: .seconds(10))
+            }
         }
+    }
+
+    /// Also used before reconnect sync. A verified replacement starts with
+    /// its own empty presentation before any of its cache is attached.
+    func establishSession() async throws -> Bool {
+        guard let api, let url = serverURL else { return false }
+        let expectedSession = session
+        let result: Result<APIValue, Error>
+        do { result = .success(try await api.me()) }
+        catch { result = .failure(error) }
+        try Task.checkCancellation()
+        guard session == expectedSession, loggedIn else { return false }
+        let remembered: AccountIdentity?
+        if case .failure(let error) = result, ErrorPresentation.isConnection(error) {
+            remembered = try identities.load(server: url)
+        } else {
+            remembered = nil
+        }
+        let resolution = try SessionResolution.resolve(server: url, result: result, remembered: remembered)
+        let resolved = resolution.identity
+        if case .verified = resolution { try identities.save(resolved) }
+        if let identity, identity != resolved {
+            endSession()
+            loggedIn = true
+            startSession()
+            return false
+        }
+        if identity == nil {
+            let cache = try Cache(identity: resolved, directory: cacheDirectory)
+            let engine = SyncEngine(store: cache)
+            self.cache = cache
+            self.engine = engine
+            self.identity = resolved
+            principalID = resolved.principalID
+            coordinator = SyncCoordinator(engine: engine, api: api)
+            try restoreCachedPresentation()
+        }
+        if case .offline = resolution {
+            connectionNote = "Offline. Showing what was last synced."
+            return false
+        }
+        return true
+    }
+
+    private func restoreCachedPresentation() throws {
+        guard let engine, let cache else { return }
+        let snapshot = try engine.snapshot()
+        entries = try snapshot.entries.filter { !$0.deleted && $0.hasBody }.sorted { $0.seq > $1.seq }
+            .map { try cachedEntry($0, principal: principalID, engine: engine) }
+        let generation = snapshot.cursor?.generation ?? ""
+        feeds = try cache.resource("feeds", generation: generation).compactMap(FeedInfo.init).filter { !$0.deleted }
+        feedMap = Dictionary(feeds.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+        briefs = try cache.resource("briefs", generation: generation).compactMap(BriefItem.init)
+        rebuildPresentation()
     }
 
     private func startEvents() {
         let s = session
         runTask("events") { [weak self] in
             while !Task.isCancelled {
-                guard let self, let coordinator = self.coordinator, self.session == s else { return }
+                guard let self, let api = self.api, self.session == s else { return }
                 do {
-                    try await coordinator.runEvents { [weak self] report in
-                        // Every hint means the engine state moved; refresh the
-                        // displayed list so agent changes arrive live.
-                        guard let self, self.session == s else { return }
-                        if !report.droppedOperationIDs.isEmpty {
-                            self.connectionNote = "\(report.droppedOperationIDs.count) queued action(s) expired or no longer apply."
-                        }
-                        self.rebuildPresentation()
-                        await self.refresh()
+                    let cursor = try self.engine?.snapshot().cursor
+                    let text = cursor.map { "\($0.generation):\($0.rev)" }
+                    for try await _ in try api.eventHints(cursor: text) {
+                        guard self.session == s, !Task.isCancelled else { return }
+                        self.scheduleSync()
                     }
                     return
                 } catch is CancellationError {
                     return
                 } catch {
                     guard !Task.isCancelled, self.session == s else { return }
-                    if let problem = error as? APIProblem, [401, 403].contains(problem.status) {
-                        self.report(error)
-                        return
-                    }
-                    self.connectionNote = "Live updates interrupted; retrying."
+                    self.report(error)
+                    if ErrorPresentation.isUnauthorized(error) { return }
                     try? await Task.sleep(for: .seconds(10))
                 }
             }
         }
-        // The event stream keeps the engine fresh, but entry lists are API
-        // fetches: poll on a slow cadence so new items arrive on their own.
+        // Poll as well as following hints so a quiet or interrupted stream
+        // cannot prevent retrying queued work.
         runTask("poll") { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(120))
@@ -202,7 +266,7 @@ import AppKit
     /// Passive marks coalesce for `delay` so rapid j/k browsing costs one
     /// round trip; the named task cancels the previous pending sync.
     func scheduleSync(delay: Double) {
-        guard let coordinator else { return }
+        guard coordinator != nil else { return }
         let s = session
         runTask("sync") { [weak self] in
             if delay > 0 { try? await Task.sleep(for: .milliseconds(Int(delay * 1000))) }
@@ -210,8 +274,17 @@ import AppKit
             self.syncing = true
             defer { if !Task.isCancelled, self.session == s { self.syncing = false } }
             do {
+                if self.serverURL != nil {
+                    guard try await self.establishSession(), self.session == s else { return }
+                }
+                guard let coordinator = self.coordinator else { return }
+                let generation = try self.engine?.snapshot().cursor?.generation
                 let report = try await coordinator.synchronize()
                 guard !Task.isCancelled, self.session == s, self.loggedIn else { return }
+                if (try self.engine?.snapshot().cursor?.generation) != generation {
+                    self.selected = nil
+                    try self.restoreCachedPresentation()
+                }
                 if !report.droppedOperationIDs.isEmpty {
                     self.connectionNote = "\(report.droppedOperationIDs.count) queued action(s) expired or no longer apply."
                 } else {
@@ -222,22 +295,19 @@ import AppKit
             } catch is CancellationError {
             } catch {
                 guard self.session == s else { return }
-                self.connectionNote = "Sync failed: \(String(describing: error))"
+                self.report(error)
             }
         }
     }
 
     private func report(_ error: Error) {
-        if let problem = error as? APIProblem {
-            if problem.status == 401 {
-                signOut()
-                self.error = "Your sign-in expired or was revoked. Sign in again."
-                return
-            }
-            self.error = problem.detail ?? problem.title
-        } else {
-            self.error = String(describing: error)
+        if ErrorPresentation.isUnauthorized(error) { signOut() }
+        let message = ErrorPresentation.message(error)
+        if ErrorPresentation.isConnection(error) {
+            connectionNote = message
+            return
         }
+        self.error = message
     }
 
     // MARK: - Device login
@@ -245,6 +315,7 @@ import AppKit
     func login() {
         guard let api, let loginTokens = tokens, !loggingIn else { return }
         let expectedSession = session
+        if let serverURL { identities.remove(server: serverURL) }
         loggingIn = true
         runTask("login") { [weak self] in
             guard let self else { return }
@@ -358,6 +429,10 @@ import AppKit
         } catch is CancellationError {
         } catch {
             guard session == expectedSession, (try? engine.snapshot().cursor?.generation) == generation else { return }
+            if ErrorPresentation.isConnection(error) {
+                do { try restoreCachedPresentation() }
+                catch { report(error) }
+            }
             report(error)
         }
     }
@@ -365,9 +440,15 @@ import AppKit
     private func refreshFeeds() async {
         guard let api else { return }
         let expectedSession = session
+        let generation = try? engine?.snapshot().cursor?.generation
         do {
-            let subs = try await api.subscriptions().compactMap(FeedInfo.init).filter { !$0.deleted }
-            guard loggedIn, session == expectedSession, !Task.isCancelled else { return }
+            let values = try await api.subscriptions()
+            guard loggedIn, session == expectedSession, !Task.isCancelled,
+                  (try? engine?.snapshot().cursor?.generation) == generation else { return }
+            if let generation {
+                try cache?.saveResource("feeds", values: values, generation: generation)
+            }
+            let subs = values.compactMap(FeedInfo.init).filter { !$0.deleted }
             feeds = subs
             feedMap = Dictionary(subs.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         } catch is CancellationError {
@@ -377,9 +458,15 @@ import AppKit
     private func refreshBriefs() async {
         guard let api else { return }
         let expectedSession = session
+        let generation = try? engine?.snapshot().cursor?.generation
         do {
-            let items = try await api.todayBriefs().compactMap(BriefItem.init)
-            guard loggedIn, session == expectedSession, !Task.isCancelled else { return }
+            let values = try await api.todayBriefs()
+            guard loggedIn, session == expectedSession, !Task.isCancelled,
+                  (try? engine?.snapshot().cursor?.generation) == generation else { return }
+            if let generation {
+                try cache?.saveResource("briefs", values: values, generation: generation)
+            }
+            let items = values.compactMap(BriefItem.init)
             briefs = items
             if items.contains(where: { principalNames[$0.principalID] == nil }) { refreshPrincipalNames() }
         } catch is CancellationError {
@@ -659,12 +746,14 @@ import AppKit
         html = ""
         imageOrigin = nil
         readingEntry = nil
+        offlineCopy = false
         guard let id, loggedIn else { return }
         let mode = imageMode
         runTask("open") { [weak self] in
             guard let self, let api = self.api, let engine = self.engine, self.loggedIn,
                   let generation = try? engine.snapshot().cursor?.generation else { return }
             let expectedSession = self.session
+            let cache = self.cache
             do {
                 if !self.entries.contains(where: { $0.id == id }) {
                     let entry = try await api.entry(id: id)
@@ -678,6 +767,8 @@ import AppKit
                 self.readingEntry = entry
                 let article: String
                 let origin: URL?
+                var offline = false
+                var contentError: Error?
                 do {
                     let signed = try await api.signedContent(entryID: id, mode: mode)
                     article = signed.html
@@ -685,17 +776,34 @@ import AppKit
                 } catch is CancellationError {
                     return
                 } catch {
-                    article = try await api.content(entryID: id).html
+                    if ErrorPresentation.isUnauthorized(error) { throw error }
+                    do {
+                        article = try await api.content(entryID: id).html
+                    } catch {
+                        if ErrorPresentation.isUnauthorized(error) || error is CancellationError { throw error }
+                        try Task.checkCancellation()
+                        guard self.session == expectedSession,
+                              (try? engine.snapshot().cursor?.generation) == generation else { return }
+                        guard let saved = try cache?.article(entryID: id, generation: generation) else { throw error }
+                        article = saved
+                        offline = true
+                        contentError = error
+                    }
                     origin = nil
                 }
                 guard self.selected == id, self.loggedIn, self.session == expectedSession,
                       (try? engine.snapshot().cursor?.generation) == generation, !Task.isCancelled else { return }
+                try cache?.saveArticle(entryID: id, html: article, generation: generation)
                 self.html = article
                 self.imageOrigin = origin
+                self.offlineCopy = offline
+                if let contentError, ErrorPresentation.isConnection(contentError) {
+                    self.connectionNote = ErrorPresentation.message(contentError)
+                }
                 self.markSeen(entryID: id, entry: self.entries.first(where: { $0.id == id }))
             } catch is CancellationError {
             } catch {
-                guard self.loggedIn, self.session == expectedSession,
+                guard self.loggedIn, self.session == expectedSession, self.selected == id, !Task.isCancelled,
                       (try? engine.snapshot().cursor?.generation) == generation else { return }
                 var missing = (error as? APIProblem)?.status == 404
                 if case APIError.httpStatus(404) = error { missing = true }

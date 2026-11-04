@@ -53,9 +53,33 @@ server hostname; the app does not disable ATS globally.
 
 Device login uses `/v1/devices/start` and `/v1/devices/poll`, obeys the poll
 interval and expiry, handles pending/slow-down responses, and stores the bearer
-token in the macOS Keychain. The database cache is partitioned by configured
-server and authenticated principal. GRDB transactions persist a complete sync
-snapshot and its cursor together. Tokens never enter that cache.
+token in the macOS Keychain. After a successful `/v1/me`, the app remembers the
+verified server origin, user ID and principal ID in preferences, without the
+token. Cache partitions include all three values. Origins normalize hostname
+case, the default HTTP/HTTPS port and a trailing slash; use an HTTP or HTTPS
+origin without a path, credentials, query or fragment. GRDB transactions persist
+a complete sync snapshot and its cursor together. Tokens never enter that cache.
+
+On cold launch, a connection failure (offline, refused connection, DNS failure,
+lost connection or timeout) reopens the last verified identity's cache. Cached
+article rows, subscription titles and cadences, and Today briefs appear without
+a successful network request. Reading and triage continue against the durable
+outbox. The app retries identity verification every ten seconds until it can
+start sync, and verifies `/v1/me` before sending queued actions on subsequent
+sync attempts. Event hints trigger sync, with a two-minute poll as a fallback.
+A changed user or principal clears the old presentation and opens only the
+newly verified identity's partition. A 401 signs you out. Signing out
+or starting a fresh device login forgets the offline identity for that server;
+a new credential must establish its own identity online before using a cache.
+
+Connection failures appear in the non-modal connection note as “Offline.
+Showing what was last synced.” Successful sync clears that note. Actionable
+failures use an alert with a human-readable message. TLS trust failures and
+HTTP errors do not authorize offline identity recovery.
+
+The earlier server/principal-only cache is retained on disk but is not reused:
+it has no verified user ID. After upgrading, connect and sync once while online
+to populate the new identity partition before relying on offline launch.
 
 The coordinator bootstraps resources by keyset pagination, pulls contiguous
 `/v1/changes` pages, sends register batches and first-class ranges in outbox
@@ -109,6 +133,14 @@ browser. The reader's **Load Images** button explicitly re-fetches the article
 with `mode=proxied`. Opening another deep link blocks images again, even when it
 names the same article. Fallback content never authorizes original image URLs.
 
+The reader saves the HTML it displays in the identity's SQLite cache. It retains
+the 200 most recently opened articles, including reads of saved copies. If both
+content requests fail, a saved copy from the current sync generation is shown
+with an “Offline copy. Images are blocked.” note. Offline copies never authorize
+image subresources, even if the saved HTML came from a signed proxied response.
+A 401 still signs you out instead of displaying a saved copy. Cache copies and
+briefs from an older server generation are not reused after a restore.
+
 A SwiftUI header above the HTML shows the publisher's title as a heading,
 feed title, author and published date (or first-seen date), followed by **Open
 Original**, which opens the article URL in the default browser. The WebKit page
@@ -125,8 +157,11 @@ and article. Agent text remains plain SwiftUI text.
 The hosted app tests snapshot a WKWebView with dark appearance and assert its
 background pixel, check short and long brief layout, inspect Activity button
 accessibility labels, deliver native URL events to the running app, and exercise
-content image policies and fallback loading. The test scheme supplies an empty server preference
-for that launch so tests do not use your saved connection or Keychain credential.
+content image policies and fallback loading. Offline tests cover identity
+persistence and validation, connection-only recovery, changed accounts, 401
+sign-out, durable rows/briefs/outbox restoration, cached reader HTML, generation
+checks, article eviction and server/user/principal isolation. The test scheme
+supplies an empty server preference for that launch so tests do not use your saved connection or Keychain credential.
 
 For scene routing, launch the app, run `open earnest://entry/3` twice and confirm
 that the same window receives both URLs. Use File > New Window to create another
@@ -134,6 +169,15 @@ window, then close every window and open the URL again to confirm one is created
 At the 880 × 520 minimum window size, check Feeds: titles wrap above the cadence
 picker and the unsubscribe icon, whose help and accessibility label name the
 feed. Briefs grow with their text up to 180 points, then scroll.
+
+For an end-to-end offline check, sign in online, sync, open an article and note
+its brief and feed title. Stop the server, quit and relaunch the app. Confirm
+cached rows and briefs appear with a connection note and no alert. Open the
+article and confirm the offline-copy note appears and images stay blocked.
+Queue Keep or Later, quit and relaunch again, then restart the server. Confirm
+the queued state syncs and the connection note clears. Repeat with a revoked
+token to check sign-out, and sign in as another account to check that the prior
+account's rows, briefs, HTML and queued actions never appear.
 
 ## Distribution later
 

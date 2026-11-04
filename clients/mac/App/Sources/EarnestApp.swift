@@ -114,6 +114,12 @@ import EarnestKit
                         }
                         .padding(8)
                     }
+                    if model.offlineCopy {
+                        Text("Offline copy. Images are blocked.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(8)
+                    }
                     Reader(html: model.html, imageOrigin: model.imageOrigin)
                 }
                 .background(Color(nsColor: .textBackgroundColor))
