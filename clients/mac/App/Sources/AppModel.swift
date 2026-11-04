@@ -44,7 +44,7 @@ import AppKit
     @Published var subscribeCadence = "today"
 
     private var api: EarnestAPI?
-    private var tokens: KeychainTokens?
+    private var tokens: (any TokenStore)?
     private var serverURL: URL?
     private let identities: IdentityStore
     private let cacheDirectory: URL?
@@ -60,8 +60,9 @@ import AppKit
     private var sessionActions = SessionCounts()
 
     init(api: EarnestAPI? = nil, engine: SyncEngine? = nil, principalID: Int64 = 0,
-         serverURL: URL? = nil, identities: IdentityStore = IdentityStore(), cacheDirectory: URL? = nil) {
+         serverURL: URL? = nil, tokens: (any TokenStore)? = nil, identities: IdentityStore = IdentityStore(), cacheDirectory: URL? = nil) {
         self.serverURL = serverURL
+        self.tokens = tokens
         self.identities = identities
         self.cacheDirectory = cacheDirectory
         self.api = api
@@ -263,8 +264,11 @@ import AppKit
                     return
                 } catch {
                     guard !Task.isCancelled, self.session == s else { return }
-                    self.report(error)
-                    if ErrorPresentation.isUnauthorized(error) { return }
+                    if ErrorPresentation.isUnauthorized(error) {
+                        self.report(error)
+                        return
+                    }
+                    self.connectionNote = "Live updates interrupted; retrying."
                     try? await Task.sleep(for: .seconds(10))
                 }
             }
@@ -336,7 +340,6 @@ import AppKit
     func login() {
         guard let api, let loginTokens = tokens, !loggingIn else { return }
         let expectedSession = session
-        if let serverURL { identities.remove(server: serverURL) }
         loggingIn = true
         runTask("login") { [weak self] in
             guard let self else { return }
@@ -363,6 +366,8 @@ import AppKit
                             if (try? loginTokens.load()) == token.accessToken { try? loginTokens.delete() }
                             return
                         }
+                        // New credentials must verify their own account before cache reuse.
+                        if let serverURL = self.serverURL { self.identities.remove(server: serverURL) }
                         self.code = nil
                         self.loggedIn = true
                         self.startSession()
@@ -843,7 +848,8 @@ import AppKit
                 }
                 guard self.selected == id, self.loggedIn, self.session == expectedSession,
                       (try? engine.snapshot().cursor?.generation) == generation, !Task.isCancelled else { return }
-                try cache?.saveArticle(entryID: id, html: article, generation: generation)
+                // Persistence is best effort once the article is available to read.
+                try? cache?.saveArticle(entryID: id, html: article, generation: generation)
                 self.html = article
                 self.imageOrigin = origin
                 self.offlineCopy = offline

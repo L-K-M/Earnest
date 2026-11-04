@@ -17,10 +17,13 @@ class SyncRepositoryTest {
         override fun save(snapshot: SyncSnapshot) { data = snapshot }
     }
 
-    private fun api(handler: (okhttp3.Request) -> Pair<Int, String>): EarnestApi = EarnestApi(
+    private fun api(
+        riverResponses: Map<String, () -> Pair<Int, String>> = emptyMap(),
+        handler: (okhttp3.Request) -> Pair<Int, String>,
+    ): EarnestApi = EarnestApi(
         "https://earnest.test", "token",
         OkHttpClient.Builder().addInterceptor { chain ->
-            val (status, body) = when (chain.request().url.encodedPath) {
+            val (status, body) = riverResponses[chain.request().url.encodedPath]?.invoke() ?: when (chain.request().url.encodedPath) {
                 "/v1/mutes" -> 200 to "[]"
                 "/v1/settings" -> 200 to """{"today_decay_days":2,"rev":0}"""
                 else -> handler(chain.request())
@@ -385,6 +388,79 @@ class SyncRepositoryTest {
         assertEquals(Revision("g1", 3), restored.snapshot().cursor)
         restored.beginBootstrap(Revision("new", 0))
         assertTrue(restored.snapshot().objects.isEmpty())
+    }
+
+    @Test
+    fun incrementalPullSurvivesRiverServerFailure() = runBlocking {
+        assertPullSurvivesRiverFailure { 503 to "{}" }
+    }
+
+    @Test
+    fun incrementalPullSurvivesRiverNetworkFailure() = runBlocking {
+        assertPullSurvivesRiverFailure { throw java.io.IOException("offline") }
+    }
+
+    private suspend fun assertPullSurvivesRiverFailure(failure: () -> Pair<Int, String>) {
+        for (path in listOf("/v1/mutes", "/v1/settings")) {
+            val original = SyncSnapshot(Revision("g1", 0), objects = listOf(
+                SyncObject(River.MUTE, 2, rev = 0, raw = """{"kind":"author","value":"Alice"}"""),
+                SyncObject(River.SETTINGS, 1, rev = 0, raw = """{"today_decay_days":4}"""),
+            ))
+            val store = Store(original)
+            val engine = SyncEngine(store)
+            var delivered = false
+            val api = api(mapOf(path to failure)) { request ->
+                assertEquals("/v1/changes", request.url.encodedPath)
+                if (!delivered) assertEquals("$path refresh must not partially replace resources", original, engine.snapshot())
+                val records = if (delivered) "[]" else """[
+                    {"rev":1,"type":"mute.deleted","payload":{"mute":{"id":2,"kind":"author","value":"Alice","rev":1,"deleted":true}}},
+                    {"rev":2,"type":"settings.updated","payload":{"settings":{"today_decay_days":7,"rev":2}}}
+                ]"""
+                delivered = true
+                200 to """{"changes":$records,"next":{"generation":"g1","rev":2},"next_cursor":"g1:2"}"""
+            }
+            assertTrue(SyncRepository(api, engine).pull().isEmpty())
+            val restored = SyncEngine(store).snapshot()
+            assertEquals(Revision("g1", 2), restored.cursor)
+            assertTrue(restored.objects.single { it.kind == River.MUTE }.deleted)
+            val settings = Json.parseToJsonElement(restored.objects.single { it.kind == River.SETTINGS }.raw).jsonObject
+            assertEquals(JsonPrimitive(7), settings["today_decay_days"])
+        }
+    }
+
+    @Test
+    fun incrementalPullPropagatesRiverAuthorizationFailures() = runBlocking {
+        for (path in listOf("/v1/mutes", "/v1/settings")) {
+            for (status in listOf(401, 403)) {
+                val engine = engine()
+                val original = engine.snapshot()
+                val api = api(mapOf(path to { status to "{}" })) { error("must not replay after authorization failure") }
+                try {
+                    SyncRepository(api, engine).pull()
+                    fail("$path HTTP $status must propagate")
+                } catch (error: ApiException) {
+                    assertEquals(status, error.status)
+                }
+                assertEquals(original, engine.snapshot())
+            }
+        }
+    }
+
+    @Test
+    fun riverResourcePersistenceFailureStillPropagates() = runBlocking {
+        val original = SyncSnapshot(Revision("g1", 0))
+        val failure = java.io.IOException("cache write failed")
+        val engine = SyncEngine(object : SyncStore {
+            override fun load() = original
+            override fun save(snapshot: SyncSnapshot) { throw failure }
+        })
+        val api = api { error("must not replay after persistence failure") }
+        try {
+            SyncRepository(api, engine).pull()
+            fail("cache write failure must propagate")
+        } catch (error: java.io.IOException) {
+            assertSame(failure, error)
+        }
     }
 
     @Test
