@@ -1,4 +1,5 @@
 import Foundation
+import OpenAPIRuntime
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
@@ -140,7 +141,8 @@ public final class EarnestAPI: Sendable {
         self.tokenStore = tokenStore
         let session = session ?? URLSession(configuration: .ephemeral, delegate: RejectRedirects(), delegateQueue: nil)
         self.session = session
-        client = Client(serverURL: baseURL, transport: APITransport(session: session, tokenStore: tokenStore))
+        client = Client(serverURL: baseURL, configuration: OpenAPIRuntime.Configuration(dateTranscoder: RFC3339DateTranscoder()),
+                        transport: APITransport(session: session, tokenStore: tokenStore))
     }
 
     public func startDevice(clientName: String) async throws -> DeviceAuthorization {
