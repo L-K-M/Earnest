@@ -49,7 +49,7 @@ final class ScriptedHTTP: URLProtocol {
         #expect(request.httpMethod == reply.method)
         if let query = reply.query { #expect(request.url?.query == query) }
         #expect(request.value(forHTTPHeaderField: "Authorization") == reply.bearer)
-        do { try reply.checkBody?(request.httpBody) }
+        do { try reply.checkBody?(Self.body(of: request)) }
         catch { Issue.record("Invalid HTTP body: \(error)") }
         let response = HTTPURLResponse(url: request.url!, statusCode: reply.status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -57,6 +57,24 @@ final class ScriptedHTTP: URLProtocol {
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
+
+    /// Darwin's URLSession hands protocols the body as a stream and leaves
+    /// httpBody nil; FoundationNetworking on Linux keeps httpBody.
+    private static func body(of request: URLRequest) -> Data? {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return nil }
+
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count <= 0 { break }
+            data.append(buffer, count: count)
+        }
+        return data
+    }
 }
 
 @Suite(.serialized) struct NetworkTests {
@@ -215,6 +233,22 @@ extension NetworkTests {
         defer { session.invalidateAndCancel() }
         let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: TestTokens(), session: session)
         await #expect(throws: APIError.self) { try await api.activity() }
+        ScriptedHTTP.assertFinished()
+    }
+}
+
+extension NetworkTests {
+    /// Go writes RFC 3339 with microseconds and the server's zone offset;
+    /// whole-second UTC fixtures hid that the generated client rejected it.
+    @Test func serverTimestampsWithFractionalSecondsDecode() async throws {
+        let annotation = #"{"id":1,"principal_id":2,"author_name":"Morning Agent","created_at":"2026-11-03T11:48:38.509896+01:00","kind":"note","entry_ids":[3],"value":"text","rev":4,"untrusted":true,"deleted":false}"#
+        let session = ScriptedHTTP.install([
+            .init(path: "/v1/annotations", body: "[\(annotation)]"),
+        ])
+        defer { session.invalidateAndCancel() }
+        let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: TestTokens(), session: session)
+        let items = try await api.annotations()
+        #expect(items.count == 1)
         ScriptedHTTP.assertFinished()
     }
 }

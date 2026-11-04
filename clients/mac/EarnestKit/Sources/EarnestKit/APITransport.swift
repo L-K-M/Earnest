@@ -39,6 +39,20 @@ func validateHTTP(_ response: HTTPURLResponse, data: Data) throws {
     }
 }
 
+/// Go writes RFC 3339 with fractional seconds whenever they are non-zero, for
+/// example 2026-11-03T11:48:38.509896+01:00; the runtime's default transcoder
+/// accepts only whole seconds.
+struct RFC3339DateTranscoder: DateTranscoder {
+    func encode(_ date: Date) throws -> String { ISO8601DateFormatter().string(from: date) }
+
+    func decode(_ text: String) throws -> Date {
+        guard let date = parseAPIDate(text) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "Invalid RFC 3339 date"))
+        }
+        return date
+    }
+}
+
 /// Generated wire types stay internal; app and sync types retain stable names and Int64 IDs.
 func adapt<T: Decodable>(_ value: some Encodable, as type: T.Type = T.self) throws -> T {
     let encoder = JSONEncoder()

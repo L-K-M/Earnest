@@ -26,7 +26,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
-@SQLiteMode(SQLiteMode.Mode.LEGACY)
+@SQLiteMode(SQLiteMode.Mode.NATIVE)
 class AppViewModelTest {
     private val app get() = ApplicationProvider.getApplicationContext<Application>()
     private val identity = AccountIdentity("https://nas.test", 1, 1)
