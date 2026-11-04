@@ -120,6 +120,55 @@ import EarnestKit
         ContentHTTP.assertFinished()
     }
 
+    func testAuthenticatedBodyNotFoundDiscardsSavedCopyAndMarksGone() async throws {
+        // Both a problem response and a plain HTTP status are authoritative.
+        for body in ["{}", #"{"type":"about:blank","title":"Not Found","status":404}"#] {
+            try await assertSavedCopyRejected(status: 404, body: body)
+        }
+    }
+
+    func testServerFailureDoesNotUseSavedCopyOrMarkGone() async throws {
+        try await assertSavedCopyRejected(status: 503, body: "{}")
+    }
+
+    private func assertSavedCopyRejected(status: Int, body: String) async throws {
+        let (directory, defaults, store, identity, cache) = try offlineFixture()
+        defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+        let session = ContentHTTP.install([
+            .init(path: "/v1/me", body: #"{"user_id":1,"principal_id":7,"kind":"human","scopes":[]}"#),
+            .init(path: "/v1/entries/42/content-url", status: status, body: body),
+            .init(path: "/v1/entries/42/content", status: status, body: body),
+        ])
+        let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
+        let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+        defer { model.signOut(); session.invalidateAndCancel() }
+        model.loggedIn = true
+        let online = try await model.establishSession()
+        XCTAssertTrue(online)
+        XCTAssertNotNil(try cache.article(entryID: 42, generation: "g"))
+        try cache.saveArticle(entryID: 43, html: "Other article", generation: "g")
+        model.selectFromList(42)
+        let deadline = Date().addingTimeInterval(5)
+        while model.error == nil && model.html.isEmpty && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNotNil(model.error)
+        XCTAssertTrue(model.html.isEmpty)
+        XCTAssertFalse(model.offlineCopy)
+        XCTAssertFalse(model.articleUnavailable)
+        let entry = try XCTUnwrap(cache.load().entries.first { $0.id == 42 })
+        XCTAssertEqual(entry.deleted, status == 404)
+        if status == 404 {
+            XCTAssertNil(try cache.article(entryID: 42, generation: "g"))
+            XCTAssertFalse(model.rows.contains { $0.id == 42 })
+        } else {
+            XCTAssertNotNil(try cache.article(entryID: 42, generation: "g"))
+        }
+        XCTAssertEqual(try cache.article(entryID: 43, generation: "g"), "Other article")
+        XCTAssertTrue(try cache.load().outbox.isEmpty)
+        ContentHTTP.assertFinished()
+    }
+
     func testColdLaunchRejectsImportedBacklogAndRestoresBriefAuthor() async throws {
         let (directory, defaults, store, identity, cache) = try offlineFixture()
         defer { defaults.removePersistentDomain(forName: defaultsSuite) }
