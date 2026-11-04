@@ -13,10 +13,14 @@ public enum River {
               state.seen.value == .text("unseen"), state.shelf.value == .text("none"),
               subscription.fields["muted"]?.boolValue != true,
               let firstSeen = entry.firstSeenAt,
-              let since = subscription.fields["initial_since"]?.dateValue,
-              let through = subscription.fields["initial_through_seq"]?.int64Value,
-              firstSeen >= since else { return false }
-        if entry.seq <= through, let published = entry.publishedAt, published < since { return false }
+              let through = subscription.fields["initial_through_seq"]?.int64Value else { return false }
+
+        // Bootstrap represents the server's unbounded cutoff as null.
+        if let since = subscription.fields["initial_since"]?.dateValue {
+            if firstSeen < since { return false }
+            if entry.seq <= through, let published = entry.publishedAt, published < since { return false }
+        }
+
         if resources.contains(where: { matchesMute($0, entry: entry) }) { return false }
         let cadence = subscription.fields["cadence"]?.stringValue ?? "today"
         if cadence == "now" { return true }

@@ -29,8 +29,8 @@ func TestSharedRiverFixtures(t *testing.T) {
 					ID             int64
 					Cadence        string
 					Muted, Deleted bool
-					Since          time.Time `json:"initial_since"`
-					Through        int64     `json:"initial_through_seq"`
+					Since          *time.Time `json:"initial_since"`
+					Through        int64      `json:"initial_through_seq"`
 				}
 				Entries []struct {
 					ID, Seq                    int64
@@ -69,7 +69,33 @@ func TestSharedRiverFixtures(t *testing.T) {
 			}
 			for _, sub := range fixture.Subscriptions {
 				feed := entriesTestFeed(t, f.db, fmt.Sprintf("https://river.test/%d", sub.ID), 0)
-				exec(`INSERT INTO subscriptions(id,user_id,feed_id,cadence,muted,initial_since,initial_through_seq,deleted_at) VALUES($1,$2,$3,$4,$5,$6,$7,CASE WHEN $8 THEN now() END)`, sub.ID, f.a.UserID, feed, sub.Cadence, sub.Muted, sub.Since, sub.Through, sub.Deleted)
+				exec(`INSERT INTO subscriptions(id,user_id,feed_id,cadence,muted,initial_since,initial_through_seq,deleted_at) VALUES($1,$2,$3,$4,$5,COALESCE($6::timestamptz,'-infinity'::timestamptz),$7,CASE WHEN $8 THEN now() END)`, sub.ID, f.a.UserID, feed, sub.Cadence, sub.Muted, sub.Since, sub.Through, sub.Deleted)
+				if sub.Since == nil {
+					var since string
+					if err := f.db.Pool().QueryRow(ctx, `SELECT initial_since::text FROM subscriptions WHERE id=$1`, sub.ID).Scan(&since); err != nil {
+						t.Fatal(err)
+					}
+					if since != "-infinity" {
+						t.Fatalf("subscription %d initial_since = %q, want -infinity", sub.ID, since)
+					}
+					page, err := f.s.Bootstrap(ctx, f.a, BootstrapRequest{Kind: BootstrapSubscriptions, AfterID: sub.ID - 1, Limit: 1})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if len(page.Items) != 1 {
+						t.Fatalf("subscription %d bootstrap: got %d items, want 1", sub.ID, len(page.Items))
+					}
+					var projection struct {
+						ID    int64
+						Since json.RawMessage `json:"initial_since"`
+					}
+					if err := json.Unmarshal(page.Items[0], &projection); err != nil {
+						t.Fatal(err)
+					}
+					if projection.ID != sub.ID || string(projection.Since) != "null" {
+						t.Fatalf("subscription %d bootstrap = %s, want null initial_since", sub.ID, page.Items[0])
+					}
+				}
 				for _, e := range fixture.Entries {
 					if e.Subscription != sub.ID {
 						continue

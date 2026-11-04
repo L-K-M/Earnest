@@ -1,9 +1,152 @@
 import Foundation
 import XCTest
 import EarnestKit
+import GRDB
+import Network
 @testable import Earnest
 
 @MainActor final class ContentLoadingTests: XCTestCase {
+    func testFailedLoginPreservesIdentityForOfflineRelaunch() async throws {
+        let (directory, defaults, store, identity, _) = try offlineFixture()
+        defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+        let session = ContentHTTP.install([
+            .init(path: "/v1/devices/start", status: 503, body: "{}", method: "POST"),
+            .init(path: "/v1/me", body: "", failure: .cannotConnectToHost),
+        ])
+        defer { session.invalidateAndCancel() }
+        let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
+        let login = AppModel(api: api, serverURL: identity.server, tokens: ContentTokens(), identities: store, cacheDirectory: directory)
+        login.login()
+        let deadline = Date().addingTimeInterval(5)
+        while login.loggingIn && Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(login.loggingIn)
+        XCTAssertNotNil(login.error)
+        XCTAssertEqual(try store.load(server: identity.server), identity)
+
+        let relaunched = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+        defer { relaunched.signOut() }
+        relaunched.loggedIn = true
+        let online = try await relaunched.establishSession()
+        XCTAssertFalse(online)
+        XCTAssertEqual(relaunched.entries.map(\.id), [42])
+        XCTAssertEqual(relaunched.briefs.map(\.text), ["Cached brief"])
+        ContentHTTP.assertFinished()
+    }
+
+    func testNewCredentialsRequireVerificationBeforeOfflineCacheReuse() async throws {
+        let (directory, defaults, store, identity, _) = try offlineFixture()
+        defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+        let session = ContentHTTP.install([
+            .init(path: "/v1/devices/start", body: #"{"device_code":"device","user_code":"user","verification_uri":"urn:earnest:test","interval":1,"expires_in":30}"#, method: "POST"),
+            .init(path: "/v1/devices/poll", body: #"{"access_token":"test-token","token_type":"Bearer"}"#, method: "POST"),
+            .init(path: "/v1/me", body: "", failure: .cannotConnectToHost),
+        ])
+        let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
+        let model = AppModel(api: api, serverURL: identity.server, tokens: ContentTokens(), identities: store, cacheDirectory: directory)
+        defer { model.signOut(); session.invalidateAndCancel() }
+        model.login()
+        let deadline = Date().addingTimeInterval(5)
+        while model.connectionNote == nil && Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(model.loggedIn)
+        XCTAssertNil(model.error)
+        XCTAssertNotNil(model.connectionNote)
+        XCTAssertTrue(model.entries.isEmpty)
+        XCTAssertTrue(model.briefs.isEmpty)
+        XCTAssertNil(try store.load(server: identity.server))
+        ContentHTTP.assertFinished()
+    }
+
+    func testArticleCacheWriteFailureStillDisplaysFetchedAndOfflineHTML() async throws {
+        let cases: [([ContentHTTP.Reply], String, Bool)] = [
+            ([.signed(mode: "proxied"), .article], "<p>Article</p>", false),
+            ([
+                .init(path: "/v1/entries/42/content-url", status: 503, body: "{}"),
+                .init(path: "/v1/entries/42/content", body: #"{"entry_id":42,"html":"<p>Fallback</p>","text":"","sanitizer_version":1,"source":"feed"}"#),
+            ], "<p>Fallback</p>", false),
+            ([
+                .init(path: "/v1/entries/42/content-url", body: "", failure: .cannotConnectToHost),
+                .init(path: "/v1/entries/42/content", body: "", failure: .cannotConnectToHost),
+            ], "<p>Saved article</p><img src='https://publisher.test/tracker'>", true),
+        ]
+        for (replies, expected, offline) in cases {
+            let (directory, defaults, store, identity, cache) = try offlineFixture()
+            defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+            let db = try DatabaseQueue(path: directory.appendingPathComponent("cache.sqlite").path)
+            try await db.write { db in
+                try db.execute(sql: "CREATE TRIGGER fail_article_write BEFORE INSERT ON article_copies BEGIN SELECT RAISE(ABORT, 'article cache unavailable'); END")
+            }
+            XCTAssertThrowsError(try cache.saveArticle(entryID: 42, html: "New copy", generation: "g"))
+            let session = ContentHTTP.install([
+                .init(path: "/v1/me", body: "", failure: .cannotConnectToHost),
+            ] + replies)
+            let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
+            let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+            defer { model.signOut(); session.invalidateAndCancel() }
+            model.loggedIn = true
+            _ = try await model.establishSession()
+            model.selectFromList(42)
+            try await waitForArticle(model)
+            XCTAssertEqual(model.html, expected)
+            XCTAssertEqual(model.offlineCopy, offline)
+            XCTAssertEqual(model.imageOrigin?.absoluteString, replies.first?.mode == "proxied" ? "https://content.test:8081" : nil)
+            XCTAssertEqual(try cache.article(entryID: 42, generation: "g"), "<p>Saved article</p><img src='https://publisher.test/tracker'>")
+            ContentHTTP.assertFinished()
+        }
+    }
+
+    func testEventServerFailureUsesRetryNoteAndUnauthorizedSignsOut() async throws {
+        for status in [500, 401] {
+            let requested = expectation(description: "Event stream connected")
+            let server = try EventFailureServer { requested.fulfill() }
+            try await server.start()
+            defer { server.stop() }
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            addTeardownBlock { try FileManager.default.removeItem(at: directory) }
+            let defaults = UserDefaults(suiteName: defaultsSuite)!
+            defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+            let store = IdentityStore(defaults: defaults)
+            let identity = try AccountIdentity(server: server.origin, userID: 1, principalID: 7)
+            let cache = try Cache(identity: identity, directory: directory)
+            let engine = SyncEngine(store: cache)
+            try engine.bootstrap(Cursor(generation: "g", rev: 1))
+            try engine.finishBootstrap()
+            let session = ContentHTTP.install([
+                .init(path: "/v1/devices/start", body: #"{"device_code":"device","user_code":"user","verification_uri":"urn:earnest:test","interval":1,"expires_in":30}"#, method: "POST"),
+                .init(path: "/v1/devices/poll", body: #"{"access_token":"test-token","token_type":"Bearer"}"#, method: "POST"),
+                .init(path: "/v1/me", body: #"{"user_id":1,"principal_id":7,"kind":"human","scopes":[]}"#),
+                .init(path: "/v1/me", body: #"{"user_id":1,"principal_id":7,"kind":"human","scopes":[]}"#),
+                .init(path: "/v1/mutes", body: "[]"),
+                .init(path: "/v1/settings", body: #"{"reading_mode":"river","today_decay_days":2,"single_key_shortcuts":true,"theme":"system","measure":68,"font":"serif","feed_overrides":{},"rev":0}"#),
+                .init(path: "/v1/changes", body: #"{"changes":[],"next":{"generation":"g","rev":1},"next_cursor":"g:1"}"#),
+                .init(path: "/v1/changes", body: #"{"changes":[],"next":{"generation":"g","rev":1},"next_cursor":"g:1"}"#),
+                .init(path: "/v1/entries", body: #"{"entries":[]}"#),
+                .init(path: "/v1/tokens", body: "[]"),
+            ])
+            let api = try EarnestAPI(baseURL: server.origin, tokenStore: ContentTokens(), session: session)
+            let model = AppModel(api: api, serverURL: server.origin, tokens: ContentTokens(), identities: store, cacheDirectory: directory)
+            defer { model.signOut(); session.invalidateAndCancel() }
+            model.section = .later
+            model.login()
+            await fulfillment(of: [requested], timeout: 5)
+            let syncDeadline = Date().addingTimeInterval(5)
+            while (!ContentHTTP.finished || model.syncing) && Date() < syncDeadline { try await Task.sleep(for: .milliseconds(10)) }
+            ContentHTTP.assertFinished()
+            XCTAssertFalse(model.syncing)
+            XCTAssertNil(model.error)
+            server.respond(status: status)
+            let deadline = Date().addingTimeInterval(5)
+            while model.connectionNote == nil && model.error == nil && Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+            if status == 401 {
+                XCTAssertFalse(model.loggedIn)
+                XCTAssertEqual(model.error, "Your sign-in expired or was revoked. Sign in again.")
+            } else {
+                XCTAssertTrue(model.loggedIn)
+                XCTAssertNil(model.error)
+                XCTAssertEqual(model.connectionNote, "Live updates interrupted; retrying.")
+            }
+        }
+    }
+
     func testListAndKeyboardSelectionsUseProxiedImages() async throws {
         let (model, session) = try makeModel([
             .signed(mode: "proxied"), .article,
@@ -117,6 +260,55 @@ import EarnestKit
         XCTAssertNil(model.error)
         XCTAssertEqual(try cache.load().outbox.map(\.register), [.seen, .kept])
         XCTAssertEqual(model.pendingOps, 2)
+        ContentHTTP.assertFinished()
+    }
+
+    func testAuthenticatedBodyNotFoundDiscardsSavedCopyAndMarksGone() async throws {
+        // Both a problem response and a plain HTTP status are authoritative.
+        for body in ["{}", #"{"type":"about:blank","title":"Not Found","status":404}"#] {
+            try await assertSavedCopyRejected(status: 404, body: body)
+        }
+    }
+
+    func testServerFailureDoesNotUseSavedCopyOrMarkGone() async throws {
+        try await assertSavedCopyRejected(status: 503, body: "{}")
+    }
+
+    private func assertSavedCopyRejected(status: Int, body: String) async throws {
+        let (directory, defaults, store, identity, cache) = try offlineFixture()
+        defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+        let session = ContentHTTP.install([
+            .init(path: "/v1/me", body: #"{"user_id":1,"principal_id":7,"kind":"human","scopes":[]}"#),
+            .init(path: "/v1/entries/42/content-url", status: status, body: body),
+            .init(path: "/v1/entries/42/content", status: status, body: body),
+        ])
+        let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
+        let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+        defer { model.signOut(); session.invalidateAndCancel() }
+        model.loggedIn = true
+        let online = try await model.establishSession()
+        XCTAssertTrue(online)
+        XCTAssertNotNil(try cache.article(entryID: 42, generation: "g"))
+        try cache.saveArticle(entryID: 43, html: "Other article", generation: "g")
+        model.selectFromList(42)
+        let deadline = Date().addingTimeInterval(5)
+        while model.error == nil && model.html.isEmpty && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNotNil(model.error)
+        XCTAssertTrue(model.html.isEmpty)
+        XCTAssertFalse(model.offlineCopy)
+        XCTAssertFalse(model.articleUnavailable)
+        let entry = try XCTUnwrap(cache.load().entries.first { $0.id == 42 })
+        XCTAssertEqual(entry.deleted, status == 404)
+        if status == 404 {
+            XCTAssertNil(try cache.article(entryID: 42, generation: "g"))
+            XCTAssertFalse(model.rows.contains { $0.id == 42 })
+        } else {
+            XCTAssertNotNil(try cache.article(entryID: 42, generation: "g"))
+        }
+        XCTAssertEqual(try cache.article(entryID: 43, generation: "g"), "Other article")
+        XCTAssertTrue(try cache.load().outbox.isEmpty)
         ContentHTTP.assertFinished()
     }
 
@@ -481,11 +673,59 @@ private final class ContentHTTP: URLProtocol {
             return
         }
         let isContent = request.url?.host == "content.test"
-        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), isContent ? nil : "Bearer test-token")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), isContent || reply.path.hasPrefix("/v1/devices/") ? nil : "Bearer test-token")
         let response = HTTPURLResponse(url: request.url!, statusCode: reply.status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(reply.body.utf8))
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
+}
+
+/// Holds the hint response until ordinary sync completes, so error routing is deterministic.
+private final class EventFailureServer: @unchecked Sendable {
+    private let listener: NWListener
+    private let queue = DispatchQueue(label: "EarnestEventFailureTest")
+    private let lock = NSLock()
+    private var connection: NWConnection?
+
+    init(onRequest: @escaping @Sendable () -> Void) throws {
+        listener = try NWListener(using: .tcp, on: .any)
+        listener.newConnectionHandler = { [weak self] connection in
+            guard let self else { connection.cancel(); return }
+            self.lock.withLock { self.connection = connection }
+            connection.start(queue: self.queue)
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, _, _ in
+                guard let data else { connection.cancel(); return }
+                XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("/v1/events"), String(decoding: data, as: UTF8.self))
+                onRequest()
+            }
+        }
+    }
+
+    var origin: URL { URL(string: "http://localhost:\(listener.port!.rawValue)")! }
+
+    func start() async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            listener.stateUpdateHandler = { state in
+                switch state {
+                case .ready: continuation.resume()
+                case .failed(let error): continuation.resume(throwing: error)
+                default: break
+                }
+            }
+            listener.start(queue: queue)
+        }
+    }
+
+    func respond(status: Int) {
+        guard let connection = lock.withLock({ connection }) else { XCTFail("No event request"); return }
+        let response = "HTTP/1.1 \(status) Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in connection.cancel() })
+    }
+
+    func stop() {
+        lock.withLock { connection?.cancel() }
+        listener.cancel()
+    }
 }

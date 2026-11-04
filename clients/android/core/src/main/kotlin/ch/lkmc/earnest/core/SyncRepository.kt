@@ -10,6 +10,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import java.io.IOException
 
 /** A server-rejected operation the UI should report to the user. */
 data class RejectedOperation(
@@ -52,7 +53,7 @@ class SyncRepository(
                 }
             } while (page.hasMore)
         }
-        refreshRiverResources(staged)
+        refreshRiverResources(staged, RiverRefresh.REQUIRED)
         engine.installBootstrap(staged.snapshot())
         engine.flush()
     }
@@ -63,7 +64,7 @@ class SyncRepository(
         if (engine.snapshot().cursor.generation.isEmpty()) {
             bootstrap()
         } else {
-            refreshRiverResources(engine)
+            refreshRiverResources(engine, RiverRefresh.ALLOW_CACHED)
         }
         while (true) {
             val cursor = engine.snapshot().cursor
@@ -216,11 +217,20 @@ class SyncRepository(
         return SyncChange(record.rev, entry, states, obj, position)
     }
 
-    /** Fetch before replay because these resources have no bootstrap endpoint. */
-    private suspend fun refreshRiverResources(target: SyncEngine) {
-        val mutes = api.mutes().map { riverResource(River.MUTE, it) }
-        val settings = riverResource(River.SETTINGS, api.settings())
-        target.replaceRiverResources(mutes, settings)
+    private enum class RiverRefresh { REQUIRED, ALLOW_CACHED }
+
+    /** Bootstrap needs a complete set; incremental replay can update the cached set. */
+    private suspend fun refreshRiverResources(target: SyncEngine, mode: RiverRefresh) {
+        val (mutes, settings) = try {
+            api.mutes() to api.settings()
+        } catch (error: IOException) {
+            if (mode == RiverRefresh.REQUIRED || (error is ApiException && error.status !in 500..599)) throw error
+
+            // Keep both cached resources on a transient failure. The change feed below
+            // still replays their updates, and the next pull retries the refresh.
+            return
+        }
+        target.replaceRiverResources(mutes.map { riverResource(River.MUTE, it) }, riverResource(River.SETTINGS, settings))
         target.flush()
     }
 
