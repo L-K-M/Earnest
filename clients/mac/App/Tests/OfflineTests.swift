@@ -138,3 +138,28 @@ final class ErrorPresentationTests: XCTestCase {
         XCTAssertFalse(ErrorPresentation.isConnection(URLError(.serverCertificateUntrusted)))
     }
 }
+
+final class RiverCacheTests: XCTestCase {
+    func testRiverInputsAndNamesPersistOnlyForTheirIdentityAndGeneration() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        addTeardownBlock { try FileManager.default.removeItem(at: directory) }
+        let identity = try AccountIdentity(server: URL(string: "https://nas.test")!, userID: 1, principalID: 7)
+        let cache = try Cache(identity: identity, directory: directory)
+        let engine = SyncEngine(store: cache)
+        try engine.bootstrap(Cursor(generation: "g", rev: 0))
+        try engine.replaceRiverResources(
+            mutes: [.object(["id": .integer(2), "kind": .string("author"), "value": .string("Alice"), "rev": .integer(1)])],
+            settings: .object(["today_decay_days": .integer(4), "rev": .integer(2)]))
+        let names: [APIValue] = [.object(["id": .integer(2), "name": .string("Morning Agent")])]
+        try cache.saveResource("principal_names", values: names, generation: "g")
+        let reopened = try Cache(identity: identity, directory: directory)
+        let restored = SyncEngine(store: reopened)
+        XCTAssertEqual(try restored.object(kind: .mute, id: 2)?.fields["mute_kind"], .string("author"))
+        XCTAssertEqual(try restored.object(kind: .settings, id: 1)?.fields["today_decay_days"], .integer(4))
+        XCTAssertEqual(try reopened.resource("principal_names", generation: "g"), names)
+        XCTAssertTrue(try reopened.resource("principal_names", generation: "new").isEmpty)
+        let other = try Cache(identity: AccountIdentity(server: identity.server, userID: 2, principalID: 7), directory: directory)
+        XCTAssertTrue(try other.load().objects.isEmpty)
+        XCTAssertTrue(try other.resource("principal_names", generation: "g").isEmpty)
+    }
+}

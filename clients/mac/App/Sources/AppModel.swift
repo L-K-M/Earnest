@@ -52,6 +52,7 @@ import AppKit
     private var coordinator: SyncCoordinator?
     private var principalID: Int64 = 0
     private var feedMap: [Int64: FeedInfo] = [:]
+    private var cachedPresentation = false
     private var session = 0
     private var tasks: [String: Task<Void, Never>] = [:]
     private var sessionActions = SessionCounts()
@@ -100,6 +101,7 @@ import AppKit
         briefs = []
         agentChanges = []
         principalNames = [:]
+        cachedPresentation = false
         selected = nil
         html = ""
         imageOrigin = nil
@@ -156,7 +158,6 @@ import AppKit
                 do {
                     if try await self.establishSession() {
                         guard self.session == s, !Task.isCancelled else { return }
-                        self.refreshPrincipalNames()
                         self.startEvents()
                         self.scheduleSync()
                         return
@@ -218,10 +219,24 @@ import AppKit
     private func restoreCachedPresentation() throws {
         guard let engine, let cache else { return }
         let snapshot = try engine.snapshot()
+        cachedPresentation = true
         entries = try snapshot.entries.filter { !$0.deleted && $0.hasBody }.sorted { $0.seq > $1.seq }
             .map { try cachedEntry($0, principal: principalID, engine: engine) }
         let generation = snapshot.cursor?.generation ?? ""
         feeds = try cache.resource("feeds", generation: generation).compactMap(FeedInfo.init).filter { !$0.deleted }
+        let subscriptions = snapshot.objects.filter { $0.kind == .subscription && !$0.deleted }
+        if !subscriptions.isEmpty {
+            feeds = subscriptions.compactMap { object in
+                var fields = object.fields
+                fields["id"] = .integer(object.id)
+                fields["title"] = .string(object.name)
+                return FeedInfo(.object(fields))
+            }
+        }
+        principalNames = Dictionary(try cache.resource("principal_names", generation: generation).compactMap { value in
+            guard let id = value["id"]?.int64Value, let name = value["name"]?.stringValue else { return nil }
+            return (id, name)
+        }, uniquingKeysWith: { _, last in last })
         feedMap = Dictionary(feeds.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         briefs = try cache.resource("briefs", generation: generation).compactMap(BriefItem.init)
         rebuildPresentation()
@@ -292,6 +307,7 @@ import AppKit
                 }
                 self.rebuildPresentation()
                 await self.refresh()
+                self.refreshPrincipalNames()
             } catch is CancellationError {
             } catch {
                 guard self.session == s else { return }
@@ -425,6 +441,7 @@ import AppKit
             } while cursor != nil && !Task.isCancelled
             guard self.section == expected, loggedIn, session == expectedSession, !Task.isCancelled else { return }
             try engine.mergeEntries(all, generation: generation)
+            cachedPresentation = false
             entries = all
         } catch is CancellationError {
         } catch {
@@ -493,6 +510,7 @@ import AppKit
             guard let self, let names = try? await self.api?.agentNames() else { return }
             guard self.session == expectedSession, self.loggedIn, !Task.isCancelled else { return }
             self.principalNames.merge(names) { _, new in new }
+            self.cachePrincipalNames()
         }
     }
 
@@ -527,6 +545,16 @@ import AppKit
         for item in items where !item.principalName.isEmpty {
             principalNames[item.principalID] = item.principalName
         }
+        cachePrincipalNames()
+    }
+
+    private func cachePrincipalNames() {
+        guard let generation = try? engine?.snapshot().cursor?.generation else { return }
+        let values = principalNames.sorted { $0.key < $1.key }.map {
+            APIValue.object(["id": .integer($0.key), "name": .string($0.value)])
+        }
+        do { try cache?.saveResource("principal_names", values: values, generation: generation) }
+        catch { report(error) }
     }
 
     // MARK: - Presentation
@@ -536,10 +564,6 @@ import AppKit
     private func effectiveState(of entry: APIEntry) -> EarnestKit.State {
         guard let engine, principalID > 0 else { return entry.state.syncState }
         return (try? engine.state(principal: principalID, entryID: entry.id)) ?? entry.state.syncState
-    }
-
-    private func riverVisible(_ state: EarnestKit.State) -> Bool {
-        state.seen.value == .text("unseen") && state.shelf.value == .text("none")
     }
 
     private func cadence(of entry: APIEntry) -> String {
@@ -561,13 +585,27 @@ import AppKit
     }
 
     func rebuildPresentation() {
+        let snapshot = try? engine?.snapshot()
         let presented = entries.filter { !$0.deleted }.map { ($0, effectiveState(of: $0)) }
+        let riverIDs: Set<Int64>
+        if cachedPresentation, let snapshot {
+            let subscriptions = Dictionary(snapshot.objects.filter { $0.kind == .subscription }.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+            let states = Dictionary(presented.map { ($0.0.id, $0.1) }, uniquingKeysWith: { _, last in last })
+            let resources = snapshot.objects.filter { $0.kind == .mute || $0.kind == .settings }
+            let now = Date()
+            riverIDs = Set(snapshot.entries.filter { entry in
+                guard let state = states[entry.id] else { return false }
+                return River.contains(entry, state: state, subscription: subscriptions[entry.subscriptionID], resources: resources, now: now)
+            }.map(\.id))
+        } else {
+            riverIDs = Set(presented.filter { $0.1.seen.value == .text("unseen") && $0.1.shelf.value == .text("none") }.map { $0.0.id })
+        }
         switch section {
         case .today:
-            rows = presented.filter { riverVisible($0.1) && cadence(of: $0.0) != "week" }.map { row($0.0, $0.1) }
+            rows = presented.filter { riverIDs.contains($0.0.id) && cadence(of: $0.0) != "week" }.map { row($0.0, $0.1) }
             editionGroups = []
         case .edition:
-            let week = presented.filter { riverVisible($0.1) && cadence(of: $0.0) == "week" }
+            let week = presented.filter { riverIDs.contains($0.0.id) && cadence(of: $0.0) == "week" }
             var groups: [Int64: EditionGroup] = [:]
             var order: [Int64] = []
             for (entry, state) in week {
@@ -596,16 +634,16 @@ import AppKit
             editionGroups = []
         }
         pendingOps = (try? engine?.snapshot().outbox.count) ?? 0
-        updateEndStatement(presented)
+        updateEndStatement(presented, riverIDs: riverIDs)
     }
 
-    private func updateEndStatement(_ presented: [(APIEntry, EarnestKit.State)]) {
+    private func updateEndStatement(_ presented: [(APIEntry, EarnestKit.State)], riverIDs: Set<Int64>) {
         guard section == .today else {
             endTitle = ""
             endDetail = ""
             return
         }
-        let river = presented.filter { riverVisible($0.1) && cadence(of: $0.0) != "week" }
+        let river = presented.filter { riverIDs.contains($0.0.id) && cadence(of: $0.0) != "week" }
         if river.isEmpty {
             endTitle = "Nothing new. A rare and beautiful thing."
         } else if let since = river.compactMap({ DateFormatting.parse($0.0.firstSeenAt) }).min() {

@@ -198,6 +198,12 @@ public final class EarnestAPI: Sendable {
         origin.port = url.port
         return SignedArticle(html: html, imageOrigin: mode == .proxied ? origin.url : nil)
     }
+    public func mutes() async throws -> [APIValue] {
+        try await generated { try adapt(try await client.listMutes(.init()).ok.body.json ?? []) }
+    }
+    public func settings() async throws -> APIValue {
+        try await generated { try adapt(try await client.getSettings(.init()).ok.body.json) }
+    }
     public func bootstrapCursor() async throws -> APIRevision {
         try await generated { try adapt(try await client.bootstrapCursor(.init()).ok.body.json) }
     }

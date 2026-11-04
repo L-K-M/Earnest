@@ -120,6 +120,39 @@ import EarnestKit
         ContentHTTP.assertFinished()
     }
 
+    func testColdLaunchRejectsImportedBacklogAndRestoresBriefAuthor() async throws {
+        let (directory, defaults, store, identity, cache) = try offlineFixture()
+        defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+        let engine = SyncEngine(store: cache)
+        let subscription: APIValue = .object([
+            "id": .integer(1), "rev": .integer(2), "cadence": .string("now"), "title": .string("Cached feed"),
+            "initial_since": .string("2026-11-01T00:00:00Z"), "initial_through_seq": .integer(100),
+        ])
+        try engine.mergeBootstrap(kind: "subscriptions", items: [subscription])
+        try engine.mergeEntry(SyncEntry(id: 43, subscriptionID: 1, seq: 4, title: "Backlog", url: "https://news.test/old",
+                                       publishedAt: DateFormatting.parse("2006-01-01T00:00:00Z"), firstSeenAt: Date()))
+        try cache.saveResource("principal_names", values: [.object(["id": .integer(2), "name": .string("Morning Agent")])], generation: "g")
+        let session = ContentHTTP.install([.init(path: "/v1/me", body: "", failure: .cannotConnectToHost)])
+        let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
+        let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+        defer { model.signOut(); session.invalidateAndCancel() }
+        model.loggedIn = true
+        _ = try await model.establishSession()
+        XCTAssertEqual(model.rows.map(\.id), [42])
+        let brief = try XCTUnwrap(model.briefs.first)
+        XCTAssertEqual(model.principalNames[brief.principalID], "Morning Agent")
+        ContentHTTP.assertFinished()
+    }
+
+    func testCachedMissingPublisherDateFallsBackToFirstSeen() throws {
+        let engine = SyncEngine(store: MemorySyncStore())
+        let firstSeen = try XCTUnwrap(DateFormatting.parse("2026-11-04T08:00:00Z"))
+        let entry = SyncEntry(id: 42, firstSeenAt: firstSeen)
+        let cached = try cachedEntry(entry, principal: 7, engine: engine)
+        XCTAssertNil(cached.publishedAt)
+        XCTAssertEqual(cached.publishedAt.flatMap(DateFormatting.parse) ?? DateFormatting.parse(cached.firstSeenAt), firstSeen)
+    }
+
     func testVerifiedDifferentAccountDoesNotAttachRememberedCache() async throws {
         let (directory, defaults, store, identity, oldCache) = try offlineFixture()
         defer { defaults.removePersistentDomain(forName: defaultsSuite) }
@@ -240,11 +273,14 @@ import EarnestKit
         let session = ContentHTTP.install([
             .init(path: "/v1/me", body: "", failure: .cannotConnectToHost),
             .init(path: "/v1/me", body: #"{"user_id":1,"principal_id":7,"kind":"human","scopes":[]}"#),
+            .init(path: "/v1/mutes", body: "[]"),
+            .init(path: "/v1/settings", body: #"{"reading_mode":"river","today_decay_days":2,"single_key_shortcuts":true,"theme":"system","measure":68,"font":"serif","feed_overrides":{},"rev":0}"#),
             .init(path: "/v1/changes", body: #"{"changes":[],"next":{"generation":"g","rev":1},"next_cursor":"g:1"}"#),
             .init(path: "/v1/state:batch", body: "[\(acknowledgement)]", method: "POST"),
             .init(path: "/v1/changes", body: "{\"changes\":[{\"rev\":2,\"type\":\"state.updated\",\"payload\":{\"results\":[\(acknowledgement)]}}],\"next\":{\"generation\":\"g\",\"rev\":2},\"next_cursor\":\"g:2\"}"),
             .init(path: "/v1/changes", body: #"{"changes":[],"next":{"generation":"g","rev":2},"next_cursor":"g:2"}"#),
             .init(path: "/v1/entries", body: #"{"entries":[]}"#),
+            .init(path: "/v1/tokens", body: #"[{"id":2,"principal_id":2,"kind":"agent","name":"Morning Agent","audience":"api","scopes":[],"daily_budget":100,"created_at":"2026-11-04T00:00:00Z"}]"#),
         ])
         let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
@@ -255,12 +291,14 @@ import EarnestKit
         model.section = .later
         model.scheduleSync()
         let deadline = Date().addingTimeInterval(5)
-        while (!ContentHTTP.finished || model.syncing || model.connectionNote != nil) && Date() < deadline {
+        while (!ContentHTTP.finished || model.syncing || model.connectionNote != nil || model.principalNames[2] == nil) && Date() < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTAssertNil(model.error)
         XCTAssertNil(model.connectionNote)
         XCTAssertTrue(try cache.load().outbox.isEmpty)
+        XCTAssertEqual(model.principalNames[2], "Morning Agent")
+        XCTAssertEqual(try cache.resource("principal_names", generation: "g").first?["name"]?.stringValue, "Morning Agent")
         XCTAssertEqual(try engine.state(principal: 7, entryID: 42).kept.value, .flag(true))
         ContentHTTP.assertFinished()
     }
@@ -280,9 +318,13 @@ import EarnestKit
         let entry = try JSONDecoder().decode(APIEntry.self, from: Data(Self.entryJSON.utf8))
         try engine.bootstrap(Cursor(generation: "g", rev: 1))
         try engine.mergeEntries([entry], generation: "g")
+        try engine.mergeBootstrap(kind: "subscriptions", items: [.object([
+            "id": .integer(1), "title": .string("Cached feed"), "cadence": .string("now"),
+            "initial_since": .string("2026-01-01T00:00:00Z"), "initial_through_seq": .integer(0),
+        ])])
         try engine.finishBootstrap()
         try cache.saveResource("feeds", values: [.object(["id": .integer(1), "title": .string("Cached feed")])], generation: "g")
-        try cache.saveResource("briefs", values: [.object(["id": .integer(9), "value": .string("Cached brief")])], generation: "g")
+        try cache.saveResource("briefs", values: [.object(["id": .integer(9), "principal_id": .integer(2), "value": .string("Cached brief")])], generation: "g")
         try cache.saveArticle(entryID: 42, html: "<p>Saved article</p><img src='https://publisher.test/tracker'>", generation: "g")
         return (directory, defaults, store, identity, cache)
     }

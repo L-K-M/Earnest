@@ -118,11 +118,29 @@ final class ScriptedHTTP: URLProtocol {
 }
 
 extension NetworkTests {
+    @Test @MainActor func missingRiverInputsLeaveBootstrapIncomplete() async throws {
+        let engine = SyncEngine(store: MemorySyncStore())
+        var replies: [ScriptedHTTP.Reply] = [.init(path: "/v1/bootstrap", body: #"{"generation":"g","rev":0}"#)]
+        for kind in ["subscriptions", "folders", "labels", "label_memberships", "entries", "state", "positions"] {
+            replies.append(.init(path: "/v1/bootstrap/\(kind)", body: #"{"items":[],"next_id":0,"next_principal":0,"next_view":"","has_more":false}"#))
+        }
+        replies += [.init(path: "/v1/annotations", body: "[]"), .init(path: "/v1/mutes", body: "[]"),
+                    .init(path: "/v1/settings", status: 503, body: "{}")]
+        let session = ScriptedHTTP.install(replies)
+        defer { session.invalidateAndCancel() }
+        let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: TestTokens(), session: session)
+        await #expect(throws: (any Error).self) { try await SyncCoordinator(engine: engine, api: api).synchronize() }
+        #expect(try !engine.snapshot().bootstrapComplete)
+        ScriptedHTTP.assertFinished()
+    }
+
     @Test @MainActor func syncRejectsNonAdvancingChangesPage() async throws {
         let engine = SyncEngine(store: MemorySyncStore())
         try engine.bootstrap(Cursor(generation: "g1", rev: 1))
         try engine.finishBootstrap()
         let session = ScriptedHTTP.install([
+            .init(path: "/v1/mutes", body: "[]"),
+            .init(path: "/v1/settings", body: readerSettingsJSON),
             .init(path: "/v1/changes", body: #"{"changes":[{"rev":1,"type":"entry.created","payload":{"entry":{"id":1,"rev":1}}}],"next":{"generation":"g1","rev":1},"next_cursor":"g1:1"}"#),
             // Bound the old retry loop so the regression fails without hanging.
             .init(path: "/v1/changes", status: 500, body: "{}"),
@@ -143,6 +161,8 @@ extension NetworkTests {
         let emptyChanges = #"{"changes":[],"next":{"generation":"new","rev":1},"next_cursor":"new:1"}"#
         let finalChanges = #"{"changes":[],"next":{"generation":"new","rev":2},"next_cursor":"new:2"}"#
         var replies: [ScriptedHTTP.Reply] = [
+            .init(path: "/v1/mutes", body: "[]"),
+            .init(path: "/v1/settings", body: readerSettingsJSON),
             .init(path: "/v1/changes", status: 410, body: #"{"type":"about:blank","title":"Gone","status":410}"#),
             .init(path: "/v1/bootstrap", body: #"{"generation":"new","rev":1}"#),
         ]
@@ -152,6 +172,8 @@ extension NetworkTests {
         }
         replies += [
             .init(path: "/v1/annotations", body: "[]"),
+            .init(path: "/v1/mutes", body: "[]"),
+            .init(path: "/v1/settings", body: readerSettingsJSON),
             .init(path: "/v1/changes", body: emptyChanges),
             .init(method: "POST", path: "/v1/state:batch", body: "[{\"op_id\":\"offline\",\"status\":\"applied\",\"state\":\(state),\"replay\":false}]", checkBody: { data in
                 let items = try JSONDecoder().decode([APIValue].self, from: #require(data))
@@ -183,6 +205,8 @@ extension NetworkTests {
         try engine.bootstrap(Cursor(generation: "g", rev: 1))
         try engine.finishBootstrap()
         var replies: [ScriptedHTTP.Reply] = [
+            .init(path: "/v1/mutes", body: "[]"),
+            .init(path: "/v1/settings", body: readerSettingsJSON),
             .init(path: "/v1/changes", status: 410, body: #"{"type":"about:blank","title":"Gone","status":410}"#),
             .init(path: "/v1/bootstrap", body: #"{"generation":"g","rev":1}"#),
         ]
@@ -190,6 +214,8 @@ extension NetworkTests {
             replies.append(.init(path: "/v1/bootstrap/\(kind)", body: #"{"items":[],"next_id":0,"next_principal":0,"next_view":"","has_more":false}"#))
         }
         replies.append(.init(path: "/v1/annotations", body: "[]"))
+        replies.append(.init(path: "/v1/mutes", body: "[]"))
+        replies.append(.init(path: "/v1/settings", body: readerSettingsJSON))
         replies.append(.init(path: "/v1/changes", status: 410, body: #"{"type":"about:blank","title":"Gone","status":410}"#))
         let session = ScriptedHTTP.install(replies)
         defer { session.invalidateAndCancel() }
@@ -288,3 +314,5 @@ extension NetworkTests {
         ScriptedHTTP.assertFinished()
     }
 }
+
+private let readerSettingsJSON = #"{"reading_mode":"river","today_decay_days":2,"single_key_shortcuts":true,"theme":"system","measure":68,"font":"serif","feed_overrides":{},"rev":0}"#

@@ -50,6 +50,7 @@ class AppViewModelTest {
         val path = chain.request().url.encodedPath
         calls += path
         val body = when (path) {
+            "/v1/settings" -> """{"today_decay_days":2,"rev":0}"""
             "/v1/changes" -> """{"changes":[],"next":{"generation":"g1","rev":0},"next_cursor":"g1:0"}"""
             "/v1/activity/agent-changes" -> """[{"id":7,"principal_id":9,"principal_name":"Morning Agent","action":"state.updated","target":{"entry_id":2,"register":"shelf"},"before":null,"after":{"shelf":{"value":"done"}},"generation":"g1","created_at":"${java.time.Instant.now()}","next_action":"revert"}]"""
             "/v1/entries/2" -> """{"id":2,"subscription_id":3,"feed_id":5,"seq":4,"first_seen_at":"2026-11-03T00:00:00Z","title":"Notification headline","url":"https://news.test/article","author":"Author","rev":2,"deleted":false}"""
@@ -77,6 +78,7 @@ class AppViewModelTest {
             EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { chain ->
                 val path = chain.request().url.encodedPath
                 val (code, body) = when {
+                    path == "/v1/settings" -> 200 to """{"today_decay_days":2,"rev":0}"""
                     path == "/v1/changes" && !recovered -> 410 to "{}"
                     path == "/v1/bootstrap" -> { recovered = true; 200 to """{"generation":"g1","rev":0}""" }
                     path.startsWith("/v1/bootstrap/") -> 200 to """{"items":[],"next_id":0,"next_principal":0,"next_view":"","has_more":false}"""
@@ -163,6 +165,7 @@ class AppViewModelTest {
                 val path = chain.request().url.encodedPath
                 calls += "${session.token}:$path"
                 val body = when (path) {
+                    "/v1/settings" -> """{"today_decay_days":2,"rev":0}"""
                     "/v1/changes" -> """{"changes":[],"next":{"generation":"g1","rev":0},"next_cursor":"g1:0"}"""
                     "/v1/entries/2/content" -> """{"entry_id":2,"html":"<p>${session.token}</p>","text":"${session.token}","sanitizer_version":1,"source":"feed"}"""
                     "/v1/entries/2/content-url" -> """{"url":"https://content.test/${session.token}","expires_at":"2026-11-03T01:00:00Z"}"""

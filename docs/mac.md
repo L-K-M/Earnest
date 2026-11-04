@@ -81,6 +81,23 @@ The earlier server/principal-only cache is retained on disk but is not reused:
 it has no verified user ID. After upgrading, connect and sync once while online
 to populate the new identity partition before relying on offline launch.
 
+Online Today and Edition use the server's river endpoint. Offline they evaluate
+that rule over cached sync entries and subscription objects. Entries must be
+unseen, on no shelf, in an active unmuted subscription and inside its initial
+import boundary. Author mutes compare whole names case-insensitively. Keyword
+mutes match the title case-insensitively. Now entries never decay, Today entries
+decay after the configured number of days (two by default), and Edition entries
+decay after seven days, all measured from first-seen time with inclusive cutoffs.
+Today excludes week-cadence feeds, which appear in Edition.
+
+Bootstrap omits mutes and reader settings. Each online synchronization fetches
+`/v1/mutes` and `/v1/settings` before replaying changes. The identity's sync
+snapshot retains those resources and applies `mute.updated`, `mute.deleted` and
+`settings.updated` by revision. Connect online once after upgrading to fill any
+previously uncached inputs. Agent names from token metadata and activity are
+cached per identity and sync generation, and restored with offline briefs.
+Rows without a publisher date fall back to their first-seen date.
+
 The coordinator bootstraps resources by keyset pagination, pulls contiguous
 `/v1/changes` pages, sends register batches and first-class ranges in outbox
 order, and merges acknowledgements by independent register revisions. A 410
@@ -159,7 +176,8 @@ background pixel, check short and long brief layout, inspect Activity button
 accessibility labels, deliver native URL events to the running app, and exercise
 content image policies and fallback loading. Offline tests cover identity
 persistence and validation, connection-only recovery, changed accounts, 401
-sign-out, durable rows/briefs/outbox restoration, cached reader HTML, generation
+sign-out, durable rows/briefs/outbox restoration, cached river inputs and brief names,
+missing publisher dates, cached reader HTML, generation
 checks, article eviction and server/user/principal isolation. The test scheme
 supplies an empty server preference for that launch so tests do not use your saved connection or Keychain credential.
 
