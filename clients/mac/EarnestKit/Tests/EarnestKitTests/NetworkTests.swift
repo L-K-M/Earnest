@@ -49,7 +49,7 @@ final class ScriptedHTTP: URLProtocol {
         #expect(request.httpMethod == reply.method)
         if let query = reply.query { #expect(request.url?.query == query) }
         #expect(request.value(forHTTPHeaderField: "Authorization") == reply.bearer)
-        do { try reply.checkBody?(request.httpBody) }
+        do { try reply.checkBody?(Self.body(of: request)) }
         catch { Issue.record("Invalid HTTP body: \(error)") }
         let response = HTTPURLResponse(url: request.url!, statusCode: reply.status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -57,6 +57,24 @@ final class ScriptedHTTP: URLProtocol {
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
+
+    /// Darwin's URLSession hands protocols the body as a stream and leaves
+    /// httpBody nil; FoundationNetworking on Linux keeps httpBody.
+    private static func body(of request: URLRequest) -> Data? {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return nil }
+
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count <= 0 { break }
+            data.append(buffer, count: count)
+        }
+        return data
+    }
 }
 
 @Suite(.serialized) struct NetworkTests {
