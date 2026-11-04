@@ -95,12 +95,14 @@ final class ScriptedHTTP: URLProtocol {
 
     @Test func contentSignedURLNeverReceivesBearer() async throws {
         let session = ScriptedHTTP.install([
-            .init(path: "/v1/entries/1/content-url", body: #"{"url":"https://content.test/article/1?signature=abc","expires_at":"2099-01-01T00:00:00Z"}"#),
+            .init(path: "/v1/entries/1/content-url", body: #"{"url":"https://content.test/article/1?signature=abc","expires_at":"2099-01-01T00:00:00Z"}"#, query: "mode=proxied"),
             .init(path: "/article/1", body: "<p>Article</p>", bearer: nil),
         ])
         defer { session.invalidateAndCancel() }
         let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: TestTokens(), session: session)
-        #expect(try await api.signedContent(entryID: 1) == "<p>Article</p>")
+        let article = try await api.signedContent(entryID: 1)
+        #expect(article.html == "<p>Article</p>")
+        #expect(article.imageOrigin?.absoluteString == "https://content.test")
         ScriptedHTTP.assertFinished()
     }
 
@@ -116,11 +118,29 @@ final class ScriptedHTTP: URLProtocol {
 }
 
 extension NetworkTests {
+    @Test @MainActor func missingRiverInputsLeaveBootstrapIncomplete() async throws {
+        let engine = SyncEngine(store: MemorySyncStore())
+        var replies: [ScriptedHTTP.Reply] = [.init(path: "/v1/bootstrap", body: #"{"generation":"g","rev":0}"#)]
+        for kind in ["subscriptions", "folders", "labels", "label_memberships", "entries", "state", "positions"] {
+            replies.append(.init(path: "/v1/bootstrap/\(kind)", body: #"{"items":[],"next_id":0,"next_principal":0,"next_view":"","has_more":false}"#))
+        }
+        replies += [.init(path: "/v1/annotations", body: "[]"), .init(path: "/v1/mutes", body: "[]"),
+                    .init(path: "/v1/settings", status: 503, body: "{}")]
+        let session = ScriptedHTTP.install(replies)
+        defer { session.invalidateAndCancel() }
+        let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: TestTokens(), session: session)
+        await #expect(throws: (any Error).self) { try await SyncCoordinator(engine: engine, api: api).synchronize() }
+        #expect(try !engine.snapshot().bootstrapComplete)
+        ScriptedHTTP.assertFinished()
+    }
+
     @Test @MainActor func syncRejectsNonAdvancingChangesPage() async throws {
         let engine = SyncEngine(store: MemorySyncStore())
         try engine.bootstrap(Cursor(generation: "g1", rev: 1))
         try engine.finishBootstrap()
         let session = ScriptedHTTP.install([
+            .init(path: "/v1/mutes", body: "[]"),
+            .init(path: "/v1/settings", body: readerSettingsJSON),
             .init(path: "/v1/changes", body: #"{"changes":[{"rev":1,"type":"entry.created","payload":{"entry":{"id":1,"rev":1}}}],"next":{"generation":"g1","rev":1},"next_cursor":"g1:1"}"#),
             // Bound the old retry loop so the regression fails without hanging.
             .init(path: "/v1/changes", status: 500, body: "{}"),
@@ -141,6 +161,8 @@ extension NetworkTests {
         let emptyChanges = #"{"changes":[],"next":{"generation":"new","rev":1},"next_cursor":"new:1"}"#
         let finalChanges = #"{"changes":[],"next":{"generation":"new","rev":2},"next_cursor":"new:2"}"#
         var replies: [ScriptedHTTP.Reply] = [
+            .init(path: "/v1/mutes", body: "[]"),
+            .init(path: "/v1/settings", body: readerSettingsJSON),
             .init(path: "/v1/changes", status: 410, body: #"{"type":"about:blank","title":"Gone","status":410}"#),
             .init(path: "/v1/bootstrap", body: #"{"generation":"new","rev":1}"#),
         ]
@@ -150,6 +172,8 @@ extension NetworkTests {
         }
         replies += [
             .init(path: "/v1/annotations", body: "[]"),
+            .init(path: "/v1/mutes", body: "[]"),
+            .init(path: "/v1/settings", body: readerSettingsJSON),
             .init(path: "/v1/changes", body: emptyChanges),
             .init(method: "POST", path: "/v1/state:batch", body: "[{\"op_id\":\"offline\",\"status\":\"applied\",\"state\":\(state),\"replay\":false}]", checkBody: { data in
                 let items = try JSONDecoder().decode([APIValue].self, from: #require(data))
@@ -181,6 +205,8 @@ extension NetworkTests {
         try engine.bootstrap(Cursor(generation: "g", rev: 1))
         try engine.finishBootstrap()
         var replies: [ScriptedHTTP.Reply] = [
+            .init(path: "/v1/mutes", body: "[]"),
+            .init(path: "/v1/settings", body: readerSettingsJSON),
             .init(path: "/v1/changes", status: 410, body: #"{"type":"about:blank","title":"Gone","status":410}"#),
             .init(path: "/v1/bootstrap", body: #"{"generation":"g","rev":1}"#),
         ]
@@ -188,6 +214,8 @@ extension NetworkTests {
             replies.append(.init(path: "/v1/bootstrap/\(kind)", body: #"{"items":[],"next_id":0,"next_principal":0,"next_view":"","has_more":false}"#))
         }
         replies.append(.init(path: "/v1/annotations", body: "[]"))
+        replies.append(.init(path: "/v1/mutes", body: "[]"))
+        replies.append(.init(path: "/v1/settings", body: readerSettingsJSON))
         replies.append(.init(path: "/v1/changes", status: 410, body: #"{"type":"about:blank","title":"Gone","status":410}"#))
         let session = ScriptedHTTP.install(replies)
         defer { session.invalidateAndCancel() }
@@ -252,3 +280,39 @@ extension NetworkTests {
         ScriptedHTTP.assertFinished()
     }
 }
+
+extension NetworkTests {
+    @Test func clickContentKeepsImagesBlocked() async throws {
+        let session = ScriptedHTTP.install([
+            .init(path: "/v1/entries/3/content-url", body: #"{"url":"https://content.test:8081/article/3?signature=abc","expires_at":"2099-01-01T00:00:00Z"}"#, query: "mode=click"),
+            .init(path: "/article/3", body: #"<a href="https://content.test:8081/image/signed" target="_blank">Load image</a>"#, bearer: nil),
+        ])
+        defer { session.invalidateAndCancel() }
+        let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: TestTokens(), session: session)
+        let article = try await api.signedContent(entryID: 3, mode: .click)
+        #expect(article.imageOrigin == nil)
+        #expect(article.html.contains("Load image"))
+        ScriptedHTTP.assertFinished()
+    }
+
+    @Test func cancelNotificationUsesGeneratedOperationAndOpID() async throws {
+        let session = ScriptedHTTP.install([
+            .init(method: "POST", path: "/v1/notifications/19:cancel", body: "{}", checkBody: { data in
+                let body = try JSONDecoder().decode([String: String].self, from: #require(data))
+                #expect(UUID(uuidString: try #require(body["op_id"])) != nil)
+            }),
+            .init(method: "POST", path: "/v1/notifications/20:cancel", status: 409,
+                  body: #"{"type":"about:blank","title":"Conflict","status":409,"detail":"already delivered"}"#),
+        ])
+        defer { session.invalidateAndCancel() }
+        let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: TestTokens(), session: session)
+        try await api.cancelNotification(id: 19)
+        do {
+            try await api.cancelNotification(id: 20)
+            Issue.record("Expected cancellation conflict")
+        } catch let problem as APIProblem { #expect(problem.status == 409) }
+        ScriptedHTTP.assertFinished()
+    }
+}
+
+private let readerSettingsJSON = #"{"reading_mode":"river","today_decay_days":2,"single_key_shortcuts":true,"theme":"system","measure":68,"font":"serif","feed_overrides":{},"rev":0}"#

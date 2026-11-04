@@ -121,3 +121,20 @@ final class PresentationTests: XCTestCase {
         XCTAssertEqual(counts.kept, 1)
     }
 }
+
+extension PresentationTests {
+    func testHeldNotificationUsesTargetID() {
+        let item = ActivityItem(.object([
+            "id": .integer(8), "action": .string("notification.created"),
+            "target": .object(["id": .integer(19)]), "next_action": .string("cancel")
+        ]))
+        XCTAssertEqual(item.notificationID, 19)
+    }
+
+    func testReaderHeaderFallsBackToFirstSeen() throws {
+        let json = #"{"id":42,"subscription_id":1,"feed_id":2,"seq":3,"title":"A title","url":"https://example.test/article","author":"Ada","first_seen_at":"2026-11-04T08:00:00Z","rev":1,"deleted":false,"state":{"principal":7,"entry_id":42,"state_rev":0,"seen":{"value":"unseen","rev":0,"occurred_at":"","actor":0,"source":""},"shelf":{"value":"none","rev":0,"occurred_at":"","actor":0,"source":""},"kept":{"value":false,"rev":0,"occurred_at":"","actor":0,"source":""}}}"#
+        let entry = try JSONDecoder().decode(APIEntry.self, from: Data(json.utf8))
+        let header = ReaderHeader(entry: entry, feedTitle: "Example", openOriginal: {})
+        XCTAssertEqual(header.date, DateFormatting.parse(entry.firstSeenAt))
+    }
+}

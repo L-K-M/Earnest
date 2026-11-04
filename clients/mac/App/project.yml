@@ -46,4 +46,6 @@ schemes:
         Earnest: all
         EarnestTests: [test]
     test:
+      commandLineArguments:
+        '-server ""': true
       targets: [EarnestTests]

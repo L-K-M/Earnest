@@ -51,9 +51,14 @@ import Testing
 
 @Test func signedURLUsesNativeExpiryShape() throws {
     let payload = Data(#"{"url":"https://content.example/article/1?signature=x","expires_at":"2099-01-01T00:00:00.123Z"}"#.utf8)
-    let signed = try JSONDecoder().decode(SignedContentURL.self, from: payload)
-    #expect(signed.url.host == "content.example")
-    #expect(parseAPIDate(signed.expiresAt) != nil)
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .custom { decoder in
+        let value = try decoder.singleValueContainer().decode(String.self)
+        return try RFC3339DateTranscoder().decode(value)
+    }
+    let signed = try decoder.decode(Components.Schemas.ContentURLResult.self, from: payload)
+    #expect(URL(string: signed.url)?.host == "content.example")
+    #expect(signed.expiresAt > Date())
 }
 
 @Test func generatedRequestAdapterAcceptsFractionalClocks() throws {
