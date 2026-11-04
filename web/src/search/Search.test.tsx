@@ -88,3 +88,16 @@ it('only requests similarity on a click and hides it when embeddings are disable
   render(<QueryClientProvider client={new QueryClient()}><MoreLikeThis entryID={4} onOpen={vi.fn()}/></QueryClientProvider>)
   await waitFor(() => expect(screen.queryByRole('button',{name:'More like this'})).toBeNull())
 })
+
+it('explains a paused embedding budget and keeps full-text search available',async () => {
+  mount('paused')
+  await screen.findByText('Hybrid search is paused. Full-text search is available.')
+  await search()
+  expect(request).toHaveBeenCalledWith('/v1/search?q=funding&mode=fulltext',expect.anything())
+})
+it('allows stored-vector similarity while the embedding budget is paused',async () => {
+  vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {embed:'paused'} : {matches:[],status:'paused'})
+  render(<QueryClientProvider client={new QueryClient()}><MoreLikeThis entryID={4} onOpen={vi.fn()}/></QueryClientProvider>)
+  fireEvent.click(await screen.findByRole('button',{name:'More like this'}))
+  expect(await screen.findByText('Similar articles are paused.')).toBeTruthy()
+})

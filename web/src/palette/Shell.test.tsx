@@ -25,7 +25,7 @@ it('connects sidebar searches, feed and label commands, and reading actions to t
     if (path === '/v1/me') return {user_id:1,principal_id:1}
     if (path === '/v1/settings') return {...defaultSettings,rev:1}
     if (path === '/v1/subscriptions') return [{id:8,feed_id:42,title:'Rust',url:'https://feed.test',deleted:false}]
-    if (path === '/v1/labels') return [{ID:3,Name:'Research',Deleted:false}]
+    if (path === '/v1/labels') return [{id:3,name:'Research',deleted:false}]
     if (path === '/v1/saved-searches') return [{id:2,name:'Rust searches',query:'rust',filters:{}}]
     if (path === '/v1/pipeline') return {embed:'disabled',classify:'disabled',semantic:'disabled',watch:'disabled',ask:'enabled'}
     if (path.startsWith('/v1/search')) return {matches:[]}

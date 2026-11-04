@@ -1158,60 +1158,60 @@
       "Label": {
         "additionalProperties": false,
         "properties": {
-          "Deleted": {
+          "deleted": {
             "type": "boolean"
           },
-          "ID": {
+          "id": {
             "format": "int64",
             "type": "integer"
           },
-          "Name": {
+          "name": {
             "type": "string"
           },
-          "Rev": {
+          "rev": {
             "format": "int64",
             "minimum": 0,
             "type": "integer"
           }
         },
         "required": [
-          "ID",
-          "Name",
-          "Rev",
-          "Deleted"
+          "id",
+          "name",
+          "rev",
+          "deleted"
         ],
         "type": "object"
       },
       "LabelMembership": {
         "additionalProperties": false,
         "properties": {
-          "Deleted": {
+          "deleted": {
             "type": "boolean"
           },
-          "EntryID": {
+          "entry_id": {
             "format": "int64",
             "type": "integer"
           },
-          "ID": {
+          "id": {
             "format": "int64",
             "type": "integer"
           },
-          "LabelID": {
+          "label_id": {
             "format": "int64",
             "type": "integer"
           },
-          "Rev": {
+          "rev": {
             "format": "int64",
             "minimum": 0,
             "type": "integer"
           }
         },
         "required": [
-          "ID",
-          "LabelID",
-          "EntryID",
-          "Rev",
-          "Deleted"
+          "id",
+          "label_id",
+          "entry_id",
+          "rev",
+          "deleted"
         ],
         "type": "object"
       },

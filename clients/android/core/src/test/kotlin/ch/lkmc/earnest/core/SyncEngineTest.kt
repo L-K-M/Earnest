@@ -202,6 +202,32 @@ class SyncEngineTest {
     }
 
     @Test
+    fun rangeAcknowledgementTombstonesGone() {
+        val engine = SyncEngine(Store())
+        engine.mergeBootstrap(SyncChange(1, entry = CachedEntry(2, 3, 1, 1), states = listOf(state(), state().copy(principal = 9))))
+        engine.mergeEntry(CachedEntry(3, 3, 2, 1))
+        engine.queueRange(RangeWrite(write("range", "seen"), Scope("all"), 2))
+        val result = RangeResult("applied", 2, listOf(3), emptyList(), listOf(
+            Result("range", "gone", state(), false),
+            Result("range", "applied", state().copy(entryId = 3), false),
+            Result("range", "gone", state().copy(entryId = 4), false),
+        ), false)
+        try {
+            engine.acknowledgeRange("range", "old", result)
+            fail("stale response accepted")
+        } catch (_: SyncException) {
+            assertFalse(engine.entry(2)!!.deleted)
+        }
+        engine.acknowledgeRange("range", "g1", result)
+        engine.mergeEntry(CachedEntry(2, 3, 1, 10, rev = 10))
+        assertTrue(engine.entry(2)!!.deleted)
+        assertFalse(engine.entry(3)!!.deleted)
+        assertNull(engine.entry(4))
+        assertTrue(engine.snapshot().states.none { it.entryId == 2L })
+        assertTrue(engine.snapshot().outbox.isEmpty())
+    }
+
+    @Test
     fun longIdentifiersSurviveSerialization() {
         val json = Json
         val snapshot = SyncSnapshot(

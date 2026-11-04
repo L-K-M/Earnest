@@ -31,7 +31,7 @@ import Testing
     #expect(try !engine.snapshot().bootstrapComplete)
 }
 
-@Test func resourcesRetainSubscriptionFieldsAndCapitalizedMemberships() throws {
+@Test func resourcesRetainSubscriptionFieldsAndMemberships() throws {
     let engine = SyncEngine(store: MemorySyncStore())
     try engine.bootstrap(Cursor(generation: "g", rev: 0))
     let subscription: APIValue = .object(["id": .integer(3), "rev": .integer(5), "title": .string("Weekly"), "cadence": .string("week"), "url": .string("https://example.test/feed"), "feed_id": .integer(7)])
@@ -39,7 +39,7 @@ import Testing
     let saved = try JSONDecoder().decode(SyncSnapshot.self, from: JSONEncoder().encode(engine.snapshot()))
     #expect(saved.objects.first?.apiValue["cadence"] == .string("week"))
     #expect(saved.objects.first?.apiValue["feed_id"] == .integer(7))
-    try engine.mergeBootstrap(kind: "label_memberships", items: [.object(["ID": .integer(4), "EntryID": .integer(2), "LabelID": .integer(9), "Rev": .integer(6), "Deleted": .bool(true)])])
+    try engine.mergeBootstrap(kind: "label_memberships", items: [.object(["id": .integer(4), "entry_id": .integer(2), "label_id": .integer(9), "rev": .integer(6), "deleted": .bool(true)])])
     #expect(try engine.object(kind: .label, id: 4)?.entryID == 2)
     #expect(try engine.object(kind: .label, id: 4)?.deleted == true)
 }

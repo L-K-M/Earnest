@@ -66,6 +66,7 @@ export function Search({saved, onOpen}: {saved?: SavedSearch; onOpen: (entry: En
       {pipeline.status.embed === 'enabled' && <label>Search mode<select value={mode} onChange={event => setMode(event.target.value)}><option value="fulltext">Full text</option><option value="hybrid">Hybrid: full text and meaning</option></select></label>}
       <button>Search</button>
     </form>
+    {pipeline.status.embed === 'paused' && <p role="status">Hybrid search is paused. Full-text search is available.</p>}
     {pipeline.error && <p role="alert">Could not check whether AI search features are available.</p>}
     {effectiveMode === 'hybrid' && <p>Hybrid search can make an embedding call and searches a bounded retrieval window. Use Full text to page further.</p>}
     {(error || results.error) && <p role="alert">{error || results.error?.message}</p>}
@@ -82,8 +83,8 @@ export function Search({saved, onOpen}: {saved?: SavedSearch; onOpen: (entry: En
 export function MoreLikeThis({entryID,onOpen}: {entryID: number; onOpen: (entry: Entry) => void}) {
   const pipeline = usePipeline()
   const [requested,setRequested] = useState(false)
-  const similar = useQuery({queryKey:['similar',entryID], enabled:requested && pipeline.status.embed === 'enabled', queryFn:({signal}) => request<Page>(`/v1/entries/${entryID}/similar`,{signal})})
-  if (pipeline.status.embed !== 'enabled') return null
+  const similar = useQuery({queryKey:['similar',entryID], enabled:requested && pipeline.status.embed !== 'disabled', queryFn:({signal}) => request<Page>(`/v1/entries/${entryID}/similar`,{signal})})
+  if (pipeline.status.embed === 'disabled') return null
   return <section aria-label="Similar articles"><button onClick={() => setRequested(true)}>More like this</button>
     {requested && similar.isPending && <p role="status">Finding similar articles…</p>}
     {similar.error && <p role="alert">{similar.error.message}</p>}

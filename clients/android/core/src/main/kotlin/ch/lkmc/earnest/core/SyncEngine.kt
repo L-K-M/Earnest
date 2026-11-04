@@ -365,6 +365,14 @@ class SyncEngine(private val store: SyncStore) {
         var next = snapshot
         for (item in result.results.orEmpty()) {
             next = merge(next, SyncChange(next.cursor.rev, states = listOf(item.state)))
+            if (item.status == STATUS_GONE) {
+                next = next.copy(
+                    entries = next.entries.map {
+                        if (it.id == item.state.entryId) it.copy(deleted = true) else it
+                    },
+                    states = next.states.filterNot { it.entryId == item.state.entryId },
+                )
+            }
         }
         commit(next.copy(outbox = next.outbox.filterNot { it.operation.opId == opId }))
     }

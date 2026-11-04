@@ -223,7 +223,7 @@ private func change(_ rev: Int64, _ type: String, _ payload: APIValue) -> APICha
         .object(pairs: [("id", .integer(5)), ("folder_id", .integer(2)), ("title", .string("Feed")), ("rev", .integer(3))]),
     ])
     try engine.mergeBootstrap(kind: "folders", items: [.object(pairs: [("id", .integer(2)), ("name", .string("Tech")), ("rev", .integer(1))])])
-    try engine.mergeBootstrap(kind: "labels", items: [.object(pairs: [("ID", .integer(8)), ("Name", .string("work")), ("Rev", .integer(2)), ("Deleted", .bool(false))])])
+    try engine.mergeBootstrap(kind: "labels", items: [.object(pairs: [("id", .integer(8)), ("name", .string("work")), ("rev", .integer(2)), ("deleted", .bool(false))])])
     try engine.mergeBootstrap(kind: "label_memberships", items: [
         .object(pairs: [("id", .integer(12)), ("kind", .string("label")), ("label_id", .integer(8)), ("entry_id", .integer(1)), ("name", .string("work")), ("principal", .integer(1)), ("rev", .integer(4))]),
     ])
@@ -437,4 +437,26 @@ private func change(_ rev: Int64, _ type: String, _ payload: APIValue) -> APICha
         try engine.mergeEntries(oldEntries, generation: "after-restore")
         #expect(try engine.state(principal: 1, entryID: 1).seen.rev == 100)
     }
+}
+
+@Test func acknowledgeRangeTombstonesGone() throws {
+    let engine = SyncEngine(store: MemorySyncStore())
+    try engine.bootstrap(Cursor(generation: "g1", rev: 1))
+    for id: Int64 in [1, 2] {
+        try engine.mergeEntry(SyncEntry(id: id, subscriptionID: 1, seq: id, rev: 1))
+    }
+    try engine.queueRange(RangeWrite(write: write("range", entryID: 0), scope: Scope(kind: .all), throughSeq: 2))
+    let result = RangeResult(status: .applied, results: [
+        WriteAcknowledgement(opID: "range", status: .gone, state: State(principal: 1, entryID: 1)),
+        WriteAcknowledgement(opID: "range", status: .applied, state: State(principal: 1, entryID: 2)),
+        WriteAcknowledgement(opID: "range", status: .gone, state: State(principal: 1, entryID: 3))
+    ])
+    #expect(throws: SyncError.self) { try engine.acknowledgeRange(opID: "range", generation: "old", result: result) }
+    #expect(try engine.entry(1)?.deleted == false)
+    try engine.acknowledgeRange(opID: "range", generation: "g1", result: result)
+    try engine.mergeEntry(SyncEntry(id: 1, subscriptionID: 1, seq: 1, rev: 10))
+    #expect(try engine.entry(1)?.deleted == true)
+    #expect(try engine.entry(2)?.deleted == false)
+    #expect(try engine.entry(3) == nil)
+    #expect(try engine.snapshot().outbox.isEmpty)
 }

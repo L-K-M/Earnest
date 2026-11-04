@@ -154,7 +154,7 @@ class OpenApiContractTest {
     }
 
     @Test
-    fun labelBootstrapRowsAcceptLowercaseKeys() {
+    fun labelRowsUseCanonicalLowercaseKeys() {
         val label = Json.decodeFromString(Label.serializer(), """{"id":1,"name":"work","rev":2,"deleted":false}""")
         assertEquals(1L, label.id)
         assertEquals("work", label.name)
@@ -164,6 +164,8 @@ class OpenApiContractTest {
         )
         assertEquals(2L, membership.labelId)
         assertEquals(3L, membership.entryId)
+        assertEquals(setOf("id", "name", "rev", "deleted"), Json.parseToJsonElement(Json.encodeToString(Label.serializer(), label)).jsonObject.keys)
+        assertEquals(setOf("id", "label_id", "entry_id", "rev", "deleted"), Json.parseToJsonElement(Json.encodeToString(LabelMembership.serializer(), membership)).jsonObject.keys)
     }
 
     private fun assertSchema(name: String, schema: JsonObject, value: JsonElement, document: JsonObject) {

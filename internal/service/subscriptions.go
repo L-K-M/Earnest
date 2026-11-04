@@ -370,6 +370,8 @@ func (s *Service) subscribeTx(ctx context.Context, tx pgx.Tx, a Actor, rawURL st
 	return sub, nil
 }
 
+const subscriptionStateBatchSize = 500
+
 // Backfill events cover entries whose IDs a concurrent bootstrap already passed.
 func (s *Service) backfillSubscription(ctx context.Context, tx pgx.Tx, user int64, sub Subscription) error {
 	rows, err := tx.Query(ctx, `SELECT id,seq,first_seen_at,published_at,deleted_at IS NOT NULL FROM entries WHERE feed_id=$1 ORDER BY id`, sub.FeedID)
@@ -436,19 +438,20 @@ func (s *Service) backfillSubscription(ctx context.Context, tx pgx.Tx, user int6
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("read subscription state backfill: %w", err)
 	}
-	var results []syncmodel.Result
 	for _, target := range targets {
-		states, err := store.LoadStates(ctx, tx, target.principal, target.entries)
-		if err != nil {
-			return fmt.Errorf("load subscription state backfill: %w", err)
-		}
-		for _, id := range target.entries {
-			results = append(results, syncmodel.Result{Status: syncmodel.Applied, State: states[id]})
-		}
-	}
-	if len(results) > 0 {
-		if _, err := s.change(ctx, tx, user, syncmodel.StateUpdated, map[string]any{"results": results}); err != nil {
-			return err
+		for start := 0; start < len(target.entries); start += subscriptionStateBatchSize {
+			ids := target.entries[start:min(start+subscriptionStateBatchSize, len(target.entries))]
+			states, err := store.LoadStates(ctx, tx, target.principal, ids)
+			if err != nil {
+				return fmt.Errorf("load subscription state backfill: %w", err)
+			}
+			results := make([]syncmodel.Result, 0, len(ids))
+			for _, id := range ids {
+				results = append(results, syncmodel.Result{Status: syncmodel.Applied, State: states[id]})
+			}
+			if _, err := s.change(ctx, tx, user, syncmodel.StateUpdated, map[string]any{"results": results}); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

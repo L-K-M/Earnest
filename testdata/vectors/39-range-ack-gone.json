@@ -1,0 +1,104 @@
+{
+  "version": 1,
+  "name": "range-ack-gone",
+  "decision": "A retried range returns gone per entry after retention. Acknowledging it tombstones the cached entry before any change-feed pull.",
+  "setup": [
+    {
+      "op": "ingest",
+      "entry": {
+        "id": 1,
+        "subscription_id": 1
+      },
+      "expect": {
+        "id": 1,
+        "seq": 1,
+        "rev": 1
+      }
+    },
+    {
+      "op": "bootstrap_begin",
+      "device": "phone",
+      "expect": {
+        "generation": "g1"
+      }
+    },
+    {
+      "op": "bootstrap_page",
+      "device": "phone",
+      "expect": {}
+    },
+    {
+      "op": "client_pull",
+      "device": "phone",
+      "expect": {
+        "generation": "g1"
+      }
+    }
+  ],
+  "operations": [
+    {
+      "op": "client_queue_range",
+      "device": "phone",
+      "write": {
+        "op_id": "range"
+      },
+      "scope": {
+        "kind": "all"
+      },
+      "through_seq": 1,
+      "expect": {}
+    },
+    {
+      "op": "client_submit",
+      "device": "phone",
+      "name": "lost",
+      "expect": {
+        "status": "applied"
+      }
+    },
+    {
+      "op": "delete",
+      "entry_id": 1,
+      "expect": {}
+    },
+    {
+      "op": "client_submit",
+      "device": "phone",
+      "name": "retry",
+      "expect": {
+        "status": "applied",
+        "replay": true,
+        "results": [
+          {
+            "status": "gone"
+          }
+        ]
+      }
+    },
+    {
+      "op": "client_ack",
+      "device": "phone",
+      "name": "retry",
+      "expect": {}
+    }
+  ],
+  "final": [
+    {
+      "op": "assert_entry",
+      "entry_id": 1,
+      "device": "phone",
+      "expect": {
+        "entry": {
+          "deleted": true
+        }
+      }
+    },
+    {
+      "op": "assert_client",
+      "device": "phone",
+      "expect": {
+        "outbox_size": 0
+      }
+    }
+  ]
+}

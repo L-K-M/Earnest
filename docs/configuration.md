@@ -57,14 +57,14 @@ ntfy server, topic and token are per-user settings, not environment variables. W
 
 ## LLM providers and tasks
 
-All tasks are disabled until both task settings are supplied. A provider requires its kind and base URL; its key can be empty for local servers. A zero or unset limit means no cap. Configure model prices before enabling an unknown model.
+All tasks are disabled until both task settings are supplied. A provider requires its kind and base URL; its key can be empty for local servers. A zero or unset limit means no cap. Calls atomically reserve a conservative cost estimate in Postgres before contacting the provider, so concurrent calls cannot oversubscribe the cap. Completed synchronous calls reconcile the reservation to reported usage; uncertain calls retain their estimate, and batch submissions retain the full estimate. The bound depends on configured prices and provider usage staying within the reserved token estimate. Configure model prices before enabling an unknown model.
 
 | Name | Default | What it does | When you need it |
 | --- | --- | --- | --- |
 | `EARNEST_LLM_PROVIDER_<NAME>_KIND` | Unset | Provider dialect: `openai`, `anthropic` or `gemini`. | Configure a provider. |
 | `EARNEST_LLM_PROVIDER_<NAME>_BASE_URL` | Unset | Provider API root. | Configure a provider. |
 | `EARNEST_LLM_PROVIDER_<NAME>_API_KEY` | Empty | Provider credential. | Provider requires authentication. |
-| `EARNEST_LLM_PROVIDER_<NAME>_LIMIT_USD` | `0` (unlimited) | Monthly provider spend threshold in USD. | Bound spending; concurrent calls can overshoot. |
+| `EARNEST_LLM_PROVIDER_<NAME>_LIMIT_USD` | `0` (unlimited) | Hard monthly provider cap in USD, including in-flight reservations. | Bound spending across concurrent calls and server processes. |
 | `EARNEST_LLM_PROVIDER_<NAME>_TIMEOUT` | `60s` | Request timeout as a Go duration. | Override the provider timeout. |
 | `EARNEST_LLM_PROVIDER_<NAME>_TOKEN_FIELD` | `max_completion_tokens` | OpenAI completion token limit field. | Set `max_tokens` for compatible servers requiring it. |
 | `EARNEST_LLM_TASK_<TASK>_PROVIDER` | Unset | Provider selected for the task. | Enable a task with its model. |

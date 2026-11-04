@@ -1495,23 +1495,23 @@ export interface components {
             verified: boolean;
         };
         Label: {
-            Deleted: boolean;
+            deleted: boolean;
             /** Format: int64 */
-            ID: number;
-            Name: string;
+            id: number;
+            name: string;
             /** Format: int64 */
-            Rev: number;
+            rev: number;
         };
         LabelMembership: {
-            Deleted: boolean;
+            deleted: boolean;
             /** Format: int64 */
-            EntryID: number;
+            entry_id: number;
             /** Format: int64 */
-            ID: number;
+            id: number;
             /** Format: int64 */
-            LabelID: number;
+            label_id: number;
             /** Format: int64 */
-            Rev: number;
+            rev: number;
         };
         LoginBody: {
             password: string;

@@ -593,7 +593,12 @@ public final class SyncEngine {
         var data = try store.load()
         guard data.cursor?.generation == generation else { throw SyncError.generationMismatch }
         for item in result.results {
-            if let state = item.state { merge(state, into: &data.states) }
+            if let state = item.state {
+                merge(state, into: &data.states)
+                if item.status == .gone, let index = data.entries.firstIndex(where: { $0.id == state.entryID }) {
+                    data.entries[index].deleted = true
+                }
+            }
         }
         var dropped: [OutboxItem] = []
         if result.status == .gone || result.status == .expired,

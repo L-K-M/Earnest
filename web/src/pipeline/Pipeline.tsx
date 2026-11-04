@@ -38,6 +38,7 @@ export function Summary({entryID, shortcuts}: {entryID: number; shortcuts: boole
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
   })
+  if (status.summary === 'paused') return <p role="status">Summaries are paused because the provider budget is unavailable.</p>
   if (status.summary !== 'enabled') return null
   return <section aria-label="Summary"><button onClick={() => {void toggle()}} aria-expanded={visible}>Summary</button>{visible && <>{busy && <p role="status">Generating summary…</p>}{error && <p role="alert">{error} <button onClick={() => {setVisible(false)}}>Close</button></p>}{result && <><p>Summary · {result.model} · <time dateTime={result.generated_at}>{new Date(result.generated_at).toLocaleString()}</time></p>{result.excerpt_notice && <p>{result.excerpt_notice}</p>}{result.claims?.map((claim, index) => <div key={index}><p>{claim.text}</p>{!claim.verified && <p>Citation not found in the article</p>}{claim.passages?.map((text, i) => <button key={i} onClick={() => setPassage(text)}>{text}</button>)}</div>)}{passage && <p>Highlighting is unavailable in the article frame. Passage: {passage}</p>}</>}</>}</section>
 }
@@ -64,7 +65,7 @@ export function Edition({onOpen}: {onOpen: (entry: Entry) => void}) {
   const cache = useQueryClient()
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const latest = useQuery({queryKey:['edition-latest'],enabled:status.edition === 'enabled',queryFn:({signal}) => request<components['schemas']['Edition']>('/v1/editions/latest',{signal}),retry:false,refetchInterval: query => query.state.data && ['pending','paused'].includes(query.state.data.status) ? 5000 : false})
+  const latest = useQuery({queryKey:['edition-latest'],enabled:status.edition === 'enabled' || status.edition === 'paused',queryFn:({signal}) => request<components['schemas']['Edition']>('/v1/editions/latest',{signal}),retry:false,refetchInterval: query => query.state.data && ['pending','paused'].includes(query.state.data.status) ? 5000 : false})
   async function trigger() {
     setBusy(true);setError('')
     try {await request('/v1/editions',{method:'POST',body:JSON.stringify({period:'weekly',op_id:crypto.randomUUID()})});await cache.invalidateQueries({queryKey:['edition-latest']})}
@@ -74,6 +75,6 @@ export function Edition({onOpen}: {onOpen: (entry: Entry) => void}) {
   async function open(id: number) {
     try {onOpen(await request<Entry>(`/v1/entries/${id}`))} catch (error) {setError(message(error))}
   }
-  if (status.edition !== 'enabled') return null
-  return <section aria-label="Edition prose"><button disabled={busy} onClick={() => {void trigger()}}>Make this week's edition</button>{error && <p role="alert">{error}</p>}{latest.error && !(latest.error instanceof RequestError && latest.error.status === 404) && <p role="alert">{latest.error.message}</p>}{latest.data && latest.data.status !== 'ready' && <p>Edition status: {latest.data.status}</p>}{latest.data?.error && <p role="alert">{latest.data.error}</p>}{latest.data?.sections?.map((section, i) => section.claims?.length ? <section key={i}><h3>{section.name}</h3><GroundedClaims claims={section.claims} onOpen={id => {void open(id)}}/></section> : null)}</section>
+  if (status.edition !== 'enabled' && status.edition !== 'paused') return null
+  return <section aria-label="Edition prose">{status.edition === 'paused' && <p role="status">Edition generation is paused because the provider budget is unavailable.</p>}<button disabled={busy || status.edition === 'paused'} onClick={() => {void trigger()}}>Make this week's edition</button>{error && <p role="alert">{error}</p>}{latest.error && !(latest.error instanceof RequestError && latest.error.status === 404) && <p role="alert">{latest.error.message}</p>}{latest.data && latest.data.status !== 'ready' && <p>Edition status: {latest.data.status}</p>}{latest.data?.error && <p role="alert">{latest.data.error}</p>}{latest.data?.sections?.map((section, i) => section.claims?.length ? <section key={i}><h3>{section.name}</h3><GroundedClaims claims={section.claims} onOpen={id => {void open(id)}}/></section> : null)}</section>
 }

@@ -58,5 +58,21 @@ private func check<T: Codable>(_ type: T.Type, name: String, schemas: [String: A
     try check(APIBootstrapPage.self, name: "BootstrapPage", schemas: schemas)
     try check(APIChange.self, name: "ChangeRecord", schemas: schemas)
     try check(APIChangesPage.self, name: "ChangesPage", schemas: schemas)
+    try check(LabelDefinition.self, name: "Label", schemas: schemas)
     try check(APIProblem.self, name: "Problem", schemas: schemas)
+}
+
+@Test func labelMembershipMatchesOpenAPISchema() throws {
+    let document = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: openAPI)) as? [String: Any])
+    let components = try #require(document["components"] as? [String: Any])
+    let schemas = try #require(components["schemas"] as? [String: Any])
+    let schema = try #require(schemas["LabelMembership"] as? [String: Any])
+    let input = try example(schema, schemas: schemas, alternative: 0)
+    let value = try JSONDecoder().decode(APIValue.self, from: JSONSerialization.data(withJSONObject: input))
+    let membership = try #require(SyncObject(labelMembership: value))
+    #expect(membership.id == value["id"]?.int64Value)
+    #expect(membership.entryID == value["entry_id"]?.int64Value)
+    #expect(membership.labelID == value["label_id"]?.int64Value)
+    #expect(membership.rev == value["rev"]?.int64Value)
+    #expect(membership.deleted == value["deleted"]?.boolValue)
 }

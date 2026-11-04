@@ -28,6 +28,16 @@ func NewClient(router *Router, budget *Budget, models map[string]ModelInfo) (*Cl
 	return &Client{router: router, budget: budget, models: models}, nil
 }
 
+// CheckBudget reports current availability without reserving spend or calling a
+// provider. Each actual call still reserves its input-dependent estimate.
+func (c *Client) CheckBudget(ctx context.Context, task Task) error {
+	route, err := c.router.Task(task)
+	if err != nil {
+		return err
+	}
+	return c.budget.Authorize(ctx, route.Provider.Name())
+}
+
 // Complete resolves task, checks the budget, calls the provider and records
 // spend. Invalid structured output is an error and is never returned. The
 // model always comes from the router; a caller-supplied one is ignored.

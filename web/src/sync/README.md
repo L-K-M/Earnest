@@ -25,12 +25,11 @@ network access is injected through the shared request seam.
 - `store.ts`: `SyncStore`: `IdbSyncStore` (one structured-clone record per
   save, so a snapshot write is a single transaction) plus `MemorySyncStore`.
 - `runtime.ts`: `ReaderSync`: the browser orchestrator (below).
-- `harness.ts` + `vectors.test.ts`: drift gate: all 35 files in
+- `harness.ts` + `vectors.test.ts`: drift gate: all shared files in
   `testdata/vectors` replayed through `SyncClient`; unregistered files and
   unknown ops fail the suite.
 - `engine.test.ts`, `runtime.test.ts`: unit/integration coverage,
-  including the late-generation-acknowledgement regressions that vectors
-  36/37 would cover (absent in this checkout).
+  including generation-aware acknowledgements and range tombstones.
 
 ## Parent integration
 

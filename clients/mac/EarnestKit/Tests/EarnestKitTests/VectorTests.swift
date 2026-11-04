@@ -22,7 +22,7 @@ private let vectorFiles: [String] = [
     "28-clock-boundaries.json", "29-resource-tombstones.json", "30-principal-isolation.json",
     "31-queued-range-client.json", "32-coalesced-done-clear.json", "33-restore-release-safety.json",
     "34-integer-identity.json", "35-batch-causal-shelf.json", "36-ack-out-of-order-merge.json",
-    "37-ack-stale-generation.json", "38-independent-register-merge.json",
+    "37-ack-stale-generation.json", "38-independent-register-merge.json", "39-range-ack-gone.json",
 ]
 
 // MARK: - Coverage model
@@ -98,7 +98,7 @@ private func loadVector(_ file: String) throws -> VectorDocument {
     #expect(names == Set(vectorFiles))
 }
 
-/// The drift gate: executes all 38 vectors end to end. Every step's `expect`
+/// The drift gate: executes all shared vectors end to end. Every step's `expect`
 /// is compared as a recursive subset (objects) with exact array equality, and
 /// `error` names match the shared vocabulary. Per-file failures report every
 //  mismatched step so one drift cannot hide the rest.
@@ -126,7 +126,7 @@ func syncVector(_ file: String) throws {
     #expect(failures.isEmpty, "\(file):\n\(failures.joined(separator: "\n"))")
 }
 
-/// Static coverage accounting, asserted rather than narrated: exactly the 35
+/// Static coverage accounting, asserted rather than narrated: exactly the 36
 /// vectors with client-observable steps exercise SyncEngine; the three
 /// notification vectors exercise only server-internal behavior. The report is
 /// also written for the task ledger.
@@ -145,7 +145,7 @@ func syncVector(_ file: String) throws {
     }
     lines.append("totals: full=\(full) server-internal-only=\(internalOnly) partial=\(partial) not-run=\(notRun)")
     try lines.joined(separator: "\n").write(toFile: "/tmp/mac-vector-coverage.txt", atomically: true, encoding: .utf8)
-    #expect(full == 35)
+    #expect(full == 36)
     #expect(internalOnly == 3)
     #expect(partial == 0)
     #expect(notRun == 0)
