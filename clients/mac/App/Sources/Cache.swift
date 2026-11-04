@@ -72,6 +72,12 @@ final class Cache: SyncStore {
         }
     }
 
+    func removeArticle(entryID: Int64, generation: String) throws {
+        try db.write { db in
+            try db.execute(sql: "DELETE FROM article_copies WHERE identity = ? AND entry_id = ? AND generation = ?", arguments: [key, entryID, generation])
+        }
+    }
+
     func saveArticle(entryID: Int64, html: String, generation: String) throws {
         try db.write { db in
             try db.execute(sql: """

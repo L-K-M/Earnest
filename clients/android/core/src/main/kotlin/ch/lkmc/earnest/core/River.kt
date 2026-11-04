@@ -18,11 +18,16 @@ object River {
         val fields = fields(subscription)
         if (fields["muted"]?.jsonPrimitive?.booleanOrNull == true) return false
         val firstSeen = instant(entry.firstSeenAt) ?: return false
-        val since = fields["initial_since"]?.jsonPrimitive?.contentOrNull?.let(::instant) ?: return false
-        if (firstSeen < since) return false
         val through = fields["initial_through_seq"]?.jsonPrimitive?.longOrNull ?: return false
         val published = entry.publishedAt?.let(::instant)
-        if (entry.seq <= through && published != null && published < since) return false
+
+        // Bootstrap represents the server's unbounded cutoff as null.
+        val since = fields["initial_since"]?.jsonPrimitive?.contentOrNull?.let(::instant)
+        if (since != null) {
+            if (firstSeen < since) return false
+            if (entry.seq <= through && published != null && published < since) return false
+        }
+
         if (resources.any { matchesMute(it, entry) }) return false
         val cadence = fields["cadence"]?.jsonPrimitive?.contentOrNull
         if (cadence == "now") return true

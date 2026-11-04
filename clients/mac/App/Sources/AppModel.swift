@@ -824,13 +824,13 @@ import AppKit
                     do {
                         article = try await api.content(entryID: id).html
                     } catch {
-                        if ErrorPresentation.isUnauthorized(error) || error is CancellationError { throw error }
+                        guard ErrorPresentation.isConnection(error) else { throw error }
                         try Task.checkCancellation()
                         guard self.session == expectedSession,
                               (try? engine.snapshot().cursor?.generation) == generation else { return }
                         guard let saved = try cache?.article(entryID: id, generation: generation) else {
                             // Never opened before: say so, and retry after the next successful sync.
-                            guard ErrorPresentation.isConnection(error), self.selected == id else { throw error }
+                            guard self.selected == id else { throw error }
                             self.articleUnavailable = true
                             self.connectionNote = ErrorPresentation.message(error)
                             return
@@ -858,7 +858,13 @@ import AppKit
                 var missing = (error as? APIProblem)?.status == 404
                 if case APIError.httpStatus(404) = error { missing = true }
                 if missing {
-                    try? self.engine?.markGone(entryID: id)
+                    do {
+                        try engine.markGone(entryID: id)
+                        try cache?.removeArticle(entryID: id, generation: generation)
+                    } catch {
+                        self.report(error)
+                        return
+                    }
                     self.rebuildPresentation()
                 }
                 self.report(error)

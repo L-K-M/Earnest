@@ -4,13 +4,17 @@ Every JSON file is executed by the Postgres service integration test, EarnestKit
 and the Android app tests. IDs and expected IDs are numeric, ordered by ascending
 sequence. `now` is fixed UTC time. `today_decay_days` is optional and defaults to
 two. Entries include their effective `seen` and `shelf` values. Subscription and
-mute `deleted` fields are optional and default to false.
+mute `deleted` fields are optional and default to false. A null or absent
+`initial_since` is unbounded: the Go loader inserts PostgreSQL `-infinity`,
+which bootstrap serializes as null.
 
 `eligibility.json` covers the initial import sequence and timestamp boundaries,
 null and old publisher dates, first-seen decay boundaries, future first-seen
 clocks, non-decaying Now feeds, week feeds, mute matching, tombstones and state.
 `custom-decay.json` checks that the Today setting changes its window while Now
-and week retain their own behavior.
+and week retain their own behavior. `unbounded-cutoff.json` covers null and
+absent import cutoffs, old publisher dates, non-decaying Now feeds and the
+Today/Edition decay windows.
 
 The Go test inserts these projections into Postgres and calls `Service.Entries`
 with `ViewRiver`. Native tests execute their production pure filter over the
