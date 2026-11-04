@@ -258,6 +258,18 @@ public final class SyncEngine {
         for state in states { merge(state, into: &data.states) }
         try store.save(data)
     }
+    /// Read these resources before pulling changes because bootstrap omits them.
+    /// Replacing the active mute set also removes deletions older than our cursor.
+    public func replaceRiverResources(mutes: [APIValue], settings: APIValue) throws {
+        var data = try store.load()
+        let objects = try mutes.map { try require(SyncObject(mute: $0), "mutes") }
+        let settingsObject = try require(SyncObject(settings: settings), "settings")
+        data.objects.removeAll { $0.kind == .mute }
+        for object in objects { merge(object: object, into: &data) }
+        merge(object: settingsObject, into: &data)
+        try store.save(data)
+    }
+
     /// Merge a fetched list or individual entry response only into its request's generation.
     public func mergeEntries(_ entries: [APIEntry], generation: String) throws {
         var data = try store.load()
@@ -361,6 +373,10 @@ public final class SyncEngine {
             mergeResultStates(try results())
         case "state.range":
             mergeResultStates(try pick("range", RangeResult.init).results)
+        case "mute.updated", "mute.deleted":
+            merge(object: try pick("mute", SyncObject.init(mute:)), into: &data)
+        case "settings.updated":
+            merge(object: try pick("settings", SyncObject.init(settings:)), into: &data)
         case "position.updated":
             merge(position: try pick("position", SyncPosition.init), into: &data)
         case "label.added", "label.removed",

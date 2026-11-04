@@ -52,6 +52,7 @@ class SyncRepository(
                 }
             } while (page.hasMore)
         }
+        refreshRiverResources(staged)
         engine.installBootstrap(staged.snapshot())
         engine.flush()
     }
@@ -59,7 +60,11 @@ class SyncRepository(
     /** Pulls pages and reports operations rejected during retention-gap recovery. */
     suspend fun pull(): List<RejectedOperation> {
         val rejected = mutableListOf<RejectedOperation>()
-        if (engine.snapshot().cursor.generation.isEmpty()) bootstrap()
+        if (engine.snapshot().cursor.generation.isEmpty()) {
+            bootstrap()
+        } else {
+            refreshRiverResources(engine)
+        }
         while (true) {
             val cursor = engine.snapshot().cursor
             val page = try {
@@ -198,7 +203,9 @@ class SyncRepository(
             val item = it.jsonObject
             CachedPosition(long(item, "principal"), string(item, "view"), long(item, "seq"), long(item, "rev"))
         }
-        val obj = payload["object"]?.let { parseObject(it, payload) }
+        val obj = payload["mute"]?.let { riverResource(River.MUTE, it) }
+            ?: payload["settings"]?.let { riverResource(River.SETTINGS, it) }
+            ?: payload["object"]?.let { parseObject(it, payload) }
         val results = payload["results"] ?: payload["range"]?.jsonObject?.get("results")
         val states = results?.takeUnless { it is JsonNull }?.let { element ->
             json.decodeFromJsonElement(
@@ -207,6 +214,20 @@ class SyncRepository(
             )
         }.orEmpty().map { it.state }
         return SyncChange(record.rev, entry, states, obj, position)
+    }
+
+    /** Fetch before replay because these resources have no bootstrap endpoint. */
+    private suspend fun refreshRiverResources(target: SyncEngine) {
+        val mutes = api.mutes().map { riverResource(River.MUTE, it) }
+        val settings = riverResource(River.SETTINGS, api.settings())
+        target.replaceRiverResources(mutes, settings)
+        target.flush()
+    }
+
+    private fun riverResource(kind: String, value: JsonElement): SyncObject {
+        val item = value.jsonObject
+        return SyncObject(kind, if (kind == River.SETTINGS) 1 else long(item, "id"),
+            rev = long(item, "rev"), deleted = boolean(item, "deleted"), raw = value.toString())
     }
 
     /** Parses a protocol object and keeps its native companion projection in [SyncObject.raw]. */

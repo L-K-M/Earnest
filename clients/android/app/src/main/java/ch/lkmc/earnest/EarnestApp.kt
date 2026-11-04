@@ -159,11 +159,11 @@ private fun MainScaffold(
             .filter { it.kind == SyncEngine.OBJECT_SUBSCRIPTION }
             .associate { it.id to it.name }
     }
-    val lists = remember(state.snapshot, state.states, state.cadences, state.todayEntryIds) {
+    val lists = remember(state.snapshot, state.states, state.cadences, state.riverEntryIds) {
         val visible = entries.filterNot { it.deleted }
         fun stateOf(id: Long) = state.states[id] ?: SyncEngine.initialState(state.principalId, id)
         val today = todayEntries(state)
-        val edition = visible.filter { state.cadences[it.subscriptionId] == "week" }
+        val edition = editionEntries(state)
         val later = visible.filter { stateOf(it.id).shelf.value == kotlinx.serialization.json.JsonPrimitive(SyncEngine.VALUE_LATER) }
         val kept = visible.filter { stateOf(it.id).kept.value == kotlinx.serialization.json.JsonPrimitive(true) }
         val done = visible.filter { stateOf(it.id).shelf.value == kotlinx.serialization.json.JsonPrimitive(SyncEngine.VALUE_DONE) }

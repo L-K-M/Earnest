@@ -6,6 +6,9 @@ import SwiftUI
 struct BriefsView: View {
     let briefs: [BriefItem]
     let names: [Int64: String]
+    @SwiftUI.State private var contentHeight: CGFloat = 0
+
+    private let maximumHeight: CGFloat = 180
 
     var body: some View {
         ScrollView {
@@ -24,8 +27,10 @@ struct BriefsView: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
         }
-        .frame(maxHeight: 180)
+        .frame(height: min(contentHeight, maximumHeight))
+        .scrollBounceBehavior(.basedOnSize)
         .background(.regularMaterial)
     }
 }
@@ -49,19 +54,21 @@ struct FeedsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                TextField("Feed URL", text: $model.subscribeURL)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { model.subscribe() }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    TextField("Feed URL", text: $model.subscribeURL)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { model.subscribe() }
+                    Button("Subscribe", systemImage: "plus") { model.subscribe() }
+                        .labelStyle(.iconOnly)
+                        .help("Subscribe to the feed URL")
+                        .disabled(model.subscribeURL.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
                 Picker("Cadence", selection: $model.subscribeCadence) {
                     Text("Now").tag("now")
                     Text("Today").tag("today")
                     Text("This week").tag("week")
                 }
-                .labelsHidden()
-                .frame(width: 110)
-                Button("Subscribe") { model.subscribe() }
-                    .disabled(model.subscribeURL.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             .padding(10)
             Divider()
@@ -70,30 +77,7 @@ struct FeedsView: View {
                                        description: Text("Paste a feed URL above."))
             } else {
                 List(model.feeds) { feed in
-                    HStack(alignment: .firstTextBaseline) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(feed.title.isEmpty ? feed.url : feed.title).lineLimit(1)
-                            Text(feed.url)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .textSelection(.enabled)
-                            if let issue = feed.issue {
-                                Text(issue).font(.caption).foregroundStyle(.red)
-                            }
-                        }
-                        Spacer()
-                        Picker("Cadence", selection: Binding(
-                            get: { feed.cadence },
-                            set: { model.setCadence(feed.id, $0) })) {
-                            Text("Now").tag("now")
-                            Text("Today").tag("today")
-                            Text("This week").tag("week")
-                        }
-                        .labelsHidden()
-                        .frame(width: 105)
-                        Button("Unsubscribe") { removing = feed }
-                    }
+                    FeedRow(feed: feed, setCadence: { model.setCadence(feed.id, $0) }, unsubscribe: { removing = feed })
                 }
             }
         }
@@ -142,10 +126,16 @@ struct ActivityView: View {
                                 case "revert":
                                     Button("Revert") { model.revert(item) }
                                         .controlSize(.small)
+                                        .accessibilityLabel("Revert \(item.detail) for \(articleName(item))")
+                                        .disabled(model.activityActionPending)
                                 case "cancel":
-                                    Text("Held notification. Can be cancelled")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                    HStack {
+                                        Text("Held notification").font(.caption).foregroundStyle(.secondary)
+                                        Button("Cancel") { model.cancelNotification(item) }
+                                            .controlSize(.small)
+                                            .accessibilityLabel("Cancel notification for \(articleName(item))")
+                                            .disabled(model.activityActionPending)
+                                    }
                                 default:
                                     if !item.reason.isEmpty {
                                         Text(item.reason)
@@ -157,6 +147,50 @@ struct ActivityView: View {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    private func articleName(_ item: ActivityItem) -> String {
+        if let title = model.title(for: item.entryID), !title.isEmpty { return title }
+        if let id = item.entryID { return "article \(id)" }
+        return "activity \(item.id)"
+    }
+}
+
+struct FeedRow: View {
+    let feed: FeedInfo
+    let setCadence: (String) -> Void
+    let unsubscribe: () -> Void
+
+    private var title: String { feed.title.isEmpty ? feed.url : feed.title }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).fixedSize(horizontal: false, vertical: true)
+            Text(feed.url)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .help(feed.url)
+                .textSelection(.enabled)
+            if let issue = feed.issue {
+                Text(issue).font(.caption).foregroundStyle(.red)
+            }
+            HStack {
+                Picker("Cadence", selection: Binding(get: { feed.cadence }, set: setCadence)) {
+                    Text("Now").tag("now")
+                    Text("Today").tag("today")
+                    Text("This week").tag("week")
+                }
+                .labelsHidden()
+                .accessibilityLabel("Cadence for \(title)")
+                .frame(width: 110)
+                Spacer()
+                Button("Unsubscribe", systemImage: "trash", action: unsubscribe)
+                    .labelStyle(.iconOnly)
+                    .accessibilityLabel("Unsubscribe from \(title)")
+                    .help("Unsubscribe from \(title)")
             }
         }
     }

@@ -10,6 +10,8 @@ filter:
     - list-entries
     - get-entry
     - entry-content
+    - entry-content-url
+    - cancel-notification
     - get-me
     - list-subscriptions
     - subscribe
@@ -26,3 +28,5 @@ filter:
     - state-through
     - list-annotations
     - list-tokens
+    - list-mutes
+    - get-settings

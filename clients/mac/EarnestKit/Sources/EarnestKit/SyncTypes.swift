@@ -154,7 +154,7 @@ public struct SyncEntry: Codable, Equatable, Sendable {
 }
 
 public enum ObjectKind: String, Codable, Sendable {
-    case subscription, folder, label, annotation, token
+    case subscription, folder, label, annotation, token, mute, settings
 }
 
 /// A revisioned resource: subscription, folder, label membership, annotation

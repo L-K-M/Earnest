@@ -99,6 +99,11 @@ class SyncEngine(private val store: SyncStore) {
 
     fun snapshot(): SyncSnapshot = snapshot
 
+    /** A fresh active set removes mutes deleted before this cache's cursor. */
+    fun replaceRiverResources(mutes: List<SyncObject>, settings: SyncObject) {
+        commit(snapshot.copy(objects = snapshot.objects.filter { it.kind != River.MUTE && it.kind != River.SETTINGS } + mutes + settings))
+    }
+
     /** Persists the current snapshot when the store coalesces writes. */
     fun flush() = store.flush()
 

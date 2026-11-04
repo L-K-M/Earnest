@@ -173,6 +173,10 @@ class EarnestApi(
 
     suspend fun contentUrl(id: Long): ContentUrl = get(url("/v1/entries/$id/content-url") { it.addQueryParameter("mode", "click") }).decode()
 
+    suspend fun mutes(): List<JsonElement> = get(url("/v1/mutes")).decode()
+
+    suspend fun settings(): JsonElement = get(url("/v1/settings"))
+
     suspend fun subscriptions(): List<Subscription> = get(url("/v1/subscriptions")).decode()
 
     suspend fun subscribe(body: SubscriptionBody): Subscription =

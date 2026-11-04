@@ -28,7 +28,11 @@ public struct SyncReport: Sendable {
         var report = SyncReport()
         do {
             let snapshot = try engine.snapshot()
-            if snapshot.cursor == nil || !snapshot.bootstrapComplete { try await bootstrap() }
+            if snapshot.cursor == nil || !snapshot.bootstrapComplete {
+                try await bootstrap()
+            } else {
+                try await refreshRiverResources()
+            }
             try await pull()
             try await push(report: &report)
             try await pull()
@@ -78,7 +82,15 @@ public struct SyncReport: Sendable {
             guard let next = ids.max(), next > afterID else { throw SyncError.invalidPage }
             afterID = next
         }
+        try await refreshRiverResources()
         try engine.finishBootstrap()
+    }
+
+    private func refreshRiverResources() async throws {
+        let mutes = try await api.mutes()
+        let settings = try await api.settings()
+        try Task.checkCancellation()
+        try engine.replaceRiverResources(mutes: mutes, settings: settings)
     }
 
     private func pull() async throws {
