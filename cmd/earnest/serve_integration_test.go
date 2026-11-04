@@ -79,13 +79,17 @@ func TestServeShutdown(t *testing.T) {
 	if err := listener.Close(); err != nil {
 		t.Fatal(err)
 	}
+	// Without an explicit file, serve keeps its VAPID pair in the user's real
+	// config directory; a test must never write there.
+	vapidFile := filepath.Join(t.TempDir(), "vapid.json")
 	command := exec.CommandContext(ctx, binary, "serve")
 	for _, value := range os.Environ() {
 		if !strings.HasPrefix(value, "EARNEST_") {
 			command.Env = append(command.Env, value)
 		}
 	}
-	command.Env = append(command.Env, "EARNEST_DATABASE_URL="+dsn, "EARNEST_SECRET_KEY="+strings.Repeat("x", 32), "EARNEST_HTTP_ADDR="+addr, "EARNEST_BASE_URL=http://"+addr)
+	command.Env = append(command.Env, "EARNEST_DATABASE_URL="+dsn, "EARNEST_SECRET_KEY="+strings.Repeat("x", 32), "EARNEST_HTTP_ADDR="+addr, "EARNEST_BASE_URL=http://"+addr,
+		"EARNEST_PUSH_VAPID_KEY_FILE="+vapidFile)
 	var logs bytes.Buffer
 	command.Stdout = &logs
 	command.Stderr = &logs
@@ -128,6 +132,9 @@ func TestServeShutdown(t *testing.T) {
 				ready = response.StatusCode == http.StatusOK
 			}
 		}
+	}
+	if _, err := os.Stat(vapidFile); err != nil {
+		t.Fatalf("VAPID keys not kept in the test directory: %v", err)
 	}
 	for _, path := range []string{"/metrics", "/openapi.json", "/"} {
 		response, err := client.Get("http://" + addr + path)
