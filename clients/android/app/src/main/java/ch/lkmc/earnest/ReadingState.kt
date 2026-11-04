@@ -1,41 +1,41 @@
 package ch.lkmc.earnest
 
 import ch.lkmc.earnest.core.CachedEntry
+import ch.lkmc.earnest.core.River
 import ch.lkmc.earnest.core.SyncEngine
-import kotlinx.serialization.json.Json
+import ch.lkmc.earnest.core.SyncSnapshot
+import ch.lkmc.earnest.core.State
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
+import java.time.Instant
 
-/** Cached membership is independent of passive seen overlays during a session. */
-internal fun todayEntries(state: UiState): List<CachedEntry> = state.snapshot.entries.filter {
-    !it.deleted && state.cadences[it.subscriptionId] in listOf("now", "today") &&
-        (state.states[it.id] ?: SyncEngine.initialState(state.principalId, it.id)).let { effective ->
-            it.id in state.todayEntryIds && effective.shelf.value == JsonPrimitive(SyncEngine.VALUE_NONE)
-        }
+/** Session members survive passive seen writes, while explicit shelf actions remove rows. */
+internal fun todayEntries(state: UiState): List<CachedEntry> = sessionEntries(state).filter { state.cadences[it.subscriptionId] != "week" }
+
+internal fun editionEntries(state: UiState): List<CachedEntry> = sessionEntries(state).filter { state.cadences[it.subscriptionId] == "week" }
+
+private fun sessionEntries(state: UiState): List<CachedEntry> = state.snapshot.entries.filter {
+    !it.deleted && it.id in state.riverEntryIds &&
+        (state.states[it.id] ?: SyncEngine.initialState(state.principalId, it.id)).shelf.value == JsonPrimitive(SyncEngine.VALUE_NONE)
 }.sortedBy { it.seq }
 
-internal fun restoredState(engine: SyncEngine, principal: Long): UiState = UiState(
-    snapshot = engine.snapshot(),
-    principalId = principal,
-    states = engine.snapshot().entries.filterNot { it.deleted }.associate { it.id to engine.state(principal, it.id) },
-    cadences = engine.snapshot().objects
-        .filter { it.kind == SyncEngine.OBJECT_SUBSCRIPTION && !it.deleted && it.raw.isNotEmpty() }
-        .associate { obj ->
-            val cadence = runCatching { Json.parseToJsonElement(obj.raw).jsonObject["cadence"]?.jsonPrimitive?.contentOrNull }
-                .getOrNull() ?: "today"
-            obj.id to cadence
-        },
-)
+internal fun restoredState(engine: SyncEngine, principal: Long, now: Instant = Instant.now()): UiState {
+    val snapshot = engine.snapshot()
+    val states = snapshot.entries.filterNot { it.deleted }.associate { it.id to engine.state(principal, it.id) }
+    val cadences = snapshot.objects.filter { it.kind == SyncEngine.OBJECT_SUBSCRIPTION && !it.deleted }
+        .associate { it.id to River.cadence(it) }
+    val members = initialRiverIds(snapshot, states, now)
+    return UiState(snapshot = snapshot, principalId = principal, states = states, cadences = cadences, riverEntryIds = members)
+}
 
-internal fun initialTodayIds(
-    snapshot: ch.lkmc.earnest.core.SyncSnapshot,
-    states: Map<Long, ch.lkmc.earnest.core.State>,
-    cadences: Map<Long, String>,
-): Set<Long> = snapshot.entries.filter {
-    !it.deleted && cadences[it.subscriptionId] in listOf("now", "today") &&
-        (states[it.id]?.seen?.value ?: JsonPrimitive(SyncEngine.VALUE_UNSEEN)) == JsonPrimitive(SyncEngine.VALUE_UNSEEN) &&
-        (states[it.id]?.shelf?.value ?: JsonPrimitive(SyncEngine.VALUE_NONE)) == JsonPrimitive(SyncEngine.VALUE_NONE)
-}.map { it.id }.toSet()
-
+internal fun initialRiverIds(
+    snapshot: SyncSnapshot,
+    states: Map<Long, State>,
+    now: Instant = Instant.now(),
+): Set<Long> {
+    val subscriptions = snapshot.objects.filter { it.kind == SyncEngine.OBJECT_SUBSCRIPTION }.associateBy { it.id }
+    val resources = snapshot.objects.filter { it.kind == River.MUTE || it.kind == River.SETTINGS }
+    return snapshot.entries.filter {
+        River.contains(it, states[it.id] ?: SyncEngine.initialState(0, it.id),
+            subscriptions[it.subscriptionId], resources, now)
+    }.map { it.id }.toSet()
+}

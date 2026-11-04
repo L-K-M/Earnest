@@ -96,6 +96,7 @@ struct ActivityItem: Identifiable, Equatable {
     let action: String
     let detail: String
     let entryID: Int64?
+    let notificationID: Int64?
     let nextAction: String
     let reason: String
     let createdAt: Date?
@@ -109,6 +110,7 @@ struct ActivityItem: Identifiable, Equatable {
         reason = value["reason"]?.stringValue ?? ""
         createdAt = value["created_at"]?.stringValue.flatMap(DateFormatting.parse)
         let target = value["target"]
+        notificationID = action.hasPrefix("notification.") ? target?["id"]?.int64Value.flatMap { $0 > 0 ? $0 : nil } : nil
         let before = value["before"]
         let after = value["after"]
         var entry = target?["entry_id"]?.int64Value

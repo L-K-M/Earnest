@@ -14,12 +14,21 @@ import AppKit
     @Published var rows: [EntryRow] = []
     @Published var editionGroups: [EditionGroup] = []
     @Published var feeds: [FeedInfo] = []
+    @Published private(set) var activityActionPending = false
     @Published var activityGroups: [ActivityGroup] = []
     @Published var briefs: [BriefItem] = []
     @Published var agentChanges: [ActivityItem] = []
     @Published var principalNames: [Int64: String] = [:]
-    @Published var selected: Int64?
+    @Published var selected: Int64? {
+        didSet { if oldValue != selected { open(selected) } }
+    }
     @Published var html = ""
+    @Published private(set) var imageOrigin: URL?
+    @Published private(set) var imageMode: ArticleImageMode = .proxied
+    @Published private(set) var readingEntry: APIEntry?
+    @Published private(set) var offlineCopy = false
+    /// The selected article could not be fetched and has no offline copy.
+    @Published private(set) var articleUnavailable = false
     @Published var error: String?
     @Published var connectionNote: String?
     @Published var code: DeviceAuthorization?
@@ -35,15 +44,31 @@ import AppKit
     @Published var subscribeCadence = "today"
 
     private var api: EarnestAPI?
-    private var tokens: KeychainTokens?
+    private var tokens: (any TokenStore)?
     private var serverURL: URL?
+    private let identities: IdentityStore
+    private let cacheDirectory: URL?
+    private var identity: AccountIdentity?
+    private var cache: Cache?
     private var engine: SyncEngine?
     private var coordinator: SyncCoordinator?
     private var principalID: Int64 = 0
     private var feedMap: [Int64: FeedInfo] = [:]
+    private var cachedPresentation = false
     private var session = 0
     private var tasks: [String: Task<Void, Never>] = [:]
     private var sessionActions = SessionCounts()
+
+    init(api: EarnestAPI? = nil, engine: SyncEngine? = nil, principalID: Int64 = 0,
+         serverURL: URL? = nil, tokens: (any TokenStore)? = nil, identities: IdentityStore = IdentityStore(), cacheDirectory: URL? = nil) {
+        self.serverURL = serverURL
+        self.tokens = tokens
+        self.identities = identities
+        self.cacheDirectory = cacheDirectory
+        self.api = api
+        self.engine = engine
+        self.principalID = principalID
+    }
 
     // MARK: - Tasks and session lifecycle
 
@@ -65,6 +90,8 @@ import AppKit
         tasks.values.forEach { $0.cancel() }
         tasks.removeAll()
         engine = nil
+        cache = nil
+        identity = nil
         coordinator = nil
         principalID = 0
         entries = []
@@ -73,11 +100,18 @@ import AppKit
         feeds = []
         feedMap = [:]
         activityGroups = []
+        activityActionPending = false
         briefs = []
         agentChanges = []
         principalNames = [:]
+        cachedPresentation = false
         selected = nil
         html = ""
+        imageOrigin = nil
+        imageMode = .proxied
+        readingEntry = nil
+        offlineCopy = false
+        articleUnavailable = false
         code = nil
         loggingIn = false
         loggedIn = false
@@ -113,55 +147,124 @@ import AppKit
     }
 
     func signOut() {
+        if let serverURL { identities.remove(server: serverURL) }
         endSession()
         do { try tokens?.delete() } catch { report(error) }
     }
 
-    /// A new session resolves the principal once, then builds the persisted
-    /// cache, sync engine and network coordinator around it.
+    /// Retry identity verification without letting an offline credential send
+    /// the remembered account's outbox under a different principal.
     private func startSession() {
         let s = session
         runTask("session") { [weak self] in
-            guard let self, let api = self.api else { return }
-            do {
-                let me = try await api.me()
-                guard self.session == s, self.loggedIn else { return }
-                guard let principal = parsePrincipalID(me), let url = self.serverURL else { throw APIError.invalidResponse }
-                self.principalID = principal
-                let engine = SyncEngine(store: try Cache(server: url, principal: principal))
-                self.engine = engine
-                self.coordinator = SyncCoordinator(engine: engine, api: api)
-                self.refreshPrincipalNames()
-                await self.refresh()
-                self.startEvents()
-                self.scheduleSync()
-            } catch is CancellationError {
-            } catch { if self.session == s { self.report(error) } }
+            while !Task.isCancelled {
+                guard let self, self.session == s, self.loggedIn else { return }
+                do {
+                    if try await self.establishSession() {
+                        guard self.session == s, !Task.isCancelled else { return }
+                        self.startEvents()
+                        self.scheduleSync()
+                        return
+                    }
+                } catch is CancellationError {
+                    return
+                } catch {
+                    guard self.session == s, !Task.isCancelled else { return }
+                    self.report(error)
+                    if !ErrorPresentation.isConnection(error) { return }
+                }
+                try? await Task.sleep(for: .seconds(10))
+            }
         }
+    }
+
+    /// Also used before reconnect sync. A verified replacement starts with
+    /// its own empty presentation before any of its cache is attached.
+    func establishSession() async throws -> Bool {
+        guard let api, let url = serverURL else { return false }
+        let expectedSession = session
+        let result: Result<APIValue, Error>
+        do { result = .success(try await api.me()) }
+        catch { result = .failure(error) }
+        try Task.checkCancellation()
+        guard session == expectedSession, loggedIn else { return false }
+        let remembered: AccountIdentity?
+        if case .failure(let error) = result, ErrorPresentation.isConnection(error) {
+            remembered = try identities.load(server: url)
+        } else {
+            remembered = nil
+        }
+        let resolution = try SessionResolution.resolve(server: url, result: result, remembered: remembered)
+        let resolved = resolution.identity
+        if case .verified = resolution { try identities.save(resolved) }
+        if let identity, identity != resolved {
+            endSession()
+            loggedIn = true
+            startSession()
+            return false
+        }
+        if identity == nil {
+            let cache = try Cache(identity: resolved, directory: cacheDirectory)
+            let engine = SyncEngine(store: cache)
+            self.cache = cache
+            self.engine = engine
+            self.identity = resolved
+            principalID = resolved.principalID
+            coordinator = SyncCoordinator(engine: engine, api: api)
+            try restoreCachedPresentation()
+        }
+        if case .offline = resolution {
+            connectionNote = "Offline. Showing what was last synced."
+            return false
+        }
+        return true
+    }
+
+    private func restoreCachedPresentation() throws {
+        guard let engine, let cache else { return }
+        let snapshot = try engine.snapshot()
+        cachedPresentation = true
+        // Oldest first, like the server river, so offline reading order matches online.
+        entries = try snapshot.entries.filter { !$0.deleted && $0.hasBody }.sorted { $0.seq < $1.seq }
+            .map { try cachedEntry($0, principal: principalID, engine: engine) }
+        let generation = snapshot.cursor?.generation ?? ""
+        feeds = try cache.resource("feeds", generation: generation).compactMap(FeedInfo.init).filter { !$0.deleted }
+        let subscriptions = snapshot.objects.filter { $0.kind == .subscription && !$0.deleted }
+        if !subscriptions.isEmpty {
+            feeds = subscriptions.compactMap { object in
+                var fields = object.fields
+                fields["id"] = .integer(object.id)
+                fields["title"] = .string(object.name)
+                return FeedInfo(.object(fields))
+            }
+        }
+        principalNames = Dictionary(try cache.resource("principal_names", generation: generation).compactMap { value in
+            guard let id = value["id"]?.int64Value, let name = value["name"]?.stringValue else { return nil }
+            return (id, name)
+        }, uniquingKeysWith: { _, last in last })
+        feedMap = Dictionary(feeds.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+        briefs = try cache.resource("briefs", generation: generation).compactMap(BriefItem.init)
+        rebuildPresentation()
     }
 
     private func startEvents() {
         let s = session
         runTask("events") { [weak self] in
             while !Task.isCancelled {
-                guard let self, let coordinator = self.coordinator, self.session == s else { return }
+                guard let self, let api = self.api, self.session == s else { return }
                 do {
-                    try await coordinator.runEvents { [weak self] report in
-                        // Every hint means the engine state moved; refresh the
-                        // displayed list so agent changes arrive live.
-                        guard let self, self.session == s else { return }
-                        if !report.droppedOperationIDs.isEmpty {
-                            self.connectionNote = "\(report.droppedOperationIDs.count) queued action(s) expired or no longer apply."
-                        }
-                        self.rebuildPresentation()
-                        await self.refresh()
+                    let cursor = try self.engine?.snapshot().cursor
+                    let text = cursor.map { "\($0.generation):\($0.rev)" }
+                    for try await _ in try api.eventHints(cursor: text) {
+                        guard self.session == s, !Task.isCancelled else { return }
+                        self.scheduleSync()
                     }
                     return
                 } catch is CancellationError {
                     return
                 } catch {
                     guard !Task.isCancelled, self.session == s else { return }
-                    if let problem = error as? APIProblem, [401, 403].contains(problem.status) {
+                    if ErrorPresentation.isUnauthorized(error) {
                         self.report(error)
                         return
                     }
@@ -170,8 +273,8 @@ import AppKit
                 }
             }
         }
-        // The event stream keeps the engine fresh, but entry lists are API
-        // fetches: poll on a slow cadence so new items arrive on their own.
+        // Poll as well as following hints so a quiet or interrupted stream
+        // cannot prevent retrying queued work.
         runTask("poll") { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(120))
@@ -186,7 +289,7 @@ import AppKit
     /// Passive marks coalesce for `delay` so rapid j/k browsing costs one
     /// round trip; the named task cancels the previous pending sync.
     func scheduleSync(delay: Double) {
-        guard let coordinator else { return }
+        guard coordinator != nil else { return }
         let s = session
         runTask("sync") { [weak self] in
             if delay > 0 { try? await Task.sleep(for: .milliseconds(Int(delay * 1000))) }
@@ -194,8 +297,17 @@ import AppKit
             self.syncing = true
             defer { if !Task.isCancelled, self.session == s { self.syncing = false } }
             do {
+                if self.serverURL != nil {
+                    guard try await self.establishSession(), self.session == s else { return }
+                }
+                guard let coordinator = self.coordinator else { return }
+                let generation = try self.engine?.snapshot().cursor?.generation
                 let report = try await coordinator.synchronize()
                 guard !Task.isCancelled, self.session == s, self.loggedIn else { return }
+                if (try self.engine?.snapshot().cursor?.generation) != generation {
+                    self.selected = nil
+                    try self.restoreCachedPresentation()
+                }
                 if !report.droppedOperationIDs.isEmpty {
                     self.connectionNote = "\(report.droppedOperationIDs.count) queued action(s) expired or no longer apply."
                 } else {
@@ -203,25 +315,24 @@ import AppKit
                 }
                 self.rebuildPresentation()
                 await self.refresh()
+                self.refreshPrincipalNames()
+                if self.articleUnavailable, let id = self.selected { self.open(id) }
             } catch is CancellationError {
             } catch {
                 guard self.session == s else { return }
-                self.connectionNote = "Sync failed: \(String(describing: error))"
+                self.report(error)
             }
         }
     }
 
     private func report(_ error: Error) {
-        if let problem = error as? APIProblem {
-            if problem.status == 401 {
-                signOut()
-                self.error = "Your sign-in expired or was revoked. Sign in again."
-                return
-            }
-            self.error = problem.detail ?? problem.title
-        } else {
-            self.error = String(describing: error)
+        if ErrorPresentation.isUnauthorized(error) { signOut() }
+        let message = ErrorPresentation.message(error)
+        if ErrorPresentation.isConnection(error) {
+            connectionNote = message
+            return
         }
+        self.error = message
     }
 
     // MARK: - Device login
@@ -255,6 +366,8 @@ import AppKit
                             if (try? loginTokens.load()) == token.accessToken { try? loginTokens.delete() }
                             return
                         }
+                        // New credentials must verify their own account before cache reuse.
+                        if let serverURL = self.serverURL { self.identities.remove(server: serverURL) }
                         self.code = nil
                         self.loggedIn = true
                         self.startSession()
@@ -338,10 +451,15 @@ import AppKit
             } while cursor != nil && !Task.isCancelled
             guard self.section == expected, loggedIn, session == expectedSession, !Task.isCancelled else { return }
             try engine.mergeEntries(all, generation: generation)
+            cachedPresentation = false
             entries = all
         } catch is CancellationError {
         } catch {
             guard session == expectedSession, (try? engine.snapshot().cursor?.generation) == generation else { return }
+            if ErrorPresentation.isConnection(error) {
+                do { try restoreCachedPresentation() }
+                catch { report(error) }
+            }
             report(error)
         }
     }
@@ -349,9 +467,15 @@ import AppKit
     private func refreshFeeds() async {
         guard let api else { return }
         let expectedSession = session
+        let generation = try? engine?.snapshot().cursor?.generation
         do {
-            let subs = try await api.subscriptions().compactMap(FeedInfo.init).filter { !$0.deleted }
-            guard loggedIn, session == expectedSession, !Task.isCancelled else { return }
+            let values = try await api.subscriptions()
+            guard loggedIn, session == expectedSession, !Task.isCancelled,
+                  (try? engine?.snapshot().cursor?.generation) == generation else { return }
+            if let generation {
+                try cache?.saveResource("feeds", values: values, generation: generation)
+            }
+            let subs = values.compactMap(FeedInfo.init).filter { !$0.deleted }
             feeds = subs
             feedMap = Dictionary(subs.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         } catch is CancellationError {
@@ -361,9 +485,15 @@ import AppKit
     private func refreshBriefs() async {
         guard let api else { return }
         let expectedSession = session
+        let generation = try? engine?.snapshot().cursor?.generation
         do {
-            let items = try await api.todayBriefs().compactMap(BriefItem.init)
-            guard loggedIn, session == expectedSession, !Task.isCancelled else { return }
+            let values = try await api.todayBriefs()
+            guard loggedIn, session == expectedSession, !Task.isCancelled,
+                  (try? engine?.snapshot().cursor?.generation) == generation else { return }
+            if let generation {
+                try cache?.saveResource("briefs", values: values, generation: generation)
+            }
+            let items = values.compactMap(BriefItem.init)
             briefs = items
             if items.contains(where: { principalNames[$0.principalID] == nil }) { refreshPrincipalNames() }
         } catch is CancellationError {
@@ -390,6 +520,7 @@ import AppKit
             guard let self, let names = try? await self.api?.agentNames() else { return }
             guard self.session == expectedSession, self.loggedIn, !Task.isCancelled else { return }
             self.principalNames.merge(names) { _, new in new }
+            self.cachePrincipalNames()
         }
     }
 
@@ -424,6 +555,16 @@ import AppKit
         for item in items where !item.principalName.isEmpty {
             principalNames[item.principalID] = item.principalName
         }
+        cachePrincipalNames()
+    }
+
+    private func cachePrincipalNames() {
+        guard let generation = try? engine?.snapshot().cursor?.generation else { return }
+        let values = principalNames.sorted { $0.key < $1.key }.map {
+            APIValue.object(["id": .integer($0.key), "name": .string($0.value)])
+        }
+        do { try cache?.saveResource("principal_names", values: values, generation: generation) }
+        catch { report(error) }
     }
 
     // MARK: - Presentation
@@ -433,10 +574,6 @@ import AppKit
     private func effectiveState(of entry: APIEntry) -> EarnestKit.State {
         guard let engine, principalID > 0 else { return entry.state.syncState }
         return (try? engine.state(principal: principalID, entryID: entry.id)) ?? entry.state.syncState
-    }
-
-    private func riverVisible(_ state: EarnestKit.State) -> Bool {
-        state.seen.value == .text("unseen") && state.shelf.value == .text("none")
     }
 
     private func cadence(of entry: APIEntry) -> String {
@@ -458,13 +595,27 @@ import AppKit
     }
 
     func rebuildPresentation() {
+        let snapshot = try? engine?.snapshot()
         let presented = entries.filter { !$0.deleted }.map { ($0, effectiveState(of: $0)) }
+        let riverIDs: Set<Int64>
+        if cachedPresentation, let snapshot {
+            let subscriptions = Dictionary(snapshot.objects.filter { $0.kind == .subscription }.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+            let states = Dictionary(presented.map { ($0.0.id, $0.1) }, uniquingKeysWith: { _, last in last })
+            let resources = snapshot.objects.filter { $0.kind == .mute || $0.kind == .settings }
+            let now = Date()
+            riverIDs = Set(snapshot.entries.filter { entry in
+                guard let state = states[entry.id] else { return false }
+                return River.contains(entry, state: state, subscription: subscriptions[entry.subscriptionID], resources: resources, now: now)
+            }.map(\.id))
+        } else {
+            riverIDs = Set(presented.filter { $0.1.seen.value == .text("unseen") && $0.1.shelf.value == .text("none") }.map { $0.0.id })
+        }
         switch section {
         case .today:
-            rows = presented.filter { riverVisible($0.1) && cadence(of: $0.0) != "week" }.map { row($0.0, $0.1) }
+            rows = presented.filter { riverIDs.contains($0.0.id) && cadence(of: $0.0) != "week" }.map { row($0.0, $0.1) }
             editionGroups = []
         case .edition:
-            let week = presented.filter { riverVisible($0.1) && cadence(of: $0.0) == "week" }
+            let week = presented.filter { riverIDs.contains($0.0.id) && cadence(of: $0.0) == "week" }
             var groups: [Int64: EditionGroup] = [:]
             var order: [Int64] = []
             for (entry, state) in week {
@@ -493,16 +644,16 @@ import AppKit
             editionGroups = []
         }
         pendingOps = (try? engine?.snapshot().outbox.count) ?? 0
-        updateEndStatement(presented)
+        updateEndStatement(presented, riverIDs: riverIDs)
     }
 
-    private func updateEndStatement(_ presented: [(APIEntry, EarnestKit.State)]) {
+    private func updateEndStatement(_ presented: [(APIEntry, EarnestKit.State)], riverIDs: Set<Int64>) {
         guard section == .today else {
             endTitle = ""
             endDetail = ""
             return
         }
-        let river = presented.filter { riverVisible($0.1) && cadence(of: $0.0) != "week" }
+        let river = presented.filter { riverIDs.contains($0.0.id) && cadence(of: $0.0) != "week" }
         if river.isEmpty {
             endTitle = "Nothing new. A rare and beautiful thing."
         } else if let since = river.compactMap({ DateFormatting.parse($0.0.firstSeenAt) }).min() {
@@ -575,7 +726,7 @@ import AppKit
         guard let index else { return }
         let ids = visibleEntryIDs()
         if let selected, ids.contains(selected) { return }
-        if !ids.isEmpty { selected = ids[min(index, ids.count - 1)] } else { selected = nil }
+        if !ids.isEmpty { selectFromList(ids[min(index, ids.count - 1)]) } else { selectFromList(nil) }
     }
 
     /// Opening an article is the desktop equivalent of scrolling past it: the
@@ -601,11 +752,11 @@ import AppKit
         let ids = visibleEntryIDs()
         guard !ids.isEmpty else { return }
         let current = ids.firstIndex(of: selected ?? -1) ?? (offset > 0 ? -1 : ids.count)
-        selected = ids[min(ids.count - 1, max(0, current + offset))]
+        selectFromList(ids[min(ids.count - 1, max(0, current + offset))])
     }
 
     func openOriginal() {
-        guard let entry = entries.first(where: { $0.id == selected }),
+        guard let entry = readingEntry ?? entries.first(where: { $0.id == selected }),
               let url = URL(string: entry.url),
               ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return }
         #if canImport(AppKit)
@@ -613,13 +764,45 @@ import AppKit
         #endif
     }
 
+    var readingFeedTitle: String {
+        guard let entry = readingEntry else { return "Feed" }
+        return feeds.first(where: { $0.id == entry.subscriptionID })?.title ?? "Feed"
+    }
+
+    func selectFromList(_ id: Int64?) {
+        imageMode = .proxied
+        if selected == id { open(id) }
+        else { selected = id }
+    }
+
+    func openDeepLink(_ url: URL) {
+        guard let id = DeepLink.entryID(url) else { return }
+        section = .today
+        imageMode = .click
+        if selected == id { open(id) }
+        else { selected = id }
+    }
+
+    func loadImages() {
+        guard selected != nil else { return }
+        imageMode = .proxied
+        open(selected)
+    }
+
     func open(_ id: Int64?) {
-        guard let id, loggedIn else { html = ""; return }
+        tasks["open"]?.cancel()
         html = ""
+        imageOrigin = nil
+        readingEntry = nil
+        offlineCopy = false
+        articleUnavailable = false
+        guard let id, loggedIn else { return }
+        let mode = imageMode
         runTask("open") { [weak self] in
             guard let self, let api = self.api, let engine = self.engine, self.loggedIn,
                   let generation = try? engine.snapshot().cursor?.generation else { return }
             let expectedSession = self.session
+            let cache = self.cache
             do {
                 if !self.entries.contains(where: { $0.id == id }) {
                     let entry = try await api.entry(id: id)
@@ -629,26 +812,65 @@ import AppKit
                     try engine.mergeEntries([entry], generation: generation)
                     self.entries.append(entry)
                 }
+                let entry = self.entries.first(where: { $0.id == id })
+                self.readingEntry = entry
                 let article: String
+                let origin: URL?
+                var offline = false
+                var contentError: Error?
                 do {
-                    article = try await api.signedContent(entryID: id)
+                    let signed = try await api.signedContent(entryID: id, mode: mode)
+                    article = signed.html
+                    origin = signed.imageOrigin
                 } catch is CancellationError {
                     return
                 } catch {
-                    article = try await api.content(entryID: id).html
+                    if ErrorPresentation.isUnauthorized(error) { throw error }
+                    do {
+                        article = try await api.content(entryID: id).html
+                    } catch {
+                        guard ErrorPresentation.isConnection(error) else { throw error }
+                        try Task.checkCancellation()
+                        guard self.session == expectedSession,
+                              (try? engine.snapshot().cursor?.generation) == generation else { return }
+                        guard let saved = try cache?.article(entryID: id, generation: generation) else {
+                            // Never opened before: say so, and retry after the next successful sync.
+                            guard self.selected == id else { throw error }
+                            self.articleUnavailable = true
+                            self.connectionNote = ErrorPresentation.message(error)
+                            return
+                        }
+                        article = saved
+                        offline = true
+                        contentError = error
+                    }
+                    origin = nil
                 }
                 guard self.selected == id, self.loggedIn, self.session == expectedSession,
                       (try? engine.snapshot().cursor?.generation) == generation, !Task.isCancelled else { return }
+                // Persistence is best effort once the article is available to read.
+                try? cache?.saveArticle(entryID: id, html: article, generation: generation)
                 self.html = article
+                self.imageOrigin = origin
+                self.offlineCopy = offline
+                if let contentError, ErrorPresentation.isConnection(contentError) {
+                    self.connectionNote = ErrorPresentation.message(contentError)
+                }
                 self.markSeen(entryID: id, entry: self.entries.first(where: { $0.id == id }))
             } catch is CancellationError {
             } catch {
-                guard self.loggedIn, self.session == expectedSession,
+                guard self.loggedIn, self.session == expectedSession, self.selected == id, !Task.isCancelled,
                       (try? engine.snapshot().cursor?.generation) == generation else { return }
                 var missing = (error as? APIProblem)?.status == 404
                 if case APIError.httpStatus(404) = error { missing = true }
                 if missing {
-                    try? self.engine?.markGone(entryID: id)
+                    do {
+                        try engine.markGone(entryID: id)
+                        try cache?.removeArticle(entryID: id, generation: generation)
+                    } catch {
+                        self.report(error)
+                        return
+                    }
                     self.rebuildPresentation()
                 }
                 self.report(error)
@@ -719,11 +941,30 @@ import AppKit
     // MARK: - Activity
 
     func revert(_ item: ActivityItem) {
-        guard let api, item.nextAction == "revert" else { return }
+        guard item.nextAction == "revert" else { return }
+        performActivityAction(item)
+    }
+
+    func cancelNotification(_ item: ActivityItem) {
+        guard item.nextAction == "cancel", item.notificationID != nil else {
+            error = "Notification ID is unavailable."
+            return
+        }
+        performActivityAction(item)
+    }
+
+    private func performActivityAction(_ item: ActivityItem) {
+        guard let api, !activityActionPending else { return }
         let expectedSession = session
-        runTask("revert") { [weak self] in
+        activityActionPending = true
+        runTask("activity-action") { [weak self] in
+            defer { if self?.session == expectedSession { self?.activityActionPending = false } }
             do {
-                _ = try await api.revertActivity(id: item.id)
+                if let notificationID = item.notificationID, item.nextAction == "cancel" {
+                    try await api.cancelNotification(id: notificationID)
+                } else {
+                    _ = try await api.revertActivity(id: item.id)
+                }
             } catch is CancellationError {
                 return
             } catch { if self?.session == expectedSession { self?.report(error) } }

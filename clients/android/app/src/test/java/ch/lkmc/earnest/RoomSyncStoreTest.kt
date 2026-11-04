@@ -15,7 +15,7 @@ import org.robolectric.annotation.SQLiteMode
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
-@SQLiteMode(SQLiteMode.Mode.LEGACY)
+@SQLiteMode(SQLiteMode.Mode.NATIVE)
 class RoomSyncStoreTest {
     @Test fun failedReplacementPreservesCommittedOutbox() {
         val context = ApplicationProvider.getApplicationContext<Context>()

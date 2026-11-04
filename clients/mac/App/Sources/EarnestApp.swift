@@ -7,7 +7,11 @@ import EarnestKit
     @StateObject private var model = AppModel()
 
     var body: some Scene {
-        WindowGroup { ContentView().environmentObject(model) }
+        WindowGroup {
+            ContentView().environmentObject(model)
+                .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
+        }
+            .handlesExternalEvents(matching: ["*"])
             .commands {
                 CommandMenu("Article") {
                     // Unmodified-letter equivalents are suspended while the
@@ -80,12 +84,7 @@ import EarnestKit
             PaletteView()
                 .environmentObject(model)
         }
-        .onOpenURL { url in
-            guard let id = DeepLink.entryID(url) else { return }
-            model.section = .today
-            if model.selected == id { model.open(id) }
-            else { model.selected = id }
-        }
+        .onOpenURL { model.openDeepLink($0) }
     }
 
     private var mainView: some View {
@@ -99,24 +98,51 @@ import EarnestKit
             .frame(minWidth: 170)
         } content: {
             contentColumn
+                // Inset on the column, not the split view: macOS columns do not
+                // yield to a split-view inset, so the note covered the end statement.
+                .safeAreaInset(edge: .bottom) {
+                    if let note = model.connectionNote {
+                        Text(note).font(.caption).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                            .background(.regularMaterial)
+                    }
+                }
                 .frame(minWidth: 320)
         } detail: {
             if model.selected != nil {
-                Reader(html: model.html)
-                    .background(Color(nsColor: .textBackgroundColor))
+                VStack(spacing: 0) {
+                    if let entry = model.readingEntry {
+                        ReaderHeader(entry: entry, feedTitle: model.readingFeedTitle, openOriginal: model.openOriginal)
+                        Divider()
+                    }
+                    if model.imageMode == .click {
+                        HStack {
+                            Text("Images are blocked for externally opened articles.")
+                                .font(.caption)
+                            Button("Load Images") { model.loadImages() }
+                        }
+                        .padding(8)
+                    }
+                    if model.offlineCopy {
+                        Text("Offline copy. Images are blocked.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(8)
+                    }
+                    if model.articleUnavailable {
+                        ContentUnavailableView("Not available offline", systemImage: "wifi.slash",
+                                               description: Text("Earnest keeps articles you have opened. This one loads when you are back online."))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        Reader(html: model.html, imageOrigin: model.imageOrigin)
+                    }
+                }
+                .background(Color(nsColor: .textBackgroundColor))
             } else {
                 ContentUnavailableView("Select an article", systemImage: "doc.text")
             }
         }
-        .safeAreaInset(edge: .bottom) {
-            if let note = model.connectionNote {
-                Text(note).font(.caption).textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(8)
-                    .background(.regularMaterial)
-            }
-        }
-        .onChange(of: model.section) { _ in model.refreshSection() }
-        .onChange(of: model.selected) { id in model.open(id) }
+        .onChange(of: model.section) { model.refreshSection() }
         .toolbar {
             ToolbarItemGroup {
                 if model.pendingOps > 0 {
@@ -133,6 +159,10 @@ import EarnestKit
         }
     }
 
+    private var entrySelection: Binding<Int64?> {
+        Binding(get: { model.selected }, set: { model.selectFromList($0) })
+    }
+
     @ViewBuilder private var contentColumn: some View {
         switch model.section {
         case .today:
@@ -144,7 +174,7 @@ import EarnestKit
                 if model.rows.isEmpty && model.briefs.isEmpty {
                     Spacer()
                 } else {
-                    EntryTable(entries: model.rows, selection: $model.selected)
+                    EntryTable(entries: model.rows, selection: entrySelection)
                 }
                 if !model.endTitle.isEmpty {
                     Divider()
@@ -162,12 +192,12 @@ import EarnestKit
                 }
             }
         case .edition:
-            EditionListView(groups: model.editionGroups, selection: $model.selected)
+            EditionListView(groups: model.editionGroups, selection: entrySelection)
         case .later, .kept, .done:
             if model.rows.isEmpty {
                 ContentUnavailableView("Nothing here", systemImage: "tray")
             } else {
-                EntryTable(entries: model.rows, selection: $model.selected)
+                EntryTable(entries: model.rows, selection: entrySelection)
             }
         case .feeds:
             FeedsView()

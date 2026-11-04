@@ -17,10 +17,17 @@ class SyncRepositoryTest {
         override fun save(snapshot: SyncSnapshot) { data = snapshot }
     }
 
-    private fun api(handler: (okhttp3.Request) -> Pair<Int, String>): EarnestApi = EarnestApi(
+    private fun api(
+        riverResponses: Map<String, () -> Pair<Int, String>> = emptyMap(),
+        handler: (okhttp3.Request) -> Pair<Int, String>,
+    ): EarnestApi = EarnestApi(
         "https://earnest.test", "token",
         OkHttpClient.Builder().addInterceptor { chain ->
-            val (status, body) = handler(chain.request())
+            val (status, body) = riverResponses[chain.request().url.encodedPath]?.invoke() ?: when (chain.request().url.encodedPath) {
+                "/v1/mutes" -> 200 to "[]"
+                "/v1/settings" -> 200 to """{"today_decay_days":2,"rev":0}"""
+                else -> handler(chain.request())
+            }
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
                 .code(status).message("test").body(body.toResponseBody()).build()
         }.build(),
@@ -353,7 +360,133 @@ class SyncRepositoryTest {
         val engine = engine()
         val payload = """{"subscription":{"id":3,"title":"Weekly","cadence":"week","rev":1},"object":{"kind":"subscription","id":3,"name":"Weekly","rev":1}}"""
         SyncRepository(api { changes(it, payload) }, engine).pull()
-        val projection = json.parseToJsonElement(engine.snapshot().objects.single().raw).jsonObject
+        val projection = json.parseToJsonElement(engine.snapshot().objects.single { it.kind == SyncEngine.OBJECT_SUBSCRIPTION }.raw).jsonObject
         assertEquals(JsonPrimitive("week"), projection["cadence"])
     }
+    @Test
+    fun riverResourcesReplayAndPersistAcrossReload() = runBlocking {
+        val store = Store(SyncSnapshot(Revision("g1", 0)))
+        val engine = SyncEngine(store)
+        val initialMute = SyncObject(River.MUTE, 2, rev = 0, raw = """{"kind":"author","value":"Alice"}""")
+        engine.replaceRiverResources(listOf(initialMute), SyncObject(River.SETTINGS, 1, rev = 0, raw = """{"today_decay_days":4}"""))
+        var delivered = false
+        val api = api { request ->
+            assertEquals("/v1/changes", request.url.encodedPath)
+            val records = if (delivered) "[]" else """[
+                {"rev":1,"type":"mute.updated","payload":{"mute":{"id":2,"kind":"keyword","value":"Spoiler","rev":1,"deleted":false}}},
+                {"rev":2,"type":"mute.deleted","payload":{"mute":{"id":2,"kind":"keyword","value":"Spoiler","rev":2,"deleted":true}}},
+                {"rev":3,"type":"settings.updated","payload":{"settings":{"today_decay_days":7,"rev":3}}}
+            ]"""
+            delivered = true
+            200 to """{"changes":$records,"next":{"generation":"g1","rev":3},"next_cursor":"g1:3"}"""
+        }
+        SyncRepository(api, engine).pull()
+        val restored = SyncEngine(store)
+        assertTrue(restored.snapshot().objects.single { it.kind == River.MUTE }.deleted)
+        val settings = Json.parseToJsonElement(restored.snapshot().objects.single { it.kind == River.SETTINGS }.raw).jsonObject
+        assertEquals(JsonPrimitive(7), settings["today_decay_days"])
+        assertEquals(Revision("g1", 3), restored.snapshot().cursor)
+        restored.beginBootstrap(Revision("new", 0))
+        assertTrue(restored.snapshot().objects.isEmpty())
+    }
+
+    @Test
+    fun incrementalPullSurvivesRiverServerFailure() = runBlocking {
+        assertPullSurvivesRiverFailure { 503 to "{}" }
+    }
+
+    @Test
+    fun incrementalPullSurvivesRiverNetworkFailure() = runBlocking {
+        assertPullSurvivesRiverFailure { throw java.io.IOException("offline") }
+    }
+
+    private suspend fun assertPullSurvivesRiverFailure(failure: () -> Pair<Int, String>) {
+        for (path in listOf("/v1/mutes", "/v1/settings")) {
+            val original = SyncSnapshot(Revision("g1", 0), objects = listOf(
+                SyncObject(River.MUTE, 2, rev = 0, raw = """{"kind":"author","value":"Alice"}"""),
+                SyncObject(River.SETTINGS, 1, rev = 0, raw = """{"today_decay_days":4}"""),
+            ))
+            val store = Store(original)
+            val engine = SyncEngine(store)
+            var delivered = false
+            val api = api(mapOf(path to failure)) { request ->
+                assertEquals("/v1/changes", request.url.encodedPath)
+                if (!delivered) assertEquals("$path refresh must not partially replace resources", original, engine.snapshot())
+                val records = if (delivered) "[]" else """[
+                    {"rev":1,"type":"mute.deleted","payload":{"mute":{"id":2,"kind":"author","value":"Alice","rev":1,"deleted":true}}},
+                    {"rev":2,"type":"settings.updated","payload":{"settings":{"today_decay_days":7,"rev":2}}}
+                ]"""
+                delivered = true
+                200 to """{"changes":$records,"next":{"generation":"g1","rev":2},"next_cursor":"g1:2"}"""
+            }
+            assertTrue(SyncRepository(api, engine).pull().isEmpty())
+            val restored = SyncEngine(store).snapshot()
+            assertEquals(Revision("g1", 2), restored.cursor)
+            assertTrue(restored.objects.single { it.kind == River.MUTE }.deleted)
+            val settings = Json.parseToJsonElement(restored.objects.single { it.kind == River.SETTINGS }.raw).jsonObject
+            assertEquals(JsonPrimitive(7), settings["today_decay_days"])
+        }
+    }
+
+    @Test
+    fun incrementalPullPropagatesRiverAuthorizationFailures() = runBlocking {
+        for (path in listOf("/v1/mutes", "/v1/settings")) {
+            for (status in listOf(401, 403)) {
+                val engine = engine()
+                val original = engine.snapshot()
+                val api = api(mapOf(path to { status to "{}" })) { error("must not replay after authorization failure") }
+                try {
+                    SyncRepository(api, engine).pull()
+                    fail("$path HTTP $status must propagate")
+                } catch (error: ApiException) {
+                    assertEquals(status, error.status)
+                }
+                assertEquals(original, engine.snapshot())
+            }
+        }
+    }
+
+    @Test
+    fun riverResourcePersistenceFailureStillPropagates() = runBlocking {
+        val original = SyncSnapshot(Revision("g1", 0))
+        val failure = java.io.IOException("cache write failed")
+        val engine = SyncEngine(object : SyncStore {
+            override fun load() = original
+            override fun save(snapshot: SyncSnapshot) { throw failure }
+        })
+        val api = api { error("must not replay after persistence failure") }
+        try {
+            SyncRepository(api, engine).pull()
+            fail("cache write failure must propagate")
+        } catch (error: java.io.IOException) {
+            assertSame(failure, error)
+        }
+    }
+
+    @Test
+    fun bootstrapResourceFailurePreservesCommittedSnapshot() = runBlocking {
+        val original = SyncSnapshot(Revision("g1", 8), entries = listOf(CachedEntry(99, title = "Cached")))
+        val store = Store(original)
+        val engine = SyncEngine(store)
+        val api = EarnestApi("https://earnest.test", "token", OkHttpClient.Builder().addInterceptor { chain ->
+            val path = chain.request().url.encodedPath
+            val (status, body) = when {
+                path == "/v1/bootstrap" -> 200 to """{"generation":"g2","rev":0}"""
+                path.startsWith("/v1/bootstrap/") -> 200 to """{"items":[],"next_id":0,"next_principal":0,"next_view":"","has_more":false}"""
+                path == "/v1/mutes" -> 200 to "[]"
+                path == "/v1/settings" -> 503 to "{}"
+                else -> error("unexpected request $path")
+            }
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(status).message("test")
+                .body(body.toResponseBody()).build()
+        }.build())
+        try {
+            SyncRepository(api, engine).bootstrap()
+            fail("bootstrap completed without its river inputs")
+        } catch (_: ApiException) {
+        }
+        assertEquals(original, engine.snapshot())
+        assertEquals(original, SyncEngine(store).snapshot())
+    }
+
 }

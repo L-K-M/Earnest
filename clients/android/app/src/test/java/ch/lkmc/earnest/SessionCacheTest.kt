@@ -16,7 +16,7 @@ import org.robolectric.annotation.SQLiteMode
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
-@SQLiteMode(SQLiteMode.Mode.LEGACY)
+@SQLiteMode(SQLiteMode.Mode.NATIVE)
 class SessionCacheTest {
     private val context get() = ApplicationProvider.getApplicationContext<Context>()
     private val identity = AccountIdentity("https://nas.test", 1, 1)

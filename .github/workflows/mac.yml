@@ -36,6 +36,10 @@ jobs:
         working-directory: clients/mac/App
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Package tests on macOS
+        # Darwin's Foundation differs from Linux's; the app ships on Darwin.
+        working-directory: clients/mac/EarnestKit
+        run: swift test
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate project

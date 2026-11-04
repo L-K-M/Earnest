@@ -1,0 +1,107 @@
+{
+  "now": "2026-11-04T12:00:00Z",
+  "subscriptions": [
+    {
+      "id": 1,
+      "cadence": "today",
+      "muted": false,
+      "initial_since": null,
+      "initial_through_seq": 100
+    },
+    {
+      "id": 2,
+      "cadence": "week",
+      "muted": false,
+      "initial_since": null,
+      "initial_through_seq": 100
+    },
+    {
+      "id": 3,
+      "cadence": "now",
+      "muted": false,
+      "initial_since": null,
+      "initial_through_seq": 100
+    },
+    {
+      "id": 4,
+      "cadence": "now",
+      "muted": false,
+      "initial_through_seq": 100
+    }
+  ],
+  "entries": [
+    {
+      "id": 1,
+      "subscription_id": 1,
+      "seq": 1,
+      "first_seen_at": "2026-11-04T08:00:00Z",
+      "published_at": "1900-01-01T00:00:00Z",
+      "author": "",
+      "title": "Unbounded import",
+      "seen": "unseen",
+      "shelf": "none"
+    },
+    {
+      "id": 2,
+      "subscription_id": 2,
+      "seq": 2,
+      "first_seen_at": "2026-11-01T08:00:00Z",
+      "published_at": "1900-01-01T00:00:00Z",
+      "author": "",
+      "title": "Unbounded import",
+      "seen": "unseen",
+      "shelf": "none"
+    },
+    {
+      "id": 3,
+      "subscription_id": 3,
+      "seq": 3,
+      "first_seen_at": "1900-01-01T00:00:00Z",
+      "published_at": "1899-01-01T00:00:00Z",
+      "author": "",
+      "title": "Unbounded import",
+      "seen": "unseen",
+      "shelf": "none"
+    },
+    {
+      "id": 4,
+      "subscription_id": 4,
+      "seq": 4,
+      "first_seen_at": "1900-01-01T00:00:00Z",
+      "published_at": null,
+      "author": "",
+      "title": "Unbounded import",
+      "seen": "unseen",
+      "shelf": "none"
+    },
+    {
+      "id": 5,
+      "subscription_id": 1,
+      "seq": 5,
+      "first_seen_at": "2026-11-01T08:00:00Z",
+      "published_at": null,
+      "author": "",
+      "title": "Unbounded import",
+      "seen": "unseen",
+      "shelf": "none"
+    },
+    {
+      "id": 6,
+      "subscription_id": 2,
+      "seq": 6,
+      "first_seen_at": "2026-10-01T08:00:00Z",
+      "published_at": null,
+      "author": "",
+      "title": "Unbounded import",
+      "seen": "unseen",
+      "shelf": "none"
+    }
+  ],
+  "mutes": [],
+  "expected_ids": [
+    1,
+    2,
+    3,
+    4
+  ]
+}

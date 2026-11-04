@@ -54,6 +54,19 @@ refresh starts a new membership from the current effective state. Cached
 subscription cadences are restored before a network request, so Today and
 Edition also work on an offline cold launch.
 
+Today and Edition share the server's river membership rule. Subscription import
+boundaries, subscription muting, case-insensitive author and title-keyword mutes,
+seen/shelf state and first-seen decay all apply. Now never decays, Today uses the
+reader setting (two days by default), and Edition uses seven days. Today excludes
+week-cadence feeds, which appear in Edition. Both lists retain their session
+membership through passive seen updates until refresh, while Later and Done
+remove rows immediately.
+
+Online sync fetches `/v1/mutes` and `/v1/settings` because bootstrap omits them,
+then replays mute and settings changes by revision. These inputs persist inside
+the identity-scoped snapshot for cold offline launches. Connect online once
+after upgrading to populate previously uncached inputs.
+
 Today shows the newest brief from each agent at the top with the agent's name.
 It also lists agent changes to unseen articles under "While you were out" and
 again at session end for changes made during the session. Each change names
@@ -113,7 +126,8 @@ WebView error fallback, deep-link parsing, brief labels, widget headline
 selection, theme persistence, notification channels and server notification text.
 Core repository tests exercise real wire payloads, batch boundaries, in-flight
 retries, entry hydration and sibling subscription projections. Room regressions
-use Robolectric's legacy SQLite mode because the native SQLite runtime stalled
-on this shared build host. There is no emulator in CI, so the device-flow
+use Robolectric's native SQLite mode on Apple silicon because legacy SQLite
+has no compatible binary. Other hosts retain legacy mode because native SQLite
+stalled on the shared CI host. There is no emulator in CI, so the device-flow
 approval, UnifiedPush delivery, widget rendering and WebView reading have not
 been verified on a device.

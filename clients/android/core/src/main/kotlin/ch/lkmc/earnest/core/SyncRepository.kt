@@ -10,6 +10,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import java.io.IOException
 
 /** A server-rejected operation the UI should report to the user. */
 data class RejectedOperation(
@@ -52,6 +53,7 @@ class SyncRepository(
                 }
             } while (page.hasMore)
         }
+        refreshRiverResources(staged, RiverRefresh.REQUIRED)
         engine.installBootstrap(staged.snapshot())
         engine.flush()
     }
@@ -59,7 +61,11 @@ class SyncRepository(
     /** Pulls pages and reports operations rejected during retention-gap recovery. */
     suspend fun pull(): List<RejectedOperation> {
         val rejected = mutableListOf<RejectedOperation>()
-        if (engine.snapshot().cursor.generation.isEmpty()) bootstrap()
+        if (engine.snapshot().cursor.generation.isEmpty()) {
+            bootstrap()
+        } else {
+            refreshRiverResources(engine, RiverRefresh.ALLOW_CACHED)
+        }
         while (true) {
             val cursor = engine.snapshot().cursor
             val page = try {
@@ -198,7 +204,9 @@ class SyncRepository(
             val item = it.jsonObject
             CachedPosition(long(item, "principal"), string(item, "view"), long(item, "seq"), long(item, "rev"))
         }
-        val obj = payload["object"]?.let { parseObject(it, payload) }
+        val obj = payload["mute"]?.let { riverResource(River.MUTE, it) }
+            ?: payload["settings"]?.let { riverResource(River.SETTINGS, it) }
+            ?: payload["object"]?.let { parseObject(it, payload) }
         val results = payload["results"] ?: payload["range"]?.jsonObject?.get("results")
         val states = results?.takeUnless { it is JsonNull }?.let { element ->
             json.decodeFromJsonElement(
@@ -207,6 +215,29 @@ class SyncRepository(
             )
         }.orEmpty().map { it.state }
         return SyncChange(record.rev, entry, states, obj, position)
+    }
+
+    private enum class RiverRefresh { REQUIRED, ALLOW_CACHED }
+
+    /** Bootstrap needs a complete set; incremental replay can update the cached set. */
+    private suspend fun refreshRiverResources(target: SyncEngine, mode: RiverRefresh) {
+        val (mutes, settings) = try {
+            api.mutes() to api.settings()
+        } catch (error: IOException) {
+            if (mode == RiverRefresh.REQUIRED || (error is ApiException && error.status !in 500..599)) throw error
+
+            // Keep both cached resources on a transient failure. The change feed below
+            // still replays their updates, and the next pull retries the refresh.
+            return
+        }
+        target.replaceRiverResources(mutes.map { riverResource(River.MUTE, it) }, riverResource(River.SETTINGS, settings))
+        target.flush()
+    }
+
+    private fun riverResource(kind: String, value: JsonElement): SyncObject {
+        val item = value.jsonObject
+        return SyncObject(kind, if (kind == River.SETTINGS) 1 else long(item, "id"),
+            rev = long(item, "rev"), deleted = boolean(item, "deleted"), raw = value.toString())
     }
 
     /** Parses a protocol object and keeps its native companion projection in [SyncObject.raw]. */

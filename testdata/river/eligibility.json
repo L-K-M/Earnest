@@ -1,0 +1,341 @@
+{
+  "now": "2026-11-04T12:00:00Z",
+  "subscriptions": [
+    {
+      "id": 1,
+      "cadence": "today",
+      "muted": false,
+      "initial_since": "2026-10-01T12:00:00Z",
+      "initial_through_seq": 100
+    },
+    {
+      "id": 2,
+      "cadence": "week",
+      "muted": false,
+      "initial_since": "2026-10-01T12:00:00Z",
+      "initial_through_seq": 100
+    },
+    {
+      "id": 3,
+      "cadence": "now",
+      "muted": false,
+      "initial_since": "2026-10-01T12:00:00Z",
+      "initial_through_seq": 100
+    },
+    {
+      "id": 4,
+      "cadence": "today",
+      "muted": true,
+      "initial_since": "2026-10-01T12:00:00Z",
+      "initial_through_seq": 100
+    },
+    {
+      "id": 5,
+      "cadence": "today",
+      "muted": false,
+      "initial_since": "2026-10-01T12:00:00Z",
+      "initial_through_seq": 100,
+      "deleted": true
+    }
+  ],
+  "entries": [
+    {
+      "id": 1,
+      "subscription_id": 1,
+      "seq": 1,
+      "first_seen_at": "2026-11-04T12:00:00Z",
+      "published_at": null,
+      "author": "",
+      "title": "Article",
+      "seen": "unseen",
+      "shelf": "none"
+    },
+    {
+      "id": 2,
+      "subscription_id": 1,
+      "seq": 2,
+      "first_seen_at": "2026-11-04T12:00:00Z",
+      "published_at": "2006-01-01T00:00:00Z",
+      "author": "",
+      "title": "Article",
+      "seen": "unseen",
+      "shelf": "none"
+    },
+    {
+      "id": 3,
+      "subscription_id": 1,
+      "seq": 3,
+      "first_seen_at": "2026-09-30T12:00:00Z",
+      "published_at": null,
+      "author": "",
+      "title": "Article",
+      "seen": "unseen",
+      "shelf": "none"
+    },
+    {
+      "id": 4,
+      "subscription_id": 1,
+      "seq": 4,
+      "first_seen_at": "2026-11-02T12:00:00Z",
+      "published_at": null,
+      "author": "",
+      "title": "Article",
+      "seen": "unseen",
+      "shelf": "none"
+    },
+    {
+      "id": 5,
+      "subscription_id": 1,
+      "seq": 5,
+      "first_seen_at": "2026-11-02T11:59:59.999999Z",
+      "published_at": null,
+      "author": "",
+      "title": "Article",
+      "seen": "unseen",
+      "shelf": "none"
+    },
+    {
+      "id": 6,
+      "subscription_id": 2,
+      "seq": 6,
+      "first_seen_at": "2026-10-28T12:00:00Z",
+      "published_at": null,
+      "author": "",
+      "title": "Article",
+      "seen": "unseen",
+      "shelf": "none"
+    },
+    {
+      "id": 7,
+      "subscription_id": 2,
+      "seq": 7,
+      "first_seen_at": "2026-10-28T11:59:59.999999Z",
+      "published_at": null,
+      "author": "",
+      "title": "Article",
+      "seen": "unseen",
+      "shelf": "none"
+    },
+    {
+      "id": 8,
+      "subscription_id": 3,
+      "seq": 8,
+      "first_seen_at": "2026-10-01T12:00:00Z",
+      "published_at": null,
+      "author": "",
+      "title": "Article",
+      "seen": "unseen",
+      "shelf": "none"
+    },
+    {
+      "id": 9,
+      "subscription_id": 4,
+      "seq": 9,
+      "first_seen_at": "2026-11-04T12:00:00Z",
+      "published_at": null,
+      "author": "",
+      "title": "Article",
+      "seen": "unseen",
+      "shelf": "none"
+    },
+    {
+      "id": 10,
+      "subscription_id": 1,
+      "seq": 10,
+      "first_seen_at": "2026-11-04T12:00:00Z",
+      "published_at": null,
+      "author": "",
+      "title": "Article",
+      "seen": "seen",
+      "shelf": "none"
+    },
+    {
+      "id": 11,
+      "subscription_id": 1,
+      "seq": 11,
+      "first_seen_at": "2026-11-04T12:00:00Z",
+      "published_at": null,
+      "author": "",
+      "title": "Article",
+      "seen": "unseen",
+      "shelf": "later"
+    },
+    {
+      "id": 12,
+      "subscription_id": 1,
+      "seq": 12,
+      "first_seen_at": "2026-11-04T12:00:00Z",
+      "published_at": null,
+      "author": "",
+      "title": "Article",
+      "seen": "unseen",
+      "shelf": "done"
+    },
+    {
+      "id": 13,
+      "subscription_id": 1,
+      "seq": 13,
+      "first_seen_at": "2026-11-04T12:00:00Z",
+      "published_at": null,
+      "author": "ALICE",
+      "title": "Article",
+      "seen": "unseen",
+      "shelf": "none"
+    },
+    {
+      "id": 14,
+      "subscription_id": 1,
+      "seq": 14,
+      "first_seen_at": "2026-11-04T12:00:00Z",
+      "published_at": null,
+      "author": "",
+      "title": "A sPoIlEr arrives",
+      "seen": "unseen",
+      "shelf": "none"
+    },
+    {
+      "id": 15,
+      "subscription_id": 1,
+      "seq": 15,
+      "first_seen_at": "2026-11-04T12:00:00Z",
+      "published_at": null,
+      "author": "Alice Smith",
+      "title": "Article",
+      "seen": "unseen",
+      "shelf": "none"
+    },
+    {
+      "id": 16,
+      "subscription_id": 1,
+      "seq": 16,
+      "first_seen_at": "2026-11-04T12:00:00Z",
+      "published_at": null,
+      "author": "",
+      "title": "Alice",
+      "seen": "unseen",
+      "shelf": "none"
+    },
+    {
+      "id": 17,
+      "subscription_id": 1,
+      "seq": 17,
+      "first_seen_at": "2026-11-04T12:00:00Z",
+      "published_at": null,
+      "author": "retired",
+      "title": "Article",
+      "seen": "unseen",
+      "shelf": "none"
+    },
+    {
+      "id": 18,
+      "subscription_id": 1,
+      "seq": 18,
+      "first_seen_at": "2026-11-05T12:00:00Z",
+      "published_at": null,
+      "author": "",
+      "title": "Article",
+      "seen": "unseen",
+      "shelf": "none"
+    },
+    {
+      "id": 19,
+      "subscription_id": 1,
+      "seq": 19,
+      "first_seen_at": "2026-11-04T12:00:00Z",
+      "published_at": "2026-10-01T12:00:00Z",
+      "author": "",
+      "title": "Article",
+      "seen": "unseen",
+      "shelf": "none"
+    },
+    {
+      "id": 20,
+      "subscription_id": 1,
+      "seq": 20,
+      "first_seen_at": "2026-11-04T12:00:00Z",
+      "published_at": "2026-10-01T11:59:59.999999Z",
+      "author": "",
+      "title": "Article",
+      "seen": "unseen",
+      "shelf": "none"
+    },
+    {
+      "id": 101,
+      "subscription_id": 1,
+      "seq": 101,
+      "first_seen_at": "2026-11-04T12:00:00Z",
+      "published_at": "2006-01-01T00:00:00Z",
+      "author": "",
+      "title": "Article",
+      "seen": "unseen",
+      "shelf": "none"
+    },
+    {
+      "id": 102,
+      "subscription_id": 1,
+      "seq": 102,
+      "first_seen_at": "2026-09-30T12:00:00Z",
+      "published_at": null,
+      "author": "",
+      "title": "Article",
+      "seen": "unseen",
+      "shelf": "none"
+    },
+    {
+      "id": 103,
+      "subscription_id": 1,
+      "seq": 103,
+      "first_seen_at": "2026-11-04T12:00:00Z",
+      "published_at": null,
+      "author": "",
+      "title": "Article",
+      "seen": "unseen",
+      "shelf": "none",
+      "deleted": true
+    },
+    {
+      "id": 104,
+      "subscription_id": 5,
+      "seq": 104,
+      "first_seen_at": "2026-11-04T12:00:00Z",
+      "published_at": null,
+      "author": "",
+      "title": "Article",
+      "seen": "unseen",
+      "shelf": "none"
+    }
+  ],
+  "mutes": [
+    {
+      "id": 1,
+      "kind": "author",
+      "value": "alice",
+      "rev": 1
+    },
+    {
+      "id": 2,
+      "kind": "keyword",
+      "value": "SPOILER",
+      "rev": 2
+    },
+    {
+      "id": 3,
+      "kind": "author",
+      "value": "retired",
+      "rev": 3,
+      "deleted": true
+    }
+  ],
+  "expected_ids": [
+    1,
+    4,
+    6,
+    8,
+    15,
+    16,
+    17,
+    18,
+    19,
+    101
+  ]
+}
