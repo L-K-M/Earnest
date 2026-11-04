@@ -67,3 +67,13 @@ it('allows forward Tab navigation except when hiding a visible summary', async (
   expect(screen.queryByText(/Summary · m/)).toBeNull()
   expect(fireEvent.keyDown(heading,{key:'Tab'})).toBe(true)
 })
+
+it('explains paused tasks and preserves the latest edition without triggering generation',async () => {
+  vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {summary:'paused',edition:'paused'} : {sections:[],status:'ready'})
+  mount(<><Summary entryID={1} shortcuts/><Edition onOpen={vi.fn()}/></>)
+  await screen.findByText('Summaries are paused because the provider budget is unavailable.')
+  await screen.findByText('Edition generation is paused because the provider budget is unavailable.')
+  expect(screen.getByRole('button',{name:"Make this week's edition"})).toHaveProperty('disabled',true)
+  await waitFor(() => expect(request).toHaveBeenCalledWith('/v1/editions/latest',expect.anything()))
+  expect(vi.mocked(request).mock.calls.some(([path,options]) => path.includes('/summary') || options?.method === 'POST')).toBe(false)
+})

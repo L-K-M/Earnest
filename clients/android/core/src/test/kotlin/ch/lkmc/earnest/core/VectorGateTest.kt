@@ -31,7 +31,7 @@ class VectorGateTest {
         "28-clock-boundaries.json", "29-resource-tombstones.json", "30-principal-isolation.json",
         "31-queued-range-client.json", "32-coalesced-done-clear.json", "33-restore-release-safety.json",
         "34-integer-identity.json", "35-batch-causal-shelf.json", "36-ack-out-of-order-merge.json",
-        "37-ack-stale-generation.json", "38-independent-register-merge.json",
+        "37-ack-stale-generation.json", "38-independent-register-merge.json", "39-range-ack-gone.json",
     )
 
     @Test

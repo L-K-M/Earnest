@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -488,4 +490,75 @@ func TestFetchMetadataSharedSubscribers(t *testing.T) {
 	if err != nil || inherited.Title != "After" || inherited.InitialFetchPending {
 		t.Fatalf("cohort metadata: %+v %v", inherited, err)
 	}
+}
+
+func TestSubscriptionStateBackfillBatches(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := t.Context()
+	const entryCount = 501
+	ids := make([]int64, entryCount)
+	for i := range ids {
+		ids[i] = f.ingest(t, fmt.Sprintf("saved-%d", i))
+	}
+	agent := entriesTestAgent(t, f.db, f.a.UserID, "Reader", ScopeStateWriteHuman)
+	var expected []syncmodel.State
+	for _, actor := range []Actor{f.a, agent} {
+		// Seed saved snapshots directly so setup does not depend on batch limits.
+		if _, err := f.db.Pool().Exec(ctx, `INSERT INTO entry_state(principal_id,entry_id,seen,seen_rev,seen_occurred_at,seen_actor,seen_source,state_rev)
+            SELECT $1,id,'seen',1,$3,$1,'deliberate',1 FROM entries WHERE feed_id=$2`, actor.PrincipalID, f.feed, f.s.now()); err != nil {
+			t.Fatal(err)
+		}
+		states, err := store.LoadStates(ctx, f.db.Pool(), actor.PrincipalID, ids)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, id := range ids {
+			expected = append(expected, states[id])
+		}
+	}
+	if err := f.s.Unsubscribe(ctx, f.a, f.subscription, "unsubscribe"); err != nil {
+		t.Fatal(err)
+	}
+	cursor, err := f.s.BootstrapCursor(ctx, f.a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.s.prober = &subscriptionsProber{}
+	if _, err := f.s.Subscribe(ctx, f.a, "https://example.test/feed", SubscribeOptions{OpID: "resubscribe"}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := f.db.Pool().Query(ctx, `SELECT payload FROM changes WHERE user_id=$1 AND rev>$2 AND type='state.updated' ORDER BY rev`, f.a.UserID, cursor.Rev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []syncmodel.State
+	var sizes []int
+	for rows.Next() {
+		var payload []byte
+		if err := rows.Scan(&payload); err != nil {
+			t.Fatal(err)
+		}
+		var change syncmodel.Change
+		if err := json.Unmarshal(payload, &change); err != nil {
+			t.Fatal(err)
+		}
+		sizes = append(sizes, len(change.Results))
+		for _, result := range change.Results {
+			if result.Status != syncmodel.Applied {
+				t.Fatalf("status = %s", result.Status)
+			}
+			got = append(got, result.State)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(sizes, []int{500, 1, 500, 1}) {
+		t.Errorf("backfill batch sizes = %v, want [500 1 500 1]", sizes)
+	}
+	if !reflect.DeepEqual(got, expected) {
+		t.Fatal("backfill changed snapshot order or register stamps")
+	}
+	coreCheckGapless(t, f.db, f.a.UserID)
 }

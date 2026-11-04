@@ -27,7 +27,7 @@ import (
 // The notification and mixed annotation/token fixture belong to later packages.
 var coreVectorFiles = []string{
 	"01-range-exception.json", "02-queue-age.json", "03-retention-deleted.json", "04-source-ranks.json", "05-equal-time.json", "06-backdated-ingest.json", "07-publisher-clock.json", "08-expired-cursor.json", "09-restore-generation.json", "10-notification-response-lost.json", "11-shared-ingest.json", "12-offline-google-batch.json", "13-bootstrap-range-race.json", "14-ingest-commit-order.json", "15-repeated-operation.json", "16-google-unread-done.json", "17-independent-kept.json", "18-late-cluster-member.json", "19-notification-before-snapshot.json", "20-google-tradeoff.json", "21-bootstrap-newer-range-crash.json", "22-native-unread-done.json", "23-batch-atomicity.json", "24-label-tombstones.json", "25-position-live.json", "26-missing-ts.json", "27-client-coalescing.json", "28-clock-boundaries.json", "29-resource-tombstones.json", "30-principal-isolation.json", "31-queued-range-client.json", "32-coalesced-done-clear.json", "33-restore-release-safety.json", "34-integer-identity.json", "35-batch-causal-shelf.json",
-	"36-ack-out-of-order-merge.json", "37-ack-stale-generation.json", "38-independent-register-merge.json",
+	"36-ack-out-of-order-merge.json", "37-ack-stale-generation.json", "38-independent-register-merge.json", "39-range-ack-gone.json",
 }
 
 type coreVector struct {

@@ -15,7 +15,7 @@ vi.mock('./request',() => ({request:vi.fn(),setCSRF:vi.fn()}))
 vi.mock('./offline/Offline',() => ({OfflineStatus:() => null,registerOffline:vi.fn().mockResolvedValue(undefined),clearOffline:vi.fn()}))
 vi.mock('./syncBridge',() => ({useReaderSync:(_identity:unknown,refresh:NonNullable<typeof sync.refresh>) => {sync.refresh=refresh;return {state:(entry:Entry) => entry.state,act:vi.fn(),retry:vi.fn(),status:'Synced',error:''}}}))
 vi.mock('./River',() => ({River:() => <main>Today articles</main>}))
-vi.mock('./Reader',() => ({Reader:({entry}:{entry:Entry}) => <article>{entry.title}</article>}))
+vi.mock('./ArticleReader',() => ({Reader:({entry}:{entry:Entry}) => <article>{entry.title}</article>}))
 
 beforeAll(async () => {await import('./main')})
 beforeEach(() => {

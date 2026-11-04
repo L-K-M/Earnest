@@ -1,20 +1,15 @@
 package ch.lkmc.earnest.core
 
-import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNames
 
 /**
  * Wire models for the Earnest native API. Field names mirror
  * ../../api/openapi.json; OpenApiContractTest checks every model against that
  * document, so a server-side rename fails the build here.
  *
- * The generated-client route was rejected: the server's projections are uneven
- * (label rows use capitalised keys on the REST surface and lowercase keys in
- * bootstrap), and the handful of endpoints this app needs is small enough to
- * keep explicit.
+ * The endpoints this app needs are small enough to keep explicit.
  */
 
 @Serializable
@@ -208,42 +203,22 @@ data class Folder(
     val deleted: Boolean,
 )
 
-// Label rows carry capitalised keys on the REST surface and lowercase keys in
-// bootstrap pages, so both are accepted on decode.
-@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class Label(
-    @SerialName("ID")
-    @JsonNames("id")
     val id: Long,
-    @SerialName("Name")
-    @JsonNames("name")
     val name: String,
-    @SerialName("Rev")
-    @JsonNames("rev")
     val rev: Long,
-    @SerialName("Deleted")
-    @JsonNames("deleted")
     val deleted: Boolean,
 )
 
-@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class LabelMembership(
-    @SerialName("ID")
-    @JsonNames("id")
     val id: Long,
-    @SerialName("LabelID")
-    @JsonNames("label_id")
+    @SerialName("label_id")
     val labelId: Long,
-    @SerialName("EntryID")
-    @JsonNames("entry_id")
+    @SerialName("entry_id")
     val entryId: Long,
-    @SerialName("Rev")
-    @JsonNames("rev")
     val rev: Long,
-    @SerialName("Deleted")
-    @JsonNames("deleted")
     val deleted: Boolean,
 )
 

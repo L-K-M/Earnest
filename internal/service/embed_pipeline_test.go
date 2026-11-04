@@ -215,6 +215,10 @@ func TestPipelineDisabledAndBudgetPause(t *testing.T) {
 		if err := budget.Record(ctx, "fake", 1); err != nil {
 			t.Fatal(err)
 		}
+		status, err := f.s.PipelineStatus(ctx, f.a)
+		if err != nil || status.Embed != "paused" || status.Classify != "paused" || status.Semantic != "paused" || status.Watch != "paused" {
+			t.Fatalf("exhausted status: %+v %v", status, err)
+		}
 		if n, err := f.s.RunPipeline(ctx, 10); n != 0 || err != nil {
 			t.Fatalf("paused %d %v", n, err)
 		}
@@ -228,6 +232,10 @@ func TestPipelineDisabledAndBudgetPause(t *testing.T) {
 		// The raised cap must cover the conservative input/output reservation,
 		// not just the fake provider's much smaller final usage.
 		ctx = pipelineTestContext(t, f.db, p, []llm.Task{llm.TaskEmbed, llm.TaskClassify}, 10000)
+		status, err = f.s.PipelineStatus(ctx, f.a)
+		if err != nil || status.Embed != "enabled" || status.Classify != "enabled" || status.Semantic != "enabled" || status.Watch != "enabled" {
+			t.Fatalf("resumed status: %+v %v", status, err)
+		}
 		if n, err := f.s.RunPipeline(ctx, 10); err != nil || n != 2 {
 			t.Fatalf("resume %d %v", n, err)
 		}

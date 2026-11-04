@@ -102,6 +102,14 @@ func New(router *llm.Router, client *llm.Client, cache *llm.Cache, models map[st
 // Enabled reports the router's current configuration; nil is disabled.
 func (e *Engine) Enabled(task llm.Task) bool { return e != nil && e.router.Enabled(task) }
 
+// CheckBudget reports a task's current provider budget without making calls.
+func (e *Engine) CheckBudget(ctx context.Context, task llm.Task) error {
+	if e == nil {
+		return llm.ErrDisabled
+	}
+	return e.client.CheckBudget(ctx, task)
+}
+
 // Model identifies a route for persistence and prevents cross-model comparisons.
 func (e *Engine) Model(task llm.Task) (string, error) {
 	if e == nil {

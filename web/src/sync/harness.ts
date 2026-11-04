@@ -94,7 +94,7 @@ export const VECTOR_FILES: readonly string[] = [
   "35-batch-causal-shelf.json",
   "36-ack-out-of-order-merge.json",
   "37-ack-stale-generation.json",
-  "38-independent-register-merge.json",
+  "38-independent-register-merge.json", "39-range-ack-gone.json",
 ];
 
 const DEFAULT_RECEIPT = Date.parse("2026-11-02T12:00:00Z");

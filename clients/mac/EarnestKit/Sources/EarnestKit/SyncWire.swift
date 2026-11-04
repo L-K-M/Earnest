@@ -290,7 +290,7 @@ extension SyncObject {
                   principal: value["principal"]?.int64Value ?? 0,
                   entryID: value["entry_id"]?.int64Value ?? 0,
                   folderID: value["folder_id"]?.int64Value ?? 0,
-                  labelID: value["label_id"]?.int64Value ?? value["LabelID"]?.int64Value ?? 0,
+                  labelID: value["label_id"]?.int64Value ?? 0,
                   name: value["name"]?.stringValue ?? "",
                   rev: value["rev"]?.int64Value ?? 0,
                   deleted: value["deleted"]?.boolValue ?? false)
@@ -320,21 +320,21 @@ extension SyncObject {
     /// entry_id name principal rev deleted`. `entry_id` distinguishes it from
     /// a label definition, which has no entry binding.
     public init?(labelMembership value: APIValue) {
-        guard let id = value["id"]?.int64Value ?? value["ID"]?.int64Value, id > 0,
-              let entryID = value["entry_id"]?.int64Value ?? value["EntryID"]?.int64Value, entryID > 0 else { return nil }
+        guard let id = value["id"]?.int64Value, id > 0,
+              let entryID = value["entry_id"]?.int64Value, entryID > 0 else { return nil }
         self.init(kind: .label, id: id,
                   principal: value["principal"]?.int64Value ?? 0,
                   entryID: entryID,
-                  labelID: value["label_id"]?.int64Value ?? value["LabelID"]?.int64Value ?? 0,
+                  labelID: value["label_id"]?.int64Value ?? 0,
                   name: value["name"]?.stringValue ?? "",
-                  rev: value["rev"]?.int64Value ?? value["Rev"]?.int64Value ?? 0,
-                  deleted: value["deleted"]?.boolValue ?? value["Deleted"]?.boolValue ?? false)
+                  rev: value["rev"]?.int64Value ?? 0,
+                  deleted: value["deleted"]?.boolValue ?? false)
         fields = Self.extraFields(value)
     }
     /// `principal` is emitted unconditionally like the reference `Object`;
     /// the rest are `omitempty` fields.
     private static func extraFields(_ value: APIValue) -> [String: APIValue] {
-        let canonical: Set<String> = ["kind", "id", "principal", "entry_id", "folder_id", "label_id", "name", "rev", "deleted", "ID", "EntryID", "LabelID", "Rev", "Deleted"]
+        let canonical: Set<String> = ["kind", "id", "principal", "entry_id", "folder_id", "label_id", "name", "rev", "deleted"]
         return (value.objectValue ?? [:]).filter { !canonical.contains($0.key) }
     }
     public var apiValue: APIValue {
@@ -354,15 +354,14 @@ extension SyncObject {
 }
 
 extension LabelDefinition {
-    /// Accepts both the bootstrap row (`id name rev deleted`) and the capitalised
-    /// serialization used by the label list endpoint.
+    /// Label definitions use `id name rev deleted` on REST and sync surfaces.
     public init?(_ value: APIValue) {
-        let id = value["id"]?.int64Value ?? value["ID"]?.int64Value
+        let id = value["id"]?.int64Value
         guard let id, id > 0 else { return nil }
         self.init(id: id,
-                  name: value["name"]?.stringValue ?? value["Name"]?.stringValue ?? "",
-                  rev: value["rev"]?.int64Value ?? value["Rev"]?.int64Value ?? 0,
-                  deleted: value["deleted"]?.boolValue ?? value["Deleted"]?.boolValue ?? false)
+                  name: value["name"]?.stringValue ?? "",
+                  rev: value["rev"]?.int64Value ?? 0,
+                  deleted: value["deleted"]?.boolValue ?? false)
     }
     public var apiValue: APIValue {
         .object(pairs: [

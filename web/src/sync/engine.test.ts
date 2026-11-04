@@ -1,8 +1,7 @@
 // Unit tests for the pure SyncClient: page atomicity, bootstrap replay,
 // higher-revision merges, outbox coalescing, in-flight immutability,
 // generation-aware acknowledgement, overlay rules, expiry and int64
-// identity. The late-generation acknowledgement tests cover the scenarios
-// vectors 36/37 would, since those files are absent from this checkout.
+// identity and per-entry tombstones in range acknowledgements.
 
 import { describe, expect, it } from "vitest";
 import { SyncClient } from "./client.js";
@@ -361,4 +360,27 @@ describe("expiry and identity", () => {
     expect(c.registerBase(1n, 1n, "shelf")).toEqual(REV(7n));
     expect(c.registerBase(1n, 1n, "seen")).toEqual(REV(0n));
   });
+});
+
+it("range acknowledgements tombstone gone entries without resurrecting or inventing them", () => {
+  const c = client();
+  c.mergeEntry(entry(1n));
+  c.mergeEntry(entry(2n));
+  for (const principal of [1n, 9n]) {
+    const state = initialState(principal, 1n);
+    c.mergeState({...state, kept: {...state.kept, value: "true", rev: 1n}, stateRev: 1n});
+  }
+  c.queueRange({write: write("range", {entryId: 0n}), scope: {kind: "all", ids: []}, throughSeq: 2n});
+  const response = {status: "applied" as const, throughSeq: 2n, subscriptions: [1n], except: [], replay: false,
+    results: [result("range", "gone"), result("range", "applied", initialState(1n, 2n)), result("range", "gone", initialState(1n, 3n))]};
+  expect(c.acknowledgeRange("old", "range", response).applied).toBe(false);
+  expect(c.entry(1n)?.deleted).toBe(false);
+  c.acknowledgeRange("g1", "range", response);
+  expect(c.entry(1n)?.deleted).toBe(true);
+  c.mergeEntry(entry(1n));
+  expect(c.entry(1n)?.deleted).toBe(true);
+  expect(c.entry(2n)?.deleted).toBe(false);
+  expect(c.entry(3n)).toBeUndefined();
+  expect(c.toSnapshot().states.map(state => state.entryId)).toEqual([2n]);
+  expect(c.outbox().length).toBe(0);
 });

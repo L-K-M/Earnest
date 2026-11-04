@@ -136,3 +136,7 @@ steps model transaction schedules, not actual SQL locks. Vector 11 proves
 serial commit invariants for two users; it does not replace database deadlock
 tests. Vector 21 rejects partial replay pages and proves idempotent restart;
 store tests must also prove that prepared range chunks are never published.
+
+Vector 39 retries a committed range after retention deletes its member. The
+per-entry gone result must tombstone the cached entry on acknowledgement,
+without relying on a later change-feed pull.

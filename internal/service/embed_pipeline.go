@@ -42,7 +42,13 @@ func pipelineError(err error) error {
 	return err
 }
 
-// PipelineStatus describes configuration without making any provider calls.
+const (
+	pipelineStatusEnabled  = "enabled"
+	pipelineStatusDisabled = "disabled"
+	pipelineStatusPaused   = "paused"
+)
+
+// PipelineStatus describes configuration and budget availability without provider calls.
 type PipelineStatus struct {
 	Embed       string `json:"embed"`
 	Classify    string `json:"classify"`
@@ -60,21 +66,26 @@ func (s *Service) PipelineStatus(ctx context.Context, a Actor) (PipelineStatus, 
 	if err := s.checkActor(ctx, a, ScopeEntriesRead); err != nil {
 		return PipelineStatus{}, err
 	}
-	status := PipelineStatus{Embed: "disabled", Classify: "disabled", Semantic: "disabled", Watch: "disabled", Blurb: "disabled", Summary: "disabled", Edition: "disabled", Ask: "disabled", CompileRule: "disabled"}
+	status := PipelineStatus{Embed: pipelineStatusDisabled, Classify: pipelineStatusDisabled, Semantic: pipelineStatusDisabled, Watch: pipelineStatusDisabled, Blurb: pipelineStatusDisabled, Summary: pipelineStatusDisabled, Edition: pipelineStatusDisabled, Ask: pipelineStatusDisabled, CompileRule: pipelineStatusDisabled}
 	e := pipelineEngine(ctx)
-	if e.Enabled(llm.TaskEmbed) {
-		status.Embed = "enabled"
-		status.Semantic = "enabled"
-		status.Watch = "enabled"
-	}
-	if e.Enabled(llm.TaskClassify) {
-		status.Classify = "enabled"
-	}
-	for task, target := range map[llm.Task]*string{llm.TaskBlurb: &status.Blurb, llm.TaskSummary: &status.Summary, llm.TaskEdition: &status.Edition, llm.TaskAsk: &status.Ask, llm.TaskCompileRule: &status.CompileRule} {
-		if e.Enabled(task) {
-			*target = "enabled"
+	for task, target := range map[llm.Task]*string{
+		llm.TaskEmbed: &status.Embed, llm.TaskClassify: &status.Classify,
+		llm.TaskBlurb: &status.Blurb, llm.TaskSummary: &status.Summary,
+		llm.TaskEdition: &status.Edition, llm.TaskAsk: &status.Ask, llm.TaskCompileRule: &status.CompileRule,
+	} {
+		err := e.CheckBudget(ctx, task)
+		switch {
+		case errors.Is(err, llm.ErrDisabled):
+		case errors.Is(err, llm.ErrBudgetExhausted):
+			*target = pipelineStatusPaused
+		case err != nil:
+			return PipelineStatus{}, err
+		default:
+			*target = pipelineStatusEnabled
 		}
 	}
+	status.Semantic = status.Embed
+	status.Watch = status.Embed
 	return status, nil
 }
 

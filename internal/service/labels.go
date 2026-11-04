@@ -13,19 +13,19 @@ import (
 // Label is one user-owned label definition. Deleted labels remain as
 // revisioned tombstones so bootstrap can reconcile them.
 type Label struct {
-	ID      int64
-	Name    string
-	Rev     uint64
-	Deleted bool
+	ID      int64  `json:"id"`
+	Name    string `json:"name"`
+	Rev     uint64 `json:"rev"`
+	Deleted bool   `json:"deleted"`
 }
 
 // LabelMembership is one entry's membership in a label, likewise tombstoned.
 type LabelMembership struct {
-	ID      int64
-	LabelID int64
-	EntryID int64
-	Rev     uint64
-	Deleted bool
+	ID      int64  `json:"id"`
+	LabelID int64  `json:"label_id"`
+	EntryID int64  `json:"entry_id"`
+	Rev     uint64 `json:"rev"`
+	Deleted bool   `json:"deleted"`
 }
 
 // labelObject carries one stable membership identity in label.added/removed.

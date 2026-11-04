@@ -389,7 +389,21 @@ export class SyncClient {
   // range, under the same generation guard.
   acknowledgeRange(requestGeneration: string, opId: string, r: RangeResult): AckOutcome {
     if (requestGeneration !== this.cursor.generation) return { applied: false, dropped: [] };
-    for (const result of r.results) this.mergeState(result.state);
+    for (const result of r.results) {
+      this.mergeState(result.state);
+      if (result.status === "gone") {
+        const entry = this.entries.get(result.state.entryId);
+        if (entry !== undefined && !entry.deleted) {
+          this.goneEntries.add(entry.id);
+          entry.deleted = true;
+          this.entries.set(entry.id, entry);
+        }
+        // Gone applies to the entry, not just the acknowledging principal.
+        for (const [key, state] of this.states) {
+          if (state.entryId === result.state.entryId) this.states.delete(key);
+        }
+      }
+    }
     this.removeOpId(opId);
     const dropped: DroppedOperation[] = [];
     if (r.status === "expired" || r.status === "gone") dropped.push({ opId, status: r.status });
