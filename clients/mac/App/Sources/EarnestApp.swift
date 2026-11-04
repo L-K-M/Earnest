@@ -7,7 +7,11 @@ import EarnestKit
     @StateObject private var model = AppModel()
 
     var body: some Scene {
-        WindowGroup { ContentView().environmentObject(model) }
+        WindowGroup {
+            ContentView().environmentObject(model)
+                .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
+        }
+            .handlesExternalEvents(matching: ["*"])
             .commands {
                 CommandMenu("Article") {
                     // Unmodified-letter equivalents are suspended while the
@@ -80,12 +84,7 @@ import EarnestKit
             PaletteView()
                 .environmentObject(model)
         }
-        .onOpenURL { url in
-            guard let id = DeepLink.entryID(url) else { return }
-            model.section = .today
-            if model.selected == id { model.open(id) }
-            else { model.selected = id }
-        }
+        .onOpenURL { model.openDeepLink($0) }
     }
 
     private var mainView: some View {
@@ -102,8 +101,22 @@ import EarnestKit
                 .frame(minWidth: 320)
         } detail: {
             if model.selected != nil {
-                Reader(html: model.html)
-                    .background(Color(nsColor: .textBackgroundColor))
+                VStack(spacing: 0) {
+                    if let entry = model.readingEntry {
+                        ReaderHeader(entry: entry, feedTitle: model.readingFeedTitle, openOriginal: model.openOriginal)
+                        Divider()
+                    }
+                    if model.imageMode == .click {
+                        HStack {
+                            Text("Images are blocked for externally opened articles.")
+                                .font(.caption)
+                            Button("Load Images") { model.loadImages() }
+                        }
+                        .padding(8)
+                    }
+                    Reader(html: model.html, imageOrigin: model.imageOrigin)
+                }
+                .background(Color(nsColor: .textBackgroundColor))
             } else {
                 ContentUnavailableView("Select an article", systemImage: "doc.text")
             }
@@ -115,8 +128,7 @@ import EarnestKit
                     .background(.regularMaterial)
             }
         }
-        .onChange(of: model.section) { _ in model.refreshSection() }
-        .onChange(of: model.selected) { id in model.open(id) }
+        .onChange(of: model.section) { model.refreshSection() }
         .toolbar {
             ToolbarItemGroup {
                 if model.pendingOps > 0 {
@@ -133,6 +145,10 @@ import EarnestKit
         }
     }
 
+    private var entrySelection: Binding<Int64?> {
+        Binding(get: { model.selected }, set: { model.selectFromList($0) })
+    }
+
     @ViewBuilder private var contentColumn: some View {
         switch model.section {
         case .today:
@@ -144,7 +160,7 @@ import EarnestKit
                 if model.rows.isEmpty && model.briefs.isEmpty {
                     Spacer()
                 } else {
-                    EntryTable(entries: model.rows, selection: $model.selected)
+                    EntryTable(entries: model.rows, selection: entrySelection)
                 }
                 if !model.endTitle.isEmpty {
                     Divider()
@@ -162,12 +178,12 @@ import EarnestKit
                 }
             }
         case .edition:
-            EditionListView(groups: model.editionGroups, selection: $model.selected)
+            EditionListView(groups: model.editionGroups, selection: entrySelection)
         case .later, .kept, .done:
             if model.rows.isEmpty {
                 ContentUnavailableView("Nothing here", systemImage: "tray")
             } else {
-                EntryTable(entries: model.rows, selection: $model.selected)
+                EntryTable(entries: model.rows, selection: entrySelection)
             }
         case .feeds:
             FeedsView()

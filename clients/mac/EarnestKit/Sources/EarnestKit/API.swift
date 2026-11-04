@@ -83,11 +83,16 @@ public struct ArticleContent: Codable, Sendable {
     public let source: String
     enum CodingKeys: String, CodingKey { case entryID = "entry_id", html, text, sanitizerVersion = "sanitizer_version", source }
 }
-struct SignedContentURL: Codable, Sendable {
-    let url: URL
-    let expiresAt: String
-    enum CodingKeys: String, CodingKey { case url, expiresAt = "expires_at" }
+public enum ArticleImageMode: String, Sendable {
+    case proxied, click
 }
+
+/// Only proxied signed content may authorize images on its content origin.
+public struct SignedArticle: Sendable {
+    public let html: String
+    public let imageOrigin: URL?
+}
+
 public struct APIRevision: Codable, Sendable {
     public let generation: String
     public let rev: Int64
@@ -168,19 +173,17 @@ public final class EarnestAPI: Sendable {
         guard entryID > 0 else { throw APIError.invalidEntryID }
         return try await generated { try adapt(try await client.entryContent(.init(path: .init(id: entryID))).ok.body.json) }
     }
-    /// This endpoint is being added in parallel and is not yet in the committed OpenAPI document.
-    public func signedContent(entryID: Int64) async throws -> String {
+    /// Fetch signed content without API credentials, preserving its image policy.
+    public func signedContent(entryID: Int64, mode: ArticleImageMode = .proxied) async throws -> SignedArticle {
         guard entryID > 0 else { throw APIError.invalidEntryID }
-        var request = URLRequest(url: baseURL.appendingPathComponent("v1/entries/\(entryID)/content-url"))
-        if let token = try tokenStore.load() { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-        let (data, response) = try await session.data(for: request)
-        guard let response = response as? HTTPURLResponse else { throw APIError.invalidResponse }
-        try validateHTTP(response, data: data)
-        let signed = try JSONDecoder().decode(SignedContentURL.self, from: data)
-        let url = signed.url
-        guard let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme),
-              url.host != nil, url.user == nil, url.password == nil, url.fragment == nil,
-              let expiry = parseAPIDate(signed.expiresAt), expiry > Date() else { throw APIError.invalidResponse }
+        let signed = try await generated {
+            try await client.entryContentUrl(.init(path: .init(id: entryID), query: .init(mode: .init(rawValue: mode.rawValue)))).ok.body.json
+        }
+        guard let url = URL(string: signed.url),
+              let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme),
+              let host = url.host, url.user == nil, url.password == nil, url.fragment == nil,
+              signed.expiresAt > Date() else { throw APIError.invalidResponse }
+
         // The authenticated server selects its content origin. Never attach API credentials here.
         var unsigned = URLRequest(url: url)
         unsigned.httpShouldHandleCookies = false
@@ -188,7 +191,12 @@ public final class EarnestAPI: Sendable {
         guard let http = htmlResponse as? HTTPURLResponse else { throw APIError.invalidResponse }
         try validateHTTP(http, data: htmlData)
         guard let html = String(data: htmlData, encoding: .utf8) else { throw APIError.invalidResponse }
-        return html
+
+        var origin = URLComponents()
+        origin.scheme = scheme
+        origin.host = host
+        origin.port = url.port
+        return SignedArticle(html: html, imageOrigin: mode == .proxied ? origin.url : nil)
     }
     public func bootstrapCursor() async throws -> APIRevision {
         try await generated { try adapt(try await client.bootstrapCursor(.init()).ok.body.json) }
@@ -248,6 +256,12 @@ public final class EarnestAPI: Sendable {
     }
     public func revertActivity(id: Int64) async throws -> APIValue {
         try await generated { try adapt(try await client.revertActivity(.init(path: .init(id: id), body: .json(.init(opId: UUID().uuidString)))).ok.body.json) }
+    }
+    public func cancelNotification(id: Int64) async throws {
+        guard id > 0 else { throw APIError.invalidEntryID }
+        _ = try await generated {
+            try await client.cancelNotification(.init(path: .init(id: id), body: .json(.init(opId: UUID().uuidString)))).ok.body.json
+        }
     }
     /// Token metadata supplies agent names without exposing token secrets.
     public func agentNames() async throws -> [Int64: String] {

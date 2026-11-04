@@ -10,6 +10,8 @@ filter:
     - list-entries
     - get-entry
     - entry-content
+    - entry-content-url
+    - cancel-notification
     - get-me
     - list-subscriptions
     - subscribe

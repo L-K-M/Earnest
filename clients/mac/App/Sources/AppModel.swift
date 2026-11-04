@@ -14,12 +14,18 @@ import AppKit
     @Published var rows: [EntryRow] = []
     @Published var editionGroups: [EditionGroup] = []
     @Published var feeds: [FeedInfo] = []
+    @Published private(set) var activityActionPending = false
     @Published var activityGroups: [ActivityGroup] = []
     @Published var briefs: [BriefItem] = []
     @Published var agentChanges: [ActivityItem] = []
     @Published var principalNames: [Int64: String] = [:]
-    @Published var selected: Int64?
+    @Published var selected: Int64? {
+        didSet { if oldValue != selected { open(selected) } }
+    }
     @Published var html = ""
+    @Published private(set) var imageOrigin: URL?
+    @Published private(set) var imageMode: ArticleImageMode = .proxied
+    @Published private(set) var readingEntry: APIEntry?
     @Published var error: String?
     @Published var connectionNote: String?
     @Published var code: DeviceAuthorization?
@@ -44,6 +50,12 @@ import AppKit
     private var session = 0
     private var tasks: [String: Task<Void, Never>] = [:]
     private var sessionActions = SessionCounts()
+
+    init(api: EarnestAPI? = nil, engine: SyncEngine? = nil, principalID: Int64 = 0) {
+        self.api = api
+        self.engine = engine
+        self.principalID = principalID
+    }
 
     // MARK: - Tasks and session lifecycle
 
@@ -73,11 +85,15 @@ import AppKit
         feeds = []
         feedMap = [:]
         activityGroups = []
+        activityActionPending = false
         briefs = []
         agentChanges = []
         principalNames = [:]
         selected = nil
         html = ""
+        imageOrigin = nil
+        imageMode = .proxied
+        readingEntry = nil
         code = nil
         loggingIn = false
         loggedIn = false
@@ -575,7 +591,7 @@ import AppKit
         guard let index else { return }
         let ids = visibleEntryIDs()
         if let selected, ids.contains(selected) { return }
-        if !ids.isEmpty { selected = ids[min(index, ids.count - 1)] } else { selected = nil }
+        if !ids.isEmpty { selectFromList(ids[min(index, ids.count - 1)]) } else { selectFromList(nil) }
     }
 
     /// Opening an article is the desktop equivalent of scrolling past it: the
@@ -601,11 +617,11 @@ import AppKit
         let ids = visibleEntryIDs()
         guard !ids.isEmpty else { return }
         let current = ids.firstIndex(of: selected ?? -1) ?? (offset > 0 ? -1 : ids.count)
-        selected = ids[min(ids.count - 1, max(0, current + offset))]
+        selectFromList(ids[min(ids.count - 1, max(0, current + offset))])
     }
 
     func openOriginal() {
-        guard let entry = entries.first(where: { $0.id == selected }),
+        guard let entry = readingEntry ?? entries.first(where: { $0.id == selected }),
               let url = URL(string: entry.url),
               ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return }
         #if canImport(AppKit)
@@ -613,9 +629,38 @@ import AppKit
         #endif
     }
 
+    var readingFeedTitle: String {
+        guard let entry = readingEntry else { return "Feed" }
+        return feeds.first(where: { $0.id == entry.subscriptionID })?.title ?? "Feed"
+    }
+
+    func selectFromList(_ id: Int64?) {
+        imageMode = .proxied
+        if selected == id { open(id) }
+        else { selected = id }
+    }
+
+    func openDeepLink(_ url: URL) {
+        guard let id = DeepLink.entryID(url) else { return }
+        section = .today
+        imageMode = .click
+        if selected == id { open(id) }
+        else { selected = id }
+    }
+
+    func loadImages() {
+        guard selected != nil else { return }
+        imageMode = .proxied
+        open(selected)
+    }
+
     func open(_ id: Int64?) {
-        guard let id, loggedIn else { html = ""; return }
+        tasks["open"]?.cancel()
         html = ""
+        imageOrigin = nil
+        readingEntry = nil
+        guard let id, loggedIn else { return }
+        let mode = imageMode
         runTask("open") { [weak self] in
             guard let self, let api = self.api, let engine = self.engine, self.loggedIn,
                   let generation = try? engine.snapshot().cursor?.generation else { return }
@@ -629,17 +674,24 @@ import AppKit
                     try engine.mergeEntries([entry], generation: generation)
                     self.entries.append(entry)
                 }
+                let entry = self.entries.first(where: { $0.id == id })
+                self.readingEntry = entry
                 let article: String
+                let origin: URL?
                 do {
-                    article = try await api.signedContent(entryID: id)
+                    let signed = try await api.signedContent(entryID: id, mode: mode)
+                    article = signed.html
+                    origin = signed.imageOrigin
                 } catch is CancellationError {
                     return
                 } catch {
                     article = try await api.content(entryID: id).html
+                    origin = nil
                 }
                 guard self.selected == id, self.loggedIn, self.session == expectedSession,
                       (try? engine.snapshot().cursor?.generation) == generation, !Task.isCancelled else { return }
                 self.html = article
+                self.imageOrigin = origin
                 self.markSeen(entryID: id, entry: self.entries.first(where: { $0.id == id }))
             } catch is CancellationError {
             } catch {
@@ -719,11 +771,30 @@ import AppKit
     // MARK: - Activity
 
     func revert(_ item: ActivityItem) {
-        guard let api, item.nextAction == "revert" else { return }
+        guard item.nextAction == "revert" else { return }
+        performActivityAction(item)
+    }
+
+    func cancelNotification(_ item: ActivityItem) {
+        guard item.nextAction == "cancel", item.notificationID != nil else {
+            error = "Notification ID is unavailable."
+            return
+        }
+        performActivityAction(item)
+    }
+
+    private func performActivityAction(_ item: ActivityItem) {
+        guard let api, !activityActionPending else { return }
         let expectedSession = session
-        runTask("revert") { [weak self] in
+        activityActionPending = true
+        runTask("activity-action") { [weak self] in
+            defer { if self?.session == expectedSession { self?.activityActionPending = false } }
             do {
-                _ = try await api.revertActivity(id: item.id)
+                if let notificationID = item.notificationID, item.nextAction == "cancel" {
+                    try await api.cancelNotification(id: notificationID)
+                } else {
+                    _ = try await api.revertActivity(id: item.id)
+                }
             } catch is CancellationError {
                 return
             } catch { if self?.session == expectedSession { self?.report(error) } }
