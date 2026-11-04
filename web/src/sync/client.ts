@@ -398,6 +398,10 @@ export class SyncClient {
           entry.deleted = true;
           this.entries.set(entry.id, entry);
         }
+        // Gone applies to the entry, not just the acknowledging principal.
+        for (const [key, state] of this.states) {
+          if (state.entryId === result.state.entryId) this.states.delete(key);
+        }
       }
     }
     this.removeOpId(opId);

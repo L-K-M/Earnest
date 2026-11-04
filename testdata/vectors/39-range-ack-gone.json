@@ -1,7 +1,7 @@
 {
   "version": 1,
   "name": "range-ack-gone",
-  "decision": "A retried range returns gone per entry after retention. Acknowledging it tombstones the cached entry before any change-feed pull.",
+  "decision": "A retried range returns gone per entry after retention. Acknowledging it tombstones the cached entry before any change-feed pull. Gone entries discard cached state for every principal.",
   "setup": [
     {
       "op": "ingest",
@@ -33,6 +33,50 @@
       "expect": {
         "generation": "g1"
       }
+    },
+    {
+      "op": "client_merge_state",
+      "device": "phone",
+      "state": {
+        "principal": 1,
+        "entry_id": 1,
+        "state_rev": 1,
+        "seen": {
+          "value": "seen",
+          "rev": 1
+        },
+        "shelf": {
+          "value": "done",
+          "rev": 1
+        },
+        "kept": {
+          "value": true,
+          "rev": 1
+        }
+      },
+      "expect": {}
+    },
+    {
+      "op": "client_merge_state",
+      "device": "phone",
+      "state": {
+        "principal": 9,
+        "entry_id": 1,
+        "state_rev": 1,
+        "seen": {
+          "value": "seen",
+          "rev": 1
+        },
+        "shelf": {
+          "value": "done",
+          "rev": 1
+        },
+        "kept": {
+          "value": true,
+          "rev": 1
+        }
+      },
+      "expect": {}
     }
   ],
   "operations": [
@@ -98,6 +142,52 @@
       "device": "phone",
       "expect": {
         "outbox_size": 0
+      }
+    },
+    {
+      "op": "assert_state",
+      "device": "phone",
+      "entry_id": 1,
+      "principal": 1,
+      "expect": {
+        "state": {
+          "state_rev": 0,
+          "seen": {
+            "value": "unseen",
+            "rev": 0
+          },
+          "shelf": {
+            "value": "none",
+            "rev": 0
+          },
+          "kept": {
+            "value": false,
+            "rev": 0
+          }
+        }
+      }
+    },
+    {
+      "op": "assert_state",
+      "device": "phone",
+      "entry_id": 1,
+      "principal": 9,
+      "expect": {
+        "state": {
+          "state_rev": 0,
+          "seen": {
+            "value": "unseen",
+            "rev": 0
+          },
+          "shelf": {
+            "value": "none",
+            "rev": 0
+          },
+          "kept": {
+            "value": false,
+            "rev": 0
+          }
+        }
       }
     }
   ]

@@ -611,8 +611,12 @@ public final class SyncEngine {
         for item in result.results {
             if let state = item.state {
                 merge(state, into: &data.states)
-                if item.status == .gone, let index = data.entries.firstIndex(where: { $0.id == state.entryID }) {
-                    data.entries[index].deleted = true
+                if item.status == .gone {
+                    if let index = data.entries.firstIndex(where: { $0.id == state.entryID }) {
+                        data.entries[index].deleted = true
+                    }
+                    // Gone applies to the entry, not just the acknowledging principal.
+                    data.states.removeAll { $0.entryID == state.entryID }
                 }
             }
         }

@@ -223,7 +223,7 @@ class SyncEngineTest {
         assertTrue(engine.entry(2)!!.deleted)
         assertFalse(engine.entry(3)!!.deleted)
         assertNull(engine.entry(4))
-        assertTrue(engine.snapshot().states.none { it.entryId == 2L })
+        assertEquals(listOf(3L), engine.snapshot().states.map { it.entryId })
         assertTrue(engine.snapshot().outbox.isEmpty())
     }
 

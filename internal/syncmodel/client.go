@@ -330,6 +330,12 @@ func (c *Client) AcknowledgeRange(opID, generation string, r RangeResult) error 
 				e.Deleted = true
 				c.entries[e.ID] = e
 			}
+			// Gone applies to the entry, not just the acknowledging principal.
+			for key := range c.states {
+				if key.entry == result.State.EntryID {
+					delete(c.states, key)
+				}
+			}
 		}
 	}
 	c.pending = slices.DeleteFunc(c.pending, func(p Pending) bool { return p.operation().OpID == opID })

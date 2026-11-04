@@ -445,6 +445,12 @@ private func change(_ rev: Int64, _ type: String, _ payload: APIValue) -> APICha
     for id: Int64 in [1, 2] {
         try engine.mergeEntry(SyncEntry(id: id, subscriptionID: 1, seq: id, rev: 1))
     }
+    for principal: Int64 in [1, 9] {
+        var state = State(principal: principal, entryID: 1)
+        state.kept = Stamp(value: .flag(true), rev: 1)
+        state.stateRev = 1
+        try engine.mergeState(state)
+    }
     try engine.queueRange(RangeWrite(write: write("range", entryID: 0), scope: Scope(kind: .all), throughSeq: 2))
     let result = RangeResult(status: .applied, results: [
         WriteAcknowledgement(opID: "range", status: .gone, state: State(principal: 1, entryID: 1)),
@@ -458,5 +464,6 @@ private func change(_ rev: Int64, _ type: String, _ payload: APIValue) -> APICha
     #expect(try engine.entry(1)?.deleted == true)
     #expect(try engine.entry(2)?.deleted == false)
     #expect(try engine.entry(3) == nil)
+    #expect(try engine.snapshot().states.map(\.entryID) == [2])
     #expect(try engine.snapshot().outbox.isEmpty)
 }

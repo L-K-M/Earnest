@@ -366,6 +366,10 @@ it("range acknowledgements tombstone gone entries without resurrecting or invent
   const c = client();
   c.mergeEntry(entry(1n));
   c.mergeEntry(entry(2n));
+  for (const principal of [1n, 9n]) {
+    const state = initialState(principal, 1n);
+    c.mergeState({...state, kept: {...state.kept, value: "true", rev: 1n}, stateRev: 1n});
+  }
   c.queueRange({write: write("range", {entryId: 0n}), scope: {kind: "all", ids: []}, throughSeq: 2n});
   const response = {status: "applied" as const, throughSeq: 2n, subscriptions: [1n], except: [], replay: false,
     results: [result("range", "gone"), result("range", "applied", initialState(1n, 2n)), result("range", "gone", initialState(1n, 3n))]};
@@ -377,5 +381,6 @@ it("range acknowledgements tombstone gone entries without resurrecting or invent
   expect(c.entry(1n)?.deleted).toBe(true);
   expect(c.entry(2n)?.deleted).toBe(false);
   expect(c.entry(3n)).toBeUndefined();
+  expect(c.toSnapshot().states.map(state => state.entryId)).toEqual([2n]);
   expect(c.outbox().length).toBe(0);
 });
