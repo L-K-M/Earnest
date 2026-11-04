@@ -27,6 +27,8 @@ import AppKit
     @Published private(set) var imageMode: ArticleImageMode = .proxied
     @Published private(set) var readingEntry: APIEntry?
     @Published private(set) var offlineCopy = false
+    /// The selected article could not be fetched and has no offline copy.
+    @Published private(set) var articleUnavailable = false
     @Published var error: String?
     @Published var connectionNote: String?
     @Published var code: DeviceAuthorization?
@@ -108,6 +110,7 @@ import AppKit
         imageMode = .proxied
         readingEntry = nil
         offlineCopy = false
+        articleUnavailable = false
         code = nil
         loggingIn = false
         loggedIn = false
@@ -220,7 +223,8 @@ import AppKit
         guard let engine, let cache else { return }
         let snapshot = try engine.snapshot()
         cachedPresentation = true
-        entries = try snapshot.entries.filter { !$0.deleted && $0.hasBody }.sorted { $0.seq > $1.seq }
+        // Oldest first, like the server river, so offline reading order matches online.
+        entries = try snapshot.entries.filter { !$0.deleted && $0.hasBody }.sorted { $0.seq < $1.seq }
             .map { try cachedEntry($0, principal: principalID, engine: engine) }
         let generation = snapshot.cursor?.generation ?? ""
         feeds = try cache.resource("feeds", generation: generation).compactMap(FeedInfo.init).filter { !$0.deleted }
@@ -308,6 +312,7 @@ import AppKit
                 self.rebuildPresentation()
                 await self.refresh()
                 self.refreshPrincipalNames()
+                if self.articleUnavailable, let id = self.selected { self.open(id) }
             } catch is CancellationError {
             } catch {
                 guard self.session == s else { return }
@@ -785,6 +790,7 @@ import AppKit
         imageOrigin = nil
         readingEntry = nil
         offlineCopy = false
+        articleUnavailable = false
         guard let id, loggedIn else { return }
         let mode = imageMode
         runTask("open") { [weak self] in
@@ -822,7 +828,13 @@ import AppKit
                         try Task.checkCancellation()
                         guard self.session == expectedSession,
                               (try? engine.snapshot().cursor?.generation) == generation else { return }
-                        guard let saved = try cache?.article(entryID: id, generation: generation) else { throw error }
+                        guard let saved = try cache?.article(entryID: id, generation: generation) else {
+                            // Never opened before: say so, and retry after the next successful sync.
+                            guard ErrorPresentation.isConnection(error), self.selected == id else { throw error }
+                            self.articleUnavailable = true
+                            self.connectionNote = ErrorPresentation.message(error)
+                            return
+                        }
                         article = saved
                         offline = true
                         contentError = error

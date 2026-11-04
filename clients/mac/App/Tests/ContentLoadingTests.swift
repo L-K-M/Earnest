@@ -144,6 +144,52 @@ import EarnestKit
         ContentHTTP.assertFinished()
     }
 
+    /// The server's river reads oldest first; the offline list must match it.
+    func testColdLaunchListsCachedRiverInSequenceOrder() async throws {
+        let (directory, defaults, store, identity, cache) = try offlineFixture()
+        defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+        let engine = SyncEngine(store: cache)
+        try engine.mergeEntry(SyncEntry(id: 44, subscriptionID: 1, seq: 5, title: "Later arrival", url: "https://news.test/new",
+                                       publishedAt: nil, firstSeenAt: Date()))
+        let session = ContentHTTP.install([.init(path: "/v1/me", body: "", failure: .cannotConnectToHost)])
+        let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
+        let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+        defer { model.signOut(); session.invalidateAndCancel() }
+        model.loggedIn = true
+        _ = try await model.establishSession()
+        XCTAssertEqual(model.rows.map(\.id), [42, 44])
+        ContentHTTP.assertFinished()
+    }
+
+    /// An article never opened before has no offline copy; the reader must say
+    /// so instead of staying blank.
+    func testOfflineArticleWithoutSavedCopyIsMarkedUnavailable() async throws {
+        let (directory, defaults, store, identity, cache) = try offlineFixture()
+        defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+        let engine = SyncEngine(store: cache)
+        try engine.mergeEntry(SyncEntry(id: 44, subscriptionID: 1, seq: 5, title: "Never opened", url: "https://news.test/new",
+                                       publishedAt: nil, firstSeenAt: Date()))
+        let session = ContentHTTP.install([
+            .init(path: "/v1/me", body: "", failure: .cannotConnectToHost),
+            .init(path: "/v1/entries/44/content-url", body: "", failure: .notConnectedToInternet),
+            .init(path: "/v1/entries/44/content", body: "", failure: .notConnectedToInternet),
+        ])
+        let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
+        let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+        defer { model.signOut(); session.invalidateAndCancel() }
+        model.loggedIn = true
+        _ = try await model.establishSession()
+        model.selectFromList(44)
+        let deadline = Date().addingTimeInterval(5)
+        while !model.articleUnavailable && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(model.articleUnavailable)
+        XCTAssertTrue(model.html.isEmpty)
+        XCTAssertNil(model.error)
+        ContentHTTP.assertFinished()
+    }
+
     func testCachedMissingPublisherDateFallsBackToFirstSeen() throws {
         let engine = SyncEngine(store: MemorySyncStore())
         let firstSeen = try XCTUnwrap(DateFormatting.parse("2026-11-04T08:00:00Z"))
