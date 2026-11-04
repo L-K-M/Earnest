@@ -2,7 +2,7 @@
 import {beforeEach, describe, expect, it, vi, type Mock} from 'vitest'
 import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {request} from './request'
-import {Feeds} from './Feeds'
+import {Feeds} from './FeedSettings'
 import {
   defaultReadingSettings, explainHealth, groupByFolder, healthPending, isFirehose,
   normalizeFeedURLInput, parseCredentialHeaders, settingsBody, summarizeImport,

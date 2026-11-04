@@ -13,7 +13,7 @@ vi.mock('./request',() => ({request:vi.fn(),setCSRF:vi.fn()}))
 vi.mock('./syncBridge',() => ({useReaderSync:() => ({state:(value: Entry) => value.state,act:vi.fn(),retry:vi.fn(),status:'Synced',error:''})}))
 vi.mock('./offline/Offline',() => ({OfflineStatus:() => null,registerOffline:vi.fn().mockResolvedValue(undefined),clearOffline:vi.fn().mockResolvedValue(undefined)}))
 vi.mock('./River',() => ({River:({view,onOpen}: {view: View;onOpen:(entry: Entry)=>void}) => <main><h2>{view.title} articles</h2><button onClick={() => onOpen(entry as Entry)}>Open private article</button></main>}))
-vi.mock('./Reader',() => ({Reader:({entry,onOpen}:{entry: Entry;onOpen:(entry: Entry)=>void}) => {late.open=onOpen;return <article>{entry.title} {entry.author} <a href={entry.url}>Original</a></article>}}))
+vi.mock('./ArticleReader',() => ({Reader:({entry,onOpen}:{entry: Entry;onOpen:(entry: Entry)=>void}) => {late.open=onOpen;return <article>{entry.title} {entry.author} <a href={entry.url}>Original</a></article>}}))
 afterEach(() => {cleanup();localStorage.clear();vi.resetAllMocks()})
 
 it('clears private reader metadata and the selected feed when accounts switch',async () => {
