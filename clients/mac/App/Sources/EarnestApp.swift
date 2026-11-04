@@ -98,6 +98,15 @@ import EarnestKit
             .frame(minWidth: 170)
         } content: {
             contentColumn
+                // Inset on the column, not the split view: macOS columns do not
+                // yield to a split-view inset, so the note covered the end statement.
+                .safeAreaInset(edge: .bottom) {
+                    if let note = model.connectionNote {
+                        Text(note).font(.caption).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                            .background(.regularMaterial)
+                    }
+                }
                 .frame(minWidth: 320)
         } detail: {
             if model.selected != nil {
@@ -120,18 +129,16 @@ import EarnestKit
                             .foregroundStyle(.secondary)
                             .padding(8)
                     }
-                    Reader(html: model.html, imageOrigin: model.imageOrigin)
+                    if model.articleUnavailable {
+                        ContentUnavailableView("Not available offline", systemImage: "wifi.slash",
+                                               description: Text("Earnest keeps articles you have opened. This one loads when you are back online."))
+                    } else {
+                        Reader(html: model.html, imageOrigin: model.imageOrigin)
+                    }
                 }
                 .background(Color(nsColor: .textBackgroundColor))
             } else {
                 ContentUnavailableView("Select an article", systemImage: "doc.text")
-            }
-        }
-        .safeAreaInset(edge: .bottom) {
-            if let note = model.connectionNote {
-                Text(note).font(.caption).textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(8)
-                    .background(.regularMaterial)
             }
         }
         .onChange(of: model.section) { model.refreshSection() }

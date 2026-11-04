@@ -156,7 +156,9 @@ content requests fail, a saved copy from the current sync generation is shown
 with an “Offline copy. Images are blocked.” note. Offline copies never authorize
 image subresources, even if the saved HTML came from a signed proxied response.
 A 401 still signs you out instead of displaying a saved copy. Cache copies and
-briefs from an older server generation are not reused after a restore.
+briefs from an older server generation are not reused after a restore. An article
+you have never opened has no copy: offline, the reader says it is not available
+and loads it after the next successful sync.
 
 A SwiftUI header above the HTML shows the publisher's title as a heading,
 feed title, author and published date (or first-seen date), followed by **Open
