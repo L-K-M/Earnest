@@ -132,6 +132,7 @@ import EarnestKit
                     if model.articleUnavailable {
                         ContentUnavailableView("Not available offline", systemImage: "wifi.slash",
                                                description: Text("Earnest keeps articles you have opened. This one loads when you are back online."))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
                         Reader(html: model.html, imageOrigin: model.imageOrigin)
                     }
