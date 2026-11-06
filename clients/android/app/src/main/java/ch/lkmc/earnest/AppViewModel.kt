@@ -20,6 +20,7 @@ import ch.lkmc.earnest.core.SyncSnapshot
 import ch.lkmc.earnest.db.BriefEntity
 import ch.lkmc.earnest.db.ContentEntity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -58,9 +59,10 @@ data class UiState(
 class AppViewModel internal constructor(
     application: Application,
     private val sessions: SessionStore,
+    private val syncSignals: Flow<String> = SyncAccess.committed,
     private val apiFactory: (AuthenticatedSession) -> EarnestApi,
 ) : AndroidViewModel(application) {
-    constructor(application: Application) : this(application, Secrets(application), {
+    constructor(application: Application) : this(application, Secrets(application), apiFactory = {
         EarnestApi(it.identity.server, it.token)
     })
 
@@ -77,6 +79,11 @@ class AppViewModel internal constructor(
     val loggedIn: StateFlow<Boolean> = _loggedIn.asStateFlow()
 
     init {
+        viewModelScope.launch {
+            syncSignals.collect { key ->
+                if (key == activeSession?.identity?.cacheKey) reloadFromCache()
+            }
+        }
         if (_loggedIn.value) onLoggedIn()
     }
 
@@ -103,7 +110,7 @@ class AppViewModel internal constructor(
                         briefs = cache.db.briefs().get(),
                         principals = cachedPrincipalNames(cache),
                         agentChanges = changes,
-                        agentChangesError = if (cache.agentChangesStale) "Agent changes could not be refreshed. Reconnect to check automated actions." else null,
+                        agentChangesError = if (cache.agentChangesStale) AGENT_CHANGES_STALE_MESSAGE else null,
                     )
                     _loggedIn.value = true
                 }
@@ -115,6 +122,35 @@ class AppViewModel internal constructor(
                 return@launch
             }
             refresh()
+        }
+    }
+
+    /**
+     * Rebuilds the UI from the account cache after a background writer (the
+     * periodic WorkManager sync) committed. Makes no network requests, so
+     * signalling an unchanged cache only recomputes the same state.
+     */
+    private fun reloadFromCache() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val cache = account ?: return@launch
+            val session = activeSession ?: return@launch
+            if (!isCurrent(session, cache)) return@launch
+            cache.withEngine { engine ->
+                if (!isCurrent(session, cache)) return@withEngine
+                val restored = restoredState(engine, cache.identity.principalId)
+                val changes = cache.agentChanges()
+                _state.value = _state.value.copy(
+                    snapshot = restored.snapshot,
+                    principalId = restored.principalId,
+                    states = restored.states,
+                    cadences = restored.cadences,
+                    riverEntryIds = restored.riverEntryIds,
+                    agentChanges = changes,
+                    sessionAgentChanges = activitySince(changes, sessionStartedAt),
+                    agentChangesError = if (cache.agentChangesStale) AGENT_CHANGES_STALE_MESSAGE else null,
+                    briefs = cache.db.briefs().get(),
+                )
+            }
         }
     }
 
@@ -411,6 +447,8 @@ class AppViewModel internal constructor(
 
     companion object {
         private const val KEY_PRINCIPALS = "principal_names"
+        private const val AGENT_CHANGES_STALE_MESSAGE =
+            "Agent changes could not be refreshed. Reconnect to check automated actions."
     }
 }
 

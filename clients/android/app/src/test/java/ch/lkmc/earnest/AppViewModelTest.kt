@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import ch.lkmc.earnest.core.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -140,6 +141,39 @@ class AppViewModelTest {
         assertNotNull("notification entry was absent from cache", entry)
         assertEquals("Notification headline", entry?.title)
         assertEquals("Notification headline", model.state.value.snapshot.entries.single().title)
+    }
+
+    @Test fun backgroundSyncCommitReloadsUiState() = runBlocking(Dispatchers.IO) {
+        val signals = MutableSharedFlow<String>(extraBufferCapacity = 1)
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val model = AppViewModel(app, Sessions(AuthenticatedSession(identity, "token")), signals) { api() }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        assertTrue(model.state.value.snapshot.entries.isEmpty())
+
+        // A background writer commits to the same account cache, then publishes.
+        SessionCache(app, identity).withEngine { engine ->
+            engine.applyPage(
+                listOf(SyncChange(1, entry = CachedEntry(5, title = "Pulled by background sync"))),
+                Revision("g1", 1),
+            )
+            engine.flush()
+        }
+        signals.emit(identity.cacheKey)
+        withTimeout(15000) {
+            model.state.first { state ->
+                state.snapshot.entries.any { it.id == 5L && it.title == "Pulled by background sync" }
+            }
+        }
+        assertEquals(setOf(5L), model.state.value.states.keys)
+
+        // A commit signalled for a different account leaves this account alone.
+        SessionCache(app, identity).withEngine { engine ->
+            engine.mergeEntry(CachedEntry(6, title = "Not signalled"))
+            engine.flush()
+        }
+        signals.emit("other-account")
+        delay(300)
+        assertNull(model.state.value.snapshot.entries.firstOrNull { it.id == 6L })
     }
 
     @Test fun refreshFetchesAgentChangesForTodayAndSessionEnd() = runBlocking(Dispatchers.IO) {
