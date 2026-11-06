@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -12,6 +13,10 @@ import (
 )
 
 const maxPushTextRunes = 512
+
+// maxClaimCandidates bounds the rows one claim inspects, the bound the
+// former locked shortlist applied.
+const maxClaimCandidates = 100
 
 type notificationAttempt struct {
 	notification Notification
@@ -68,73 +73,71 @@ func (s *Service) DeliverNotifications(ctx context.Context, limit int) (int, err
 }
 func (s *Service) claimNotification(ctx context.Context) (*notificationAttempt, error) {
 	var attempt *notificationAttempt
-	err := s.store.WithTx(ctx, func(tx pgx.Tx) error {
-		if err := store.LockCore(ctx, tx); err != nil {
-			return err
-		}
-		var generation string
-		var released bool
-		if err := tx.QueryRow(ctx, "SELECT generation::text,notifications_released FROM system WHERE singleton").Scan(&generation, &released); err != nil {
-			return err
-		}
-		if !released {
-			return nil
-		}
-		// A worker may skip muted or newly quiet rows and continue to the next candidate.
-		rows, err := tx.Query(ctx, `SELECT n.id,n.recipient_user_id FROM notifications n
+	// A worker may skip muted or newly quiet rows and continue to the next
+	// candidate. Rows held for quiet hours commit in their own transaction
+	// and are excluded by id, so one claim never locks more than one row.
+	held := []int64{}
+	for len(held) < maxClaimCandidates && attempt == nil {
+		inspected := false
+		err := s.store.WithTx(ctx, func(tx pgx.Tx) error {
+			if err := store.LockCore(ctx, tx); err != nil {
+				return err
+			}
+			var generation string
+			var released bool
+			if err := tx.QueryRow(ctx, "SELECT generation::text,notifications_released FROM system WHERE singleton").Scan(&generation, &released); err != nil {
+				return err
+			}
+			if !released {
+				return nil
+			}
+			var id, user int64
+			var urgent bool
+			err := tx.QueryRow(ctx, `SELECT n.id,n.recipient_user_id,n.urgent FROM notifications n
  WHERE n.generation=$1 AND n.attempted_at IS NULL AND (n.status='queued' OR (n.status='held' AND n.held_until<=$2))
  AND NOT EXISTS(SELECT 1 FROM notification_mutes m WHERE m.user_id=n.recipient_user_id AND m.principal_id=n.sender_principal_id)
- ORDER BY n.id FOR UPDATE OF n SKIP LOCKED LIMIT 100`, generation, s.now())
-		if err != nil {
-			return err
-		}
-		type candidate struct{ id, user int64 }
-		candidates := []candidate{}
-		for rows.Next() {
-			var c candidate
-			if err := rows.Scan(&c.id, &c.user); err != nil {
-				rows.Close()
-				return err
+ AND NOT (n.id = ANY($3::bigint[]))
+ ORDER BY n.id FOR UPDATE OF n SKIP LOCKED LIMIT 1`, generation, s.now(), held).Scan(&id, &user, &urgent)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
 			}
-			candidates = append(candidates, c)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		for _, c := range candidates {
-			n, err := loadNotification(ctx, tx, c.user, c.id)
 			if err != nil {
 				return err
 			}
-			var urgent bool
-			if err := tx.QueryRow(ctx, "SELECT urgent FROM notifications WHERE id=$1", c.id).Scan(&urgent); err != nil {
-				return err
-			}
-			settings, err := s.pushSettingsTx(ctx, tx, c.user)
+			inspected = true
+			n, err := loadNotification(ctx, tx, user, id)
 			if err != nil {
 				return err
 			}
-			until := quietUntil(settings, s.now())
-			if !urgent && !until.IsZero() {
-				if _, err := tx.Exec(ctx, "UPDATE notifications SET status='held',held_until=$2 WHERE id=$1", c.id, until); err != nil {
+			settings, err := s.pushSettingsTx(ctx, tx, user)
+			if err != nil {
+				return err
+			}
+			if until := quietUntil(settings, s.now()); !urgent && !until.IsZero() {
+				if _, err := tx.Exec(ctx, "UPDATE notifications SET status='held',held_until=$2 WHERE id=$1", id, until); err != nil {
 					return err
 				}
-				continue
+				held = append(held, id)
+				return nil
 			}
-			devices, err := s.notificationDevicesTx(ctx, tx, c.user)
+			devices, err := s.notificationDevicesFor(ctx, tx, user, settings)
 			if err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, "UPDATE notifications SET status='attempting',attempted_at=$2 WHERE id=$1", c.id, s.now()); err != nil {
+			if _, err := tx.Exec(ctx, "UPDATE notifications SET status='attempting',attempted_at=$2 WHERE id=$1", id, s.now()); err != nil {
 				return err
 			}
-			attempt = &notificationAttempt{notification: n, user: c.user, devices: devices}
+			attempt = &notificationAttempt{notification: n, user: user, devices: devices}
 			return nil
+		})
+		if err != nil {
+			return nil, err
 		}
-		return nil
-	})
-	return attempt, err
+		if !inspected {
+			break
+		}
+	}
+	return attempt, nil
 }
 func (s *Service) finishNotification(ctx context.Context, a notificationAttempt, outcome push.Outcome) error {
 	status := NotificationUncertain

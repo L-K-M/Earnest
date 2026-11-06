@@ -23,6 +23,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.MapSerializer
@@ -69,6 +70,9 @@ class AppViewModel internal constructor(
     private var sessionStartedAt = Instant.now()
     private var changesSince = Instant.EPOCH.toString()
     private val json = Json { ignoreUnknownKeys = true }
+    private val flushScheduler by lazy {
+        DebouncedFlush(viewModelScope, FLUSH_DEBOUNCE_MILLIS) { flushOutbox() }
+    }
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -81,6 +85,11 @@ class AppViewModel internal constructor(
 
     init {
         if (_loggedIn.value) onLoggedIn()
+    }
+
+    override fun onCleared() {
+        flushScheduler.cancel()
+        super.onCleared()
     }
 
     /** Called only after /v1/me established the authenticated account. */
@@ -140,7 +149,7 @@ class AppViewModel internal constructor(
     fun refresh() {
         viewModelScope.launch(Dispatchers.IO) {
             val (cache, session) = activeAccount("Still signing in; the refresh did not run.") ?: return@launch
-            _state.value = _state.value.copy(loading = true, error = null)
+            _state.update { current -> current.copy(loading = true, error = null) }
             try {
                 val api = apiFactory(session)
                 cache.withEngine { syncEngine ->
@@ -164,10 +173,12 @@ class AppViewModel internal constructor(
                     if (!currentOrExpired(session, cache)) return@withEngine
                     val restored = restoredState(syncEngine, cache.identity.principalId)
                     val changes = changesResult.getOrNull() ?: _state.value.agentChanges
-                    _state.value = _state.value.copy(
-                        snapshot = syncEngine.snapshot(),
+                    val snapshot = syncEngine.snapshot()
+                    val states = effectiveStates(syncEngine, cache.identity.principalId)
+                    _state.update { current -> current.copy(
+                        snapshot = snapshot,
                         principalId = cache.identity.principalId,
-                        states = effectiveStates(syncEngine, cache.identity.principalId),
+                        states = states,
                         cadences = restored.cadences,
                         riverEntryIds = restored.riverEntryIds,
                         agentChanges = changes,
@@ -176,9 +187,9 @@ class AppViewModel internal constructor(
                         briefs = cached,
                         principals = names.ifEmpty { cachedPrincipalNames(cache) },
                         rejected = rejected,
-                        error = if (rejected.isEmpty()) null else "Some reading actions could not be synced because they expired or their articles were removed.",
+                        error = droppedOperationMessage(rejected, expired),
                         expired = expired,
-                    )
+                    ) }
                 }
             } catch (error: ApiException) {
                 if (!currentOrExpired(session, cache)) return@launch
@@ -188,17 +199,17 @@ class AppViewModel internal constructor(
                     sessions.clearToken()
                     if (sessions.current() == null) sessionExpired()
                 }
-                _state.value = _state.value.copy(error = error.message)
+                _state.update { current -> current.copy(error = error.message) }
             } catch (error: Exception) {
-                if (currentOrExpired(session, cache)) _state.value = _state.value.copy(error = error.message)
+                if (currentOrExpired(session, cache)) _state.update { current -> current.copy(error = error.message) }
             } finally {
-                if (currentOrExpired(session, cache)) _state.value = _state.value.copy(loading = false)
+                if (currentOrExpired(session, cache)) _state.update { current -> current.copy(loading = false) }
             }
         }
     }
 
     fun markSeen(entryId: Long) {
-        queue(entryId, SyncEngine.REGISTER_SEEN, JsonPrimitive(SyncEngine.VALUE_SEEN), SyncEngine.KIND_PASSIVE, "render")
+        queue(entryId, SyncEngine.REGISTER_SEEN, JsonPrimitive(SyncEngine.VALUE_SEEN), SyncEngine.KIND_PASSIVE, "seen")
     }
 
     fun later(entryId: Long, onSaved: () -> Unit = {}) {
@@ -233,7 +244,7 @@ class AppViewModel internal constructor(
                     if (!currentOrExpired(session, cache)) return@withEngine
                     val principal = cache.identity.principalId
                     if (principal == 0L || syncEngine.snapshot().cursor.generation.isEmpty()) {
-                        _state.value = _state.value.copy(error = "Still signing in; the action was not saved.")
+                        _state.update { current -> current.copy(error = "Still signing in; the action was not saved.") }
                         return@withEngine
                     }
                     val current = syncEngine.state(principal, entryId)
@@ -254,21 +265,77 @@ class AppViewModel internal constructor(
                     )
                     syncEngine.queue(write)
                     syncEngine.flush()
-                    _state.value = _state.value.copy(
-                        snapshot = syncEngine.snapshot(),
-                        states = effectiveStates(syncEngine, principal),
-                        cadences = restoredState(syncEngine, principal).cadences,
-                        agentChanges = cache.agentChanges(),
-                        sessionAgentChanges = activitySince(cache.agentChanges(), sessionStartedAt),
-                    )
+                    val snapshot = syncEngine.snapshot()
+                    val states = effectiveStates(syncEngine, principal)
+                    val cadences = restoredState(syncEngine, principal).cadences
+                    val agentChanges = cache.agentChanges()
+                    _state.update { current -> current.copy(
+                        snapshot = snapshot,
+                        states = states,
+                        cadences = cadences,
+                        agentChanges = agentChanges,
+                        sessionAgentChanges = activitySince(agentChanges, sessionStartedAt),
+                    ) }
                     onSaved()
+                    flushScheduler.request()
                 }
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
             } catch (error: Exception) {
                 if (currentOrExpired(session, cache)) {
-                    _state.value = _state.value.copy(error = "Could not save the action: ${error.message}")
+                    _state.update { current -> current.copy(error = "Could not save the action: ${error.message}") }
                 }
+            }
+        }
+    }
+
+    /**
+     * Sends the durable outbox shortly after the last queued action. A network
+     * failure leaves the queue intact for the periodic sync; only a rejected
+     * operation is reported, because local state still shows the intent.
+     */
+    private suspend fun flushOutbox() {
+        // Room refuses main-thread access, so the flush leaves Main after the debounce.
+        withContext(Dispatchers.IO) {
+            val cache = account ?: return@withContext
+            val session = activeSession ?: return@withContext
+            if (!isCurrent(session, cache)) return@withContext
+            try {
+                cache.withEngine { syncEngine ->
+                    if (!isCurrent(session, cache)) return@withEngine
+                    val repository = SyncRepository(apiFactory(session), syncEngine)
+                    val rejected = repository.flush()
+                    syncEngine.expire(Instant.now())
+                    syncEngine.flush()
+                    if (!isCurrent(session, cache)) return@withEngine
+                    // The session's river membership is left alone: only a refresh
+                    // starts a new one, so passive seen marks do not drop rows.
+                    // The update is atomic: a concurrent writer (refresh's loading
+                    // flag, an action error) must not be clobbered by this rebuild.
+                    // Read the engine before the update: its lambda may run more than once.
+                    val snapshot = syncEngine.snapshot()
+                    val principalId = cache.identity.principalId
+                    val states = effectiveStates(syncEngine, principalId)
+                    val agentChanges = cache.agentChanges()
+                    _state.update { current ->
+                        current.copy(
+                            snapshot = snapshot,
+                            principalId = principalId,
+                            states = states,
+                            agentChanges = agentChanges,
+                            sessionAgentChanges = activitySince(agentChanges, sessionStartedAt),
+                            rejected = rejected,
+                            error = if (rejected.isEmpty()) current.error else "Some reading actions could not be synced because they expired or their articles were removed.",
+                        )
+                    }
+                }
+            } catch (error: ApiException) {
+                if (!isCurrent(session, cache)) return@withContext
+                if (error.isUnauthorized) logout()
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                // The queue is durable; the periodic sync retries without user action.
             }
         }
     }
@@ -278,7 +345,7 @@ class AppViewModel internal constructor(
             val api = api() ?: return@launch
             runCatching { api.subscribe(SubscriptionBody(url = url, opId = opId("subscribe"), cadence = cadence)) }
                 .onSuccess { refresh() }
-                .onFailure { _state.value = _state.value.copy(error = it.message) }
+                .onFailure { _state.update { current -> current.copy(error = it.message) } }
         }
     }
 
@@ -287,7 +354,7 @@ class AppViewModel internal constructor(
             val api = api() ?: return@launch
             runCatching { api.unsubscribe(subscriptionId, opId("unsubscribe")) }
                 .onSuccess { refresh() }
-                .onFailure { _state.value = _state.value.copy(error = it.message) }
+                .onFailure { _state.update { current -> current.copy(error = it.message) } }
         }
     }
 
@@ -297,7 +364,7 @@ class AppViewModel internal constructor(
             runCatching {
                 api.updateSubscription(subscriptionId, SubscriptionPatch(opId = opId("cadence"), cadence = cadence))
             }.onSuccess { refresh() }
-            .onFailure { _state.value = _state.value.copy(error = it.message) }
+            .onFailure { _state.update { current -> current.copy(error = it.message) } }
         }
     }
 
@@ -306,7 +373,7 @@ class AppViewModel internal constructor(
             val api = api() ?: return@launch
             runCatching { api.revertActivity(activityId, opId("revert")) }
                 .onSuccess { refresh() }
-                .onFailure { _state.value = _state.value.copy(error = it.message) }
+                .onFailure { _state.update { current -> current.copy(error = it.message) } }
         }
     }
 
@@ -359,10 +426,9 @@ class AppViewModel internal constructor(
             if (!currentOrExpired(session, cache)) return@withEngine null
             val entry = SyncRepository(apiFactory(session), engine).loadEntry(entryId)
             if (!currentOrExpired(session, cache)) return@withEngine null
-            _state.value = _state.value.copy(
-                snapshot = engine.snapshot(),
-                states = effectiveStates(engine, cache.identity.principalId),
-            )
+            val snapshot = engine.snapshot()
+            val states = effectiveStates(engine, cache.identity.principalId)
+            _state.update { current -> current.copy(snapshot = snapshot, states = states) }
             entry
         }
     }
@@ -446,8 +512,22 @@ class AppViewModel internal constructor(
 
     private fun opId(action: String) = "$action-${java.util.UUID.randomUUID()}"
 
+    /** Summarises dropped operations without exposing internal operation IDs. */
+    private fun droppedOperationMessage(rejected: List<RejectedOperation>, expired: List<String>): String? {
+        if (rejected.isEmpty() && expired.isEmpty()) return null
+        val expiredCount = rejected.count { it.status == "expired" } + expired.size
+        val goneCount = rejected.count { it.status == "gone" }
+        val otherCount = rejected.size - rejected.count { it.status == "expired" || it.status == "gone" }
+        val parts = mutableListOf<String>()
+        if (expiredCount > 0) parts += "$expiredCount expired before they could sync"
+        if (goneCount > 0) parts += "$goneCount could not be applied because the article was removed"
+        if (otherCount > 0) parts += "$otherCount could not be synced"
+        return "Some reading actions could not be synced: " + parts.joinToString(", ")
+    }
+
     companion object {
         private const val KEY_PRINCIPALS = "principal_names"
+        private const val FLUSH_DEBOUNCE_MILLIS = 1500L
     }
 }
 
