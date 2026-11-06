@@ -64,6 +64,9 @@ it('never hijacks Tab while a summary is visible', async () => {
   mount(<><h2 tabIndex={-1}>Article</h2><input aria-label="Other input"/><Summary entryID={1}/></>)
   await screen.findByRole('button',{name:'Summary'})
   const heading = screen.getByText('Article')
+  // Tab must not open a collapsed summary either.
+  expect(fireEvent.keyDown(heading,{key:'Tab'})).toBe(true)
+  expect(screen.getByRole('button',{name:'Summary'}).getAttribute('aria-expanded')).toBe('false')
   fireEvent.click(screen.getByRole('button',{name:'Summary'}))
   expect(await screen.findByText(/Summary · m/)).toBeTruthy()
   // Keyboard focus must keep moving normally with a summary open.
