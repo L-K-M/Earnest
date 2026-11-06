@@ -7,6 +7,8 @@ import {usePipeline} from '../search/pipeline'
 
 type GroundedClaim = components['schemas']['GroundedClaim']
 const message = (error: unknown) => error instanceof Error ? error.message : 'The request failed.'
+// An answer draws on several sources, so the summary's singular excerpt notice is wrong here.
+const askExcerptNotice = 'Some sources gave excerpts only.'
 
 function GroundedClaims({claims, onOpen}: {claims: GroundedClaim[] | null; onOpen: (id: number) => void}) {
   return <>{claims?.map((claim, index) => <div key={index}><p>{claim.text}</p>{!claim.verified && <p>Citation not found in the article</p>}{claim.citations?.map((citation, i) => <div key={i}>{!citation.verified && claim.verified && <p>Citation not found in the article</p>}{citation.passages?.map((passage, j) => <p key={j}>{citation.verified ? <button onClick={() => onOpen(citation.entry_id)}>{passage}</button> : passage}</p>)}</div>)}</div>)}</>
@@ -57,7 +59,7 @@ export function Ask({onOpen}: {onOpen: (entry: Entry) => void}) {
   async function open(id: number) {
     try {onOpen(await request<Entry>(`/v1/entries/${id}`))} catch (error) {setError(message(error))}
   }
-  return <main><h2>Ask my feeds</h2><p>Answers come from your feeds only.</p><form onSubmit={event => {event.preventDefault();void submit()}}><label>Question<textarea value={question} required onChange={event => setQuestion(event.target.value)}/></label><button disabled={busy}>Ask</button></form>{error && <p role="alert">{error}</p>}{result && <><p>{result.remaining_today} of {result.daily_limit} questions remaining today.</p>{result.excerpt_notice && <p>{result.excerpt_notice}</p>}<GroundedClaims claims={result.claims} onOpen={id => {void open(id)}}/></>}</main>
+  return <main><h2>Ask my feeds</h2><p>Answers come from your feeds only.</p><form onSubmit={event => {event.preventDefault();void submit()}}><label>Question<textarea value={question} required onChange={event => setQuestion(event.target.value)}/></label><button disabled={busy}>Ask</button></form>{error && <p role="alert">{error}</p>}{result && <><p>{result.remaining_today} of {result.daily_limit} questions remaining today.</p>{result.excerpt_notice && <p>{askExcerptNotice}</p>}<GroundedClaims claims={result.claims} onOpen={id => {void open(id)}}/></>}</main>
 }
 
 export function Edition({onOpen}: {onOpen: (entry: Entry) => void}) {
