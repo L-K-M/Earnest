@@ -1,7 +1,9 @@
 package clientip
 
 import (
+	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"testing"
 )
 
@@ -121,5 +123,60 @@ func TestKeyRepeatedForwardedHeaderLines(t *testing.T) {
 	key, ok := Key(r)
 	if !ok || key != "198.51.100.9" {
 		t.Fatalf("repeated header lines: got %q, %v", key, ok)
+	}
+}
+
+// gateway is a Docker bridge gateway: in Compose, a proxy on the host such as
+// `tailscale serve` reaches the container from this address, not loopback.
+var gateway = WithProxies([]netip.Prefix{netip.MustParsePrefix("172.18.0.1/32")})
+
+func TestKeyConfiguredGatewayProxyForwarded(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "/", nil)
+	r.RemoteAddr = "172.18.0.1:40000"
+	r.Header.Set("X-Forwarded-For", "203.0.113.9, 100.64.0.5")
+	if got, ok := gateway.key(r); !ok || got != "100.64.0.5" {
+		t.Fatalf("key = %q, %v; want the tailnet client the proxy appended", got, ok)
+	}
+}
+
+func TestKeyUnconfiguredGatewayIsTheClient(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "/", nil)
+	r.RemoteAddr = "172.18.0.1:40000"
+	r.Header.Set("X-Forwarded-For", "100.64.0.5")
+	if got, ok := Loopback.key(r); !ok || got != "172.18.0.1" {
+		t.Fatalf("key = %q, %v; an untrusted peer's header must be ignored", got, ok)
+	}
+}
+
+func TestKeyConfiguredProxyKeepsLoopbackAndSkipsTrustedHops(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "/", nil)
+	r.RemoteAddr = "127.0.0.1:40000"
+	r.Header.Set("X-Forwarded-For", "100.64.0.7, 172.18.0.1, 127.0.0.1")
+	if got, ok := gateway.key(r); !ok || got != "100.64.0.7" {
+		t.Fatalf("key = %q, %v; want the first untrusted entry from the right", got, ok)
+	}
+}
+
+func TestKeyDirectPeerSpoofIgnoredWithConfiguredProxy(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "/", nil)
+	r.RemoteAddr = "192.0.2.10:40000"
+	r.Header.Set("X-Forwarded-For", "100.64.0.5")
+	if got, ok := gateway.key(r); !ok || got != "192.0.2.10" {
+		t.Fatalf("key = %q, %v; a direct LAN client must not choose its bucket", got, ok)
+	}
+}
+
+func TestMiddlewareResolvesKeyForHandlers(t *testing.T) {
+	var got string
+	var ok bool
+	handler := Middleware(gateway, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, ok = Key(r)
+	}))
+	r := httptest.NewRequest(http.MethodPost, "/", nil)
+	r.RemoteAddr = "172.18.0.1:40000"
+	r.Header.Set("X-Forwarded-For", "100.64.0.5")
+	handler.ServeHTTP(httptest.NewRecorder(), r)
+	if !ok || got != "100.64.0.5" {
+		t.Fatalf("Key under Middleware = %q, %v; want the configured proxy honoured", got, ok)
 	}
 }
