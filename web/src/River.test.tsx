@@ -123,7 +123,7 @@ describe('river interactions', () => {
   it('shows one representative per story with its also-in count', async () => {
     vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {blurb:'disabled'} : path.startsWith('/v1/positions') ? {seq:0} : {entries, groups:[{entry:entries[0],cluster_id:7,also_in:2}]})
     vi.stubGlobal('IntersectionObserver', Observer)
-    const actions: ReaderActions = {act:vi.fn().mockResolvedValue(undefined),markAll:vi.fn().mockResolvedValue(undefined),state:entry=>entry.state}
+    const actions: ReaderActions = {act:vi.fn().mockResolvedValue(undefined),state:entry=>entry.state}
     render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'today',title:'Today'}} subscriptions={[]} actions={actions} selected={entries[0]} onSelect={vi.fn()} onOpen={vi.fn()} shortcuts={false} counts={false} summary={{seen:0,done:0,later:0,kept:0}} onHelp={vi.fn()} /></QueryClientProvider>)
     await screen.findByText('Article 1')
     fireEvent.click(screen.getByText('One per story'))
