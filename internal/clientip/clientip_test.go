@@ -19,10 +19,50 @@ func TestKeyDirectPeer(t *testing.T) {
 func TestKeyLoopbackProxyForwarded(t *testing.T) {
 	r := httptest.NewRequest("POST", "/", nil)
 	r.RemoteAddr = "127.0.0.1:8080"
-	r.Header.Set("X-Forwarded-For", "198.51.100.9, 10.0.0.1")
+	// Proxies append, so the rightmost entry is the one the proxy observed;
+	// the client-chosen leftmost entry must be ignored.
+	r.Header.Set("X-Forwarded-For", "203.0.113.99, 198.51.100.9")
 	key, ok := Key(r)
 	if !ok || key != "198.51.100.9" {
 		t.Fatalf("forwarded: got %q, %v", key, ok)
+	}
+}
+
+func TestKeyLoopbackProxySkipsLoopbackHops(t *testing.T) {
+	r := httptest.NewRequest("POST", "/", nil)
+	r.RemoteAddr = "127.0.0.1:8080"
+	r.Header.Set("X-Forwarded-For", "203.0.113.99, 127.0.0.1, 198.51.100.9")
+	key, ok := Key(r)
+	if !ok || key != "198.51.100.9" {
+		t.Fatalf("chain: got %q, %v", key, ok)
+	}
+}
+
+func TestKeyLoopbackProxyAllLoopbackChain(t *testing.T) {
+	r := httptest.NewRequest("POST", "/", nil)
+	r.RemoteAddr = "127.0.0.1:8080"
+	r.Header.Set("X-Forwarded-For", "127.0.0.1, ::1")
+	if _, ok := Key(r); ok {
+		t.Fatal("all-loopback chain must not yield a key")
+	}
+}
+
+func TestKeyMappedLoopbackPeerUsesForwardedHeader(t *testing.T) {
+	r := httptest.NewRequest("POST", "/", nil)
+	r.RemoteAddr = "[::ffff:127.0.0.1]:8080"
+	r.Header.Set("X-Forwarded-For", "198.51.100.9")
+	key, ok := Key(r)
+	if !ok || key != "198.51.100.9" {
+		t.Fatalf("mapped loopback: got %q, %v", key, ok)
+	}
+}
+
+func TestKeyMappedDirectPeerIsCanonicalized(t *testing.T) {
+	r := httptest.NewRequest("POST", "/", nil)
+	r.RemoteAddr = "[::ffff:203.0.113.7]:51234"
+	key, ok := Key(r)
+	if !ok || key != "203.0.113.7" {
+		t.Fatalf("mapped direct peer: got %q, %v", key, ok)
 	}
 }
 

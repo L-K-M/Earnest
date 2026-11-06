@@ -10,13 +10,17 @@ import (
 
 // Key returns the identity a rate limiter should bucket this request under.
 //
-// A loopback peer is a trusted reverse proxy running on the same host (for
-// example `tailscale serve`, the documented HTTPS front end), so the first
-// X-Forwarded-For entry names the real client. Any other peer is identified
-// by its socket address; its forwarding headers are attacker-controlled and
-// ignored. The second result is false when no usable client address exists;
-// callers must then fall back to a per-credential key instead of sharing one
-// bucket across all clients.
+// A loopback peer is assumed to be the reverse proxy on an otherwise
+// single-user host (for example `tailscale serve`, the documented HTTPS front
+// end), so X-Forwarded-For is trusted only from loopback peers: any other
+// local process could otherwise choose its bucket. Proxies append the address
+// they observed to the right of X-Forwarded-For, so the rightmost non-loopback
+// entry is the client the proxy actually saw; entries to its left are
+// client-chosen. Any other peer is identified by its socket address; its
+// forwarding headers are attacker-controlled and ignored. The second result
+// is false when no usable client address exists; callers must then fall back
+// to a per-credential key (which trades a shared lockout for a per-account
+// one) instead of bucketing all clients together.
 func Key(r *http.Request) (string, bool) {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -28,10 +32,19 @@ func Key(r *http.Request) (string, bool) {
 		// string, let the caller fall back to a per-credential key.
 		return "", false
 	}
+	ip = ip.Unmap()
 	if ip.IsLoopback() {
 		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-			first, _, _ := strings.Cut(forwarded, ",")
-			if addr, err := netip.ParseAddr(strings.TrimSpace(first)); err == nil && !addr.IsUnspecified() {
+			entries := strings.Split(forwarded, ",")
+			for i := len(entries) - 1; i >= 0; i-- {
+				addr, err := netip.ParseAddr(strings.TrimSpace(entries[i]))
+				if err != nil || addr.IsUnspecified() {
+					return "", false
+				}
+				addr = addr.Unmap()
+				if addr.IsLoopback() {
+					continue // another same-host proxy hop
+				}
 				return addr.String(), true
 			}
 		}
