@@ -66,7 +66,7 @@ it('switches to hybrid mode, pages using opaque cursors, and saves its exact que
 it('deletes a saved search from the search panel',async () => {
   vi.spyOn(window,'confirm').mockReturnValue(true)
   mount('enabled',true)
-  fireEvent.click(await screen.findByRole('button',{name:'Delete this saved search'}))
+  fireEvent.click(await screen.findByRole('button',{name:'Delete “Funding view”'}))
   await waitFor(() => expect(request).toHaveBeenCalledWith('/v1/saved-searches/3',{method:'DELETE'}))
   expect(await screen.findByText('Saved search deleted. It is gone from the sidebar.')).toBeTruthy()
 })
