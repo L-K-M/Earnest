@@ -19,8 +19,25 @@ it('offers only agent scopes, creates a token and shows its secret once', async 
   await screen.findByText('earnest_agent_secret')
   const call = vi.mocked(request).mock.calls.find(([, options]) => options?.method === 'POST')!
   expect(JSON.parse(String(call[1]?.body))).toMatchObject({kind:'agent',name:'Scout',audience:'mcp',scopes:['entries:read'],daily_budget:3})
+  // The form clears so the next token starts clean.
+  expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('')
+  expect((screen.getByLabelText(/entries:read/) as HTMLInputElement).checked).toBe(false)
   fireEvent.click(screen.getByText('Done'));expect(screen.queryByText('earnest_agent_secret')).toBeNull()
 })
+
+it('confirms copying a secret', async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined)
+  Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText}})
+  vi.mocked(request).mockImplementation(async (_path, options) => options?.method === 'POST' ? {secret:'earnest_agent_secret'} : [])
+  mount(<Tokens />)
+  fireEvent.change(screen.getByLabelText('Name'), {target:{value:'Scout'}})
+  fireEvent.click(screen.getByRole('button',{name:'Create agent token'}))
+  fireEvent.click(await screen.findByText('Copy secret'))
+  expect(await screen.findByText('Copied')).toBeTruthy()
+  expect(writeText).toHaveBeenCalledWith('earnest_agent_secret')
+})
+
+
 it('approves a code supplied in the URL and confirms revocation', async () => {
   history.replaceState(null, '', '/device?user_code=ABCD-1234')
   vi.mocked(request).mockImplementation(async (_path, options) => options?.method ? {} : [{id:1,name:'Phone',kind:'app',audience:'api',scopes:[],daily_budget:0}])
@@ -58,6 +75,9 @@ it('creates, disables and deletes webhooks', async () => {
   mount(<Webhooks />);fireEvent.change(screen.getByLabelText('URL'),{target:{value:'https://example.test/new'}});fireEvent.click(screen.getByLabelText('entry.matched'));fireEvent.click(screen.getByRole('button',{name:'Create webhook'}));await screen.findByText('whsec_secret')
   const call=vi.mocked(request).mock.calls.find(([, options])=>options?.method==='POST')!
   expect(JSON.parse(String(call[1]?.body))).toMatchObject({url:'https://example.test/new',events:['entry.matched']})
+  // The form clears so the next webhook starts clean.
+  expect((screen.getByLabelText('URL') as HTMLInputElement).value).toBe('')
+  expect((screen.getByLabelText('entry.matched') as HTMLInputElement).checked).toBe(false)
   fireEvent.click(await screen.findByText('Disable'));await waitFor(()=>expect(vi.mocked(request).mock.calls.some(([path,options])=>path==='/v1/webhooks/4' && options?.method==='PATCH')).toBe(true))
   fireEvent.click(screen.getByText('Delete'));await waitFor(()=>expect(vi.mocked(request).mock.calls.some(([path,options])=>path.startsWith('/v1/webhooks/4?op_id=') && options?.method==='DELETE')).toBe(true))
 })

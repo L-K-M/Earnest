@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import {afterEach,expect,it,vi} from 'vitest'
 import {cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react'
-import {Settings,defaultSettings,settingsInput} from './Settings'
+import {Settings,defaultSettings,settingsInput,withoutFeedOverride} from './Settings'
 import {request} from './request'
 vi.mock('./request',()=>({request:vi.fn()}))
 afterEach(()=>{cleanup();vi.clearAllMocks()})
@@ -20,4 +20,14 @@ it('saves settings without sending the read-only revision back to strict API val
 })
 it('preserves feed overrides while replacing account preferences',()=>{
   expect(settingsInput({...defaultSettings,rev:12,feed_overrides:{'9':{measure:72}}},'save')).toEqual({...defaultSettings,feed_overrides:{'9':{measure:72}},op_id:'save'})
+})
+it('withoutFeedOverride removes only the given feed and leaves the rest',()=>{
+  const settings={...defaultSettings,feed_overrides:{'9':{measure:72},'4':{theme:'dark' as const}}}
+  const next=withoutFeedOverride(settings,'9')
+  expect(next.feed_overrides).toEqual({'4':{theme:'dark'}})
+  expect(settings.feed_overrides['9']).toEqual({measure:72}) // input not mutated
+})
+it('withoutFeedOverride is a no-op when the feed has no override',()=>{
+  const settings={...defaultSettings,feed_overrides:{'9':{measure:72}}}
+  expect(withoutFeedOverride(settings,'4')).toBe(settings)
 })
