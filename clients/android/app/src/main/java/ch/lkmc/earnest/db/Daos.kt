@@ -14,6 +14,10 @@ interface SyncSnapshotDao {
     @Query("SELECT version FROM sync_snapshot WHERE id = 1")
     fun version(): Long?
 
+    /** Atomically rewrites the snapshot and bumps the write counter; returns rows affected. */
+    @Query("UPDATE sync_snapshot SET json = :json, version = version + 1 WHERE id = 1")
+    fun rewrite(json: String): Int
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     fun save(entity: SyncSnapshotEntity)
 }

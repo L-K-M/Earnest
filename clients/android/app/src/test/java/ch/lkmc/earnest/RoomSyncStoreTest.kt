@@ -47,7 +47,7 @@ class RoomSyncStoreTest {
             val original = SyncSnapshot(Revision("g1", 0), outbox = listOf(pending))
             store.save(original)
             store.flush()
-            db.openHelper.writableDatabase.execSQL("CREATE TRIGGER fail_snapshot BEFORE INSERT ON sync_snapshot BEGIN SELECT RAISE(ABORT, 'simulated persistence failure'); END")
+            db.openHelper.writableDatabase.execSQL("CREATE TRIGGER fail_snapshot BEFORE UPDATE ON sync_snapshot BEGIN SELECT RAISE(ABORT, 'simulated persistence failure'); END")
             store.save(original.copy(cursor = Revision("g1", 1)))
             try {
                 store.flush()

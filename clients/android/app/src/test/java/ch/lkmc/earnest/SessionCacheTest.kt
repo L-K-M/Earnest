@@ -59,6 +59,17 @@ class SessionCacheTest {
         assertEquals(Revision("g2", 9), cache.withEngine { it.snapshot().cursor })
     }
 
+    @Test fun failedBlockDropsEngineSoStagedWriteIsNeverFlushed() = runBlocking(Dispatchers.IO.limitedParallelism(1)) {
+        val cache = SessionCache(context, identity)
+        runCatching {
+            cache.withEngine {
+                it.beginBootstrap(Revision("g1", 0)); it.queue(write); error("boom")
+            }
+        }
+        assertNull(cache.engine)
+        assertEquals(emptyList<String>(), cache.withEngine { it.snapshot().outbox.map { p -> p.operation.opId } })
+    }
+
     @Test fun accountsIsolateSnapshotOutboxContentAndPreferences() = runBlocking(Dispatchers.IO.limitedParallelism(1)) {
         val first = SessionCache(context, identity)
         first.withEngine { it.beginBootstrap(Revision("g1", 0)); it.mergeEntry(CachedEntry(2, title = "Private")); it.queue(write) }

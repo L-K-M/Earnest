@@ -92,7 +92,7 @@ internal class SessionCache(context: Context, val identity: AccountIdentity) {
         val store = RoomSyncStore(db)
         val version = store.version()
         val cached = engine
-        val active = if (cached != null && version == snapshotVersion) {
+        val active = if (cached != null && version != -1L && version == snapshotVersion) {
             cached
         } else {
             SyncEngine(store).also { engine = it; snapshotVersion = version }
