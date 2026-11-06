@@ -175,8 +175,21 @@ func (s *Service) Entry(ctx context.Context, a Actor, id int64) (Entry, error) {
 }
 
 // GetByIDs returns the visible entries among ids in request order, silently
-// omitting entries the user cannot see. Tombstones come back flagged.
+// omitting entries the user cannot see. Tombstones come back flagged. It does
+// not load bodies: list callers never render them, and loading them would cost
+// one query per entry.
 func (s *Service) GetByIDs(ctx context.Context, a Actor, ids []int64) ([]Entry, error) {
+	return s.getByIDs(ctx, a, ids, false)
+}
+
+// GetByIDsWithContent is GetByIDs plus the current sanitised body, loaded in
+// one query. Only callers that render bodies, such as Google Reader
+// compatibility, should ask for it.
+func (s *Service) GetByIDsWithContent(ctx context.Context, a Actor, ids []int64) ([]Entry, error) {
+	return s.getByIDs(ctx, a, ids, true)
+}
+
+func (s *Service) getByIDs(ctx context.Context, a Actor, ids []int64, withContent bool) ([]Entry, error) {
 	if err := s.checkActor(ctx, a, ScopeEntriesRead); err != nil {
 		return nil, err
 	}
@@ -206,6 +219,13 @@ func (s *Service) GetByIDs(ctx context.Context, a Actor, ids []int64) ([]Entry, 
 	if err != nil {
 		return nil, err
 	}
+	var content map[int64]store.ContentRow
+	if withContent {
+		content, err = store.LoadContentMap(ctx, s.store.Pool(), want)
+		if err != nil {
+			return nil, err
+		}
+	}
 	byID := make(map[int64]store.EntryRow, len(rows))
 	for _, r := range rows {
 		byID[r.ID] = r
@@ -218,13 +238,9 @@ func (s *Service) GetByIDs(ctx context.Context, a Actor, ids []int64) ([]Entry, 
 		}
 		e := entryFromRow(r)
 		e.State = states[id]
-		if !e.Deleted {
-			html, text, version, source, err := store.LoadContent(ctx, s.store.Pool(), id)
-			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-				return nil, err
-			}
-			if err == nil {
-				e.Content = &EntryContent{EntryID: id, HTML: html, Text: text, SanitizerVersion: version, Source: ContentSource(source)}
+		if withContent && !e.Deleted {
+			if c, ok := content[id]; ok {
+				e.Content = &EntryContent{EntryID: id, HTML: c.HTML, Text: c.Text, SanitizerVersion: c.Version, Source: ContentSource(c.Source)}
 			}
 		}
 		out = append(out, e)
