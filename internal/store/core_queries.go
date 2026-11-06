@@ -30,3 +30,32 @@ func InsertChange(ctx context.Context, tx pgx.Tx, user, rev int64, kind string, 
 	}
 	return nil
 }
+
+// InsertChanges persists one payload per allocated user revision in a single
+// statement, pairing each revision with the payload at the same index.
+func InsertChanges(ctx context.Context, tx pgx.Tx, user int64, revs []int64, kind string, payloads []json.RawMessage, at time.Time) error {
+	if len(revs) != len(payloads) {
+		return fmt.Errorf("revisions and payloads must pair")
+	}
+	if len(revs) == 0 {
+		return nil
+	}
+	type row struct {
+		Rev     int64           `json:"rev"`
+		Payload json.RawMessage `json:"payload"`
+	}
+	batch := make([]row, len(revs))
+	for i := range revs {
+		batch[i] = row{Rev: revs[i], Payload: payloads[i]}
+	}
+	body, err := json.Marshal(batch)
+	if err != nil {
+		return fmt.Errorf("encode changes: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO changes(user_id,rev,type,payload,created_at)
+		SELECT $1, (r->>'rev')::bigint, $2, r->'payload', $3
+		FROM jsonb_array_elements($4::jsonb) AS r`, user, kind, at, string(body)); err != nil {
+		return fmt.Errorf("insert changes: %w", err)
+	}
+	return nil
+}

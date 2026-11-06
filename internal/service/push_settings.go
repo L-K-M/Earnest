@@ -192,6 +192,16 @@ func (s *Service) pushSettingsTx(ctx context.Context, tx pgx.Tx, user int64) (pu
 // settings. Subscription keys and the ntfy token are decrypted here, inside
 // the delivery transaction, not on the way out.
 func (s *Service) notificationDevicesTx(ctx context.Context, tx pgx.Tx, user int64) ([]push.Device, error) {
+	ps, err := s.pushSettingsTx(ctx, tx, user)
+	if err != nil {
+		return nil, err
+	}
+	return s.notificationDevicesFor(ctx, tx, user, ps)
+}
+
+// notificationDevicesFor is notificationDevicesTx for callers that already
+// loaded the user's push settings in this transaction, like the claim.
+func (s *Service) notificationDevicesFor(ctx context.Context, tx pgx.Tx, user int64, ps pushSettings) ([]push.Device, error) {
 	out := []push.Device{}
 	rows, err := tx.Query(ctx, "SELECT transport,endpoint,keys,show_text FROM devices WHERE user_id=$1 ORDER BY id", user)
 	if err != nil {
@@ -219,10 +229,6 @@ func (s *Service) notificationDevicesTx(ctx context.Context, tx pgx.Tx, user int
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	ps, err := s.pushSettingsTx(ctx, tx, user)
-	if err != nil {
 		return nil, err
 	}
 	if ps.NtfyServer != "" && ps.NtfyTopic != "" {

@@ -51,6 +51,7 @@ type Service struct {
 	events       broker
 	pushRegistry *push.Registry
 	outbound     *outbound.Client
+	probeTimeout time.Duration
 }
 
 // New derives a purpose-separated credential key without retaining the deployment secret.
@@ -74,7 +75,7 @@ func New(db *store.Store, deps Deps) (*Service, error) {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{store: db, now: now, prober: deps.FeedProber, credentials: aead, pushRegistry: deps.PushRegistry, outbound: deps.Outbound}, nil
+	return &Service{store: db, now: now, prober: deps.FeedProber, credentials: aead, pushRegistry: deps.PushRegistry, outbound: deps.Outbound, probeTimeout: defaultProbeTimeout}, nil
 }
 
 func (s *Service) checkActor(ctx context.Context, a Actor, scope Scope) error {

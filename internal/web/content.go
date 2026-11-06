@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -18,7 +19,13 @@ import (
 	"github.com/L-K-M/Earnest/internal/service"
 )
 
-const contentLifetime = 5 * time.Minute
+// contentLifetime bounds a signed article capability. It must outlast a
+// reading session: a reader who keeps an article open, whose iframe reloads
+// under memory pressure, or who reopens a cached article expects the URL to
+// still work. The content handler re-checks subscription visibility on every
+// request, so an unsubscription stops an outstanding ticket immediately; the
+// residual risk of a leaked URL is the same one the image proxy accepts.
+const contentLifetime = 12 * time.Hour
 
 // ImageMode selects how the content origin loads remote images.
 type ImageMode string
@@ -171,6 +178,18 @@ func (c *Content) URLHandler(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"url": u})
 }
 
+// expiredPage renders a small explanation for an expired or invalid ticket.
+// The iframe is sandboxed without scripts, so the page can only tell the
+// reader to reopen the article; it cannot refresh the ticket itself.
+func (c *Content) expiredPage(w http.ResponseWriter) {
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// 410 keeps the status contract honest for monitors and prefetchers; the
+	// browser still renders the body inside the reader's iframe.
+	w.WriteHeader(http.StatusGone)
+	_, _ = io.WriteString(w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font:1rem/1.6 system-ui,sans-serif;color:#202020;background:#fff;max-width:34ch;margin:4rem auto;padding:0 1rem}h1{font-size:1.2rem}</style></head><body><h1>This article link has expired</h1><p>Close the article and open it again in Earnest.</p></body></html>`)
+}
+
 // ServeHTTP serves a signed article without depending on browser cookies.
 func (c *Content) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -183,7 +202,10 @@ func (c *Content) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	t, ok := c.signer.Verify(r.URL.Query().Get("sig"))
 	id, err := strconv.ParseInt(strings.TrimPrefix(r.URL.Path, "/content/"), 10, 64)
 	if !ok || err != nil || id != t.EntryID {
-		http.NotFound(w, r)
+		// A bare 404 inside the reader's iframe looks like a broken article.
+		// Explain the expiry instead; reopening the article fetches a fresh
+		// ticket from the app.
+		c.expiredPage(w)
 		return
 	}
 	// The content origin only reads stored bodies, so an agent ticket gets
