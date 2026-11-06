@@ -179,7 +179,7 @@ class AppViewModel internal constructor(
                         briefs = cached,
                         principals = names.ifEmpty { cachedPrincipalNames(cache) },
                         rejected = rejected,
-                        error = if (rejected.isEmpty()) null else "Some reading actions could not be synced because they expired or their articles were removed.",
+                        error = droppedOperationMessage(rejected, expired),
                         expired = expired,
                     ) }
                 }
@@ -474,6 +474,19 @@ class AppViewModel internal constructor(
     }
 
     private fun opId(action: String) = "$action-${java.util.UUID.randomUUID()}"
+
+    /** Summarises dropped operations without exposing internal operation IDs. */
+    private fun droppedOperationMessage(rejected: List<RejectedOperation>, expired: List<String>): String? {
+        if (rejected.isEmpty() && expired.isEmpty()) return null
+        val expiredCount = rejected.count { it.status == "expired" } + expired.size
+        val goneCount = rejected.count { it.status == "gone" }
+        val otherCount = rejected.size - rejected.count { it.status == "expired" || it.status == "gone" }
+        val parts = mutableListOf<String>()
+        if (expiredCount > 0) parts += "$expiredCount expired before they could sync"
+        if (goneCount > 0) parts += "$goneCount could not be applied because the article was removed"
+        if (otherCount > 0) parts += "$otherCount could not be synced"
+        return "Some reading actions could not be synced: " + parts.joinToString(", ")
+    }
 
     companion object {
         private const val KEY_PRINCIPALS = "principal_names"
