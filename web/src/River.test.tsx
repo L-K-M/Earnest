@@ -25,7 +25,7 @@ function mount(shortcuts=true, blurbStatus="disabled", selected=entries[0], rows
   const act = vi.fn().mockResolvedValue(undefined)
   const actions: ReaderActions = {act,state:entry=>entry.state}
   const onSelect=vi.fn()
-  const view=render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'today',title:'Today'}} subscriptions={[]} actions={actions} selected={selected} onSelect={onSelect} onOpen={vi.fn()} shortcuts={shortcuts} counts={false} summary={{seen:0,done:0,later:0,kept:0}} onHelp={vi.fn()} /></QueryClientProvider>)
+  const view=render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'today',title:'Today'}} subscriptions={[]} actions={actions} selected={selected} onSelect={onSelect} onOpen={vi.fn()} shortcuts={shortcuts} counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>)
   return {act,onSelect,container:view.container}
 }
 function scroller() { return screen.getByLabelText('Article list') }

@@ -54,7 +54,14 @@ export function Palette({commands,shortcuts,enabled=true,helpRef}: {commands: Co
       if (!enabled || event.defaultPrevented || event.repeat || event.isComposing) return
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'k') {event.preventDefault();open(dialog.current);return}
       if (event.ctrlKey || event.metaKey || event.altKey || !shortcutsAllowed(event.target,shortcuts)) return
-      if (event.key === '?') {event.preventDefault();open(help.current);return}
+      if (event.key === '?') {
+        // Toggle: a second press closes the dialog instead of calling
+        // showModal() on an open element, which throws InvalidStateError.
+        event.preventDefault()
+        const node = help.current
+        if (node) { if (node.open) node.close(); else open(node) }
+        return
+      }
       if (event.key === '/') {
         const search = commandsRef.current.find(command => command.id === 'search')
         if (search) {event.preventDefault();void search.run()}

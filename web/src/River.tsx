@@ -20,7 +20,7 @@ function statusLabel(state: EntryState): string {
   return state.seen.value === 'seen' ? 'Seen' : 'Unread'
 }
 
-export function River({view, subscriptions, actions, selected, onSelect, onOpen, shortcuts, counts, summary, onHelp, since = '1970-01-01T00:00:00Z', sessionStart = '1970-01-01T00:00:00Z'}: {since?:string; sessionStart?:string; view: View; subscriptions: Subscription[]; actions: ReaderActions; selected: Entry | null; onSelect: (entry: Entry) => void; onOpen: (entry: Entry) => void; shortcuts: boolean; counts: boolean; summary: SessionSummary; onHelp: () => void}) {
+export function River({view, subscriptions, actions, selected, onSelect, onOpen, shortcuts, counts, summary, since = '1970-01-01T00:00:00Z', sessionStart = '1970-01-01T00:00:00Z'}: {since?:string; sessionStart?:string; view: View; subscriptions: Subscription[]; actions: ReaderActions; selected: Entry | null; onSelect: (entry: Entry) => void; onOpen: (entry: Entry) => void; shortcuts: boolean; counts: boolean; summary: SessionSummary}) {
   const pipeline = usePipeline()
   const key = viewKey(view)
   const scroller = useRef<HTMLDivElement>(null)
@@ -139,7 +139,6 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
       if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || !shortcutsAllowed(event.target, shortcuts)) return
       const index = entries.findIndex(entry => entry.id === selected?.id)
       const entry = entries[Math.max(0, index)]
-      if (event.key === '?') { event.preventDefault(); onHelp(); return }
       if (!entry) return
       if (event.key === 'j' || event.key === 'k') {
         event.preventDefault()
@@ -156,7 +155,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     }
     window.addEventListener('keydown', keyboard)
     return () => window.removeEventListener('keydown', keyboard)
-  }, [entries, selected, shortcuts, onSelect, open, onHelp, virtual, actions])
+  }, [entries, selected, shortcuts, onSelect, open, virtual, actions])
 
   const unread = entries.filter(entry => { const state = actions.state(entry); return state.seen.value === 'unseen' && state.shelf.value !== 'done' }).length
   return <main className="river" aria-label="Articles">
