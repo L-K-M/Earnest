@@ -32,11 +32,12 @@ fun Context.setThemeSetting(setting: ThemeSetting) {
     getSharedPreferences(THEME_PREFS, Context.MODE_PRIVATE).edit { putString(THEME_KEY, setting.name) }
 }
 
-// Earnest's reading palette: a warm paper surface with ink text and a deep
-// teal accent in light mode, and a dark ink surface with a cool highlight in
-// dark mode. The stock Material 3 purple scheme is not used anywhere.
+// Earnest's reading palette: a warm paper surface with ink text and the
+// wordmark's teal accent in light mode, and a dark ink surface with the cool
+// brand highlight in dark mode. The stock Material 3 purple scheme is not
+// used anywhere.
 internal val LightColors = lightColorScheme(
-    primary = Color(0xFF1F4E5F),
+    primary = Color(0xFF07566E),
     onPrimary = Color(0xFFFFFFFF),
     primaryContainer = Color(0xFFD3E4EA),
     onPrimaryContainer = Color(0xFF0A2A33),
@@ -59,9 +60,9 @@ internal val LightColors = lightColorScheme(
 )
 
 internal val DarkColors = darkColorScheme(
-    primary = Color(0xFF85B8CB),
+    primary = Color(0xFF8BD0EF),
     onPrimary = Color(0xFF0A2A33),
-    primaryContainer = Color(0xFF1F4E5F),
+    primaryContainer = Color(0xFF07566E),
     onPrimaryContainer = Color(0xFFD3E4EA),
     secondary = Color(0xFFB9C8B4),
     onSecondary = Color(0xFF1F2B1F),

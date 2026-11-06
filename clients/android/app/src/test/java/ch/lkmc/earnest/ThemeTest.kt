@@ -33,12 +33,12 @@ class ThemeTest {
     @Test fun lightPaletteIsWarmPaperWithInkAndTeal() {
         assertEquals(Color(0xFFF8F6EF), LightColors.background)
         assertEquals(Color(0xFF282620), LightColors.onBackground)
-        assertEquals(Color(0xFF1F4E5F), LightColors.primary)
+        assertEquals(Color(0xFF07566E), LightColors.primary)
     }
 
     @Test fun darkPaletteIsInkWithCoolHighlight() {
         assertEquals(Color(0xFF141413), DarkColors.background)
         assertEquals(Color(0xFFE8E4DA), DarkColors.onBackground)
-        assertEquals(Color(0xFF85B8CB), DarkColors.primary)
+        assertEquals(Color(0xFF8BD0EF), DarkColors.primary)
     }
 }
