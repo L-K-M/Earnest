@@ -86,3 +86,38 @@ func TestReaderIframeSandbox(t *testing.T) {
 		t.Fatal("reader iframe sandbox changed")
 	}
 }
+
+func TestExpiredTicketPage(t *testing.T) {
+	egress, err := outbound.New(outbound.Config{Version: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy, err := imageproxy.New([]byte(strings.Repeat("x", 32)), egress, "https://content.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Content{svc: fakeContent{}, proxy: proxy, signer: &TicketSigner{key: []byte(strings.Repeat("x", 32)), origin: "https://content.example", now: func() time.Time { return time.Unix(200, 0) }}}
+	sig := c.signer.Sign(Ticket{UserID: 1, PrincipalID: 2, Kind: service.PrincipalHuman, EntryID: 3, Expires: 100, Mode: ImageProxied})
+	w := httptest.NewRecorder()
+	c.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/content/3?sig="+sig, nil))
+	if w.Code != http.StatusGone {
+		t.Fatalf("status = %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "This article link has expired") {
+		t.Fatalf("body = %q", w.Body.String())
+	}
+	if policy := w.Header().Get("Content-Security-Policy"); !strings.Contains(policy, "default-src 'none'") {
+		t.Fatalf("CSP = %q", policy)
+	}
+	// Invalid signature and entry-ID mismatch take the same branch.
+	w2 := httptest.NewRecorder()
+	c.ServeHTTP(w2, httptest.NewRequest(http.MethodGet, "/content/999?sig="+sig, nil))
+	if !strings.Contains(w2.Body.String(), "This article link has expired") {
+		t.Fatalf("mismatch body = %q", w2.Body.String())
+	}
+	w3 := httptest.NewRecorder()
+	c.ServeHTTP(w3, httptest.NewRequest(http.MethodGet, "/content/3?sig=garbage", nil))
+	if !strings.Contains(w3.Body.String(), "This article link has expired") {
+		t.Fatalf("bad sig body = %q", w3.Body.String())
+	}
+}

@@ -34,11 +34,28 @@ user ID and human principal ID. Returning to that account restores its own
 pending actions. Signing in again clears the displayed state before attaching
 the verified account.
 
+Notification permission is requested only after a successful sign-in, when
+push registration starts, or from the top-bar Notifications action. The
+connect screen never asks for it. Queued actions are sent a few seconds after
+the last one; offline, the durable queue waits for the periodic sync.
+
 The old unscoped `earnest.db` and `session` preferences are retained on upgrade,
 but never attached to a new login or replayed into another account. Their
 ownership cannot be established safely. Preserve those files if pending
 actions need manual recovery; the app reports a retained legacy cache. No Room
 schema changes or destructive migrations are used.
+
+### Testing against a local server
+
+Release builds trust only system certificate authorities. Debug builds also
+trust certificates you install yourself (`res/xml/network_security_config.xml`),
+so you can test against a local server behind a reverse proxy with a
+self-signed certificate. In the emulator the host is `10.0.2.2`: issue the
+proxy's certificate for that address, set `EARNEST_BASE_URL` and
+`EARNEST_CONTENT_ORIGIN` to the proxy's `https://10.0.2.2:<port>` origins, and
+install your CA certificate in the emulator under Settings > Security >
+Encryption & credentials > Install a certificate > CA certificate. Cleartext
+HTTP stays disabled in every build.
 
 ## Reading offline
 
@@ -47,12 +64,15 @@ and caches article content when you open it. Lists work without a connection;
 the reader falls back to the cached content when the signed content URL cannot
 be fetched. Swipe a row left a short distance for Later, or a long distance
 for Done; the label appears during the gesture and an undo action is offered
-in a snackbar. Rows mark themselves seen as they render, while Today keeps
-its session membership stable. Passive seen updates do not remove rows or
-expose more rows to automatic marking. Later and Done remove rows immediately;
-refresh starts a new membership from the current effective state. Cached
-subscription cadences are restored before a network request, so Today and
-Edition also work on an offline cold launch.
+in a snackbar that names the action and auto-dismisses. The swipe background
+is hidden until the row moves. A row marks itself seen once it has been on
+screen and then scrolls out through the top edge, or when you open it; rows
+visible on first composition, or never composed, stay unseen. Today keeps
+its session membership stable: passive seen updates do not remove rows or
+expose more rows to automatic marking. Later and Done remove rows
+immediately; refresh starts a new membership from the current effective
+state. Cached subscription cadences are restored before a network request,
+so Today and Edition also work on an offline cold launch.
 
 Today and Edition share the server's river membership rule. Subscription import
 boundaries, subscription muting, case-insensitive author and title-keyword mutes,
@@ -75,14 +95,17 @@ it. Failure to refresh this list is reported. The last successful list remains
 available offline. Background sync caches the same notices; an interrupted or
 failed refresh leaves a visible warning on the next offline launch.
 
-The reader loads the signed content URL in a WebView with JavaScript, file
-access and content access disabled, and allows only that origin; other links
-open in the browser. All signed content URLs request `mode=click`, including
-notification-selected articles, so automatic image loading cannot reveal an
-agent's article selection. On a main-frame network or HTTP failure, the reader
-loads the cached HTML once through the local asset origin. Subresource failures
-do not replace the article, and local fallback content cannot load network
-resources. Agent text is shown as plain text, never as HTML.
+The reader shows the feed title and the published date (falling back to
+first seen) under the article title, with an Open original action that opens
+the entry URL in the browser. It loads the signed content URL in a WebView
+with JavaScript, file access and content access disabled, and allows only
+that origin; other links open in the browser. All signed content URLs request
+`mode=click`, including notification-selected articles, so automatic image
+loading cannot reveal an agent's article selection. On a main-frame network or
+HTTP failure, the reader loads the cached HTML once through the local asset
+origin. Subresource failures do not replace the article, and local fallback
+content cannot load network resources. Agent text is shown as plain text,
+never as HTML.
 
 Notifications and deep links resolve missing metadata through `/v1/entries/{id}`;
 selection follows the current snapshot as cold-launch loading and sync complete.
@@ -93,8 +116,10 @@ retry.
 ## Feeds and activity
 
 Feeds subscribes by URL, changes a subscription's cadence (Now, Today, This
-week) and unsubscribes. Activity groups agent changes by principal and offers
-Revert where the server reports that the action can still be undone.
+week) and unsubscribes. The current cadence is selected in the row. Activity
+groups agent changes by principal, shows a readable description with the
+article title where there is one, and offers Revert where the server reports
+that the action can still be undone.
 
 ## Themes and the widget
 
@@ -114,16 +139,21 @@ ntfy Android app. Run an ntfy server you control, configure the distributor to
 use it, and select it in Earnest. On registration the app sends the endpoint
 and its `p256dh` and auth keys to `/v1/devices`. The server requires an HTTPS
 endpoint it can reach; private IP literals are rejected. Notification
-permission must be granted on Android 13+.
+permission must be granted on Android 13+; the app asks after sign-in, when
+push registration starts, or from the top-bar action, and the top bar shows
+that action only while permission is missing.
 
 ## Verification
 
 `:core:test` runs the shared sync vectors and the OpenAPI contract test;
 `:app:testDebugUnitTest` covers snapshot replacement failure, concurrent
 foreground/background writes, account isolation, offline cadence restoration,
-Today session membership, missing notification metadata, agent-change retrieval,
-WebView error fallback, deep-link parsing, brief labels, widget headline
-selection, theme persistence, notification channels and server notification text.
+Today session membership, passive seen on scroll, missing notification metadata,
+agent-change retrieval, WebView error fallback, deep-link parsing, brief labels,
+widget headline selection, theme persistence, notification channels and server
+notification text, notification permission timing, cadence selection, swipe
+thresholds and snackbar text, activity descriptions, reader date and original
+URL, and outbox flush debounce.
 Core repository tests exercise real wire payloads, batch boundaries, in-flight
 retries, entry hydration and sibling subscription projections. Room regressions
 use Robolectric's native SQLite mode on Apple silicon because legacy SQLite

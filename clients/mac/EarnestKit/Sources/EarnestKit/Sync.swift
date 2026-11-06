@@ -511,6 +511,17 @@ public final class SyncEngine {
     public func state(principal: Int64, entryID: Int64) throws -> State {
         overlay(principal: principal, entryID: entryID, data: try store.load())
     }
+    /// Bulk read for list rendering: one snapshot load for many entries.
+    /// Equivalent to calling state() per ID, without the per-call decode.
+    public func states(principal: Int64, entryIDs: [Int64]) throws -> [Int64: State] {
+        let data = try store.load()
+        var out: [Int64: State] = [:]
+        out.reserveCapacity(entryIDs.count)
+        for id in entryIDs {
+            out[id] = overlay(principal: principal, entryID: id, data: data)
+        }
+        return out
+    }
     public func entry(_ id: Int64) throws -> SyncEntry? {
         try store.load().entries.first { $0.id == id }
     }
