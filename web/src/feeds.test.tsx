@@ -203,4 +203,17 @@ describe('Feeds', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Refresh now'}))
     await waitFor(() => expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('Renamed'))
   })
+
+  it('keeps a draft title while the input is focused', async () => {
+    const routes: Routes = {'/v1/subscriptions': [sub()], '/v1/folders': [], '/v1/mutes': []}
+    api(routes)
+    render(<Feeds onChanged={() => {}} />)
+    const input = await screen.findByLabelText('Title') as HTMLInputElement
+    input.focus()
+    fireEvent.change(input, {target: {value: 'My draft'}})
+    routes['/v1/subscriptions'] = [sub({title: 'Renamed', rev: 2})]
+    fireEvent.click(screen.getByRole('button', {name: 'Refresh now'}))
+    await waitFor(() => expect((screen.getByRole('button', {name: 'Refresh now'}) as HTMLButtonElement).disabled).toBe(false))
+    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('My draft')
+  })
 })

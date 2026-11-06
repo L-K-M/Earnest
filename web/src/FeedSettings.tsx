@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useState} from 'react'
+import {useCallback, useEffect, useRef, useState} from 'react'
 import {
   CADENCES, EXTRACT_MODES, groupByFolder, isFirehose, newOp, normalizeFeedURLInput, parseCredentialHeaders, summarizeImport,
   createFolder, createMute, deleteFolder, deleteMute, explainHealth, exportOPML, importOPML, readFileText,
@@ -237,7 +237,7 @@ function SubscriptionSection({subs, folders, busy, act}: {subs: Subscription[]; 
   return <section aria-labelledby="subscriptions-heading"><h3 id="subscriptions-heading">Subscriptions</h3>
     {groups.map(group => group.subscriptions.length === 0 ? null : <div key={group.folder?.id ?? 0}>
       {group.folder && <h4>{group.folder.name}</h4>}
-      <ul>{group.subscriptions.map(sub => <SubscriptionRow key={`${sub.id}:${sub.rev}`} sub={sub} folders={folders} busy={busy} act={act} />)}</ul>
+      <ul>{group.subscriptions.map(sub => <SubscriptionRow key={sub.id} sub={sub} folders={folders} busy={busy} act={act} />)}</ul>
     </div>)}
   </section>
 }
@@ -249,13 +249,20 @@ function when(iso: string): string {
 
 function SubscriptionRow({sub, folders, busy, act}: {sub: Subscription; folders: Folder[]; busy: boolean; act: Act}) {
   const [title, setTitle] = useState(sub.title)
+  const titleRef = useRef<HTMLInputElement>(null)
+  // Adopt an external title change, but never discard a draft the user is
+  // typing in the title field right now.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- prop-to-draft sync, guarded by focus.
+    if (document.activeElement !== titleRef.current) setTitle(sub.title)
+  }, [sub.title])
   const explanation = explainHealth(sub.health)
   const patch = (body: Omit<SubscriptionPatch, 'op_id'>, note: string) => act(() => patchSubscription(sub.id, {...body, op_id: newOp()}), note)
   return <li>
     <strong>{sub.title || sub.url}</strong>{sub.private && ' · private'}{isFirehose(sub) && ' · firehose'}
     {' '}<a href={sub.site_url || sub.url} target="_blank" rel="noopener noreferrer">Site</a>
     <form onSubmit={event => { event.preventDefault(); void patch({title: title.trim()}, 'Title saved.') }}>
-      <label>Title<input value={title} onChange={e => setTitle(e.target.value)} /></label>
+      <label>Title<input ref={titleRef} value={title} onChange={e => setTitle(e.target.value)} /></label>
       <button disabled={busy}>Save title</button>
     </form>
     <label>Cadence<select value={sub.cadence} disabled={busy} onChange={e => { void patch({cadence: e.target.value}, 'Cadence updated.') }}>{CADENCES.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
