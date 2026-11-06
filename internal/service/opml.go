@@ -36,6 +36,11 @@ type OPMLResult struct {
 	Error        string        `json:"error,omitempty"`
 }
 
+var (
+	errInvalidFeedURL = errors.New("invalid feed URL")
+	errTitleTooLong   = errors.New("title too long")
+)
+
 // opmlWork is one flattened outline in depth-first order. parent is the index
 // of the nearest ancestor folder, or -1.
 type opmlWork struct {
@@ -100,7 +105,9 @@ func (s *Service) ImportOPML(ctx context.Context, a Actor, outlines []OPMLOutlin
 	results := make([]OPMLResult, len(works))
 	for start := 0; start < len(works); start += opmlChunkSize {
 		if err := ctx.Err(); err != nil {
-			return results, err
+			// Only committed chunks are durable; the rest of the slice is
+			// zero values for work that never ran.
+			return results[:start], err
 		}
 		end := min(start+opmlChunkSize, len(works))
 		err := s.withEvents(ctx, func(tx pgx.Tx) error {
@@ -131,7 +138,8 @@ func (s *Service) ImportOPML(ctx context.Context, a Actor, outlines []OPMLOutlin
 			return nil
 		})
 		if err != nil {
-			return results, err
+			// The chunk rolled back, so its recorded successes are phantom.
+			return results[:start], err
 		}
 	}
 	return results, nil
@@ -153,10 +161,10 @@ func (s *Service) importOPMLItem(ctx context.Context, tx pgx.Tx, a Actor, w opml
 	if w.xmlURL != "" {
 		rawURL, err := normalizedFeedURL(w.xmlURL)
 		if err != nil {
-			return result, errors.New("invalid feed URL")
+			return result, errInvalidFeedURL
 		}
 		if len(w.title) > 1024 {
-			return result, errors.New("title too long")
+			return result, errTitleTooLong
 		}
 		sub, err := s.subscribeTx(ctx, tx, a, rawURL, FeedMeta{Title: w.title, SiteURL: w.htmlURL}, SubscribeOptions{Title: w.title, FolderID: folderID}, nil)
 		if err != nil {

@@ -385,6 +385,32 @@ func TestSubscriptions(t *testing.T) {
 		}
 		coreCheckGapless(t, f.db, f.a.UserID)
 	})
+	t.Run("opml_folder_at_chunk_boundary_parents_next_chunk_children", func(t *testing.T) {
+		f := newCoreFixture(t, template)
+		input := make([]OPMLOutline, opmlChunkSize-1)
+		for i := range input {
+			input[i] = OPMLOutline{Title: fmt.Sprintf("Boundary feed %d", i), XMLURL: fmt.Sprintf("https://boundary.test/%d", i)}
+		}
+		folder := OPMLOutline{Title: "Boundary folder"}
+		for i := 0; i < 3; i++ {
+			folder.Outlines = append(folder.Outlines, OPMLOutline{Title: fmt.Sprintf("Child %d", i), XMLURL: fmt.Sprintf("https://boundary.test/child/%d", i)})
+		}
+		input = append(input, folder)
+		results, err := f.s.ImportOPML(context.Background(), f.a, input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		folderIdx := opmlChunkSize - 1
+		if results[folderIdx].Folder == nil {
+			t.Fatal("boundary folder not created")
+		}
+		for i := folderIdx + 1; i < folderIdx+4; i++ {
+			if results[i].Subscription == nil || results[i].Subscription.FolderID != results[folderIdx].Folder.ID {
+				t.Fatalf("child %d not placed in boundary folder: %+v", i, results[i])
+			}
+		}
+		coreCheckGapless(t, f.db, f.a.UserID)
+	})
 }
 
 func TestSubscriptionValidation(t *testing.T) {
