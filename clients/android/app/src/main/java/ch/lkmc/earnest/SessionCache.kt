@@ -4,10 +4,14 @@ import android.content.Context
 import androidx.core.content.edit
 import ch.lkmc.earnest.core.Activity
 import ch.lkmc.earnest.core.EarnestApi
+import ch.lkmc.earnest.core.EngineSession
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import ch.lkmc.earnest.core.SyncEngine
+import ch.lkmc.earnest.core.SyncRepository
 import ch.lkmc.earnest.db.AppDatabase
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.net.URI
@@ -38,7 +42,18 @@ internal interface SessionStore {
 }
 
 internal object SyncAccess {
+    /** Serializes read-through-commit sections on the persisted snapshot and session save. */
     val mutex = Mutex()
+
+    /**
+     * Cache key of an account whose Room store a background writer just
+     * committed, so a running app reloads instead of waiting for a manual
+     * refresh. One buffered slot is enough: only the latest commit matters.
+     */
+    val committed = MutableSharedFlow<String>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    /** Serializes a pull/flush cycle; only its snapshot sections take [mutex]. */
+    val sync = Mutex()
 }
 
 /** Reload, mutate and flush form one critical section for every snapshot writer. */
@@ -59,7 +74,7 @@ internal class SessionCache(context: Context, val identity: AccountIdentity) {
         json.decodeFromString(ListSerializer(Activity.serializer()), preferences.getString(KEY_AGENT_CHANGES, "[]")!!)
     }.getOrDefault(emptyList())
 
-    /** Called inside withEngine so offline notices follow the same sync owner. */
+    /** Called from a sync cycle so offline notices follow the same sync owner. */
     suspend fun refreshAgentChanges(
         api: EarnestApi,
         since: String = preferences.getString(KEY_CHANGES_SINCE, null) ?: java.time.Instant.EPOCH.toString(),
@@ -112,6 +127,16 @@ internal class SessionCache(context: Context, val identity: AccountIdentity) {
             throw t
         }
     }
+
+    /** A repository whose engine sections run under [SyncAccess.mutex], keeping HTTP off the lock. */
+    fun repository(api: EarnestApi): SyncRepository = SyncRepository(api, object : EngineSession {
+        override suspend fun <T> invoke(section: suspend (SyncEngine) -> T): T = withEngine(section)
+    })
+
+    /** Runs [block] as the only pull owner so its change pages cannot interleave. */
+    suspend fun <T> withSync(api: EarnestApi, block: suspend (SyncRepository) -> T): T =
+        SyncAccess.sync.withLock { block(repository(api)) }
+
     companion object {
         const val KEY_CHANGES_SINCE = "agent_changes_since"
         private const val KEY_AGENT_CHANGES = "agent_changes"

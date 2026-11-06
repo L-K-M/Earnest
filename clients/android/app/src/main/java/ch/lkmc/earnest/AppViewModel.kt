@@ -15,11 +15,11 @@ import ch.lkmc.earnest.core.StateWrite
 import ch.lkmc.earnest.core.SubscriptionBody
 import ch.lkmc.earnest.core.SubscriptionPatch
 import ch.lkmc.earnest.core.SyncEngine
-import ch.lkmc.earnest.core.SyncRepository
 import ch.lkmc.earnest.core.SyncSnapshot
 import ch.lkmc.earnest.db.BriefEntity
 import ch.lkmc.earnest.db.ContentEntity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -59,9 +59,10 @@ data class UiState(
 class AppViewModel internal constructor(
     application: Application,
     private val sessions: SessionStore,
+    private val syncSignals: Flow<String> = SyncAccess.committed,
     private val apiFactory: (AuthenticatedSession) -> EarnestApi,
 ) : AndroidViewModel(application) {
-    constructor(application: Application) : this(application, Secrets(application), {
+    constructor(application: Application) : this(application, Secrets(application), apiFactory = {
         EarnestApi(it.identity.server, it.token)
     })
 
@@ -84,6 +85,11 @@ class AppViewModel internal constructor(
     val sessionNotice: StateFlow<String?> = _sessionNotice.asStateFlow()
 
     init {
+        viewModelScope.launch {
+            syncSignals.collect { key ->
+                if (key == activeSession?.identity?.cacheKey) reloadFromCache()
+            }
+        }
         if (_loggedIn.value) onLoggedIn()
     }
 
@@ -120,7 +126,7 @@ class AppViewModel internal constructor(
                         briefs = cache.db.briefs().get(),
                         principals = cachedPrincipalNames(cache),
                         agentChanges = changes,
-                        agentChangesError = if (cache.agentChangesStale) "Agent changes could not be refreshed. Reconnect to check automated actions." else null,
+                        agentChangesError = if (cache.agentChangesStale) AGENT_CHANGES_STALE_MESSAGE else null,
                     )
                     _loggedIn.value = true
                 }
@@ -134,6 +140,37 @@ class AppViewModel internal constructor(
                 return@launch
             }
             refresh()
+        }
+    }
+
+    /**
+     * Rebuilds the UI from the account cache after a background writer (the
+     * periodic WorkManager sync) committed. Makes no network requests, so
+     * signalling an unchanged cache only recomputes the same state.
+     */
+    private fun reloadFromCache() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val cache = account ?: return@launch
+            val session = activeSession ?: return@launch
+            if (!isCurrent(session, cache)) return@launch
+            cache.withEngine { engine ->
+                if (!isCurrent(session, cache)) return@withEngine
+                val restored = restoredState(engine, cache.identity.principalId)
+                val changes = cache.agentChanges()
+                // update{} keeps the reload from clobbering a concurrent
+                // foreground write to the state flow.
+                _state.update { previous -> previous.copy(
+                    snapshot = restored.snapshot,
+                    principalId = restored.principalId,
+                    states = restored.states,
+                    cadences = restored.cadences,
+                    riverEntryIds = restored.riverEntryIds,
+                    agentChanges = changes,
+                    sessionAgentChanges = activitySince(changes, sessionStartedAt),
+                    agentChangesError = if (cache.agentChangesStale) AGENT_CHANGES_STALE_MESSAGE else null,
+                    briefs = cache.db.briefs().get(),
+                ) }
+            }
         }
     }
 
@@ -152,33 +189,35 @@ class AppViewModel internal constructor(
             _state.update { current -> current.copy(loading = true, error = null) }
             try {
                 val api = apiFactory(session)
-                cache.withEngine { syncEngine ->
-                    if (!currentOrExpired(session, cache)) return@withEngine
-                    val repository = SyncRepository(api, syncEngine)
+                val synced = cache.withSync(api) { repository ->
+                    if (!currentOrExpired(session, cache)) return@withSync null
                     cache.markAgentChangesStale()
                     val rejected = repository.pull() + repository.flush()
-                    val expired = syncEngine.expire(Instant.now()).map { it.operation.opId }
-                    syncEngine.flush()
-                    val briefs = runCatching { api.todaysBriefs() }.getOrNull()
-                    if (briefs != null) cacheBriefs(cache, briefs)
-                    val cached = briefs?.map { BriefEntity(it.principalId, it.value, it.rev) } ?: cache.db.briefs().get()
-                    val names = principalNames(api)
-                    savePrincipalNames(cache, names)
-                    val changesResult = runCatching { cache.refreshAgentChanges(api, changesSince) }
-                    changesResult.getOrNull()?.let {
+                    val expired = repository.expire(Instant.now()).map { it.operation.opId }
+                    // The agent-changes cursor must advance under the sync lock:
+                    // a concurrent worker cycle outside it could write an older one.
+                    val changes = runCatching { cache.refreshAgentChanges(api, changesSince) }
+                    changes.getOrNull()?.let {
                         cache.preferences.edit {
                             putString(SessionCache.KEY_CHANGES_SINCE, sessionStartedAt.toString())
                         }
                     }
+                    Triple(rejected, expired, changes)
+                } ?: return@launch
+                val (rejected, expired, changesResult) = synced
+                val briefs = runCatching { api.todaysBriefs() }.getOrNull()
+                if (briefs != null) cacheBriefs(cache, briefs)
+                val cached = briefs?.map { BriefEntity(it.principalId, it.value, it.rev) } ?: cache.db.briefs().get()
+                val names = principalNames(api)
+                savePrincipalNames(cache, names)
+                cache.withEngine { syncEngine ->
                     if (!currentOrExpired(session, cache)) return@withEngine
                     val restored = restoredState(syncEngine, cache.identity.principalId)
                     val changes = changesResult.getOrNull() ?: _state.value.agentChanges
-                    val snapshot = syncEngine.snapshot()
-                    val states = effectiveStates(syncEngine, cache.identity.principalId)
                     _state.update { current -> current.copy(
-                        snapshot = snapshot,
-                        principalId = cache.identity.principalId,
-                        states = states,
+                        snapshot = restored.snapshot,
+                        principalId = restored.principalId,
+                        states = restored.states,
                         cadences = restored.cadences,
                         riverEntryIds = restored.riverEntryIds,
                         agentChanges = changes,
@@ -191,6 +230,7 @@ class AppViewModel internal constructor(
                         expired = expired,
                     ) }
                 }
+                refreshWidgets(getApplication())
             } catch (error: ApiException) {
                 if (!currentOrExpired(session, cache)) return@launch
                 if (error.isUnauthorized && sessions.current() == session) {
@@ -265,14 +305,12 @@ class AppViewModel internal constructor(
                     )
                     syncEngine.queue(write)
                     syncEngine.flush()
-                    val snapshot = syncEngine.snapshot()
-                    val states = effectiveStates(syncEngine, principal)
-                    val cadences = restoredState(syncEngine, principal).cadences
+                    val restored = restoredState(syncEngine, principal)
                     val agentChanges = cache.agentChanges()
                     _state.update { current -> current.copy(
-                        snapshot = snapshot,
-                        states = states,
-                        cadences = cadences,
+                        snapshot = restored.snapshot,
+                        states = restored.states,
+                        cadences = restored.cadences,
                         agentChanges = agentChanges,
                         sessionAgentChanges = activitySince(agentChanges, sessionStartedAt),
                     ) }
@@ -301,12 +339,17 @@ class AppViewModel internal constructor(
             val session = activeSession ?: return@withContext
             if (!isCurrent(session, cache)) return@withContext
             try {
-                cache.withEngine { syncEngine ->
-                    if (!isCurrent(session, cache)) return@withEngine
-                    val repository = SyncRepository(apiFactory(session), syncEngine)
+                // withSync serialises the flush against pull cycles; its engine
+                // sections take SyncAccess.mutex only around load-mutate-save,
+                // so the batch request never blocks a queued action.
+                val synced = cache.withSync(apiFactory(session)) { repository ->
+                    if (!isCurrent(session, cache)) return@withSync null
                     val rejected = repository.flush()
-                    syncEngine.expire(Instant.now())
-                    syncEngine.flush()
+                    val expired = repository.expire(Instant.now()).map { it.operation.opId }
+                    rejected to expired
+                } ?: return@withContext
+                val (rejected, expired) = synced
+                cache.withEngine { syncEngine ->
                     if (!isCurrent(session, cache)) return@withEngine
                     // The session's river membership is left alone: only a refresh
                     // starts a new one, so passive seen marks do not drop rows.
@@ -325,7 +368,7 @@ class AppViewModel internal constructor(
                             agentChanges = agentChanges,
                             sessionAgentChanges = activitySince(agentChanges, sessionStartedAt),
                             rejected = rejected,
-                            error = if (rejected.isEmpty()) current.error else "Some reading actions could not be synced because they expired or their articles were removed.",
+                            error = droppedOperationMessage(rejected, expired) ?: current.error,
                         )
                     }
                 }
@@ -422,9 +465,8 @@ class AppViewModel internal constructor(
 
     internal suspend fun loadEntry(entryId: Long): ch.lkmc.earnest.core.CachedEntry? = withContext(Dispatchers.IO) {
         val (cache, session) = activeAccount("Still signing in; the entry was not loaded.") ?: return@withContext null
+        val entry = cache.repository(apiFactory(session)).loadEntry(entryId)
         cache.withEngine { engine ->
-            if (!currentOrExpired(session, cache)) return@withEngine null
-            val entry = SyncRepository(apiFactory(session), engine).loadEntry(entryId)
             if (!currentOrExpired(session, cache)) return@withEngine null
             val snapshot = engine.snapshot()
             val states = effectiveStates(engine, cache.identity.principalId)
@@ -505,9 +547,7 @@ class AppViewModel internal constructor(
 
     private fun effectiveStates(syncEngine: SyncEngine, principal: Long): Map<Long, State> {
         if (principal == 0L) return emptyMap()
-        return syncEngine.snapshot().entries
-            .filterNot { it.deleted }
-            .associate { it.id to syncEngine.state(principal, it.id) }
+        return syncEngine.states(principal)
     }
 
     private fun opId(action: String) = "$action-${java.util.UUID.randomUUID()}"
@@ -527,6 +567,8 @@ class AppViewModel internal constructor(
 
     companion object {
         private const val KEY_PRINCIPALS = "principal_names"
+        private const val AGENT_CHANGES_STALE_MESSAGE =
+            "Agent changes could not be refreshed. Reconnect to check automated actions."
         private const val FLUSH_DEBOUNCE_MILLIS = 1500L
     }
 }

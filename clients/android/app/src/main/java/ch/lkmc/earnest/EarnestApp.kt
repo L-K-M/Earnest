@@ -77,11 +77,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import ch.lkmc.earnest.core.CachedEntry
 import ch.lkmc.earnest.core.River
 import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.core.SyncSnapshot
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
@@ -92,6 +94,13 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
+
+/**
+ * Poll cadence while the app is visible, a gentler version of the Mac
+ * client's two-minute poll. Queued marks flush and new entries arrive
+ * without waiting for the fifteen-minute WorkManager sync.
+ */
+private const val FOREGROUND_REFRESH_MS = 3L * 60 * 1000
 
 private enum class View(val label: String, val icon: ImageVector) {
     TODAY("Today", Icons.Filled.DateRange),
@@ -171,6 +180,15 @@ private fun MainScaffold(
     val context = LocalContext.current
     val selected = navigator.currentDestination?.contentKey
 
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                delay(FOREGROUND_REFRESH_MS)
+                model.refresh()
+            }
+        }
+    }
     LaunchedEffect(initialEntry) {
         initialEntry?.let { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, it) }
     }
