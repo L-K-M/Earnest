@@ -5,9 +5,10 @@ export const responseLimit = 100
 export const maxResponseBytes = 2 * 1024 * 1024
 
 // warmLimit bounds how many article bodies a river page prefetches for offline
-// reading. The first entries of a page are the newest and the most likely to be
-// read next, so warming them keeps the next screen available offline without
-// downloading the whole backlog on every page.
+// reading. A forward river page is ordered oldest-first, so its first entries
+// are the top of the list and the ones the user reads next. Warming them keeps
+// the next screen available offline without downloading the whole backlog on
+// every page.
 export const warmLimit = 10
 
 export function cacheKind(raw: string, origin: string, method='GET'): 'shell' | 'content' | 'reading' | 'resource' | null {
