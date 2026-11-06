@@ -21,10 +21,12 @@ function statusLabel(state: EntryState): string {
   return state.seen.value === 'seen' ? 'Seen' : 'Unread'
 }
 
-export function River({view, subscriptions, actions, selected, onSelect, onOpen, shortcuts, counts, summary, onHelp, since = '1970-01-01T00:00:00Z', sessionStart = '1970-01-01T00:00:00Z'}: {since?:string; sessionStart?:string; view: View; subscriptions: Subscription[]; actions: ReaderActions; selected: Entry | null; onSelect: (entry: Entry) => void; onOpen: (entry: Entry) => void; shortcuts: boolean; counts: boolean; summary: SessionSummary; onHelp: () => void}) {
+export function River({view, subscriptions, actions, selected, onSelect, onOpen, shortcuts, counts, summary, since = '1970-01-01T00:00:00Z', sessionStart = '1970-01-01T00:00:00Z'}: {since?:string; sessionStart?:string; view: View; subscriptions: Subscription[]; actions: ReaderActions; selected: Entry | null; onSelect: (entry: Entry) => void; onOpen: (entry: Entry) => void; shortcuts: boolean; counts: boolean; summary: SessionSummary}) {
   const pipeline = usePipeline()
   const key = viewKey(view)
   const scroller = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  const [scrollMargin, setScrollMargin] = useState(0)
   const heading = useRef<HTMLHeadingElement>(null)
   const seen = useRef(new Set<number>())
   const pending = useRef(new Set<number>())
@@ -53,7 +55,28 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     for (const group of page.groups ?? []) clusterInfo.set(group.entry.id, group.also_in)
   }
   // eslint-disable-next-line react-hooks/incompatible-library -- Virtual owns mutable scroll measurements; this app does not use React Compiler.
-  const virtual = useVirtualizer({count: entries.length, getScrollElement: () => scroller.current, estimateSize: () => 100, overscan: 5, getItemKey: index => entries[index].id})
+  const virtual = useVirtualizer({count: entries.length, getScrollElement: () => scroller.current, estimateSize: () => 100, overscan: 5, scrollMargin, getItemKey: index => entries[index].id})
+  // The Today panel sits above the list inside the scroller, so the list's own
+  // top is offset from the scroller's content origin. The virtualizer needs
+  // that offset as scrollMargin to report row positions in scroller
+  // coordinates; the seen logic and row transforms then line up.
+  const measureScrollMargin = useCallback(() => {
+    const root = scroller.current
+    const element = listRef.current
+    if (!root || !element) return
+    setScrollMargin(element.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop)
+  }, [])
+  useEffect(() => {
+    measureScrollMargin()
+    const root = scroller.current
+    const element = listRef.current
+    if (typeof ResizeObserver === 'undefined' || !root || !element) return
+    const observer = new ResizeObserver(measureScrollMargin)
+    observer.observe(element)
+    const panel = root.firstElementChild
+    if (panel && panel !== element) observer.observe(panel)
+    return () => observer.disconnect()
+  }, [measureScrollMargin])
   const visible = virtual.getVirtualItems()
   const actionsRef = useRef(actions)
   useEffect(() => { actionsRef.current = actions }, [actions])
@@ -122,7 +145,6 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
       if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || !shortcutsAllowed(event.target, shortcuts)) return
       const index = entries.findIndex(entry => entry.id === selected?.id)
       const entry = entries[Math.max(0, index)]
-      if (event.key === '?') { event.preventDefault(); onHelp(); return }
       if (!entry) return
       if (event.key === 'j' || event.key === 'k') {
         event.preventDefault()
@@ -139,7 +161,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     }
     window.addEventListener('keydown', keyboard)
     return () => window.removeEventListener('keydown', keyboard)
-  }, [entries, selected, shortcuts, onSelect, open, onHelp, virtual, actions])
+  }, [entries, selected, shortcuts, onSelect, open, virtual, actions])
 
   const unread = entries.filter(entry => { const state = actions.state(entry); return state.seen.value === 'unseen' && state.shelf.value !== 'done' }).length
   return <main className="river" aria-label="Articles">
@@ -149,14 +171,14 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     {view.kind === 'edition' && <Edition onOpen={onOpen}/>}
     <div className="river-scroll" ref={scroller} onScroll={markScrolledPast} tabIndex={0} aria-label="Article list">
       {view.kind === 'today' && <TodayAgents since={since} onOpen={onOpen}/>}
-      <div className="virtual-list" style={{height: virtual.getTotalSize()}} role="list">
+      <div ref={listRef} className="virtual-list" style={{height: virtual.getTotalSize()}} role="list">
         {visible.map(row => {
           const entry = entries[row.index]
           const state = actions.state(entry)
           const source = subscriptions.find(sub => sub.id === entry.subscription_id)?.title || 'Feed'
           const group = view.kind === 'edition' && (row.index === 0 || entries[row.index - 1].subscription_id !== entry.subscription_id)
           const alsoIn = clusterInfo.get(entry.id) ?? 0
-          return <div className="virtual-row" key={entry.id} role="listitem" data-entry={entry.id} style={{height: row.size, transform: `translateY(${row.start}px)`}}>
+          return <div className="virtual-row" key={entry.id} role="listitem" data-entry={entry.id} style={{height: row.size, transform: `translateY(${row.start - virtual.options.scrollMargin}px)`}}>
             {group && <h3 className="feed-group">{source}</h3>}
             <button className="entry" aria-current={selected?.id === entry.id ? 'true' : undefined} onFocus={() => onSelect(entry)} onClick={() => open(entry)}><strong>{entry.title || 'Untitled'}</strong>{pipeline.status.blurb === 'enabled' && entry.blurb && <span>{entry.blurb}</span>}<span>{source} · {statusLabel(state)}{state.kept.value === true ? ' · Kept' : ''}{cluster && alsoIn > 0 ? ` · also in ${alsoIn}` : ''}</span></button>
           </div>

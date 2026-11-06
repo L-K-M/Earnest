@@ -39,10 +39,16 @@ export async function registerOffline(): Promise<void> {
 
 export async function clearOffline(): Promise<void> {
   // The acknowledgement fences in-flight prefetch writes before sign-out ends.
+  // The push worker can own the root registration, so look every registration
+  // up by script URL instead of assuming the controlling worker is offline.
   const controller = navigator.serviceWorker?.controller
-  const worker = controller && new URL(controller.scriptURL).pathname === '/offline-worker.js'
-    ? controller : (await navigator.serviceWorker?.getRegistration('/'))?.active
-  if (worker && new URL(worker.scriptURL).pathname === '/offline-worker.js') await new Promise<void>((resolve,reject) => {
+  const registrations = await navigator.serviceWorker?.getRegistrations?.() ?? []
+  const workers = registrations
+    .map(registration => registration.active ?? registration.waiting ?? registration.installing)
+    .filter((worker): worker is ServiceWorker => worker != null)
+  const worker = (controller && new URL(controller.scriptURL).pathname === '/offline-worker.js' ? controller : undefined)
+    ?? workers.find(worker => new URL(worker.scriptURL).pathname === '/offline-worker.js')
+  if (worker) await new Promise<void>((resolve,reject) => {
     const channel = new MessageChannel()
     const timeout = window.setTimeout(() => {channel.port1.close();reject(new Error('Could not clear offline reading copies. Retry sign out.'))},5000)
     channel.port1.onmessage = () => {window.clearTimeout(timeout);channel.port1.close();resolve()}
