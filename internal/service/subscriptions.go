@@ -370,11 +370,35 @@ func (s *Service) subscribeTx(ctx context.Context, tx pgx.Tx, a Actor, rawURL st
 	return sub, nil
 }
 
-const subscriptionStateBatchSize = 500
+const (
+	subscriptionStateBatchSize = 500
+	// subscriptionBackfillLimit caps how many entries of the bootstrap window
+	// a subscribe revisions inside LockCore.
+	subscriptionBackfillLimit = 1000
+)
 
-// Backfill events cover entries whose IDs a concurrent bootstrap already passed.
+// Backfill events cover entries whose IDs a concurrent bootstrap already
+// passed. The selection is bounded twice: only the bootstrap window
+// qualifies, because older entries are never bootstrap-deliverable, so
+// events for them would only bloat the change log while LockCore is held;
+// and at most subscriptionBackfillLimit of the newest by seq, so a feed
+// with a large in-window backlog cannot hold the lock for long either.
+//
+// Entries outside the bound get no entry_revisions stamp and no event.
+// That is safe because no read requires the stamp: entry listing, single
+// reads and bootstrap pages all left-join entry_revisions and coalesce a
+// missing row to rev 0; the river derives its contents from the
+// subscription's initial_since and initial_through_seq over live tables;
+// and /v1/entries history views list every entry through the shared feed
+// join regardless. The only loss is that a bootstrap racing the subscribe
+// can miss create events for the excluded tail: a later bootstrap still
+// delivers every in-window entry, and older entries were never
+// bootstrap-deliverable anyway.
 func (s *Service) backfillSubscription(ctx context.Context, tx pgx.Tx, user int64, sub Subscription) error {
-	rows, err := tx.Query(ctx, `SELECT id,seq,first_seen_at,published_at,deleted_at IS NOT NULL FROM entries WHERE feed_id=$1 ORDER BY id`, sub.FeedID)
+	rows, err := tx.Query(ctx, `SELECT id,seq,first_seen_at,published_at,deleted_at IS NOT NULL FROM (
+  SELECT id,seq,first_seen_at,published_at,deleted_at FROM entries
+  WHERE feed_id=$1 AND first_seen_at>=$2 ORDER BY seq DESC LIMIT $3) bounded ORDER BY seq`,
+		sub.FeedID, s.now().UTC().Add(-bootstrapWindow), subscriptionBackfillLimit)
 	if err != nil {
 		return fmt.Errorf("subscription backfill: %w", err)
 	}
@@ -395,21 +419,25 @@ func (s *Service) backfillSubscription(ctx context.Context, tx pgx.Tx, user int6
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("read subscription backfill: %w", err)
 	}
-	for _, e := range entries {
-		rev, err := changeRev(ctx, tx, user)
+	if len(entries) > 0 {
+		allocation, err := store.AllocateCounters(ctx, tx, 0, map[int64]int64{user: int64(len(entries))})
 		if err != nil {
 			return err
 		}
-		e.Rev = uint64(rev)
-		if _, err := tx.Exec(ctx, `INSERT INTO entry_revisions(user_id,entry_id,rev) VALUES($1,$2,$3) ON CONFLICT(user_id,entry_id) DO UPDATE SET rev=EXCLUDED.rev`, user, int64(e.ID), rev); err != nil {
-			return fmt.Errorf("stamp subscription backfill: %w", err)
-		}
-		kind := syncmodel.EntryCreated
-		if e.Deleted {
-			kind = syncmodel.EntryDeleted
-		}
-		if err := s.emitChange(ctx, tx, user, rev, kind, "entry", e); err != nil {
-			return err
+		rev := allocation.Revs[user].First
+		for _, e := range entries {
+			e.Rev = uint64(rev)
+			if _, err := tx.Exec(ctx, `INSERT INTO entry_revisions(user_id,entry_id,rev) VALUES($1,$2,$3) ON CONFLICT(user_id,entry_id) DO UPDATE SET rev=EXCLUDED.rev`, user, int64(e.ID), rev); err != nil {
+				return fmt.Errorf("stamp subscription backfill: %w", err)
+			}
+			kind := syncmodel.EntryCreated
+			if e.Deleted {
+				kind = syncmodel.EntryDeleted
+			}
+			if err := s.emitChange(ctx, tx, user, rev, kind, "entry", e); err != nil {
+				return err
+			}
+			rev++
 		}
 	}
 
