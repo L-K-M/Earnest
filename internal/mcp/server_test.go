@@ -412,6 +412,9 @@ func TestPlainTextBriefingReplayAndScopes(t *testing.T) {
 	}
 	var multi briefing
 	decodeOutput(t, call(t, f, "get_briefing", briefingArgs{IncludeSummaries: true}), &multi)
+	if got := multi.Groups[0].Entries[0].Summaries; len(got) != 1 || got[0].ID != summary.ID {
+		t.Fatalf("first stored summary missing after adding second: %+v", got)
+	}
 	if got := multi.Groups[1].Entries[0].Summaries; len(got) != 1 || got[0].ID != summary2.ID {
 		t.Fatalf("second stored summary: %+v", got)
 	}
