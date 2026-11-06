@@ -222,6 +222,7 @@ class AppViewModel internal constructor(
                         expired = expired,
                     ) }
                 }
+                refreshWidgets(getApplication())
             } catch (error: ApiException) {
                 if (!isCurrent(session, cache)) return@launch
                 if (error.isUnauthorized) {

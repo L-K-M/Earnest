@@ -31,6 +31,7 @@ internal class SyncWorker(context: Context, params: WorkerParameters) : Coroutin
                 cache.refreshAgentChanges(api)
             }
             SyncAccess.committed.tryEmit(session.identity.cacheKey)
+            refreshWidgets(applicationContext)
             Result.success()
         } catch (error: ApiException) {
             if (error.isUnauthorized && secrets.current() == session) secrets.clearToken()
