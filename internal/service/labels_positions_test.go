@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"testing"
 
@@ -214,6 +215,276 @@ func TestLabelsService(t *testing.T) {
 	})
 }
 
+func TestLabelsBulkService(t *testing.T) {
+	template := storetest.NewTemplate(t)
+	f := entriesTestNew(t, template)
+	ctx := context.Background()
+	user := f.a.UserID
+	feed := entriesTestFeed(t, f.db, "https://entriesTest-bulk.test/rss", 0)
+	entriesTestSub(t, f.db, user, feed, "today")
+	ids := f.ingestMany(t, feed, "bulk", 400, f.now())
+	foreignFeed := entriesTestFeed(t, f.db, "https://entriesTest-bulk-foreign.test/rss", 0)
+	foreign := f.ingest(t, foreignFeed, "foreign", f.now())
+	f.setClock(entriesTestBase)
+
+	membershipEntries := func(label int64) map[int64]bool {
+		rows, err := f.db.Pool().Query(ctx, "SELECT entry_id, deleted_at IS NOT NULL FROM entry_labels WHERE user_id=$1 AND label_id=$2", user, label)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		out := map[int64]bool{}
+		for rows.Next() {
+			var id int64
+			var deleted bool
+			if err := rows.Scan(&id, &deleted); err != nil {
+				t.Fatal(err)
+			}
+			out[id] = deleted
+		}
+		return out
+	}
+	labelEvents := func(label int64, kind string) []map[string]any {
+		rows, err := f.db.Pool().Query(ctx, `SELECT rev, payload FROM changes WHERE user_id=$1 AND type=$2 AND (payload->>'label_id')::bigint=$3 ORDER BY rev`, user, kind, label)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var out []map[string]any
+		for rows.Next() {
+			var rev int64
+			var body []byte
+			if err := rows.Scan(&rev, &body); err != nil {
+				t.Fatal(err)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatal(err)
+			}
+			payload["_rev"] = rev
+			out = append(out, payload)
+		}
+		return out
+	}
+	activeCount := func(label int64) int {
+		var n int
+		if err := f.db.Pool().QueryRow(ctx, "SELECT count(*) FROM entry_labels WHERE user_id=$1 AND label_id=$2 AND deleted_at IS NULL", user, label).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	t.Run("add_matches_repeated_single_calls", func(t *testing.T) {
+		bulk, err := f.s.CreateLabel(ctx, f.a, "entriesTest bulk", "bk-create")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := f.s.AddLabels(ctx, f.a, bulk.ID, ids, "bk-add")
+		if err != nil || len(got) != len(ids) {
+			t.Fatalf("bulk add: %d %v", len(got), err)
+		}
+		for i, m := range got {
+			if m.ID == 0 || m.Rev == 0 || m.EntryID != ids[i] || m.LabelID != bulk.ID || m.Deleted {
+				t.Fatalf("membership %d: %+v", i, m)
+			}
+		}
+		if n := activeCount(bulk.ID); n != len(ids) {
+			t.Fatalf("active memberships: %d", n)
+		}
+		// The same edit through repeated single calls must reach the same
+		// state: identical active entry set and one event per membership.
+		seq, err := f.s.CreateLabel(ctx, f.a, "entriesTest seq", "bk-create-seq")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, id := range ids {
+			if _, err := f.s.AddLabel(ctx, f.a, seq.ID, id, fmt.Sprintf("bk-seq-%d", id)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		bulkSet, seqSet := membershipEntries(bulk.ID), membershipEntries(seq.ID)
+		if len(bulkSet) != len(seqSet) {
+			t.Fatalf("membership sets differ: %d vs %d", len(bulkSet), len(seqSet))
+		}
+		for id := range seqSet {
+			if _, ok := bulkSet[id]; !ok {
+				t.Fatalf("bulk missing entry %d", id)
+			}
+		}
+		added := labelEvents(bulk.ID, "label.added")
+		if len(added) != len(ids) {
+			t.Fatalf("bulk events: %d", len(added))
+		}
+		var prevRev int64
+		for i, payload := range added {
+			obj, _ := payload["object"].(map[string]any)
+			if obj["kind"] != "label" || obj["deleted"] != false {
+				t.Fatalf("event %d object: %v", i, obj)
+			}
+			if int64(obj["entry_id"].(float64)) != ids[i] || uint64(obj["rev"].(float64)) != got[i].Rev || int64(obj["rev"].(float64)) != payload["_rev"].(int64) {
+				t.Fatalf("event %d rev/object: %v", i, payload)
+			}
+			if i > 0 && payload["_rev"].(int64) != prevRev+1 {
+				t.Fatalf("revisions not contiguous at %d", i)
+			}
+			prevRev = payload["_rev"].(int64)
+		}
+		// A repeat of the whole set is a recorded no-op: same rows, no events.
+		again, err := f.s.AddLabels(ctx, f.a, bulk.ID, ids, "bk-add-again")
+		if err != nil || len(again) != len(ids) {
+			t.Fatalf("repeat add: %v", err)
+		}
+		for i, m := range again {
+			if m != got[i] {
+				t.Fatalf("repeat changed membership %d: %+v vs %+v", i, m, got[i])
+			}
+		}
+		if n := len(labelEvents(bulk.ID, "label.added")); n != len(ids) {
+			t.Fatalf("repeat emitted %d events", n)
+		}
+	})
+
+	t.Run("add_stops_at_first_invalid_entry", func(t *testing.T) {
+		label, err := f.s.CreateLabel(ctx, f.a, "entriesTest mixed", "mx-create")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mixed := []int64{ids[0], ids[1], foreign, ids[2]}
+		got, err := f.s.AddLabels(ctx, f.a, label.ID, mixed, "mx-add")
+		if !errors.Is(err, ErrNotFound) || len(got) != 2 {
+			t.Fatalf("mixed add: %d %v", len(got), err)
+		}
+		set := membershipEntries(label.ID)
+		if len(set) != 2 || !setContains(set, ids[0], false) || !setContains(set, ids[1], false) {
+			t.Fatalf("prefix memberships: %v", set)
+		}
+		// The same list through repeated single calls stops identically.
+		seq, err := f.s.CreateLabel(ctx, f.a, "entriesTest mixed seq", "mx-create-seq")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var loopErr error
+		for i, id := range mixed {
+			if _, loopErr = f.s.AddLabel(ctx, f.a, seq.ID, id, fmt.Sprintf("mx-seq-%d", i)); loopErr != nil {
+				break
+			}
+		}
+		if !errors.Is(loopErr, ErrNotFound) {
+			t.Fatalf("sequential error: %v", loopErr)
+		}
+		if set := membershipEntries(seq.ID); len(set) != 2 || !setContains(set, ids[0], false) || !setContains(set, ids[1], false) {
+			t.Fatalf("sequential prefix: %v", set)
+		}
+		// A nonpositive id mid-list reports Invalid with its prefix applied.
+		got, err = f.s.AddLabels(ctx, f.a, label.ID, []int64{ids[3], 0, ids[4]}, "mx-badid")
+		if !errors.Is(err, ErrInvalid) || len(got) != 1 || got[0].EntryID != ids[3] {
+			t.Fatalf("bad id add: %+v %v", got, err)
+		}
+		if set := membershipEntries(label.ID); len(set) != 3 {
+			t.Fatalf("memberships after bad id: %v", set)
+		}
+		// The failing op's record replays identically rather than re-applying.
+		replayed, err := f.s.AddLabels(ctx, f.a, label.ID, mixed, "mx-add")
+		if !errors.Is(err, ErrNotFound) || len(replayed) != 2 {
+			t.Fatalf("failed replay: %d %v", len(replayed), err)
+		}
+	})
+
+	t.Run("remove_skips_missing_and_matches_loop", func(t *testing.T) {
+		label, err := f.s.CreateLabel(ctx, f.a, "entriesTest remove", "rm-create")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.s.AddLabels(ctx, f.a, label.ID, ids[:200], "rm-add"); err != nil {
+			t.Fatal(err)
+		}
+		// An invisible entry still holding a membership is tombstoned, exactly
+		// like RemoveLabel, which never checks visibility.
+		if _, err := f.db.Pool().Exec(ctx, "INSERT INTO entry_labels(user_id,entry_id,label_id,rev) VALUES($1,$2,$3,1)", user, foreign, label.ID); err != nil {
+			t.Fatal(err)
+		}
+		missing := ids[len(ids)-1] + 99999
+		got, err := f.s.RemoveLabels(ctx, f.a, label.ID, []int64{ids[0], foreign, missing, ids[1], ids[2]}, "rm-1")
+		if err != nil || len(got) != 4 {
+			t.Fatalf("remove: %d %v", len(got), err)
+		}
+		for _, m := range got {
+			if !m.Deleted || m.Rev == 0 {
+				t.Fatalf("tombstone: %+v", m)
+			}
+		}
+		set := membershipEntries(label.ID)
+		for _, id := range []int64{ids[0], ids[1], ids[2], foreign} {
+			if !setContains(set, id, true) {
+				t.Fatalf("not tombstoned: %d %v", id, set)
+			}
+		}
+		removed := labelEvents(label.ID, "label.removed")
+		if len(removed) != 4 {
+			t.Fatalf("removed events: %d", len(removed))
+		}
+		// Missing memberships and labels are skipped, not errors.
+		if got, err := f.s.RemoveLabels(ctx, f.a, label.ID, []int64{missing, ids[0]}, "rm-2"); err != nil || len(got) != 0 {
+			t.Fatalf("re-remove: %d %v", len(got), err)
+		}
+		if got, err := f.s.RemoveLabels(ctx, f.a, label.ID+99, ids[:3], "rm-3"); err != nil || len(got) != 0 {
+			t.Fatalf("missing label: %d %v", len(got), err)
+		}
+		// A nonpositive id still stops the set with the prefix committed.
+		got, err = f.s.RemoveLabels(ctx, f.a, label.ID, []int64{ids[3], 0, ids[4]}, "rm-4")
+		if !errors.Is(err, ErrInvalid) || len(got) != 1 {
+			t.Fatalf("bad id remove: %+v %v", got, err)
+		}
+		if set := membershipEntries(label.ID); !setContains(set, ids[3], true) || !setContains(set, ids[4], false) {
+			t.Fatalf("bad id prefix: %v", set)
+		}
+	})
+
+	t.Run("replay_and_validation", func(t *testing.T) {
+		label, err := f.s.CreateLabel(ctx, f.a, "entriesTest replay", "rp-create")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := f.s.AddLabels(ctx, f.a, label.ID, ids[:20], "rp-add")
+		if err != nil || len(got) != 20 {
+			t.Fatal(err)
+		}
+		replayed, err := f.s.AddLabels(ctx, f.a, label.ID, ids[:20], "rp-add")
+		if err != nil || len(replayed) != 20 {
+			t.Fatal(err)
+		}
+		for i := range got {
+			if got[i] != replayed[i] {
+				t.Fatalf("replay %d: %+v vs %+v", i, got[i], replayed[i])
+			}
+		}
+		if n := len(labelEvents(label.ID, "label.added")); n != 20 {
+			t.Fatalf("replay emitted %d events", n)
+		}
+		agent := entriesTestAgent(t, f.db, user, "bulklbot", ScopeEntriesRead, ScopeStateWrite)
+		if _, err := f.s.AddLabels(ctx, agent, label.ID, ids[:1], "rp-agent"); !errors.Is(err, ErrForbidden) {
+			t.Fatal("agent bulk add", err)
+		}
+		if _, err := f.s.RemoveLabels(ctx, agent, label.ID, ids[:1], "rp-agent-rm"); !errors.Is(err, ErrForbidden) {
+			t.Fatal("agent bulk remove", err)
+		}
+		if _, err := f.s.AddLabels(ctx, f.a, 0, ids[:1], "rp-badlabel"); !errors.Is(err, ErrInvalid) {
+			t.Fatal("bad label", err)
+		}
+		if _, err := f.s.AddLabels(ctx, f.a, label.ID, ids[:1], ""); !errors.Is(err, ErrInvalid) {
+			t.Fatal("empty op", err)
+		}
+		if got, err := f.s.AddLabels(ctx, f.a, label.ID, nil, "rp-empty"); err != nil || len(got) != 0 {
+			t.Fatalf("empty set: %v", err)
+		}
+	})
+}
+
+func setContains(set map[int64]bool, id int64, deleted bool) bool {
+	d, ok := set[id]
+	return ok && d == deleted
+}
+
 func TestPositionsService(t *testing.T) {
 	template := storetest.NewTemplate(t)
 	f := entriesTestNew(t, template)
@@ -315,4 +586,37 @@ func TestPositionsService(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestBulkLabelsDeduplicateIDs pins the batch contract: a repeated entry id
+// must not crash the batched upsert (one ON CONFLICT clause cannot touch the
+// same row twice) or double-apply the membership change.
+func TestBulkLabelsDeduplicateIDs(t *testing.T) {
+	template := storetest.NewTemplate(t)
+	f := entriesTestNew(t, template)
+	ctx := context.Background()
+	user := f.a.UserID
+	feed := entriesTestFeed(t, f.db, "https://entriesTest-dup.test/rss", 0)
+	entriesTestSub(t, f.db, user, feed, "today")
+	e1 := f.ingest(t, feed, "dup", f.now())
+	f.setClock(entriesTestBase)
+	label, err := f.s.CreateLabel(ctx, f.a, "dup", "op-dup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	twice := []int64{e1, e1}
+	added, err := f.s.AddLabels(ctx, f.a, label.ID, twice, "op-add")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(added) != 1 {
+		t.Fatalf("add applied %d rows for one entry: %+v", len(added), added)
+	}
+	removed, err := f.s.RemoveLabels(ctx, f.a, label.ID, twice, "op-remove")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 1 {
+		t.Fatalf("remove applied %d rows for one entry: %+v", len(removed), removed)
+	}
 }
