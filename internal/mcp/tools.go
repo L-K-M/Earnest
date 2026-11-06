@@ -240,12 +240,30 @@ func getBriefing(ctx context.Context, svc *service.Service, a service.Actor, arg
 		{Cadence: service.CadenceToday, Entries: []compactEntry{}},
 		{Cadence: service.CadenceWeek, Entries: []compactEntry{}},
 	}
+	// One batched lookup replaces a query per entry. Annotations can name
+	// several entries (briefs), so index them by every ID they carry.
+	summaries := map[int64][]service.Annotation{}
+	if args.IncludeSummaries {
+		ids := make([]int64, 0, len(entries))
+		for _, e := range entries {
+			ids = append(ids, e.ID)
+		}
+		// Summaries are upserted one per (principal, kind, entry set), so a
+		// page of at most maxPageSize entries can match at most maxPageSize
+		// annotations; the limit cannot starve later entries.
+		annotations, err := svc.ListAnnotations(ctx, a, service.AnnotationQuery{EntryIDs: ids, Kind: service.AnnotationSummary, Limit: maxPageSize})
+		if err != nil {
+			return nil, err
+		}
+		for _, annotation := range annotations {
+			for _, id := range annotation.EntryIDs {
+				summaries[id] = append(summaries[id], annotation)
+			}
+		}
+	}
 	for _, entry := range compact(entries) {
 		if args.IncludeSummaries {
-			entry.Summaries, err = svc.ListAnnotations(ctx, a, service.AnnotationQuery{EntryIDs: []int64{entry.ID}, Kind: service.AnnotationSummary, Limit: maxPageSize})
-			if err != nil {
-				return nil, err
-			}
+			entry.Summaries = summaries[entry.ID]
 		}
 		for i := range groups {
 			if groups[i].Cadence == cadences[entry.SubscriptionID] {

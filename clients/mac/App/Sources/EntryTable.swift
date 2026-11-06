@@ -2,7 +2,7 @@ import Foundation
 import AppKit
 import SwiftUI
 
-private enum TableItem {
+private enum TableItem: Equatable {
     case header(String)
     case entry(EntryRow)
 
@@ -52,10 +52,16 @@ struct EntryTable: NSViewRepresentable {
         coordinator.updating = true
         defer { coordinator.updating = false }
         coordinator.parent = self
-        coordinator.items = items
-        table.reloadData()
+        let newItems = items
+        // Reload only when the rows actually changed: j/k selection updates
+        // otherwise rebuilt every visible row view on each key press.
+        if coordinator.items != newItems {
+            coordinator.items = newItems
+            table.reloadData()
+        }
         if let selection, let row = coordinator.items.firstIndex(where: { $0.entryID == selection }) {
             table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            table.scrollRowToVisible(row)
         } else {
             table.deselectAll(nil)
         }
