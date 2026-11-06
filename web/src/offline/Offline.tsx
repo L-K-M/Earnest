@@ -42,10 +42,10 @@ export async function clearOffline(): Promise<void> {
   // The push worker can own the root registration, so look every registration
   // up by script URL instead of assuming the controlling worker is offline.
   const controller = navigator.serviceWorker?.controller
-  const registrations = await navigator.serviceWorker?.getRegistrations() ?? []
+  const registrations = await navigator.serviceWorker?.getRegistrations?.() ?? []
   const workers = registrations
     .map(registration => registration.active ?? registration.waiting ?? registration.installing)
-    .filter((worker): worker is ServiceWorker => worker !== null)
+    .filter((worker): worker is ServiceWorker => worker != null)
   const worker = (controller && new URL(controller.scriptURL).pathname === '/offline-worker.js' ? controller : undefined)
     ?? workers.find(worker => new URL(worker.scriptURL).pathname === '/offline-worker.js')
   if (worker) await new Promise<void>((resolve,reject) => {
