@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 )
 
@@ -72,9 +73,16 @@ func ntfyBody(dev Device, msg Message) string {
 	return msg.Body
 }
 
-// hasURL reports whether s contains something shaped like an absolute URI.
+// bareHostRE matches a host-shaped token without a scheme, such as
+// example.com, bit.ly/abc or www.example.com. ntfy clients auto-link these just
+// like absolute URIs, so they carry the same open-tracking risk. The leading
+// boundary keeps ordinary words and decimal numbers from matching.
+var bareHostRE = regexp.MustCompile(`(?i)(?:^|[^@\w])((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,})(?:[^@\w]|$)`)
+
+// hasURL reports whether s contains something shaped like a URL, with or
+// without a scheme.
 func hasURL(s string) bool {
-	return strings.Contains(strings.ToLower(s), "://")
+	return strings.Contains(strings.ToLower(s), "://") || bareHostRE.MatchString(s)
 }
 
 // ntfyPriority maps the closed category onto an ntfy priority: alerts are

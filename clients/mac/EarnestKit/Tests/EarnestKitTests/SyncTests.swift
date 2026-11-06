@@ -467,3 +467,29 @@ private func change(_ rev: Int64, _ type: String, _ payload: APIValue) -> APICha
     #expect(try engine.snapshot().states.map(\.entryID) == [2])
     #expect(try engine.snapshot().outbox.isEmpty)
 }
+
+@Test func bulkStatesMatchPerEntryStates() throws {
+    let engine = SyncEngine(store: MemorySyncStore())
+    let cursor = Cursor(generation: "g1", rev: 1)
+    try engine.bootstrap(cursor)
+    try engine.mergeEntry(SyncEntry(id: 1, subscriptionID: 1, seq: 1, rev: 1))
+    try engine.mergeEntry(SyncEntry(id: 2, subscriptionID: 1, seq: 2, rev: 1))
+    var state = State(principal: 1, entryID: 1)
+    state.shelf = Stamp(value: .text("done"), rev: 1)
+    try engine.mergeBootstrap([state])
+    try engine.queue(Write(opID: "keep", principal: 1, entryID: 2, register: .kept, value: .flag(true), base: cursor, occurredAt: base))
+    // The bulk read must apply the same overlay as the per-entry path,
+    // including a queued write and an uncached entry.
+    let bulk = try engine.states(principal: 1, entryIDs: [1, 2, 3])
+    #expect(bulk.count == 3)
+    for id in [Int64(1), 2, 3] {
+        let single = try engine.state(principal: 1, entryID: id)
+        #expect(bulk[id]?.seen.value == single.seen.value)
+        #expect(bulk[id]?.seen.rev == single.seen.rev)
+        #expect(bulk[id]?.shelf.value == single.shelf.value)
+        #expect(bulk[id]?.shelf.rev == single.shelf.rev)
+        #expect(bulk[id]?.kept.value == single.kept.value)
+        #expect(bulk[id]?.kept.rev == single.kept.rev)
+    }
+    #expect(bulk[2]?.kept.value == .flag(true))
+}
