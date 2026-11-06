@@ -141,6 +141,7 @@ private fun MainScaffold(
     LaunchedEffect(selected, state.accountKey) {
         reader.load(selected, state.accountKey) { id ->
             if (model.loadEntry(id) == null) throw java.io.IOException("This entry is no longer available.")
+            model.markSeen(id)
             model.openEntry(id)
         }
     }
@@ -394,7 +395,7 @@ private fun EntryListScreen(
     onUnkeep: (Long) -> Unit,
 ) {
     val listState = rememberLazyListState()
-    MarkSeenOnRender(entries, principalId, listState, onSeen)
+    MarkSeenOnScroll(entries, principalId, listState, onSeen)
     LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
         if (briefs.isNotEmpty()) {
             item(key = "briefs") {
@@ -448,7 +449,7 @@ private fun EntryListScreen(
 }
 
 @Composable
-private fun MarkSeenOnRender(
+private fun MarkSeenOnScroll(
     entries: List<CachedEntry>,
     principalId: Long,
     listState: androidx.compose.foundation.lazy.LazyListState,
@@ -456,16 +457,19 @@ private fun MarkSeenOnRender(
 ) {
     // Resetting with the principal keeps offline launches from losing marks:
     // rows are marked again once the principal is known.
-    val marked = remember(principalId) { mutableSetOf<Long>() }
+    val tracker = remember(principalId) { PassiveSeenTracker() }
     LaunchedEffect(listState, entries, principalId) {
         if (principalId == 0L) return@LaunchedEffect
-        snapshotFlow { listState.layoutInfo.visibleItemsInfo.map { it.key } }
+        snapshotFlow {
+            SeenViewport(
+                firstVisibleIndex = listState.firstVisibleItemIndex,
+                visible = listState.layoutInfo.visibleItemsInfo.mapNotNull { item ->
+                    (item.key as? Long)?.let { key -> key to item.index }
+                }.toMap(),
+            )
+        }
             .distinctUntilChanged()
-            .collect { keys ->
-                keys.filterIsInstance<Long>().forEach { key ->
-                    if (marked.add(key)) onSeen(key)
-                }
-            }
+            .collect { viewport -> tracker.observe(viewport).forEach(onSeen) }
     }
 }
 

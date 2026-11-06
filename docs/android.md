@@ -47,10 +47,12 @@ and caches article content when you open it. Lists work without a connection;
 the reader falls back to the cached content when the signed content URL cannot
 be fetched. Swipe a row left a short distance for Later, or a long distance
 for Done; the label appears during the gesture and an undo action is offered
-in a snackbar. Rows mark themselves seen as they render, while Today keeps
-its session membership stable. Passive seen updates do not remove rows or
-expose more rows to automatic marking. Later and Done remove rows immediately;
-refresh starts a new membership from the current effective state. Cached
+in a snackbar. A row marks itself seen once it has been on screen and then
+scrolls out through the top edge, or when you open it; rows visible on first
+composition, or never composed, stay unseen. Today keeps its session
+membership stable: passive seen updates do not remove rows or expose more
+rows to automatic marking. Later and Done remove rows immediately; refresh
+starts a new membership from the current effective state. Cached
 subscription cadences are restored before a network request, so Today and
 Edition also work on an offline cold launch.
 
@@ -121,9 +123,10 @@ permission must be granted on Android 13+.
 `:core:test` runs the shared sync vectors and the OpenAPI contract test;
 `:app:testDebugUnitTest` covers snapshot replacement failure, concurrent
 foreground/background writes, account isolation, offline cadence restoration,
-Today session membership, missing notification metadata, agent-change retrieval,
-WebView error fallback, deep-link parsing, brief labels, widget headline
-selection, theme persistence, notification channels and server notification text.
+Today session membership, passive seen on scroll, missing notification metadata,
+agent-change retrieval, WebView error fallback, deep-link parsing, brief labels,
+widget headline selection, theme persistence, notification channels and server
+notification text.
 Core repository tests exercise real wire payloads, batch boundaries, in-flight
 retries, entry hydration and sibling subscription projections. Room regressions
 use Robolectric's native SQLite mode on Apple silicon because legacy SQLite

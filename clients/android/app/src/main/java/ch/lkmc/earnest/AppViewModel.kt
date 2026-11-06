@@ -187,7 +187,7 @@ class AppViewModel internal constructor(
     }
 
     fun markSeen(entryId: Long) {
-        queue(entryId, SyncEngine.REGISTER_SEEN, JsonPrimitive(SyncEngine.VALUE_SEEN), SyncEngine.KIND_PASSIVE, "render")
+        queue(entryId, SyncEngine.REGISTER_SEEN, JsonPrimitive(SyncEngine.VALUE_SEEN), SyncEngine.KIND_PASSIVE, "seen")
     }
 
     fun later(entryId: Long, onSaved: () -> Unit = {}) {
