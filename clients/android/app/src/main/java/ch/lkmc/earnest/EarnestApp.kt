@@ -21,9 +21,12 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -317,6 +320,7 @@ private fun EarnestTopBar(
     onThemeChange: (ThemeSetting) -> Unit,
 ) {
     var themeOpen by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
     TopAppBar(
         title = { Text(title) },
         actions = {
@@ -332,6 +336,18 @@ private fun EarnestTopBar(
                 }
             }
             TextButton(onClick = { themeOpen = true }) { Text("Theme") }
+            IconButton(onClick = { menuOpen = true }) {
+                Icon(Icons.Filled.MoreVert, contentDescription = "More options")
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Sign out") },
+                        onClick = {
+                            menuOpen = false
+                            model.logout()
+                        },
+                    )
+                }
+            }
         },
     )
     if (themeOpen) {
@@ -426,6 +442,10 @@ private fun EntryListScreen(
             if (effective.kept.value == kotlinx.serialization.json.JsonPrimitive(true)) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
                     TextButton(onClick = { onUnkeep(entry.id) }) { Text("Unkeep") }
+                }
+            } else {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                    TextButton(onClick = { onKeep(entry.id) }) { Text("Keep") }
                 }
             }
         }
