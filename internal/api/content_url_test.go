@@ -47,7 +47,9 @@ func TestContentURLActors(t *testing.T) {
 			if result.URL == "" || result.ExpiresAt.IsZero() {
 				t.Fatalf("result = %+v", result)
 			}
-			if lifetime := time.Until(result.ExpiresAt); lifetime <= 4*time.Minute || lifetime > 5*time.Minute {
+			// The content ticket must outlast a reading session. Keep this in
+			// sync with web.contentLifetime.
+			if lifetime := time.Until(result.ExpiresAt); lifetime <= 11*time.Hour || lifetime > 12*time.Hour {
 				t.Fatalf("expiry lifetime = %s", lifetime)
 			}
 			parsed, err := url.Parse(result.URL)

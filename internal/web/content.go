@@ -18,7 +18,13 @@ import (
 	"github.com/L-K-M/Earnest/internal/service"
 )
 
-const contentLifetime = 5 * time.Minute
+// contentLifetime bounds a signed article capability. It must outlast a
+// reading session: a reader who keeps an article open, whose iframe reloads
+// under memory pressure, or who reopens a cached article expects the URL to
+// still work. The content handler re-checks subscription visibility on every
+// request, so an unsubscription stops an outstanding ticket immediately; the
+// residual risk of a leaked URL is the same one the image proxy accepts.
+const contentLifetime = 12 * time.Hour
 
 // ImageMode selects how the content origin loads remote images.
 type ImageMode string
