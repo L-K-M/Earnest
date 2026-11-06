@@ -6,7 +6,7 @@ import {River} from './River'
 import type {Entry, ReaderActions} from './reader'
 import {request} from './request'
 vi.mock('./request', () => ({request:vi.fn()}))
-vi.mock('@tanstack/react-virtual', () => ({useVirtualizer: ({count}: {count:number}) => ({getTotalSize:()=>count*100, getVirtualItems:()=>Array.from({length:Math.min(2,count)},(_,index)=>({index,size:100,start:index*100})), scrollToIndex:vi.fn()})}))
+vi.mock('@tanstack/react-virtual', () => ({useVirtualizer: ({count}: {count:number}) => ({getTotalSize:()=>count*100, getVirtualItems:()=>Array.from({length:Math.min(2,count)},(_,index)=>({index,size:100,start:index*100})), scrollToIndex:vi.fn(),measureElement:vi.fn()})}))
 const entries = [1,2,3].map(id => ({id,seq:id,title:`Article ${id}`,blurb:'A cached line',subscription_id:1,deleted:false,state:{principal:1,entry_id:id,state_rev:0,seen:{value:'unseen',rev:0},shelf:{value:'none',rev:0},kept:{value:false,rev:0}}})) as Entry[]
 const callbacks: IntersectionObserverCallback[] = []
 const observed: Element[] = []
@@ -50,6 +50,13 @@ describe('river interactions', () => {
     await screen.findByText('Article 1')
     fireEvent.keyDown(document.body,{key:'e'})
     expect(act).not.toHaveBeenCalled()
+  })
+  it('exposes each row to the virtualizer measurement hook', async () => {
+    mount()
+    await screen.findByText('Article 1')
+    const rows = document.querySelectorAll('.virtual-row')
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) expect(row.getAttribute('data-index')).toMatch(/^\d+$/)
   })
 })
 it('retries a visible row after sync finishes restoring',async()=>{

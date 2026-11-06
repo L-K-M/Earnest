@@ -35,6 +35,8 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     refetchOnWindowFocus: false, staleTime: Infinity,
   })
   const entries = orderEntries(list.data?.pages.flatMap(page => page.entries) ?? [], view, subscriptions)
+  // Rows are measured (measureElement on each row) so long titles, blurbs and
+  // zoomed text are never clipped; estimateSize is only the pre-measure guess.
   // eslint-disable-next-line react-hooks/incompatible-library -- Virtual owns mutable scroll measurements; this app does not use React Compiler.
   const virtual = useVirtualizer({count: entries.length, getScrollElement: () => scroller.current, estimateSize: () => 100, overscan: 5, getItemKey: index => entries[index].id})
   const visible = virtual.getVirtualItems()
@@ -117,7 +119,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
           const state = actions.state(entry)
           const source = subscriptions.find(sub => sub.id === entry.subscription_id)?.title || 'Feed'
           const group = view.kind === 'edition' && (row.index === 0 || entries[row.index - 1].subscription_id !== entry.subscription_id)
-          return <div className="virtual-row" key={entry.id} role="listitem" data-entry={entry.id} style={{height: row.size, transform: `translateY(${row.start}px)`}}>
+          return <div className="virtual-row" key={entry.id} role="listitem" data-entry={entry.id} data-index={row.index} ref={virtual.measureElement} style={{transform: `translateY(${row.start}px)`}}>
             {group && <h3 className="feed-group">{source}</h3>}
             <button className="entry" aria-current={selected?.id === entry.id ? 'true' : undefined} onFocus={() => onSelect(entry)} onClick={() => onOpen(entry)}><strong>{entry.title || 'Untitled'}</strong>{pipeline.status.blurb === 'enabled' && entry.blurb && <span>{entry.blurb}</span>}<span>{source} · {state.shelf.value === 'none' ? (state.seen.value === 'seen' ? 'Seen' : 'Unread') : state.shelf.value}{state.kept.value === true ? ' · Kept' : ''}</span></button>
           </div>
