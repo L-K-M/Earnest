@@ -138,6 +138,9 @@ func (a *Auth) UserActor(ctx context.Context, username string) (Actor, error) {
 	return actor, nil
 }
 
+// throttle reports whether the username or client is currently locked out.
+// Only failures count, so a user who signs in successfully several times in a
+// row is not locked out by their own activity.
 func (a *Auth) throttle(username, client string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -147,20 +150,32 @@ func (a *Auth) throttle(username, client string) bool {
 			delete(a.attempts, key)
 		}
 	}
-	keys := []string{"u:" + username, "c:" + client}
-	blocked := false
-	for _, key := range keys {
+	for _, key := range []string{"u:" + username, "c:" + client} {
+		if a.attempts[key].count >= loginLimit {
+			return true
+		}
+	}
+	return false
+}
+
+// recordFailure counts a failed attempt against the username and client.
+func (a *Auth) recordFailure(username, client string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	now := a.now()
+	for key, v := range a.attempts {
+		if !now.Before(v.until) {
+			delete(a.attempts, key)
+		}
+	}
+	for _, key := range []string{"u:" + username, "c:" + client} {
 		v := a.attempts[key]
 		if v.until.IsZero() {
 			v.until = now.Add(loginWindow)
 		}
 		v.count++
 		a.attempts[key] = v
-		if v.count > loginLimit {
-			blocked = true
-		}
 	}
-	return blocked
 }
 
 // Authenticate checks a password and rate limits attempts by username and client key.
@@ -179,6 +194,7 @@ func (a *Auth) Authenticate(ctx context.Context, username, password, clientKey s
 	}
 	ok := checkPassword(hash, password)
 	if !ok || err != nil {
+		a.recordFailure(username, clientKey)
 		return Actor{}, ErrUnauthorized
 	}
 	actor.Kind = PrincipalHuman
