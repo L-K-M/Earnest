@@ -638,8 +638,10 @@ private fun describeActivity(activity: ch.lkmc.earnest.core.Activity): String {
     val changes = listOf("seen", "shelf", "kept").mapNotNull { register ->
         val from = (before[register] as? JsonObject)?.get("value") as? JsonPrimitive
         val to = (after[register] as? JsonObject)?.get("value") as? JsonPrimitive
-        if (from != null && to != null && from.content != to.content) {
-            "$register: ${from.content} to ${to.content}"
+        val fromValue = from?.content
+        val toValue = to?.content
+        if (fromValue != toValue) {
+            "$register: ${fromValue ?: "absent"} to ${toValue ?: "absent"}"
         } else {
             null
         }
