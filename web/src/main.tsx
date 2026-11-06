@@ -12,6 +12,8 @@ import {Onboarding} from './Onboarding'
 import {ActivityScreen, Notifications} from './agents/Surfaces'
 import {Tokens, Push, Webhooks} from './account/Account'
 import {useReaderSync} from './syncBridge'
+import {latestSeq} from './feeds'
+import type {Scope} from './sync/types'
 import {type Entry, type ReaderActions, type Subscription, type View, viewKey} from './reader'
 import {Rules} from './rules/Rules'
 import {Search, useSavedSearches, type SavedSearch} from './search/Search'
@@ -117,6 +119,19 @@ function Session({onLogout}: {onLogout: () => void}) {
     act: async (entry, register, value, kind = 'explicit') => {
       await sync.act(entry, register, value, kind)
       setSummary(old => ({...old, seen: old.seen + Number(register === 'seen' && value === 'seen'), done: old.done + Number(register === 'shelf' && value === 'done'), later: old.later + Number(register === 'shelf' && value === 'later'), kept: old.kept + Number(register === 'kept' && value === true)}))
+    },
+    markAll: async view => {
+      const scope: Scope = view.kind === 'feed' ? {kind: 'subscriptions', ids: [BigInt(view.id ?? 0)]}
+        : view.kind === 'folder' ? {kind: 'folder', ids: [BigInt(view.id ?? 0)]}
+        : {kind: 'all', ids: []}
+      // Prefer the newest server sequence; offline, queueRange falls back to
+      // the highest sequence this device has already observed.
+      let throughSeq: bigint | undefined
+      try {
+        const seq = await latestSeq()
+        if (seq > 0) throughSeq = BigInt(seq)
+      } catch { /* Offline: use the cached boundary. */ }
+      await sync.markAll(scope, throughSeq)
     },
   }
   const choose = useCallback((next: View) => { setView(next); setPanel('river'); setSelected(null); setOpened(false) }, [])

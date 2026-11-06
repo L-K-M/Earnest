@@ -23,10 +23,11 @@ afterEach(() => {cleanup();vi.clearAllMocks();vi.unstubAllGlobals();virtualItems
 function mount(shortcuts=true, blurbStatus="disabled", selected=entries[0], rows=entries) {
   vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {blurb:blurbStatus} : path.startsWith('/v1/positions') ? {seq:0} : {entries:rows})
   const act = vi.fn().mockResolvedValue(undefined)
-  const actions: ReaderActions = {act,state:entry=>entry.state}
+  const markAll = vi.fn().mockResolvedValue(undefined)
+  const actions: ReaderActions = {act,markAll,state:entry=>entry.state}
   const onSelect=vi.fn()
   const view=render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'today',title:'Today'}} subscriptions={[]} actions={actions} selected={selected} onSelect={onSelect} onOpen={vi.fn()} shortcuts={shortcuts} counts={false} summary={{seen:0,done:0,later:0,kept:0}} onHelp={vi.fn()} /></QueryClientProvider>)
-  return {act,onSelect,container:view.container}
+  return {act,markAll,onSelect,container:view.container}
 }
 function scroller() { return screen.getByLabelText('Article list') }
 function scrollPast(id: number) {
@@ -119,6 +120,22 @@ describe('river interactions', () => {
     await screen.findByText('Article 1')
     fireEvent.keyDown(document.body,{key:'e'})
     expect(act).not.toHaveBeenCalled()
+  })
+  it('marks the whole view read after confirmation', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const {markAll}=mount()
+    await screen.findByText('Article 1')
+    fireEvent.click(screen.getByText('Mark all as read'))
+    await waitFor(()=>expect(markAll).toHaveBeenCalledWith({kind:'today',title:'Today'}))
+    confirm.mockRestore()
+  })
+  it('leaves the river alone when mark-all is cancelled', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const {markAll}=mount()
+    await screen.findByText('Article 1')
+    fireEvent.click(screen.getByText('Mark all as read'))
+    expect(markAll).not.toHaveBeenCalled()
+    confirm.mockRestore()
   })
 })
 it('retries a scrolled-past row after sync finishes restoring',async()=>{

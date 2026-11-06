@@ -8,6 +8,7 @@ export type View = {kind: 'today' | 'edition' | 'later' | 'kept' | 'done' | 'fee
 export type ReaderActions = {
   state: (entry: Entry) => EntryState
   act: (entry: Entry, register: Register, value: Value, kind?: 'explicit' | 'passive') => Promise<void>
+  markAll: (view: View) => Promise<void>
 }
 export function viewKey(view: View): string { return `${view.kind}${view.id === undefined ? '' : `:${view.id}`}` }
 export function entryQuery(view: View): URLSearchParams {

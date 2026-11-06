@@ -5,7 +5,7 @@ import {type Entry, type EntryState, type Register, type Value} from './reader'
 import {parseJson} from './sync/json'
 import {decodeEntry, decodeState} from './sync/wire'
 import {formatTime} from './sync/time'
-import type {Register as SyncRegister, State} from './sync/types'
+import type {Register as SyncRegister, Scope, State} from './sync/types'
 
 function safeNumber(value: bigint): number {
   const number = Number(value)
@@ -74,6 +74,13 @@ export function useReaderSync(identity: {user_id: number; principal_id: number} 
       const generation=sync.cursor().generation
       await sync.observe(decodeEntry(parseJson(JSON.stringify(entry))), decodeState(parseJson(JSON.stringify(entry.state))), generation)
       await sync.queue(BigInt(entry.id),register,value,kind)
+      sync.kick()
+    },
+    markAll:async (scope:Scope, throughSeq?:bigint):Promise<void> => {
+      const sync=runtime.current
+      if (!sync) throw new Error('Reading state is not ready. Try again after sync opens.')
+      if (!sync.status().bootstrapped) throw new Error('Reading state is being restored. Try again when sync finishes.')
+      await sync.queueRange(scope, throughSeq === undefined ? undefined : {throughSeq})
       sync.kick()
     },
     retry:() => {setError('');if(runtime.current)runtime.current.kick();else setAttempt(old=>old+1)},

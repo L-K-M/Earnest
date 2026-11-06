@@ -30,6 +30,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   const rendered = useRef(new Map<number, {start: number; size: number}>())
   const passed = useRef(new Set<number>())
   const [error, setError] = useState('')
+  const [markingAll, setMarkingAll] = useState(false)
   const position = useQuery({queryKey: ['position', key], queryFn: ({signal}) => request<{seq: number}>(`/v1/positions/${encodeURIComponent(key)}`, {signal})})
   const list = useInfiniteQuery({
     queryKey: ['river', key, position.data?.seq], enabled: position.isSuccess,
@@ -54,6 +55,16 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   const entriesRef = useRef(entries)
   useEffect(() => { entriesRef.current = entries }, [entries])
   useEffect(() => { heading.current?.focus() }, [key])
+
+  function markAll() {
+    const message = view.kind === 'feed' ? `Mark every article from ${view.title} as read?`
+      : view.kind === 'folder' ? `Mark every article in ${view.title} as read?`
+      : 'Mark every article in every feed as read?'
+    if (!window.confirm(message)) return
+    setMarkingAll(true)
+    setError('')
+    void actions.markAll(view).catch(error => setError(error instanceof Error ? error.message : 'Could not mark articles as read.')).finally(() => setMarkingAll(false))
+  }
 
   // Remember which rendered rows have been inside the viewport. A row that
   // mounts already above the fold (a jump or a prepended page) never enters
@@ -137,7 +148,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
 
   const unread = entries.filter(entry => { const state = actions.state(entry); return state.seen.value === 'unseen' && state.shelf.value !== 'done' }).length
   return <main className="river" aria-label="Articles">
-    <header><h2 ref={heading} tabIndex={-1}>{view.title}</h2><button disabled={!list.isSuccess || list.isRefetching} onClick={() => {void list.refetch()}}>Refresh articles</button><button disabled={!list.isSuccess || list.isFetchingPreviousPage} onClick={() => { void list.fetchPreviousPage() }}>Earlier articles</button>{counts && <p>{unread} unread in loaded articles</p>}</header>
+    <header><h2 ref={heading} tabIndex={-1}>{view.title}</h2><button disabled={!list.isSuccess || list.isRefetching} onClick={() => {void list.refetch()}}>Refresh articles</button><button disabled={!list.isSuccess || list.isFetchingPreviousPage} onClick={() => { void list.fetchPreviousPage() }}>Earlier articles</button><button disabled={markingAll || !list.isSuccess} onClick={markAll}>Mark all as read</button>{counts && <p>{unread} unread in loaded articles</p>}</header>
     {(error || position.error || list.error) && <p role="alert">{error || position.error?.message || list.error?.message} <button onClick={() => { void (position.isError ? position.refetch() : list.refetch()) }}>Try again</button></p>}
     {(position.isPending || list.isPending) && <p role="status">Finding your place…</p>}
     {view.kind === 'edition' && <Edition onOpen={onOpen}/>}
