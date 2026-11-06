@@ -157,9 +157,9 @@ class AppViewModel internal constructor(
                     val restored = restoredState(syncEngine, cache.identity.principalId)
                     val changes = changesResult.getOrNull() ?: _state.value.agentChanges
                     _state.value = _state.value.copy(
-                        snapshot = syncEngine.snapshot(),
-                        principalId = cache.identity.principalId,
-                        states = effectiveStates(syncEngine, cache.identity.principalId),
+                        snapshot = restored.snapshot,
+                        principalId = restored.principalId,
+                        states = restored.states,
                         cadences = restored.cadences,
                         riverEntryIds = restored.riverEntryIds,
                         agentChanges = changes,
@@ -244,10 +244,11 @@ class AppViewModel internal constructor(
                     )
                     syncEngine.queue(write)
                     syncEngine.flush()
+                    val restored = restoredState(syncEngine, principal)
                     _state.value = _state.value.copy(
-                        snapshot = syncEngine.snapshot(),
-                        states = effectiveStates(syncEngine, principal),
-                        cadences = restoredState(syncEngine, principal).cadences,
+                        snapshot = restored.snapshot,
+                        states = restored.states,
+                        cadences = restored.cadences,
                         agentChanges = cache.agentChanges(),
                         sessionAgentChanges = activitySince(cache.agentChanges(), sessionStartedAt),
                     )
@@ -402,9 +403,7 @@ class AppViewModel internal constructor(
 
     private fun effectiveStates(syncEngine: SyncEngine, principal: Long): Map<Long, State> {
         if (principal == 0L) return emptyMap()
-        return syncEngine.snapshot().entries
-            .filterNot { it.deleted }
-            .associate { it.id to syncEngine.state(principal, it.id) }
+        return syncEngine.states(principal)
     }
 
     private fun opId(action: String) = "$action-${java.util.UUID.randomUUID()}"
