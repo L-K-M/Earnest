@@ -611,3 +611,43 @@ func TestEntriesGetAndContent(t *testing.T) {
 		}
 	})
 }
+
+func TestUnreadCounts(t *testing.T) {
+	template := storetest.NewTemplate(t)
+	f := entriesTestNew(t, template)
+	ctx := context.Background()
+	user, human := f.a.UserID, f.a.PrincipalID
+	base := f.now()
+
+	feedA := entriesTestFeed(t, f.db, "https://counts-a.test/rss", 0)
+	feedB := entriesTestFeed(t, f.db, "https://counts-b.test/rss", 0)
+	subA := entriesTestSub(t, f.db, user, feedA, "today")
+	subB := entriesTestSub(t, f.db, user, feedB, "today")
+
+	f.ingest(t, feedA, "unread one", base.Add(-time.Hour))
+	e2 := f.ingest(t, feedA, "later", base.Add(-2*time.Hour))
+	e3 := f.ingest(t, feedA, "done", base.Add(-3*time.Hour))
+	e4 := f.ingest(t, feedA, "kept", base.Add(-4*time.Hour))
+	e5 := f.ingest(t, feedA, "seen", base.Add(-5*time.Hour))
+	f.ingest(t, feedB, "unread two", base.Add(-time.Hour))
+	e7 := f.ingest(t, feedA, "gone", base.Add(-6*time.Hour))
+
+	entriesTestState(t, f.db, human, e2, "shelf", "later")
+	entriesTestState(t, f.db, human, e3, "shelf", "done")
+	entriesTestState(t, f.db, human, e4, "kept", "")
+	entriesTestState(t, f.db, human, e5, "seen", "seen")
+	if _, err := f.db.Pool().Exec(ctx, "UPDATE entries SET deleted_at=now() WHERE id=$1", e7); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := f.s.UnreadCounts(ctx, f.a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ByFeed[subA] != 3 || got.ByFeed[subB] != 1 {
+		t.Fatalf("by feed: %+v", got.ByFeed)
+	}
+	if got.Later != 1 || got.Kept != 1 || got.Total != 4 {
+		t.Fatalf("totals: %+v", got)
+	}
+}

@@ -195,6 +195,29 @@ func TestHTTPReader(t *testing.T) {
 		requireStatus(t, f.do(t, http.MethodPost, "/v1/session/logout", nil, f.session()), http.StatusOK)
 		requireStatus(t, f.do(t, http.MethodGet, "/v1/me", nil, f.session()), http.StatusUnauthorized)
 	})
+	t.Run("unread counts", func(t *testing.T) {
+		f := newAPIFixture(t, template)
+		rec := f.do(t, http.MethodGet, "/v1/entries:counts", nil, f.session())
+		requireStatus(t, rec, http.StatusOK)
+		var counts service.UnreadCounts
+		if err := json.Unmarshal(rec.Body.Bytes(), &counts); err != nil {
+			t.Fatal(err)
+		}
+		if counts.ByFeed[f.subID] != 1 || counts.Total != 1 || counts.Later != 0 || counts.Kept != 0 {
+			t.Fatalf("counts=%+v", counts)
+		}
+		body := []syncmodel.Write{f.write(t, "later", syncmodel.Shelf, syncmodel.Later)}
+		requireStatus(t, f.do(t, http.MethodPost, "/v1/state:batch", body, f.session()), http.StatusOK)
+		rec = f.do(t, http.MethodGet, "/v1/entries:counts", nil, f.session())
+		requireStatus(t, rec, http.StatusOK)
+		if err := json.Unmarshal(rec.Body.Bytes(), &counts); err != nil {
+			t.Fatal(err)
+		}
+		if counts.ByFeed[f.subID] != 1 || counts.Later != 1 {
+			t.Fatalf("counts after later=%+v", counts)
+		}
+		requireStatus(t, f.do(t, http.MethodGet, "/v1/entries:counts", nil, requestCredentials{bearer: f.token(t, service.AudienceAPI)}), http.StatusOK)
+	})
 	t.Run("agent boundaries and audience", func(t *testing.T) {
 		f := newAPIFixture(t, template)
 		credentials := requestCredentials{bearer: f.token(t, service.AudienceAPI)}
