@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -71,6 +72,17 @@ func insertEvent(ctx context.Context, tx pgx.Tx, user, rev int64, kind string, p
 		return err
 	}
 	if tracked, ok := tx.(*eventTx); ok {
+		tracked.users[user] = struct{}{}
+	}
+	return nil
+}
+
+// insertEvents writes one event per (rev, payload) pair in a single statement.
+func insertEvents(ctx context.Context, tx pgx.Tx, user int64, revs []int64, kind string, payloads []json.RawMessage, at time.Time) error {
+	if err := store.InsertChanges(ctx, tx, user, revs, kind, payloads, at); err != nil {
+		return err
+	}
+	if tracked, ok := tx.(*eventTx); ok && len(revs) > 0 {
 		tracked.users[user] = struct{}{}
 	}
 	return nil

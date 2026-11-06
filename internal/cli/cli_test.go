@@ -144,6 +144,7 @@ func TestStateActionRegisterValue(t *testing.T) {
 		{actionDone, "shelf", "done"},
 		{actionLater, "shelf", "later"},
 		{actionKeep, "kept", true},
+		{actionUnkeep, "kept", false},
 		{actionUnread, "seen", "unseen"},
 		{stateAction("bogus"), "", nil},
 	}

@@ -569,6 +569,33 @@ func TestEntriesGetAndContent(t *testing.T) {
 			t.Fatal("negative id accepted", err)
 		}
 	})
+	t.Run("get_by_ids_content_is_opt_in", func(t *testing.T) {
+		plain, err := f.s.GetByIDs(ctx, f.a, []int64{e1, e2})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range plain {
+			if e.Content != nil {
+				t.Fatalf("GetByIDs loaded content for %d", e.ID)
+			}
+		}
+		withContent, err := f.s.GetByIDsWithContent(ctx, f.a, []int64{e1, e2})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range withContent {
+			if e.Content == nil || e.Content.HTML == "" {
+				t.Fatalf("GetByIDsWithContent missing body for %d", e.ID)
+			}
+		}
+		tomb, err := f.s.GetByIDsWithContent(ctx, f.a, []int64{e3})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(tomb) != 1 || !tomb[0].Deleted || tomb[0].Content != nil {
+			t.Fatalf("tombstone content: %+v", tomb)
+		}
+	})
 	t.Run("content_prefers_extracted_then_version", func(t *testing.T) {
 		hash := entriesTestHashB("body:first")
 		stmt := "INSERT INTO contents(entry_id,content_hash,sanitizer_version,source,html,text) VALUES($1,$2,$3,$4,$5,$6)"

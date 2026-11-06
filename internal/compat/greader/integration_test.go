@@ -248,6 +248,63 @@ func TestClientSync(t *testing.T) {
 		t.Fatalf("deliberate unreads retained: %d", unread)
 	}
 
+	// A bulk tag edit over several hundred items runs as one service op per
+	// direction: one op record, one transaction, per-membership events.
+	var opsBefore int
+	if err = db.Pool().QueryRow(ctx, `SELECT count(*) FROM op_ids WHERE principal_id=$1 AND result->>'method'='AddLabels'`, actor.PrincipalID).Scan(&opsBefore); err != nil {
+		t.Fatal(err)
+	}
+	bulk := url.Values{"T": {csrfToken}, "a": {labelPrefix + "bulk"}}
+	for i := 6001; i <= 6500; i++ {
+		bulk.Add("i", strconv.Itoa(i))
+	}
+	if got := read(request("POST", api+"edit-tag", bulk, token)); got != "OK" {
+		t.Fatal(got)
+	}
+	var labeled int
+	if err = db.Pool().QueryRow(ctx, `SELECT count(*) FROM entry_labels el JOIN labels l ON l.id=el.label_id AND l.user_id=el.user_id WHERE el.user_id=$1 AND l.name='bulk' AND el.deleted_at IS NULL`, actor.UserID).Scan(&labeled); err != nil || labeled != 500 {
+		t.Fatalf("bulk add: %d %v", labeled, err)
+	}
+	var bulkLabel int64
+	if err = db.Pool().QueryRow(ctx, "SELECT id FROM labels WHERE user_id=$1 AND name='bulk'", actor.UserID).Scan(&bulkLabel); err != nil {
+		t.Fatal(err)
+	}
+	var addOps, addEvents int
+	if err = db.Pool().QueryRow(ctx, `SELECT count(*) FROM op_ids WHERE principal_id=$1 AND result->>'method'='AddLabels'`, actor.PrincipalID).Scan(&addOps); err != nil || addOps != opsBefore+1 {
+		t.Fatalf("bulk add ops: %d (before %d) %v", addOps, opsBefore, err)
+	}
+	if err = db.Pool().QueryRow(ctx, `SELECT count(*) FROM changes WHERE user_id=$1 AND type='label.added' AND (payload->>'label_id')::bigint=$2`, actor.UserID, bulkLabel).Scan(&addEvents); err != nil || addEvents != 500 {
+		t.Fatalf("bulk add events: %d %v", addEvents, err)
+	}
+	// A mixed add stops at the first invalid id with the prefix committed,
+	// as repeated per-entry edits did before.
+	mixed := url.Values{"T": {csrfToken}, "a": {labelPrefix + "bulk"}}
+	for i := 7001; i <= 7050; i++ {
+		mixed.Add("i", strconv.Itoa(i))
+	}
+	mixed.Add("i", "99999999")
+	for i := 7051; i <= 7100; i++ {
+		mixed.Add("i", strconv.Itoa(i))
+	}
+	resp := request("POST", api+"edit-tag", mixed, token)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("mixed add: %d", resp.StatusCode)
+	}
+	if err = db.Pool().QueryRow(ctx, `SELECT (SELECT count(*) FROM entry_labels el WHERE el.user_id=$1 AND el.label_id=$2 AND el.deleted_at IS NULL AND el.entry_id BETWEEN 7001 AND 7050),(SELECT count(*) FROM entry_labels el WHERE el.user_id=$1 AND el.label_id=$2 AND el.deleted_at IS NULL AND el.entry_id BETWEEN 7051 AND 7100)`, actor.UserID, bulkLabel).Scan(&labeled, &addEvents); err != nil || labeled != 50 || addEvents != 0 {
+		t.Fatalf("mixed prefix: %d/%d %v", labeled, addEvents, err)
+	}
+	// A bulk remove skips missing memberships and still reports OK.
+	bulk.Del("a")
+	bulk.Add("r", labelPrefix+"bulk")
+	bulk.Add("i", "99999998")
+	if got := read(request("POST", api+"edit-tag", bulk, token)); got != "OK" {
+		t.Fatal(got)
+	}
+	if err = db.Pool().QueryRow(ctx, `SELECT count(*) FROM entry_labels el WHERE el.user_id=$1 AND el.label_id=$2 AND el.deleted_at IS NULL AND el.entry_id BETWEEN 6001 AND 6500`, actor.UserID, bulkLabel).Scan(&labeled); err != nil || labeled != 0 {
+		t.Fatalf("bulk remove: %d %v", labeled, err)
+	}
+
 	// An omitted timestamp captures the current sequence boundary.
 	var otherFeed, otherID int64
 	if err = db.Pool().QueryRow(ctx, "INSERT INTO feeds(url) VALUES('https://example.com/other') RETURNING id").Scan(&otherFeed); err != nil {

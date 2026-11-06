@@ -27,6 +27,7 @@ type pipelineProvider struct {
 	received   []string
 	classifier string
 	invalidFor string
+	failFor    string
 }
 
 func (p *pipelineProvider) requests() []string {
@@ -46,7 +47,12 @@ func (p *pipelineProvider) serve(w http.ResponseWriter, r *http.Request) {
 	if p.invalidFor != "" && strings.Contains(string(body), p.invalidFor) {
 		classification = `{"labels":"refused"}`
 	}
+	fail := p.failFor != "" && strings.Contains(string(body), p.failFor)
 	p.mu.Unlock()
+	if fail {
+		http.Error(w, "transient", 500)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	if strings.HasSuffix(r.URL.Path, "/embeddings") {
 		var req struct {

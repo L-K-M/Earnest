@@ -81,11 +81,36 @@ internal class SessionCache(context: Context, val identity: AccountIdentity) {
         return changes
     }
 
+    // Internal so tests can observe engine reuse.
+    internal var engine: SyncEngine? = null
+    internal var snapshotVersion = -1L
+
     suspend fun <T> withEngine(block: suspend (SyncEngine) -> T): T = SyncAccess.mutex.withLock {
-        val engine = SyncEngine(RoomSyncStore(db))
-        val result = block(engine)
-        engine.flush()
-        result
+        // Rebuilding the engine decodes the whole snapshot JSON on every call.
+        // The snapshot row carries a write counter, so an unchanged version means
+        // no writer (e.g. the sync worker) committed since the last load.
+        val store = RoomSyncStore(db)
+        val version = store.version()
+        val cached = engine
+        val active = if (cached != null && version != -1L && version == snapshotVersion) {
+            cached
+        } else {
+            SyncEngine(store).also { engine = it; snapshotVersion = version }
+        }
+        try {
+            val result = block(active)
+            active.flush()
+            // flush() bumped the counter; record the post-write version so the
+            // next call reuses this engine instead of rebuilding it.
+            snapshotVersion = store.version()
+            result
+        } catch (t: Throwable) {
+            // A failed block may have staged a write via save(); drop the engine
+            // so a later, unrelated call cannot flush it.
+            engine = null
+            snapshotVersion = -1L
+            throw t
+        }
     }
     companion object {
         const val KEY_CHANGES_SINCE = "agent_changes_since"

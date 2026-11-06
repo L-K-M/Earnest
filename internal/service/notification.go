@@ -219,10 +219,13 @@ type notificationReader interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
-func loadNotification(ctx context.Context, q notificationReader, user, id int64) (Notification, error) {
+// notificationSelect lists the columns scanNotification reads, Muted last.
+const notificationSelect = "SELECT n.id,n.sender_principal_id,n.note,n.entry_ids,n.category,n.status,n.held_until,n.budget_used,n.budget_limit,n.why,n.generation::text,n.created_at,EXISTS(SELECT 1 FROM notification_mutes m WHERE m.user_id=n.recipient_user_id AND m.principal_id=n.sender_principal_id) FROM notifications n"
+
+func scanNotification(row pgx.Row) (Notification, error) {
 	var out Notification
 	var why []byte
-	err := q.QueryRow(ctx, "SELECT n.id,n.sender_principal_id,n.note,n.entry_ids,n.category,n.status,n.held_until,n.budget_used,n.budget_limit,n.why,n.generation::text,n.created_at,EXISTS(SELECT 1 FROM notification_mutes m WHERE m.user_id=n.recipient_user_id AND m.principal_id=n.sender_principal_id) FROM notifications n WHERE n.recipient_user_id=$1 AND n.id=$2", user, id).Scan(&out.ID, &out.PrincipalID, &out.Note, &out.EntryIDs, &out.Category, &out.Status, &out.HeldUntil, &out.Budget.UsedToday, &out.Budget.LimitToday, &why, &out.Generation, &out.CreatedAt, &out.Muted)
+	err := row.Scan(&out.ID, &out.PrincipalID, &out.Note, &out.EntryIDs, &out.Category, &out.Status, &out.HeldUntil, &out.Budget.UsedToday, &out.Budget.LimitToday, &why, &out.Generation, &out.CreatedAt, &out.Muted)
 	if err != nil {
 		return out, domainError(err)
 	}
@@ -230,6 +233,10 @@ func loadNotification(ctx context.Context, q notificationReader, user, id int64)
 		return out, err
 	}
 	return out, nil
+}
+
+func loadNotification(ctx context.Context, q notificationReader, user, id int64) (Notification, error) {
+	return scanNotification(q.QueryRow(ctx, notificationSelect+" WHERE n.recipient_user_id=$1 AND n.id=$2", user, id))
 }
 func (s *Service) notificationHuman(ctx context.Context, a Actor) error {
 	if a.Kind != PrincipalHuman {
@@ -255,32 +262,20 @@ func (s *Service) ListNotifications(ctx context.Context, a Actor, beforeID int64
 	if limit < 1 || limit > 1000 || beforeID < 0 {
 		return nil, ErrInvalid
 	}
-	rows, err := s.store.Pool().Query(ctx, "SELECT id FROM notifications WHERE recipient_user_id=$1 AND ($2::bigint=0 OR id<$2) ORDER BY id DESC LIMIT $3", a.UserID, beforeID, limit)
+	rows, err := s.store.Pool().Query(ctx, notificationSelect+" WHERE n.recipient_user_id=$1 AND ($2::bigint=0 OR n.id<$2) ORDER BY n.id DESC LIMIT $3", a.UserID, beforeID, limit)
 	if err != nil {
 		return nil, err
 	}
-	ids := []int64{}
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
+	defer rows.Close()
 	out := []Notification{}
-	for _, id := range ids {
-		n, err := loadNotification(ctx, s.store.Pool(), a.UserID, id)
+	for rows.Next() {
+		n, err := scanNotification(rows)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, n)
 	}
-	return out, nil
+	return out, rows.Err()
 }
 
 // CancelNotification permits the human or its author to cancel only while held.
