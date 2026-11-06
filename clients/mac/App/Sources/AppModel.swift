@@ -225,8 +225,9 @@ import AppKit
         let snapshot = try engine.snapshot()
         cachedPresentation = true
         // Oldest first, like the server river, so offline reading order matches online.
-        entries = try snapshot.entries.filter { !$0.deleted && $0.hasBody }.sorted { $0.seq < $1.seq }
-            .map { try cachedEntry($0, principal: principalID, engine: engine) }
+        let cached = snapshot.entries.filter { !$0.deleted && $0.hasBody }.sorted { $0.seq < $1.seq }
+        let prefetched = (try? engine.states(principal: principalID, entryIDs: cached.map(\.id))) ?? [:]
+        entries = try cached.map { try cachedEntry($0, principal: principalID, engine: engine, state: prefetched[$0.id]) }
         let generation = snapshot.cursor?.generation ?? ""
         feeds = try cache.resource("feeds", generation: generation).compactMap(FeedInfo.init).filter { !$0.deleted }
         let subscriptions = snapshot.objects.filter { $0.kind == .subscription && !$0.deleted }
@@ -596,7 +597,13 @@ import AppKit
 
     func rebuildPresentation() {
         let snapshot = try? engine?.snapshot()
-        let presented = entries.filter { !$0.deleted }.map { ($0, effectiveState(of: $0)) }
+        let visible = entries.filter { !$0.deleted }
+        // One snapshot load for the whole list: state() per row cost a full
+        // snapshot decode each and dominated rebuilds on large libraries.
+        let bulk: [Int64: EarnestKit.State]? = principalID > 0
+            ? (try? engine?.states(principal: principalID, entryIDs: visible.map(\.id))) ?? nil
+            : nil
+        let presented = visible.map { ($0, bulk?[$0.id] ?? $0.state.syncState) }
         let riverIDs: Set<Int64>
         if cachedPresentation, let snapshot {
             let subscriptions = Dictionary(snapshot.objects.filter { $0.kind == .subscription }.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
@@ -643,7 +650,7 @@ import AppKit
             rows = []
             editionGroups = []
         }
-        pendingOps = (try? engine?.snapshot().outbox.count) ?? 0
+        pendingOps = snapshot?.outbox.count ?? 0
         updateEndStatement(presented, riverIDs: riverIDs)
     }
 
