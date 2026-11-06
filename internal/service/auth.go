@@ -187,14 +187,14 @@ func (a *Auth) recordFailure(username, client string) {
 	}
 }
 
-// clearFailures forgets recorded failures once a successful login proves
-// knowledge of the password.
-func (a *Auth) clearFailures(username, client string) {
+// clearFailures forgets the account's recorded failures once a successful
+// login proves knowledge of its password. The client counter stays: it bounds
+// password spraying across accounts, and a valid login for one account must
+// not reset it for the next guesses against others.
+func (a *Auth) clearFailures(username string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	for _, key := range failureKeys(username, client) {
-		delete(a.attempts, key)
-	}
+	delete(a.attempts, "u:"+username)
 }
 
 // Authenticate checks a password and rate limits attempts by username and client key.
@@ -216,7 +216,7 @@ func (a *Auth) Authenticate(ctx context.Context, username, password, clientKey s
 		a.recordFailure(username, clientKey)
 		return Actor{}, ErrUnauthorized
 	}
-	a.clearFailures(username, clientKey)
+	a.clearFailures(username)
 	actor.Kind = PrincipalHuman
 	actor.Scopes = append([]Scope(nil), HumanScopes...)
 	return actor, nil
