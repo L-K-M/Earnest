@@ -53,6 +53,15 @@ describe('river interactions', () => {
     expect(act).toHaveBeenCalledTimes(1)
     expect(screen.queryByText('Article 3')).toBeNull()
   })
+  it('drops a queued passive seen when the reader marks the row unread', async () => {
+    const {act}=mount()
+    await screen.findByText('Article 1')
+    scrollPast(1)
+    fireEvent.keyDown(document.body,{key:'m'})
+    expect(act).toHaveBeenCalledWith(entries[0],'seen','unseen')
+    await new Promise(resolve => window.setTimeout(resolve, 1300))
+    expect(act).not.toHaveBeenCalledWith(entries[0],'seen','seen','passive')
+  })
   it('marks a row seen when it is opened', async () => {
     const {act}=mount()
     await screen.findByText('Article 1')

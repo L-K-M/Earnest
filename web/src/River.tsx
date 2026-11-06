@@ -129,7 +129,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
       if (event.key === 'v') { event.preventDefault(); window.open(entry.url, '_blank', 'noopener,noreferrer'); return }
       const state = actions.state(entry)
       const action = event.key === 'e' ? ['shelf', 'done'] as const : event.key === 's' ? ['shelf', state.shelf.value === 'later' ? 'none' : 'later'] as const : event.key === 'f' ? ['kept', state.kept.value !== true] as const : event.key === 'm' ? ['seen', 'unseen'] as const : null
-      if (action) { event.preventDefault(); void actions.act(entry, action[0], action[1]).catch(error => setError(error instanceof Error ? error.message : 'Could not save action.')) }
+      if (action) { event.preventDefault(); if (action[0] === 'seen') pending.current.delete(entry.id); void actions.act(entry, action[0], action[1]).catch(error => setError(error instanceof Error ? error.message : 'Could not save action.')) }
     }
     window.addEventListener('keydown', keyboard)
     return () => window.removeEventListener('keydown', keyboard)
