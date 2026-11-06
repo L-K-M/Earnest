@@ -12,7 +12,12 @@ export function Reader({entry, subscription, settings, actions, onClose, onSetti
   const online = useOnline()
   const title = useRef<HTMLHeadingElement>(null)
   const [error, setError] = useState('')
-  const [overrideDraft, setOverrideDraft] = useState(() => ({...settings, ...settings.feed_overrides[String(entry.feed_id)]}))
+  const feedOverrideKey = String(entry.feed_id)
+  const hasOverride = feedOverrideKey in settings.feed_overrides
+  const typography = {...settings, ...settings.feed_overrides[feedOverrideKey]}
+  // The draft holds only the typography triple, so saving stores a clean
+  // per-feed override instead of the whole settings document.
+  const [overrideDraft, setOverrideDraft] = useState<Pick<ReadingSettings, 'theme' | 'measure' | 'font'>>(() => ({theme: typography.theme, measure: typography.measure, font: typography.font}))
   const [savingOverride, setSavingOverride] = useState(false)
   const [dark, setDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
   useEffect(() => { title.current?.focus() }, [entry.id])
@@ -22,9 +27,6 @@ export function Reader({entry, subscription, settings, actions, onClose, onSetti
     query.addEventListener('change', changed)
     return () => query.removeEventListener('change', changed)
   }, [])
-  const feedOverrideKey = String(entry.feed_id)
-  const hasOverride = feedOverrideKey in settings.feed_overrides
-  const typography = {...settings, ...settings.feed_overrides[feedOverrideKey]}
   const content = useQuery({queryKey: ['content', entry.id, typography.theme, typography.measure, typography.font], enabled:online, gcTime:0, queryFn: () => request<{url: string}>(`/web/content-url/${entry.id}`)})
   const state = actions.state(entry)
   function act(register: 'seen' | 'shelf' | 'kept', value: 'unseen' | 'done' | 'later' | 'none' | boolean) {
@@ -44,7 +46,7 @@ export function Reader({entry, subscription, settings, actions, onClose, onSetti
     try {
       const next = withoutFeedOverride(settings, feedOverrideKey)
       onSettings(await request<ReadingSettings>('/v1/settings', {method: 'PUT', body: JSON.stringify(settingsInput(next))}))
-      setOverrideDraft({...next})
+      setOverrideDraft({theme: next.theme, measure: next.measure, font: next.font})
       setError('')
     } catch (error) { setError(error instanceof Error ? error.message : 'Could not reset feed typography.') }
     finally { setSavingOverride(false) }
