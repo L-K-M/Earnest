@@ -33,7 +33,7 @@ clients live in `clients/mac` and `clients/android`.
 - Go 1.27, one binary at `cmd/earnest`. `CGO_ENABLED=0`, `log/slog` only.
   Packages live under `internal/`; the map and layering rules are in
   `docs/architecture.md`.
-- `Dockerfile`: `golang:1.27-alpine` → `alpine:3.22`, version/revision stamped
+- `Dockerfile`: `golang:1.27-alpine` → `alpine:3.24`, version/revision stamped
   by `-ldflags` at build time.
 - `compose.yaml`: `earnest` (`image:` + `build:` + `pull_policy: build`) and
   `postgres` (`pgvector/pgvector:pg18`).

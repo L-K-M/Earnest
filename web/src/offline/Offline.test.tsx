@@ -12,7 +12,8 @@ it.each([null,{scriptURL:'https://reader.test/push-worker.js'}])('fences an acti
   vi.stubGlobal('MessageChannel',MessageChannel)
   let acknowledge = () => undefined as void
   const postMessage = vi.fn((_message,ports) => {acknowledge=() => {ports[0].postMessage('cleared');ports[0].close()}})
-  Object.defineProperty(navigator,'serviceWorker',{configurable:true,value:{controller,getRegistration:vi.fn().mockResolvedValue({active:{scriptURL:'https://reader.test/offline-worker.js',postMessage}})}})
+  const offline = {scriptURL:'https://reader.test/offline-worker.js',postMessage}
+  Object.defineProperty(navigator,'serviceWorker',{configurable:true,value:{controller,getRegistration:vi.fn().mockResolvedValue({active:offline}),getRegistrations:vi.fn().mockResolvedValue([{active:offline}])}})
   const remove = vi.fn().mockResolvedValue(true)
   vi.stubGlobal('caches',{delete:remove})
   const clearing = clearOffline()
@@ -28,7 +29,8 @@ it('refuses to finish clearing if the active worker does not acknowledge',async 
   vi.useFakeTimers()
   const close = vi.fn()
   vi.stubGlobal('MessageChannel',class {port1={close,onmessage:null};port2={}})
-  Object.defineProperty(navigator,'serviceWorker',{configurable:true,value:{controller:null,getRegistration:vi.fn().mockResolvedValue({active:{scriptURL:'https://reader.test/offline-worker.js',postMessage:vi.fn()}})}})
+  const offline = {scriptURL:'https://reader.test/offline-worker.js',postMessage:vi.fn()}
+  Object.defineProperty(navigator,'serviceWorker',{configurable:true,value:{controller:null,getRegistration:vi.fn().mockResolvedValue({active:offline}),getRegistrations:vi.fn().mockResolvedValue([{active:offline}])}})
   const remove = vi.fn()
   vi.stubGlobal('caches',{delete:remove})
   const clearing = clearOffline().then(() => null,error => error as Error)

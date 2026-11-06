@@ -48,6 +48,12 @@ it('respects single-key opt-out and editable fields while leaving modified K ava
   expect(screen.queryByRole('dialog')).toBeNull()
   fireEvent.keyDown(document.body,{key:'?'})
   expect(screen.getByRole('dialog',{name:'Keyboard shortcuts'})).toBeTruthy()
+  // A second press toggles the dialog closed instead of calling showModal()
+  // again, which would throw InvalidStateError in a browser.
+  fireEvent.keyDown(document.body,{key:'?'})
+  expect(screen.queryByRole('dialog',{name:'Keyboard shortcuts'})).toBeNull()
+  fireEvent.keyDown(document.body,{key:'?'})
+  expect(screen.getByRole('dialog',{name:'Keyboard shortcuts'})).toBeTruthy()
   fireEvent.click(screen.getByRole('button',{name:'Close help'}))
   fireEvent.keyDown(document.body,{key:'/'})
   expect(all.find(c => c.id === 'search')!.run).toHaveBeenCalledOnce()
