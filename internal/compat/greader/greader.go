@@ -384,19 +384,14 @@ func (h *handler) markAll(w http.ResponseWriter, r *http.Request, a service.Acto
 	return nil
 }
 func (h *handler) unreadCount(w http.ResponseWriter, r *http.Request, a service.Actor) error {
-	f := service.EntryFilter{View: service.ViewAll, UnreadOnly: true, Limit: 200}
-	count := 0
-	for {
-		entries, err := h.svc.Entries(r.Context(), a, f)
-		if err != nil {
-			return err
-		}
-		count += len(entries)
-		if len(entries) < 200 {
-			break
-		}
-		f.AfterSeq = entries[len(entries)-1].Seq
+	counts, err := h.svc.UnreadCounts(r.Context(), a)
+	if err != nil {
+		return err
 	}
-	writeJSON(w, map[string]any{"unreadcounts": []any{map[string]any{"id": statePrefix + "reading-list", "count": count, "newestItemTimestampUsec": "0"}}})
+	total := 0
+	for _, feed := range counts.Feeds {
+		total += feed.Unread
+	}
+	writeJSON(w, map[string]any{"unreadcounts": []any{map[string]any{"id": statePrefix + "reading-list", "count": total, "newestItemTimestampUsec": "0"}}})
 	return nil
 }

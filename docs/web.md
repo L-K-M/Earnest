@@ -45,11 +45,11 @@ placeholder until the web bundle has been copied into `internal/web/dist`.
    or export OPML, and mute keywords/authors. Feed health explains failure classes
    and shows the service's last attempt/success and next scheduled fetch.
 
-Only unread-count mode requests and displays unread totals. Per-feed counts page
-all unread results behind a fixed upper sequence, rather than presenting a
-first-page count as the total. The list's separate count says explicitly that it
-covers loaded articles. Today excludes This week on the client because the
-existing river API includes all three cadences.
+Only unread-count mode requests and displays unread totals. Per-feed counts come
+from one grouped server query (`/v1/unread-counts`), so totals stay exact
+without paging unread entries through the entry list. The list's separate count
+says explicitly that it covers loaded articles. Today excludes This week on the
+client because the existing river API includes all three cadences.
 
 ## Settings contract
 

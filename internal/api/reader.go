@@ -142,6 +142,9 @@ func (s *server) readerRoutes() {
 	route(s, http.MethodDelete, "/v1/folders/{id}", "delete-folder", func(ctx context.Context, in *deleteInput) (empty, error) {
 		return empty{}, s.svc.DeleteFolder(ctx, actor(ctx), in.ID, in.OpID)
 	})
+	route(s, http.MethodGet, "/v1/unread-counts", "unread-counts", func(ctx context.Context, in *empty) (service.UnreadCounts, error) {
+		return s.svc.UnreadCounts(ctx, actor(ctx))
+	})
 	route(s, http.MethodGet, "/v1/entries", "list-entries", func(ctx context.Context, in *entriesInput) (entriesPage, error) {
 		if len(in.IDs) > 0 {
 			entries, err := s.svc.GetByIDs(ctx, actor(ctx), in.IDs)
