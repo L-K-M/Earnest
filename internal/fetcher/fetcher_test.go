@@ -630,6 +630,7 @@ func TestFullTextExtractionCancellationDoesNotHang(t *testing.T) {
 		<-release
 	}))
 	defer article.Close()
+	defer close(release)
 	feedServed := make(chan struct{})
 	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		close(feedServed)
@@ -656,7 +657,95 @@ func TestFullTextExtractionCancellationDoesNotHang(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Fetch deadlocked after cancellation")
 	}
-	close(release)
+}
+
+// The worker pool must still respect the per-pass cap: 20 extractable items
+// whose pages overlap in flight yield at most maxExtractsPerFetch fetches,
+// and the items keep their feed order.
+func TestParallelExtractionHonoursCap(t *testing.T) {
+	var hits, inFlight, maxInFlight atomic.Int32
+	release := make(chan struct{})
+	var once sync.Once
+	defer once.Do(func() { close(release) })
+	pageHandler := func(w http.ResponseWriter, _ *http.Request) {
+		n := inFlight.Add(1)
+		defer inFlight.Add(-1)
+		for {
+			m := maxInFlight.Load()
+			if n <= m || maxInFlight.CompareAndSwap(m, n) {
+				break
+			}
+		}
+		// The first two requests block until both have arrived, so overlap is
+		// observed deterministically; release then stays closed.
+		if hits.Add(1) == 2 {
+			once.Do(func() { close(release) })
+		}
+		select {
+		case <-release:
+		case <-time.After(5 * time.Second):
+			http.Error(w, "timeout", http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprint(w, "<html><body><article><h1>Story</h1><p>a readable article body with enough words</p></article></body></html>")
+	}
+	pageA := httptest.NewServer(http.HandlerFunc(pageHandler))
+	defer pageA.Close()
+	pageB := httptest.NewServer(http.HandlerFunc(pageHandler))
+	defer pageB.Close()
+	// The outbound client serialises requests per hostname, so overlapping
+	// fetches need distinct hostnames, not just distinct ports.
+	pages := []string{strings.Replace(pageA.URL, "127.0.0.1", "localhost", 1), pageB.URL}
+	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		var b strings.Builder
+		b.WriteString(`<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>`)
+		for i := 0; i < 20; i++ {
+			fmt.Fprintf(&b, `<item><guid>g%d</guid><link>%s/page%d</link><description>short</description></item>`, i, pages[i%len(pages)], i)
+		}
+		b.WriteString(`</channel></rss>`)
+		fmt.Fprint(w, b.String())
+	}))
+	defer feed.Close()
+	hosts := make([]string, 0, 3)
+	ports := make([]uint16, 0, 3)
+	for _, raw := range []string{feed.URL, pages[0], pages[1]} {
+		u, err := url.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hosts = append(hosts, u.Host)
+		_, p, _ := net.SplitHostPort(u.Host)
+		n, _ := strconv.Atoi(p)
+		ports = append(ports, uint16(n))
+	}
+	c, err := outbound.New(outbound.Config{AllowHosts: hosts, Spacing: time.Nanosecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &fakeService{}
+	f, err := New(s, c, Config{ExtraPorts: ports})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := service.FeedToFetch{FeedID: 1, URL: feed.URL, Extract: service.ExtractAlways, LeaseUntil: time.Now().Add(10 * time.Minute)}
+	if err := f.Fetch(context.Background(), claim); err != nil {
+		t.Fatal(err)
+	}
+	items := s.outcomes[0].Items
+	if s.outcomes[0].Status != service.FetchOK || len(items) != 20 {
+		t.Fatalf("all items must be ingested, got %s with %d items", s.outcomes[0].Status, len(items))
+	}
+	for i, item := range items {
+		if item.GUID != fmt.Sprintf("g%d", i) {
+			t.Fatalf("item order changed at %d: %q", i, item.GUID)
+		}
+	}
+	if got := hits.Load(); got != maxExtractsPerFetch {
+		t.Fatalf("one pass must extract at most %d pages, got %d", maxExtractsPerFetch, got)
+	}
+	if got := maxInFlight.Load(); got < 2 {
+		t.Fatalf("extractions did not overlap: max in-flight %d", got)
+	}
 }
 
 func TestFetchScopesCredentialsToCanonicalOrigin(t *testing.T) {

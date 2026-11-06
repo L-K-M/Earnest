@@ -389,8 +389,8 @@ func (f *Fetcher) items(ctx context.Context, claim service.FeedToFetch, list []f
 	if !claim.LeaseUntil.IsZero() {
 		extractDeadline = claim.LeaseUntil.Add(-leaseMargin)
 	}
-	extractions := 0
-	for _, it := range list {
+	var jobs []extractJob
+	for i, it := range list {
 		base := itemBase(it.URL)
 		link := ""
 		if base != nil {
@@ -433,22 +433,8 @@ func (f *Fetcher) items(ctx context.Context, claim service.FeedToFetch, list []f
 			source = service.ContentFromFeedExcerpt
 		}
 		if claim.Extract == service.ExtractAlways && base != nil && !known[feed.IdentityHash(it)] &&
-			extractions < maxExtractsPerFetch && (extractDeadline.IsZero() || time.Now().Before(extractDeadline)) {
-			extractions++
-			r, e := f.client.Get(ctx, link, outbound.Policy{Purpose: outbound.Extract, ExtraPorts: f.config.ExtraPorts})
-			if e == nil && r != nil {
-				body, readErr := io.ReadAll(r.Response.Body)
-				r.Response.Body.Close()
-				if readErr == nil && r.Response.StatusCode >= 200 && r.Response.StatusCode < 300 {
-					extracted, extractErr := extract.Extract(r.FinalURL, body)
-					if extractErr == nil && extracted.Status == extract.StatusOK {
-						doc = extracted.Document
-						source = service.ContentFromExtracted
-					}
-				}
-			} else if r != nil {
-				r.Response.Body.Close()
-			}
+			len(jobs) < maxExtractsPerFetch && (extractDeadline.IsZero() || time.Now().Before(extractDeadline)) {
+			jobs = append(jobs, extractJob{index: i, link: link})
 		}
 		entry := service.IngestItem{IdentityHash: feed.IdentityHash(it), GUID: it.GUID, URL: link, Title: it.Title, Author: it.Author, PublishedAt: it.Published, UpdatedAt: it.Updated, ContentHash: feed.ContentHash(it), Language: it.Language, ContentHTML: doc.HTML, ContentText: sanitize.Text(doc.HTML), SanitizerVersion: int(doc.Version), ContentSource: source}
 		for _, enc := range it.Enclosures {
@@ -456,7 +442,85 @@ func (f *Fetcher) items(ctx context.Context, claim service.FeedToFetch, list []f
 		}
 		result = append(result, entry)
 	}
+	// Results land back on items by index, so overlapping fetches cannot
+	// reorder the list.
+	for i, extracted := range f.extractItems(ctx, jobs, extractDeadline) {
+		result[i].ContentHTML = extracted.document.HTML
+		result[i].ContentText = sanitize.Text(extracted.document.HTML)
+		result[i].SanitizerVersion = int(extracted.document.Version)
+		result[i].ContentSource = extracted.source
+	}
 	return result, nil
+}
+
+// extractWorkers bounds concurrent full-text extraction. The outbound client
+// still spaces requests per host, so this mainly overlaps different hosts and
+// hides readability CPU time instead of serialising the whole item list.
+const extractWorkers = 4
+
+// extractJob is one full-text extraction selected in items(): the item index
+// the result applies to and the resolved http(s) link to fetch.
+type extractJob struct {
+	index int
+	link  string
+}
+
+type extractionResult struct {
+	document sanitize.Document
+	source   service.ContentSource
+}
+
+// extractItems runs the selected jobs through a pool of extractWorkers. A
+// worker starts no new fetch once ctx is done or the lease deadline has
+// passed; an in-flight GET still ends with ctx. Failures leave no result, so
+// the item keeps its feed body: an extraction error is not a feed error.
+func (f *Fetcher) extractItems(ctx context.Context, jobs []extractJob, deadline time.Time) map[int]extractionResult {
+	if len(jobs) == 0 {
+		return nil
+	}
+	results := make(map[int]extractionResult, len(jobs))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	// Buffered so the producer never blocks if every worker stops early on a
+	// cancelled context or an expired lease.
+	jobsCh := make(chan extractJob, len(jobs))
+	workers := min(extractWorkers, len(jobs))
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobsCh {
+				if ctx.Err() != nil || (!deadline.IsZero() && !time.Now().Before(deadline)) {
+					return
+				}
+				r, e := f.client.Get(ctx, j.link, outbound.Policy{Purpose: outbound.Extract, ExtraPorts: f.config.ExtraPorts})
+				if e != nil || r == nil {
+					if r != nil {
+						r.Response.Body.Close()
+					}
+					continue
+				}
+				body, readErr := io.ReadAll(r.Response.Body)
+				r.Response.Body.Close()
+				if readErr != nil || r.Response.StatusCode < 200 || r.Response.StatusCode >= 300 {
+					continue
+				}
+				extracted, extractErr := extract.Extract(r.FinalURL, body)
+				if extractErr != nil || extracted.Status != extract.StatusOK {
+					continue
+				}
+				mu.Lock()
+				results[j.index] = extractionResult{document: extracted.Document, source: service.ContentFromExtracted}
+				mu.Unlock()
+			}
+		}()
+	}
+	for _, j := range jobs {
+		jobsCh <- j
+	}
+	close(jobsCh)
+	wg.Wait()
+	return results
 }
 
 // ProbeError classifies a discovery failure.
