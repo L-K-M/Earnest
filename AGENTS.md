@@ -27,6 +27,7 @@ clients live in `clients/mac` and `clients/android`.
 | Run the stack | `docker compose up -d --build` → `localhost:8080/healthz` |
 | Update a deployment | `./update.sh [branch]` |
 | Tag a release | `scripts/release.sh X.Y.Z [--push]` (see `CICD.md`) |
+| Regenerate icons and wordmark images | `swift scripts/brand-assets.swift` on macOS (see `media-sources/README.md`) |
 
 ## Layout and stack
 
