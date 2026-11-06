@@ -12,7 +12,7 @@ it('is stable within a day', () => {
   expect(morning).toBe(evening)
 })
 
-it('rotates across days', () => {
-  const seen = new Set(Array.from({length: EMPTY_STATES.length + 1}, (_, i) => emptyCopy(new Date(Date.UTC(2026, 10, 6 + i)))))
-  expect(seen.size).toBeGreaterThan(1)
+it('rotates across days and every message appears once per cycle', () => {
+  const seen = new Set(Array.from({length: EMPTY_STATES.length}, (_, i) => emptyCopy(new Date(Date.UTC(2026, 10, 6 + i)))))
+  expect(seen.size).toBe(EMPTY_STATES.length)
 })
