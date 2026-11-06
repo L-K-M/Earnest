@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -289,4 +290,104 @@ func TestHostSpacing(t *testing.T) {
 	if len(hits) != 2 || hits[1].Sub(hits[0]) < 40*time.Millisecond {
 		t.Fatalf("spacing: %v", hits)
 	}
+}
+
+// The two article fetches must overlap: each handler only releases once both
+// requests have arrived, so a serial fetcher times out and the items fall back
+// to feed content. The articles use different hostnames because the outbound
+// client spaces requests per hostname.
+func TestFullTextExtractionOverlaps(t *testing.T) {
+	var mu sync.Mutex
+	arrived := 0
+	release := make(chan struct{})
+	articleHandler := func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		arrived++
+		if arrived == 2 {
+			close(release)
+		}
+		mu.Unlock()
+		select {
+		case <-release:
+		case <-time.After(5 * time.Second):
+			http.Error(w, "timeout", http.StatusInternalServerError)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `<html><body><article><p>%s</p></article></body></html>`, strings.Repeat("word ", 200))
+	}
+	articleA := httptest.NewServer(http.HandlerFunc(articleHandler))
+	defer articleA.Close()
+	articleB := httptest.NewServer(http.HandlerFunc(articleHandler))
+	defer articleB.Close()
+	articleAURL := strings.Replace(articleA.URL, "127.0.0.1", "localhost", 1)
+	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintf(w, `<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>`+
+			`<item><title>a</title><link>%s</link><description>short</description></item>`+
+			`<item><title>b</title><link>%s</link><description>short</description></item>`+
+			`</channel></rss>`, articleAURL, articleB.URL)
+	}))
+	defer feed.Close()
+
+	hosts := make([]string, 0, 3)
+	ports := make([]uint16, 0, 3)
+	for _, raw := range []string{feed.URL, articleAURL, articleB.URL} {
+		u, err := url.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hosts = append(hosts, u.Host)
+		_, p, _ := net.SplitHostPort(u.Host)
+		n, _ := strconv.Atoi(p)
+		ports = append(ports, uint16(n))
+	}
+	c, err := outbound.New(outbound.Config{AllowHosts: hosts, Spacing: time.Nanosecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &fakeService{}
+	f, err := New(s, c, Config{ExtraPorts: ports})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Fetch(context.Background(), service.FeedToFetch{FeedID: 1, URL: feed.URL, Extract: service.ExtractAlways}); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.outcomes) != 1 {
+		t.Fatalf("outcomes: %d", len(s.outcomes))
+	}
+	items := s.outcomes[0].Items
+	if len(items) != 2 {
+		t.Fatalf("items: %d", len(items))
+	}
+	for i, item := range items {
+		if item.ContentSource != service.ContentFromExtracted {
+			t.Fatalf("item %d source = %s, want extracted (title %q)", i, item.ContentSource, item.Title)
+		}
+	}
+}
+
+func testFetcherForServers(t *testing.T, servers ...*httptest.Server) (*Fetcher, *fakeService) {
+	t.Helper()
+	hosts := make([]string, 0, len(servers))
+	ports := make([]uint16, 0, len(servers))
+	for _, server := range servers {
+		u, err := url.Parse(server.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hosts = append(hosts, u.Host)
+		_, p, _ := net.SplitHostPort(u.Host)
+		n, _ := strconv.Atoi(p)
+		ports = append(ports, uint16(n))
+	}
+	c, err := outbound.New(outbound.Config{AllowHosts: hosts, Spacing: time.Nanosecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &fakeService{}
+	f, err := New(s, c, Config{ExtraPorts: ports})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f, s
 }

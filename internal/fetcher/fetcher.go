@@ -351,8 +351,9 @@ func (f *Fetcher) items(ctx context.Context, claim service.FeedToFetch, list []f
 			return nil, fmt.Errorf("known identities: %w", err)
 		}
 	}
+	extractions := f.extractItems(ctx, claim, list, known)
 	result := make([]service.IngestItem, 0, len(list))
-	for _, it := range list {
+	for i, it := range list {
 		base, _ := url.Parse(it.URL)
 		content := it.ContentHTML
 		if content == "" {
@@ -366,21 +367,9 @@ func (f *Fetcher) items(ctx context.Context, claim service.FeedToFetch, list []f
 		if it.ContentHTML == "" {
 			source = service.ContentFromFeedExcerpt
 		}
-		if claim.Extract == service.ExtractAlways && !known[feed.IdentityHash(it)] && it.URL != "" {
-			r, e := f.client.Get(ctx, it.URL, outbound.Policy{Purpose: outbound.Extract, ExtraPorts: f.config.ExtraPorts})
-			if e == nil && r != nil {
-				body, readErr := io.ReadAll(r.Response.Body)
-				r.Response.Body.Close()
-				if readErr == nil && r.Response.StatusCode >= 200 && r.Response.StatusCode < 300 {
-					extracted, extractErr := extract.Extract(r.FinalURL, body)
-					if extractErr == nil && extracted.Status == extract.StatusOK {
-						doc = extracted.Document
-						source = service.ContentFromExtracted
-					}
-				}
-			} else if r != nil {
-				r.Response.Body.Close()
-			}
+		if extracted, ok := extractions[i]; ok {
+			doc = extracted.document
+			source = extracted.source
 		}
 		entry := service.IngestItem{IdentityHash: feed.IdentityHash(it), GUID: it.GUID, URL: it.URL, Title: it.Title, Author: it.Author, PublishedAt: it.Published, UpdatedAt: it.Updated, ContentHash: feed.ContentHash(it), Language: it.Language, ContentHTML: doc.HTML, ContentText: sanitize.Text(doc.HTML), SanitizerVersion: int(doc.Version), ContentSource: source}
 		for _, enc := range it.Enclosures {
@@ -389,6 +378,80 @@ func (f *Fetcher) items(ctx context.Context, claim service.FeedToFetch, list []f
 		result = append(result, entry)
 	}
 	return result, nil
+}
+
+// extractWorkers bounds concurrent full-text extraction. The outbound client
+// still spaces requests per host, so this mainly overlaps different hosts and
+// hides readability CPU time instead of serialising the whole item list.
+const extractWorkers = 4
+
+type extractionResult struct {
+	document sanitize.Document
+	source   service.ContentSource
+}
+
+// extractItems fetches and extracts every item that needs full text, bounded by
+// extractWorkers. Failures fall back to the feed body, matching the previous
+// behaviour: an extraction error is not a feed error.
+func (f *Fetcher) extractItems(ctx context.Context, claim service.FeedToFetch, list []feed.Item, known map[string]bool) map[int]extractionResult {
+	if claim.Extract != service.ExtractAlways {
+		return nil
+	}
+	type job struct {
+		index int
+		url   string
+	}
+	jobs := make([]job, 0, len(list))
+	for i, it := range list {
+		if it.URL == "" || known[feed.IdentityHash(it)] {
+			continue
+		}
+		jobs = append(jobs, job{index: i, url: it.URL})
+	}
+	if len(jobs) == 0 {
+		return nil
+	}
+	results := make(map[int]extractionResult, len(jobs))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	jobsCh := make(chan job)
+	workers := min(extractWorkers, len(jobs))
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobsCh {
+				if ctx.Err() != nil {
+					return
+				}
+				r, e := f.client.Get(ctx, j.url, outbound.Policy{Purpose: outbound.Extract, ExtraPorts: f.config.ExtraPorts})
+				if e != nil || r == nil {
+					if r != nil {
+						r.Response.Body.Close()
+					}
+					continue
+				}
+				body, readErr := io.ReadAll(r.Response.Body)
+				r.Response.Body.Close()
+				if readErr != nil || r.Response.StatusCode < 200 || r.Response.StatusCode >= 300 {
+					continue
+				}
+				extracted, extractErr := extract.Extract(r.FinalURL, body)
+				if extractErr != nil || extracted.Status != extract.StatusOK {
+					continue
+				}
+				mu.Lock()
+				results[j.index] = extractionResult{document: extracted.Document, source: service.ContentFromExtracted}
+				mu.Unlock()
+			}
+		}()
+	}
+	for _, j := range jobs {
+		jobsCh <- j
+	}
+	close(jobsCh)
+	wg.Wait()
+	return results
 }
 
 // ProbeError classifies a discovery failure.
