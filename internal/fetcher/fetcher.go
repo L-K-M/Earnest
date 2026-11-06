@@ -38,6 +38,17 @@ type Config struct {
 	Metrics                  *metrics.Registry
 }
 
+const (
+	// maxExtractsPerFetch bounds full-text extraction within one pass. Each
+	// attempt is a bounded outbound GET, but a fresh subscription has one per
+	// item; without a cap the item loop can outlive the claim lease and a
+	// second worker claims the same feed. Skipped items stay unknown to
+	// KnownIdentities and are extracted on later passes.
+	maxExtractsPerFetch = 12
+	// leaseMargin keeps the item loop clear of the claim lease deadline.
+	leaseMargin = 30 * time.Second
+)
+
 // Fetcher coordinates retrieval and reporting.
 type Fetcher struct {
 	service Service
@@ -317,9 +328,6 @@ func (f *Fetcher) interval(item service.FeedToFetch, parsed *feed.Feed, status s
 		sort.Slice(dates, func(i, j int) bool { return dates[i].Before(dates[j]) })
 		if len(dates) > 1 {
 			d = dates[len(dates)-1].Sub(dates[0]) / time.Duration(len(dates)-1)
-			if d > time.Hour {
-				d = time.Hour
-			}
 		}
 	}
 	if status != service.FetchFailed && d >= time.Hour {
@@ -365,6 +373,13 @@ func (f *Fetcher) items(ctx context.Context, claim service.FeedToFetch, list []f
 		}
 	}
 	result := make([]service.IngestItem, 0, len(list))
+	// Extraction work stops at the smaller of a count budget and the claim
+	// lease deadline, so one pass can never run past its lease.
+	extractDeadline := time.Time{}
+	if !claim.LeaseUntil.IsZero() {
+		extractDeadline = claim.LeaseUntil.Add(-leaseMargin)
+	}
+	extractions := 0
 	for _, it := range list {
 		base := itemBase(it.URL)
 		link := ""
@@ -388,7 +403,9 @@ func (f *Fetcher) items(ctx context.Context, claim service.FeedToFetch, list []f
 		if it.ContentHTML == "" {
 			source = service.ContentFromFeedExcerpt
 		}
-		if claim.Extract == service.ExtractAlways && base != nil && !known[feed.IdentityHash(it)] {
+		if claim.Extract == service.ExtractAlways && base != nil && !known[feed.IdentityHash(it)] &&
+			extractions < maxExtractsPerFetch && (extractDeadline.IsZero() || time.Now().Before(extractDeadline)) {
+			extractions++
 			r, e := f.client.Get(ctx, it.URL, outbound.Policy{Purpose: outbound.Extract, ExtraPorts: f.config.ExtraPorts})
 			if e == nil && r != nil {
 				body, readErr := io.ReadAll(r.Response.Body)

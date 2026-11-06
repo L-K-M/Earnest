@@ -10,9 +10,11 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/L-K-M/Earnest/internal/feed"
 	"github.com/L-K-M/Earnest/internal/outbound"
 	"github.com/L-K-M/Earnest/internal/service"
 )
@@ -358,5 +360,73 @@ func TestFetchDropsActiveSchemeLinks(t *testing.T) {
 		default:
 			t.Fatalf("unexpected guid %q", item.GUID)
 		}
+	}
+}
+
+func TestIntervalLetsSlowFeedsBackOffToMaxInterval(t *testing.T) {
+	f, _ := testFetcher(t, httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
+	now := time.Now()
+	day := 24 * time.Hour
+	parsed := &feed.Feed{Items: []feed.Item{
+		{Published: func() *time.Time { v := now.Add(-14 * day); return &v }()},
+		{Published: func() *time.Time { v := now.Add(-7 * day); return &v }()},
+		{Published: func() *time.Time { v := now; return &v }()},
+	}}
+	got := f.interval(service.FeedToFetch{}, parsed, service.FetchOK, "")
+	if got != f.config.MaxInterval {
+		t.Fatalf("a weekly feed must poll at MaxInterval (%v), got %v", f.config.MaxInterval, got)
+	}
+}
+
+func TestFetchBoundsExtractionWork(t *testing.T) {
+	var pageHits atomic.Int32
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/page") {
+			pageHits.Add(1)
+			fmt.Fprint(w, "<html><body><article><h1>Story</h1><p>a readable article body with enough words</p></article></body></html>")
+			return
+		}
+		var b strings.Builder
+		b.WriteString(`<rss version="2.0"><channel><title>Feed</title>`)
+		for i := 0; i < 20; i++ {
+			fmt.Fprintf(&b, `<item><guid>g%d</guid><link>%s/page%d</link><description>body %d</description></item>`, i, server.URL, i, i)
+		}
+		b.WriteString(`</channel></rss>`)
+		fmt.Fprint(w, b.String())
+	}))
+	defer server.Close()
+	f, s := testFetcher(t, server)
+	claim := service.FeedToFetch{FeedID: 1, URL: server.URL, Extract: service.ExtractAlways, LeaseUntil: time.Now().Add(10 * time.Minute)}
+	if err := f.Fetch(context.Background(), claim); err != nil {
+		t.Fatal(err)
+	}
+	if s.outcomes[0].Status != service.FetchOK || len(s.outcomes[0].Items) != 20 {
+		t.Fatalf("all items must be ingested, got %s with %d items", s.outcomes[0].Status, len(s.outcomes[0].Items))
+	}
+	if got := pageHits.Load(); got != maxExtractsPerFetch {
+		t.Fatalf("one pass must extract at most %d pages, got %d", maxExtractsPerFetch, got)
+	}
+}
+
+func TestFetchStopsExtractingNearTheLeaseDeadline(t *testing.T) {
+	var pageHits atomic.Int32
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/page") {
+			pageHits.Add(1)
+			fmt.Fprint(w, "<html><body><article><h1>Story</h1><p>a readable article body with enough words</p></article></body></html>")
+			return
+		}
+		fmt.Fprintf(w, `<rss version="2.0"><channel><title>Feed</title><item><guid>g</guid><link>%s/page0</link><description>body</description></item></channel></rss>`, server.URL)
+	}))
+	defer server.Close()
+	f, _ := testFetcher(t, server)
+	claim := service.FeedToFetch{FeedID: 1, URL: server.URL, Extract: service.ExtractAlways, LeaseUntil: time.Now().Add(time.Second)}
+	if err := f.Fetch(context.Background(), claim); err != nil {
+		t.Fatal(err)
+	}
+	if got := pageHits.Load(); got != 0 {
+		t.Fatalf("a lease about to expire must defer extraction, got %d page fetches", got)
 	}
 }
