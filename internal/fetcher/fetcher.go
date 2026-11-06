@@ -387,11 +387,13 @@ func (f *Fetcher) items(ctx context.Context, claim service.FeedToFetch, list []f
 			// Only absolute http(s) links reach a client that renders them as
 			// anchors; a stored active-scheme link is a stored attack.
 			link = strings.TrimSpace(it.URL)
-		} else if ref, err := url.Parse(strings.TrimSpace(it.URL)); err == nil && ref.Scheme == "" && it.URL != "" {
+		} else if ref, err := url.Parse(strings.TrimSpace(it.URL)); err == nil && ref.Scheme == "" && (ref.Host != "" || ref.Path != "") {
 			// Relative item links are valid RSS/Atom. The parser resolves them
 			// against the feed base, but a feed with a broken base URI can still
 			// hand one over; resolve it against the fetch URL so the item keeps
-			// a usable link. Active-scheme values have a scheme and stay dropped.
+			// a usable link. Active-scheme values have a scheme and stay dropped;
+			// a blank, fragment-only or query-only reference names no resource
+			// and would otherwise resolve to the feed URL itself.
 			if feedBase := itemBase(claim.URL); feedBase != nil {
 				base = itemBase(feedBase.ResolveReference(ref).String())
 				if base != nil {

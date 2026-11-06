@@ -459,6 +459,9 @@ func TestItemsResolveRelativeLinksAgainstTheFetchURL(t *testing.T) {
 		{GUID: "relative", URL: "relative/post", ContentHTML: "body"},
 		{GUID: "rooted", URL: "/posts/2", ContentHTML: "body"},
 		{GUID: "active", URL: "javascript:alert(1)", ContentHTML: "body"},
+		{GUID: "blank", URL: "   ", ContentHTML: "body"},
+		{GUID: "fragment", URL: "#top", ContentHTML: "body"},
+		{GUID: "query", URL: "?page=2", ContentHTML: "body"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -467,6 +470,9 @@ func TestItemsResolveRelativeLinksAgainstTheFetchURL(t *testing.T) {
 		"relative": "https://feed.example/relative/post",
 		"rooted":   "https://feed.example/posts/2",
 		"active":   "",
+		"blank":    "",
+		"fragment": "",
+		"query":    "",
 	}
 	for _, item := range items {
 		if item.URL != want[item.GUID] {
