@@ -321,3 +321,106 @@ func TestAgentChangesToUnseenFiltersBeforeLimit(t *testing.T) {
 		t.Fatalf("second page: %v %v", page, err)
 	}
 }
+
+func TestRevertPublishesChangeHint(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := context.Background()
+	id := f.ingest(t, "article")
+	a := surfaceAgent(t, f, "Morning", 3)
+	gen, err := f.db.Generation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.Triage(ctx, a, TriageRequest{OpID: "triage", Generation: gen, EntryIDs: []int64{id}, Action: TriageDone}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := f.s.ListActivity(ctx, f.a, ActivityFilter{PrincipalID: a.PrincipalID})
+	if err != nil || len(rows) != 1 {
+		t.Fatal(rows, err)
+	}
+	hints, cancel, err := f.s.WatchChanges(ctx, f.a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	if err := f.s.Revert(ctx, f.a, rows[0].ID, "human-revert"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-hints:
+	case <-time.After(5 * time.Second):
+		t.Fatal("revert did not publish a change hint")
+	}
+}
+
+func TestAnnotationRevertEmitsFullPayload(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := context.Background()
+	id := f.ingest(t, "article")
+	a := surfaceAgent(t, f, "Morning", 3)
+	request := PutAnnotationRequest{OpID: "note", EntryIDs: []int64{id}, Kind: AnnotationNote, Value: "note"}
+	if _, err := f.s.PutAnnotation(ctx, a, request); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := f.s.ListActivity(ctx, f.a, ActivityFilter{Action: "annotation.updated"})
+	if err != nil || len(rows) != 1 {
+		t.Fatal(rows, err)
+	}
+	hints, cancel, err := f.s.WatchChanges(ctx, f.a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	if err := f.s.Revert(ctx, f.a, rows[0].ID, "revert-note"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-hints:
+	case <-time.After(5 * time.Second):
+		t.Fatal("annotation revert did not publish a change hint")
+	}
+	var kind string
+	var payload []byte
+	if err := f.db.Pool().QueryRow(ctx, "SELECT type,payload FROM changes WHERE user_id=$1 ORDER BY rev DESC LIMIT 1", f.a.UserID).Scan(&kind, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if kind != "annotation.deleted" {
+		t.Fatalf("change type %q", kind)
+	}
+	var body struct {
+		Annotation Annotation `json:"annotation"`
+	}
+	if err := json.Unmarshal(payload, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Annotation.Value != "note" || body.Annotation.ID == 0 {
+		t.Fatalf("payload missing restored annotation: %s", payload)
+	}
+}
+
+func TestMutePublishesChangeHint(t *testing.T) {
+	f := entriesTestNew(t, storetest.NewTemplate(t))
+	ctx := context.Background()
+	hints, cancel, err := f.s.WatchChanges(ctx, f.a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	mute, err := f.s.CreateMute(ctx, f.a, MuteKeyword, "noisy", "mute")
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-hints:
+	case <-time.After(5 * time.Second):
+		t.Fatal("mute create did not publish a change hint")
+	}
+	if err := f.s.DeleteMute(ctx, f.a, mute.ID, "delete"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-hints:
+	case <-time.After(5 * time.Second):
+		t.Fatal("mute delete did not publish a change hint")
+	}
+}
