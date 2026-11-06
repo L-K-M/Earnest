@@ -7,7 +7,11 @@ import EarnestKit
     @StateObject private var model = AppModel()
 
     var body: some Scene {
-        WindowGroup {
+        // One window by design: AppModel owns the sync engine, cache and
+        // selection as a singleton, so a second WindowGroup window mirrored
+        // the first instead of opening an independent reading pane. Truly
+        // per-window state would need the engine shared and selection local.
+        Window("Earnest", id: "main") {
             ContentView().environmentObject(model)
                 .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
         }

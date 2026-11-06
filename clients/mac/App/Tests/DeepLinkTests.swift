@@ -14,22 +14,19 @@ final class DeepLinkTests: XCTestCase {
 }
 
 @MainActor final class DeepLinkWindowTests: XCTestCase {
-    func testExternalURLsReuseWindowsAndNewWindowRemainsAvailable() async throws {
+    func testExternalURLsReuseWindowsAndNewWindowIsNotOffered() async throws {
         let initial = readerWindows.count
         XCTAssertGreaterThan(initial, 0)
         try await sendEntryURL()
         try await sendEntryURL()
         XCTAssertEqual(readerWindows.count, initial, "External URLs must reuse a reader window")
 
-        let fileMenu = try XCTUnwrap(NSApp.mainMenu?.items.first(where: { $0.title == "File" })?.submenu)
-        let index = fileMenu.indexOfItem(withTitle: "New Window")
-        XCTAssertGreaterThanOrEqual(index, 0)
-        guard index >= 0 else { return }
-        fileMenu.performActionForItem(at: index)
-        try await Task.sleep(for: .milliseconds(100))
-        XCTAssertEqual(readerWindows.count, initial + 1, "File > New Window must keep multi-window support")
-        try await sendEntryURL()
-        XCTAssertEqual(readerWindows.count, initial + 1)
+        // One window by design: the AppModel owns the sync engine, cache and
+        // reading selection as a singleton, so a second window mirrored the
+        // first instead of reading side by side.
+        let menus = NSApp.mainMenu?.items.compactMap(\.submenu) ?? []
+        let hasNewWindow = menus.contains { $0.indexOfItem(withTitle: "New Window") >= 0 }
+        XCTAssertFalse(hasNewWindow, "New Window must not be offered: its window shared the first window's reading state")
 
         for window in readerWindows { window.close() }
         try await sendEntryURL()
