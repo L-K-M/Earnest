@@ -414,7 +414,9 @@ func (f *Fetcher) extractItems(ctx context.Context, claim service.FeedToFetch, l
 	results := make(map[int]extractionResult, len(jobs))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	jobsCh := make(chan job)
+	// Buffered so the producer never blocks if every worker stops early on a
+	// cancelled context.
+	jobsCh := make(chan job, len(jobs))
 	workers := min(extractWorkers, len(jobs))
 	for w := 0; w < workers; w++ {
 		wg.Add(1)

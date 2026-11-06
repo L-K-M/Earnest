@@ -391,3 +391,43 @@ func testFetcherForServers(t *testing.T, servers ...*httptest.Server) (*Fetcher,
 	}
 	return f, s
 }
+
+// Cancelling the context must not leave the producer blocked on a job channel
+// whose workers have all exited.
+func TestFullTextExtractionCancellationDoesNotHang(t *testing.T) {
+	var once sync.Once
+	arrived := make(chan struct{})
+	release := make(chan struct{})
+	article := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		once.Do(func() { close(arrived) })
+		<-release
+	}))
+	defer article.Close()
+	feedServed := make(chan struct{})
+	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(feedServed)
+		_, _ = fmt.Fprintf(w, `<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>%s</channel></rss>`,
+			strings.Repeat(`<item><title>a</title><link>`+article.URL+`</link><description>short</description></item>`, 5))
+	}))
+	defer feed.Close()
+	f, _ := testFetcherForServers(t, feed, article)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- f.Fetch(ctx, service.FeedToFetch{FeedID: 1, URL: feed.URL, Extract: service.ExtractAlways})
+	}()
+	<-feedServed
+	select {
+	case <-arrived:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("extraction never started")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Fetch deadlocked after cancellation")
+	}
+	close(release)
+}
