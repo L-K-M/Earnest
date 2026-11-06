@@ -4,6 +4,12 @@ export const contentLimit = 200
 export const responseLimit = 100
 export const maxResponseBytes = 2 * 1024 * 1024
 
+// warmLimit bounds how many article bodies a river page prefetches for offline
+// reading. The first entries of a page are the newest and the most likely to be
+// read next, so warming them keeps the next screen available offline without
+// downloading the whole backlog on every page.
+export const warmLimit = 10
+
 export function cacheKind(raw: string, origin: string, method='GET'): 'shell' | 'content' | 'reading' | 'resource' | null {
   const url = new URL(raw,origin)
   if (method !== 'GET' || url.origin !== origin) return null
@@ -20,10 +26,10 @@ export function evictionKeys(keys: string[], incoming: string, limit: number): s
   return ordered.slice(0,Math.max(0,ordered.length-Math.max(0,limit)))
 }
 
-export function visitedContentPaths(page: unknown): string[] {
+export function warmContentPaths(page: unknown): string[] {
   if (!page || typeof page !== 'object' || !('entries' in page) || !Array.isArray(page.entries)) return []
   return [...new Set(page.entries.flatMap((entry: unknown) => {
     if (!entry || typeof entry !== 'object' || !('id' in entry) || !Number.isSafeInteger(entry.id) || Number(entry.id) <= 0 || ('deleted' in entry && entry.deleted)) return []
     return [`/v1/entries/${entry.id}/content`]
-  }))].slice(-contentLimit)
+  }))].slice(0,warmLimit)
 }

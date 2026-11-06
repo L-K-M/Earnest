@@ -1,5 +1,5 @@
 import {describe,expect,it} from 'vitest'
-import {cacheKind,contentLimit,evictionKeys,visitedContentPaths} from './policy'
+import {cacheKind,evictionKeys,warmContentPaths,warmLimit} from './policy'
 
 const origin = 'https://reader.test'
 describe('offline cache allowlist',() => {
@@ -26,10 +26,10 @@ describe('bounded oldest-first eviction',() => {
     expect(evictionKeys(['a','b','c'],'d',1)).toEqual(['a','b','c'])
   })
   it('selects safe entry IDs only, deduplicates and caps each warmup',() => {
-    expect(visitedContentPaths({entries:[null,{}, {id:1}, {id:1}, {id:'2'}, {id:3,deleted:true}, {id:Number.MAX_SAFE_INTEGER+1}, {id:-1}]})).toEqual(['/v1/entries/1/content'])
-    const paths = visitedContentPaths({entries:Array.from({length:300},(_,i) => ({id:i+1}))})
-    expect(paths).toHaveLength(contentLimit)
-    expect(paths[0]).toBe('/v1/entries/101/content')
-    expect(visitedContentPaths(null)).toEqual([])
+    expect(warmContentPaths({entries:[null,{}, {id:1}, {id:1}, {id:'2'}, {id:3,deleted:true}, {id:Number.MAX_SAFE_INTEGER+1}, {id:-1}]})).toEqual(['/v1/entries/1/content'])
+    const paths = warmContentPaths({entries:Array.from({length:300},(_,i) => ({id:i+1}))})
+    expect(paths).toHaveLength(warmLimit)
+    expect(paths[0]).toBe('/v1/entries/1/content')
+    expect(warmContentPaths(null)).toEqual([])
   })
 })
