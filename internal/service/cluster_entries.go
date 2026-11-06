@@ -15,6 +15,9 @@ func (s *Service) ClusterEntries(ctx context.Context, a Actor, f EntryFilter) ([
 	if f.Limit < 0 || f.Limit > maxEntryLimit {
 		return nil, ErrInvalid
 	}
+	if f.Limit == 0 {
+		f.Limit = defaultEntryLimit
+	}
 	f.SuppressClusters = true
 	return s.Entries(ctx, a, f)
 }
