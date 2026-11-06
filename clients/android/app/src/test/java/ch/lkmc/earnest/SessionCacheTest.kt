@@ -44,6 +44,35 @@ class SessionCacheTest {
         assertEquals(listOf("later"), worker.withEngine { it.snapshot().outbox.map { p -> p.operation.opId } })
     }
 
+    @Test fun queuedActionCompletesWhilePullWaitsOnTheNetwork() = runBlocking(Dispatchers.IO) {
+        val cache = SessionCache(context, identity)
+        cache.withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val fetching = CompletableDeferred<Unit>()
+        val release = java.util.concurrent.CountDownLatch(1)
+        val api = EarnestApi(identity.server, "token", okhttp3.OkHttpClient.Builder().addInterceptor { chain ->
+            val body = when (chain.request().url.encodedPath) {
+                "/v1/mutes" -> "[]"
+                "/v1/settings" -> """{"today_decay_days":2,"rev":0}"""
+                "/v1/changes" -> {
+                    fetching.complete(Unit)
+                    release.await()
+                    """{"changes":[],"next":{"generation":"g1","rev":0},"next_cursor":"g1:0"}"""
+                }
+                else -> "[]"
+            }
+            okhttp3.Response.Builder().request(chain.request()).protocol(okhttp3.Protocol.HTTP_1_1)
+                .code(200).message("test").body(body.toResponseBody()).build()
+        }.build())
+        val pull = async(Dispatchers.IO) { cache.withSync(api) { it.pull() } }
+        fetching.await()
+        withTimeout(5000) { cache.withEngine { it.queue(write) } }
+        assertTrue("the pull's HTTP was released before the queued action ran", release.count > 0)
+        assertEquals(listOf("later"), cache.withEngine { it.snapshot().outbox.map { p -> p.operation.opId } })
+        release.countDown()
+        pull.await()
+        assertEquals(listOf("later"), cache.withEngine { it.snapshot().outbox.map { p -> p.operation.opId } })
+    }
+
     @Test fun consecutiveWritesReuseTheEngineUntilAnotherWriterCommits() = runBlocking(Dispatchers.IO.limitedParallelism(1)) {
         val cache = SessionCache(context, identity)
         cache.withEngine { it.beginBootstrap(Revision("g1", 0)); it.queue(write) }
@@ -116,7 +145,7 @@ class SessionCacheTest {
                 .code(status).message("test")
                 .body(json.encodeToString(kotlinx.serialization.builtins.ListSerializer(Activity.serializer()), page).toResponseBody()).build()
         }.build())
-        cache.withEngine {
+        cache.withSync(api) {
             cache.markAgentChangesStale()
             cache.refreshAgentChanges(api)
         }
@@ -126,7 +155,7 @@ class SessionCacheTest {
         status = 503
         cache.markAgentChangesStale()
         try {
-            cache.withEngine { cache.refreshAgentChanges(api) }
+            cache.withSync(api) { cache.refreshAgentChanges(api) }
             fail("failed notice fetch succeeded")
         } catch (_: ApiException) {
             assertEquals(1000, cache.agentChanges().size)
