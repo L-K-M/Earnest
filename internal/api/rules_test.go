@@ -109,6 +109,9 @@ func TestHTTPRules(t *testing.T) {
 	if len(matches.Entries) != 1 || matches.Entries[0].ID != f.entryID {
 		t.Fatalf("dry run matches=%+v", matches.Entries)
 	}
+	if matches.Total != 1 {
+		t.Fatalf("dry run total=%d want 1", matches.Total)
+	}
 	if after := snapshot(); before != after {
 		t.Fatalf("dry run changed persisted state: before=%s after=%s", before, after)
 	}

@@ -119,11 +119,11 @@ func (s *Service) CompileRule(ctx context.Context, a Actor, text string) (Compil
 			return CompiledRule{}, ErrInvalid
 		}
 	}
-	ids, err := s.DryRunRule(ctx, a, predicate, output.Actions)
+	ids, total, err := s.DryRunRule(ctx, a, predicate, output.Actions)
 	if err != nil {
 		return CompiledRule{}, err
 	}
-	return CompiledRule{Predicate: predicate, Actions: output.Actions, FeedsToConfirm: selected, EntryIDs: ids, Matched: len(ids), Description: fmt.Sprintf("Would have matched %d items", len(ids)), Model: model, PromptVersion: CompilePromptVersion}, nil
+	return CompiledRule{Predicate: predicate, Actions: output.Actions, FeedsToConfirm: selected, EntryIDs: ids, Matched: total, Description: fmt.Sprintf("Would have matched %d items", total), Model: model, PromptVersion: CompilePromptVersion}, nil
 }
 
 func humanWroteID(text string, id int64) bool {
