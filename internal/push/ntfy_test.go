@@ -187,3 +187,48 @@ func TestNtfyRejectsOtherKinds(t *testing.T) {
 		t.Fatalf("outcome = %v", OutcomeOf(err))
 	}
 }
+
+// A scheme-less host is still auto-linked by ntfy clients, so it must be
+// treated like a URL.
+func TestNtfyRejectsBareHostInServerBody(t *testing.T) {
+	srv, captured := newCapture(t, http.StatusCreated, nil)
+	transport, err := NewNtfy(testConfig(t, srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = transport.Send(context.Background(), Device{Kind: KindNtfy, Endpoint: srv.URL + "/topic"}, Message{
+		Title: "t",
+		Body:  "read example.com/story please",
+	})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if OutcomeOf(err) != OutcomeNotDelivered {
+		t.Fatalf("outcome = %v", OutcomeOf(err))
+	}
+	select {
+	case <-captured.requests:
+		t.Fatal("request with a bare host was sent anyway")
+	default:
+	}
+}
+
+func TestHasURL(t *testing.T) {
+	tests := []struct {
+		in   string
+		want bool
+	}{
+		{"plain text", false},
+		{"version 1.2 is out", false},
+		{"e.g. this", false},
+		{"see https://example.com", true},
+		{"see example.com/story", true},
+		{"bit.ly/abc", true},
+		{"www.example.com", true},
+	}
+	for _, tt := range tests {
+		if got := hasURL(tt.in); got != tt.want {
+			t.Errorf("hasURL(%q) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+}
