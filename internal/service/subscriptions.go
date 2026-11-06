@@ -23,6 +23,13 @@ const (
 	CadenceWeek  Cadence = "week"
 )
 
+// probeTimeout bounds the synchronous discovery probe in Subscribe. Discovery
+// may follow redirects and HTML hints across many URLs, each with its own
+// outbound timeout, so without a cap a single subscribe request could hang
+// for many minutes; the scheduler picks the feed up within a minute instead.
+// It is a var so tests can shrink it.
+var probeTimeout = 2 * time.Minute
+
 // FeedHealth reports the last attempt, schedule and posting rate.
 type FeedHealth struct {
 	LastSuccessAt       *time.Time `json:"last_success_at,omitempty"`
@@ -245,12 +252,17 @@ func (s *Service) Subscribe(ctx context.Context, a Actor, rawURL string, options
 	if s.prober == nil {
 		return Subscription{}, ErrUnavailable
 	}
-	resolved, meta, items, err := s.prober.Probe(ctx, rawURL, options.Credentials)
+	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	resolved, meta, items, err := s.prober.Probe(probeCtx, rawURL, options.Credentials)
 	if err != nil {
 		class := "network"
 		var classified ProbeError
 		if errors.As(err, &classified) && validFetchError(classified.Class()) {
 			class = classified.Class()
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			class = "timeout"
 		}
 		return Subscription{}, fmt.Errorf("probe failed (%s): %w", class, ErrUnavailable)
 	}
