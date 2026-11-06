@@ -75,6 +75,18 @@ it('preserves saved filters and offers full text when hybrid is paused',async ()
   fireEvent.click(screen.getByRole('button',{name:'Use full-text search'}))
   expect((screen.getByLabelText('Search mode') as HTMLSelectElement).value).toBe('fulltext')
 })
+it('shows saved subscription, folder and limit filters as selectable controls',async () => {
+  vi.mocked(request).mockImplementation(async path => {
+    if (path === '/v1/pipeline') return {embed:'disabled',classify:'disabled',semantic:'disabled',watch:'disabled'}
+    return {matches:[]}
+  })
+  render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}>
+    <Search saved={{id:3,name:'Funding view',query:'funding',filters:{folder_id:7,subscription_id:5,limit:10,mode:'fulltext'}}} onOpen={vi.fn()} subscriptions={[{id:5,feed_id:1,title:'Publisher',url:'https://a.example',deleted:false} as never]} folders={[{id:7,name:'Work',rev:1,deleted:false}]}/>
+  </QueryClientProvider>)
+  expect((screen.getByLabelText('Feed') as HTMLSelectElement).value).toBe('5')
+  expect((screen.getByLabelText('Folder') as HTMLSelectElement).value).toBe('7')
+  expect((screen.getByLabelText('Results per page') as HTMLSelectElement).value).toBe('10')
+})
 it('only requests similarity on a click and hides it when embeddings are disabled',async () => {
   vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {embed:'enabled'} : {matches:[],status:'paused'})
   const client = new QueryClient({defaultOptions:{queries:{retry:false}}})
