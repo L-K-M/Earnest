@@ -174,10 +174,29 @@ func (s *Store) ClassifierLabels(ctx context.Context, id int64, model, version s
 	return labels, true, nil
 }
 
+// WatchCheckState is a reservation decision for one watch confirmation.
+type WatchCheckState int
+
+const (
+	// WatchCheckRun inserted a reservation; make the provider call now.
+	WatchCheckRun WatchCheckState = iota
+	// WatchCheckCached carries a definite earlier answer in the result.
+	WatchCheckCached
+	// WatchCheckUncertain: an earlier attempt remains unmatched until the
+	// content changes. An uncertain call is not automatically repeated.
+	WatchCheckUncertain
+	// WatchCheckBudget: the rule's daily check budget is exhausted.
+	WatchCheckBudget
+)
+
 // WatchCheckReserve accounts attempts before a call, avoiding repeat spending
-// after a crash. An uncertain attempt remains unmatched until content changes.
-func (s *Store) WatchCheckReserve(ctx context.Context, rule, entry int64, hash []byte, model string, budget int, now time.Time) (bool, *bool, error) {
-	var call bool
+// after a crash. An uncertain attempt remains unmatched until content changes,
+// which the state reports as WatchCheckUncertain so callers can distinguish it
+// from budget exhaustion.
+func (s *Store) WatchCheckReserve(ctx context.Context, rule, entry int64, hash []byte, model string, budget int, now time.Time) (WatchCheckState, *bool, error) {
+	// Defaults to WatchCheckBudget: the budget early-return inside the
+	// transaction leaves state untouched when the daily budget is spent.
+	state := WatchCheckBudget
 	var result *bool
 	err := s.WithTx(ctx, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, rule); err != nil {
@@ -185,6 +204,11 @@ func (s *Store) WatchCheckReserve(ctx context.Context, rule, entry int64, hash [
 		}
 		err := tx.QueryRow(ctx, `SELECT matched FROM watch_checks WHERE rule_id=$1 AND entry_id=$2 AND content_hash=$3 AND model=$4`, rule, entry, hash, model).Scan(&result)
 		if err == nil {
+			if result == nil {
+				state = WatchCheckUncertain
+			} else {
+				state = WatchCheckCached
+			}
 			return nil
 		}
 		if err != pgx.ErrNoRows {
@@ -196,16 +220,19 @@ func (s *Store) WatchCheckReserve(ctx context.Context, rule, entry int64, hash [
 			return err
 		}
 		if used >= budget {
+			state = WatchCheckBudget
 			return nil
 		}
 		_, err = tx.Exec(ctx, `INSERT INTO watch_checks(rule_id,entry_id,content_hash,model,attempted_at) VALUES($1,$2,$3,$4,$5)`, rule, entry, hash, model, now)
-		call = err == nil
+		if err == nil {
+			state = WatchCheckRun
+		}
 		return err
 	})
 	if err != nil {
-		return false, nil, fmt.Errorf("reserve watch check: %w", err)
+		return WatchCheckBudget, nil, fmt.Errorf("reserve watch check: %w", err)
 	}
-	return call, result, nil
+	return state, result, nil
 }
 
 // EmbedCached reuses identical bounded publisher input within one privacy
