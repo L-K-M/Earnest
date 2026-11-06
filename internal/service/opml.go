@@ -166,12 +166,14 @@ func (s *Service) importOPMLItem(ctx context.Context, tx pgx.Tx, a Actor, w opml
 		if len(w.title) > 1024 {
 			return result, errTitleTooLong
 		}
-		sub, err := s.subscribeTx(ctx, tx, a, rawURL, FeedMeta{Title: w.title, SiteURL: w.htmlURL}, SubscribeOptions{Title: w.title, FolderID: folderID}, nil)
+		sub, firstFetchPending, err := s.subscribeTx(ctx, tx, a, rawURL, FeedMeta{Title: w.title, SiteURL: w.htmlURL}, SubscribeOptions{Title: w.title, FolderID: folderID}, nil)
 		if err != nil {
 			return result, err
 		}
 		result.Subscription = &sub
-		result.Deferred = true
+		// Deferred reflects whether this import scheduled an initial fetch;
+		// re-importing an existing subscription schedules none.
+		result.Deferred = firstFetchPending
 		return result, nil
 	}
 	if w.folder {

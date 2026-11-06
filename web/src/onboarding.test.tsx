@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import {beforeEach, describe, expect, it, vi, type Mock} from 'vitest'
-import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react'
+import {act, cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {request} from './request'
 import {Onboarding} from './Onboarding'
 import type {Subscription} from './feeds'
@@ -85,5 +85,62 @@ describe('Onboarding', () => {
     expect(calls('/v1/positions')).toHaveLength(0)
     expect(calls('/v1/entries')).toHaveLength(0)
     expect(bodyOf(calls('/v1/settings')[0])).toMatchObject({reading_mode: 'unread_counts', today_decay_days: 2})
+  })
+})
+
+describe('decay input and volume polling', () => {
+  it('keeps today_decay_days numeric when the decay input is cleared', async () => {
+    api({'/v1/entries': {entries: []}, '/v1/settings': {}})
+    const done = vi.fn()
+    render(<Onboarding onComplete={done} />)
+    fireEvent.click(screen.getByRole('button', {name: /Skip/}))
+    await screen.findByText('How do you like to read?')
+    const input = screen.getByLabelText(/Today items stay for this many days/) as HTMLInputElement
+    fireEvent.change(input, {target: {value: ''}})
+    // Clearing the field falls back to the default instead of NaN.
+    expect(input.value).toBe('2')
+    fireEvent.change(input, {target: {value: '5'}})
+    fireEvent.click(screen.getByRole('button', {name: 'Start reading'}))
+    await waitFor(() => expect(done).toHaveBeenCalledTimes(1))
+    const settings = calls('/v1/settings')
+    expect(settings).toHaveLength(1)
+    expect(bodyOf(settings[0]).today_decay_days).toBe(5)
+  })
+
+  it('stops measuring feed volume after unmount', async () => {
+    vi.useFakeTimers()
+    // jsdom's FileReader completes on a real task; resolve it synchronously so
+    // the import flow advances under fake timers.
+    class InstantFileReader {
+      result = '<opml/>'
+      onload: (() => void) | null = null
+      onerror: ((e: unknown) => void) | null = null
+      readAsText() { this.onload?.() }
+    }
+    vi.stubGlobal('FileReader', InstantFileReader)
+    try {
+      const pending = sub({health: {...baseHealth, last_attempt_at: ''}})
+      api({
+        '/v1/opml:import': [{path: [0], deferred: true, subscription: pending}],
+        '/v1/subscriptions': [pending],
+      })
+      const done = vi.fn()
+      const view = render(<Onboarding onComplete={done} />)
+      fireEvent.change(screen.getByLabelText('OPML subscription file'), {target: {files: [new window.File(['<opml/>'], 'feeds.opml')]}})
+      fireEvent.click(screen.getByRole('button', {name: 'Import and continue'}))
+      await act(async () => {})
+      expect(screen.getByText('Import complete')).toBeTruthy()
+      const before = calls('/v1/subscriptions').length
+      view.unmount()
+      await vi.advanceTimersByTimeAsync(60000)
+      const after = calls('/v1/subscriptions').length
+      // A cancelled poll stops after at most one more in-flight request; an
+      // uncancelled one would run the full HEALTH_POLLS (8) iterations.
+      expect(after).toBeLessThan(8)
+      expect(after).toBeLessThanOrEqual(before + 1)
+    } finally {
+      vi.useRealTimers()
+      vi.unstubAllGlobals()
+    }
   })
 })

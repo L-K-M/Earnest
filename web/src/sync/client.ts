@@ -68,6 +68,11 @@ export interface ClientSnapshot {
   // (subscription titles, feed URLs, label definitions) the UI reads via
   // resource(). The engine ignores it.
   rawItems?: [string, JsonValue][];
+  // version is the runtime's monotonic write counter. The engine ignores it;
+  // the store keeps the same number in a small record so a tab can tell
+  // whether its in-memory snapshot is current without reading the whole
+  // document.
+  version?: number;
 }
 
 // FlushRequest is the next outbox group to submit. Register writes go as one

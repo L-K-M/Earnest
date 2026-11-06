@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import {afterEach, expect, it, vi} from 'vitest'
-import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react'
+import {cleanup, fireEvent, render, screen, waitFor, within} from '@testing-library/react'
 import {QueryClient, QueryClientProvider} from '@tanstack/react-query'
 import {ActivityScreen, Notifications, SessionChanges, TodayAgents} from './Surfaces'
 import {request, RequestError} from '../request'
@@ -23,6 +23,21 @@ it('groups changes and explains a conflicting revert',async()=>{
  expect(screen.getByText(/Article 9: seen: unseen to seen/)).toBeTruthy();fireEvent.click(screen.getByText('Revert'));await screen.findByRole('alert')
  expect((await screen.findByRole('alert')).textContent).toContain('You changed it since')
 })
+it('filters activity by agent name and shows an empty state',async()=>{
+ vi.mocked(request).mockImplementation(async path=>path==='/v1/agents'?[{principal_id:2,name:'Scout',muted:false,used_today:0}]:path.startsWith('/v1/activity?')?{activities:[]}:[])
+ mount(<ActivityScreen/>)
+ const select=await screen.findByLabelText('Agent')
+ await screen.findByText('Scout',{exact:true})
+ expect(within(select).getByText('Scout')).toBeTruthy()
+ fireEvent.change(select,{target:{value:'2'}})
+ await waitFor(()=>expect(vi.mocked(request).mock.calls.some(([path])=>path.includes('principal_id=2'))).toBe(true))
+ expect(await screen.findByText('No activity matches these filters.')).toBeTruthy()
+})
+it('shows an empty state when there is no activity',async()=>{
+ vi.mocked(request).mockImplementation(async path=>path==='/v1/agents'?[]:path.startsWith('/v1/activity?')?{activities:[]}:[])
+ mount(<ActivityScreen/>)
+ expect(await screen.findByText('No activity yet.')).toBeTruthy()
+})
 it('shows filtered activity and session changes',async()=>{
  vi.mocked(request).mockImplementation(async path=>path==='/v1/agents'?[{principal_id:2,name:hostile,muted:true,used_today:3},{principal_id:3,name:'Other',muted:false,used_today:0}]:{activities:[row]})
  const view=mount(<ActivityScreen/>);expect(await screen.findByText('Scout')).toBeTruthy();expect(await screen.findByText(`${hostile} · Muted · 3 notifications today`)).toBeTruthy();expect(screen.getByText('Other · Unmuted · 0 notifications today')).toBeTruthy();expect(view.container.querySelectorAll('a,img,script')).toHaveLength(0);fireEvent.change(screen.getByLabelText('Action'),{target:{value:'state.updated'}})
@@ -31,19 +46,50 @@ it('shows filtered activity and session changes',async()=>{
 })
 it('shows notification provenance, inert note, mute controls and release',async()=>{
  vi.mocked(request).mockImplementation(async path=>path==='/v1/notifications/8'?notification:path.startsWith('/v1/notifications?')?[notification]:path==='/v1/bootstrap'?{generation:'g'}:{})
- const view=mount(<Notifications onOpen={vi.fn()}/>);fireEvent.click(await screen.findByText(/Scout · alert/));await screen.findByText(hostile)
+ const view=mount(<Notifications onOpen={vi.fn()} onOpenSettings={vi.fn()}/>);fireEvent.click(await screen.findByText(/Scout · alert/));await screen.findByText(hostile)
  expect(view.container.querySelectorAll('a,img,script')).toHaveLength(0);expect(screen.getByText(/Matching rule: 4/)).toBeTruthy();expect(screen.queryByText('Unmute Scout')).toBeNull()
  fireEvent.click(screen.getByText('Mute Scout'));await waitFor(()=>expect(vi.mocked(request).mock.calls.some(([path,opts])=>path==='/v1/agents/2/mute' && opts?.method==='PUT')).toBe(true))
  fireEvent.click(screen.getByText('Release current notifications'));await waitFor(()=>expect(vi.mocked(request).mock.calls.some(([path])=>path==='/v1/notifications:release')).toBe(true))
 })
 it('opens a cited entry and labels the brief from its own fields',async()=>{
  const cited={id:12,title:'Cited article'}
- vi.mocked(request).mockImplementation(async path=>path.startsWith('/v1/briefs')?[{...brief,entry_ids:[12]}]:path==='/v1/entries/12'?cited:[])
+ const cited2={id:13,title:'Second article'}
+ vi.mocked(request).mockImplementation(async path=>{
+   if (path.startsWith('/v1/briefs')) return [{...brief,entry_ids:[12,13]}]
+   if (path.startsWith('/v1/entries?ids=')) {
+     const wanted=new Set((new URLSearchParams(path.split('?')[1]).get('ids') ?? '').split(',').map(Number))
+     return {entries:[cited,cited2].filter(entry=>wanted.has(entry.id))}
+   }
+   if (path==='/v1/entries/12') return cited
+   return []
+ })
  const open=vi.fn();mount(<TodayAgents since="2026-01-01T00:00:00Z" onOpen={open}/>);fireEvent.click(await screen.findByText('Cited article'));expect(open).toHaveBeenCalledWith(cited);expect(screen.getByText(`Scout · ${new Date(brief.created_at).toLocaleString()}`)).toBeTruthy();expect(vi.mocked(request).mock.calls.some(([path])=>path.startsWith('/v1/activity?'))).toBe(false)
+ expect(vi.mocked(request).mock.calls.some(([path])=>path.startsWith('/v1/entries/12'))).toBe(false)
+ expect(vi.mocked(request).mock.calls.some(([path])=>path.startsWith('/v1/entries?ids='))).toBe(true)
+ expect(await screen.findByText('Second article')).toBeTruthy()
 })
 it('cancels a held notification from activity and can unmute',async()=>{
  const held={...row,action:'notification.created',target:{id:8},next_action:'cancel'}
  vi.mocked(request).mockImplementation(async (path,options)=>options?.method?{}:path.startsWith('/v1/activity?')?{activities:[held]}:path==='/v1/notifications/8'?{...notification,muted:true}:path.startsWith('/v1/notifications?')?[notification]:path==='/v1/agents'?[]:{})
  const view=mount(<ActivityScreen/>);fireEvent.click(await screen.findByText('Cancel'));await waitFor(()=>expect(vi.mocked(request).mock.calls.some(([path])=>path==='/v1/notifications/8:cancel')).toBe(true));view.unmount()
- mount(<Notifications onOpen={vi.fn()}/>);fireEvent.click(await screen.findByText(/Scout · alert/));fireEvent.click(await screen.findByText('Unmute Scout'));expect(screen.queryByText('Mute Scout')).toBeNull();await waitFor(()=>expect(vi.mocked(request).mock.calls.some(([path,opts])=>path.startsWith('/v1/agents/2/mute?op_id=') && opts?.method==='DELETE')).toBe(true))
+ mount(<Notifications onOpen={vi.fn()} onOpenSettings={vi.fn()}/>);fireEvent.click(await screen.findByText(/Scout · alert/));fireEvent.click(await screen.findByText('Unmute Scout'));expect(screen.queryByText('Mute Scout')).toBeNull();await waitFor(()=>expect(vi.mocked(request).mock.calls.some(([path,opts])=>path.startsWith('/v1/agents/2/mute?op_id=') && opts?.method==='DELETE')).toBe(true))
+})
+it('explains a failed notification and links to push settings',async()=>{
+ const failed={...notification,status:'failed'}
+ const openSettings=vi.fn()
+ vi.mocked(request).mockImplementation(async path=>path==='/v1/notifications/8'?failed:path.startsWith('/v1/notifications?')?[failed]:path==='/v1/bootstrap'?{generation:'g'}:{})
+ mount(<Notifications onOpen={vi.fn()} onOpenSettings={openSettings}/>)
+ fireEvent.click(await screen.findByText(/Scout · alert/))
+ await screen.findByText(/No push destination accepted/)
+ fireEvent.click(screen.getByText('Check push settings'))
+ expect(openSettings).toHaveBeenCalled()
+})
+it('shows a placeholder, not unavailable, while cited entries load',async()=>{
+ vi.mocked(request).mockImplementation(async path=>{
+   if (path.startsWith('/v1/briefs')) return [{...brief,entry_ids:[12]}]
+   if (path.startsWith('/v1/entries?ids=')) return new Promise(()=>{})
+   return []
+ })
+ mount(<TodayAgents since="2026-01-01T00:00:00Z" onOpen={vi.fn()}/>)
+ expect(await screen.findByText('Article 12…')).toBeTruthy()
 })
