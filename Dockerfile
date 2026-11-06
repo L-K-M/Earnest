@@ -46,7 +46,7 @@ LABEL org.opencontainers.image.title="Earnest" \
       org.opencontainers.image.created="${CREATED}" \
       org.opencontainers.image.vendor="L-K-M" \
       org.opencontainers.image.licenses="Unlicense" \
-      org.opencontainers.image.base.name="docker.io/library/alpine:3.22"
+      org.opencontainers.image.base.name="docker.io/library/alpine:3.24"
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=build /out/earnest /usr/local/bin/earnest
 COPY LICENSE /usr/share/doc/earnest/LICENSE
