@@ -88,11 +88,12 @@ private enum class View(val label: String) {
 internal fun EarnestApp(initialEntry: Long?, notificationId: Long?) {
     val model: AppViewModel = viewModel()
     val loggedIn by model.loggedIn.collectAsState()
+    val sessionNotice by model.sessionNotice.collectAsState()
     val context = LocalContext.current
     var theme by remember { mutableStateOf(context.themeSetting()) }
     EarnestTheme(theme) {
         if (!loggedIn) {
-            LoginScreen(onLoggedIn = model::onLoggedIn)
+            LoginScreen(onLoggedIn = model::onLoggedIn, notice = sessionNotice)
             return@EarnestTheme
         }
         val state by model.state.collectAsState()

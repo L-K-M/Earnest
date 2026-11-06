@@ -209,4 +209,42 @@ class AppViewModelTest {
         assertEquals("<p>account-a</p>", cached?.cachedHtml)
         assertNull(cached?.url)
     }
+
+    @Test fun clearedTokenSignsOutOnRefresh() = runBlocking(Dispatchers.IO) {
+        val sessions = Sessions(AuthenticatedSession(identity, "token"))
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val model = AppViewModel(app, sessions) { api() }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        sessions.clearToken()
+        model.refresh()
+        withTimeout(15000) { model.loggedIn.first { !it } }
+        assertFalse(model.loggedIn.value)
+        assertEquals("Your session expired. Sign in again.", model.sessionNotice.value)
+    }
+
+    @Test fun clearedTokenSignsOutOnQueuedAction() = runBlocking(Dispatchers.IO) {
+        val sessions = Sessions(AuthenticatedSession(identity, "token"))
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val model = AppViewModel(app, sessions) { api() }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        sessions.clearToken()
+        val saved = java.util.concurrent.atomic.AtomicInteger()
+        model.later(2) { saved.incrementAndGet() }
+        withTimeout(15000) { model.loggedIn.first { !it } }
+        assertEquals("Your session expired. Sign in again.", model.sessionNotice.value)
+        assertEquals("dropped swipe still reported success", 0, saved.get())
+        assertTrue(SessionCache(app, identity).withEngine { it.snapshot().outbox.isEmpty() })
+    }
+
+    @Test fun clearedTokenSignsOutOnEntryLoad() = runBlocking(Dispatchers.IO) {
+        val sessions = Sessions(AuthenticatedSession(identity, "token"))
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val model = AppViewModel(app, sessions) { api() }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        sessions.clearToken()
+        assertNull(model.loadEntry(2))
+        withTimeout(15000) { model.loggedIn.first { !it } }
+        assertFalse(model.loggedIn.value)
+        assertEquals("Your session expired. Sign in again.", model.sessionNotice.value)
+    }
 }

@@ -32,7 +32,7 @@ import kotlinx.coroutines.sync.withLock
 
 /** Device authorization: start, show the code, then poll automatically. */
 @Composable
-internal fun LoginScreen(onLoggedIn: () -> Unit) {
+internal fun LoginScreen(onLoggedIn: () -> Unit, notice: String? = null) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var server by remember { mutableStateOf("") }
@@ -75,6 +75,7 @@ internal fun LoginScreen(onLoggedIn: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("Connect to Earnest", style = MaterialTheme.typography.headlineSmall)
+        notice?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         OutlinedTextField(
             value = server,
             onValueChange = { server = it },
