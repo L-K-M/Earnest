@@ -489,4 +489,14 @@ class SyncRepositoryTest {
         assertEquals(original, SyncEngine(store).snapshot())
     }
 
+    @Test
+    fun expiredOperationsPersistAfterReload() = runBlocking {
+        val stale = Pending(write = write("ancient").copy(occurredAt = "2020-01-01T00:00:00Z"))
+        val store = Store(SyncSnapshot(Revision("g1", 0), outbox = listOf(stale)))
+        val repository = SyncRepository(api { 200 to "[]" }, SyncEngine(store))
+        val dropped = repository.expire(java.time.Instant.parse("2026-01-01T00:00:00Z"))
+        assertEquals(listOf("ancient"), dropped.map { it.operation.opId })
+        // A fresh engine over the same store must not resurrect the dropped operation.
+        assertTrue(SyncEngine(store).snapshot().outbox.isEmpty())
+    }
 }

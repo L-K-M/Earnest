@@ -150,7 +150,9 @@ class SyncRepository(
     }
 
     /** Drops queue items older than 30 days and returns them for reporting. */
-    suspend fun expire(now: java.time.Instant): List<Pending> = session { it.expire(now) }
+    // Expire must persist like every other mutation: without the flush the
+    // dropped operations reload from the store after process death.
+    suspend fun expire(now: java.time.Instant): List<Pending> = session { engine -> engine.expire(now).also { engine.flush() } }
 
     private fun resource(kind: String, value: JsonElement): SyncChange {
         val item = value.jsonObject
