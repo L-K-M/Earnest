@@ -89,6 +89,10 @@ type EntryFilter struct {
 	BeforeSeq uint64
 	Limit     int
 	Direction PageDirection
+	// SuppressClusters excludes river rows hidden by read-time cluster
+	// suppression, so one page query returns visible rows directly instead of
+	// rescanning suppressed chunks. Only meaningful for the river view.
+	SuppressClusters bool
 }
 
 // EntryContent is the sanitised body at the entry's current content hash.
@@ -416,6 +420,9 @@ func (s *Service) entryPageQuery(ctx context.Context, a Actor, f EntryFilter, pr
 		return "", nil, nil
 	}
 	args := []any{a.UserID, principal}
+	// Named refs for the two fixed params, so clauses deep in the query cannot
+	// drift if the args initialization above ever changes order.
+	userArg, principalArg := "$1", "$2"
 	arg := func(v any) string {
 		args = append(args, v)
 		return fmt.Sprintf("$%d", len(args))
@@ -441,6 +448,20 @@ func (s *Service) entryPageQuery(ctx context.Context, a Actor, f EntryFilter, pr
 		conds = append(conds, "(s.cadence = 'now' OR e.first_seen_at >= CASE s.cadence "+
 			"WHEN 'week' THEN "+arg(s.now().UTC().Add(-weekDecay))+"::timestamptz ELSE "+
 			arg(s.now().UTC().Add(-decay))+"::timestamptz END)")
+		if f.SuppressClusters {
+			// Same predicate as store.SuppressedClusterEntries, expressed against
+			// the row so a page query returns only visible rows in one pass.
+			// st is the resolved principal's entry_state ($2), the same principal
+			// the cluster_dones join keys on, so actor and principal can differ.
+			conds = append(conds, `NOT EXISTS (SELECT 1 FROM entry_clusters ec
+				JOIN cluster_dones d ON d.user_id = ec.user_id AND d.cluster_id = ec.cluster_id AND d.principal_id = `+principalArg+`
+				JOIN clusters c ON c.user_id = ec.user_id AND c.id = ec.cluster_id AND c.deleted_at IS NULL
+				WHERE ec.user_id = `+userArg+` AND ec.entry_id = e.id AND ec.deleted_at IS NULL
+				AND ec.rev > d.rev
+				AND COALESCE(st.seen_rev, 0) <= d.rev
+				AND COALESCE(st.seen, 'unseen') = 'unseen'
+				AND COALESCE(st.shelf, 'none') <> 'done')`)
+		}
 	case ViewLater:
 		conds = append(conds, "st.shelf = 'later'")
 	case ViewDone:
