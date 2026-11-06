@@ -66,6 +66,28 @@ func TestClaimDueFeedsSkipsInvalidCredentials(t *testing.T) {
 	}
 }
 
+func TestClaimDueFeedsFetchesPermanentRedirect(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := t.Context()
+	if _, err := f.s.RecordFetch(ctx, FetchOutcome{FeedID: f.feed, Status: FetchOK, Items: []IngestItem{coreItem("moved")}, PermanentRedirectURL: "https://moved.test/feed"}); err != nil {
+		t.Fatal(err)
+	}
+	due, err := f.s.ClaimDueFeeds(ctx, f.s.now().Add(time.Hour*365*24), 10, time.Minute)
+	if err != nil || len(due) != 1 || due[0].FeedID != f.feed {
+		t.Fatalf("claim: %+v %v", due, err)
+	}
+	if due[0].FetchURL != "https://moved.test/feed" {
+		t.Fatalf("claim returned stale fetch URL %q after permanent redirect", due[0].FetchURL)
+	}
+	if due[0].URL != "https://example.test/feed" {
+		t.Fatalf("canonical claim URL changed: %q", due[0].URL)
+	}
+	var url string
+	if err := f.db.Pool().QueryRow(ctx, "SELECT url FROM feeds WHERE id=$1", f.feed).Scan(&url); err != nil || url != "https://example.test/feed" {
+		t.Fatalf("canonical feed URL changed: %q %v", url, err)
+	}
+}
+
 func TestFetchErrorUTF8Boundary(t *testing.T) {
 	f := newCoreFixture(t, storetest.NewTemplate(t))
 	ctx := t.Context()

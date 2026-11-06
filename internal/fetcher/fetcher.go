@@ -210,7 +210,17 @@ func credentials(c *service.FeedCredentials) outbound.Credentials {
 func (f *Fetcher) Fetch(ctx context.Context, item service.FeedToFetch) error {
 	now := time.Now().UTC()
 	out := service.FetchOutcome{FeedID: item.FeedID, AttemptedAt: now, Status: service.FetchFailed}
-	result, err := f.client.Get(ctx, item.URL, outbound.Policy{Purpose: outbound.Feed, Credentials: credentials(item.Credentials), ETag: item.ETag, LastModified: item.LastModified, ExtraPorts: f.config.ExtraPorts})
+	target := item.FetchURL
+	if target == "" {
+		target = item.URL
+	}
+	// Credentials belong to the feed's own origin: a recorded permanent
+	// redirect must not send them to another host (mirrors Probe scoping).
+	var scoped *service.FeedCredentials
+	if sameOrigin(item.URL, target) {
+		scoped = item.Credentials
+	}
+	result, err := f.client.Get(ctx, target, outbound.Policy{Purpose: outbound.Feed, Credentials: credentials(scoped), ETag: item.ETag, LastModified: item.LastModified, ExtraPorts: f.config.ExtraPorts})
 	var parsed *feed.Feed
 	if result != nil {
 		resp := result.Response
@@ -399,6 +409,18 @@ type ProbeError struct {
 
 func (e *ProbeError) Error() string { return e.Class + ": " + e.Err.Error() }
 func (e *ProbeError) Unwrap() error { return e.Err }
+
+func sameOrigin(a, b string) bool {
+	left, err := url.Parse(a)
+	if err != nil {
+		return false
+	}
+	right, err := url.Parse(b)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(left.Scheme, right.Scheme) && strings.EqualFold(left.Host, right.Host)
+}
 
 // Probe discovers a feed and returns its parsed, sanitised contents.
 func (f *Fetcher) Probe(ctx context.Context, rawURL string, creds *service.FeedCredentials) (string, service.FeedMeta, []service.IngestItem, error) {
