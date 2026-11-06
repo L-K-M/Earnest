@@ -31,6 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
@@ -92,7 +93,8 @@ internal fun EarnestApp(initialEntry: Long?, notificationId: Long?) {
     var theme by remember { mutableStateOf(context.themeSetting()) }
     EarnestTheme(theme) {
         if (!loggedIn) {
-            LoginScreen(onLoggedIn = model::onLoggedIn)
+            // The login has no scaffold, so a surface gives it the theme's background and text colours.
+            Surface(Modifier.fillMaxSize()) { LoginScreen(onLoggedIn = model::onLoggedIn) }
             return@EarnestTheme
         }
         val state by model.state.collectAsState()
