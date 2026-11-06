@@ -611,3 +611,73 @@ func TestEntriesGetAndContent(t *testing.T) {
 		}
 	})
 }
+
+// TestEntryTagConditionsCompose pins SQL precedence: filter conditions join
+// with AND, so a tag condition with a top-level OR must parenthesise it or
+// entries bypass the rest of the filter (a Done entry of one subscription
+// leaked into another subscription's read stream).
+func TestEntryTagConditionsCompose(t *testing.T) {
+	template := storetest.NewTemplate(t)
+	f := entriesTestNew(t, template)
+	ctx := context.Background()
+	user, human := f.a.UserID, f.a.PrincipalID
+	base := f.now()
+	feedA := entriesTestFeed(t, f.db, "https://entriesTag-a.test/rss", 0)
+	feedB := entriesTestFeed(t, f.db, "https://entriesTag-b.test/rss", 0)
+	subA := entriesTestSub(t, f.db, user, feedA, "today")
+	entriesTestSub(t, f.db, user, feedB, "today")
+	eA := f.ingest(t, feedA, "read here", base.Add(-1*time.Hour))
+	eB := f.ingest(t, feedB, "done there", base.Add(-2*time.Hour))
+	f.setClock(base)
+	entriesTestState(t, f.db, human, eA, "seen", "seen")
+	entriesTestState(t, f.db, human, eB, "shelf", "done")
+	got, err := f.s.Entries(ctx, f.a, EntryFilter{View: ViewAll, SubscriptionID: subA, RequireTags: []EntryTag{{Kind: TagRead}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entriesTestEqual(t, got, []int64{eA})
+}
+
+// TestEntryLabelNamesSkipsDeletedRows pins the categories projection: a
+// tombstoned membership and a membership under a deleted label must not
+// resurface in stream results.
+func TestEntryLabelNamesSkipsDeletedRows(t *testing.T) {
+	template := storetest.NewTemplate(t)
+	f := entriesTestNew(t, template)
+	ctx := context.Background()
+	user := f.a.UserID
+	base := f.now()
+	feed := entriesTestFeed(t, f.db, "https://entriesLabel.test/rss", 0)
+	entriesTestSub(t, f.db, user, feed, "today")
+	e1 := f.ingest(t, feed, "live label", base.Add(-1*time.Hour))
+	e2 := f.ingest(t, feed, "tombstoned", base.Add(-2*time.Hour))
+	e3 := f.ingest(t, feed, "deleted label", base.Add(-3*time.Hour))
+	live, err := f.s.CreateLabel(ctx, f.a, "live", "op-live")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone, err := f.s.CreateLabel(ctx, f.a, "gone", "op-gone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []struct {
+		sql  string
+		args []any
+	}{
+		{"INSERT INTO entry_labels(user_id,entry_id,label_id,rev) VALUES($1,$2,$3,1)", []any{user, e1, live.ID}},
+		{"INSERT INTO entry_labels(user_id,entry_id,label_id,rev,deleted_at) VALUES($1,$2,$3,1,now())", []any{user, e2, live.ID}},
+		{"INSERT INTO entry_labels(user_id,entry_id,label_id,rev) VALUES($1,$2,$3,1)", []any{user, e3, gone.ID}},
+		{"UPDATE labels SET deleted_at=now() WHERE id=$1", []any{gone.ID}},
+	} {
+		if _, err := f.db.Pool().Exec(ctx, q.sql, q.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := f.s.EntryLabelNames(ctx, f.a, []int64{e1, e2, e3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || len(got[e1]) != 1 || got[e1][0] != "live" {
+		t.Fatalf("labels leaked deleted rows: %v", got)
+	}
+}

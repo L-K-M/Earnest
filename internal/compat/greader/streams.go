@@ -12,22 +12,25 @@ import (
 
 // streamTag maps one Google Reader stream or tag parameter to the service's
 // entry predicate. Callers must check it with validStreamTag first.
-func streamTag(tag string) service.EntryTag {
+func streamTag(tag string) (service.EntryTag, bool) {
 	switch tag {
 	case "", statePrefix + "reading-list":
-		return service.EntryTag{Kind: service.TagAll}
+		return service.EntryTag{Kind: service.TagAll}, true
 	case statePrefix + "read":
-		return service.EntryTag{Kind: service.TagRead}
+		return service.EntryTag{Kind: service.TagRead}, true
 	case statePrefix + "starred":
-		return service.EntryTag{Kind: service.TagKept}
+		return service.EntryTag{Kind: service.TagKept}, true
 	case statePrefix + "kept-unread":
-		return service.EntryTag{Kind: service.TagUnread}
+		return service.EntryTag{Kind: service.TagUnread}, true
 	}
 	if strings.HasPrefix(tag, "feed/") {
-		return service.EntryTag{Kind: service.TagFeed, Name: strings.TrimPrefix(tag, "feed/")}
+		return service.EntryTag{Kind: service.TagFeed, Name: strings.TrimPrefix(tag, "feed/")}, true
 	}
-	name, _ := labelName(tag)
-	return service.EntryTag{Kind: service.TagLabel, Name: name}
+	// An unrecognised tag must not degrade to an empty label, which would
+	// match every folder-less entry; callers validate first, so ok=false
+	// is an internal invariant violation.
+	name, ok := labelName(tag)
+	return service.EntryTag{Kind: service.TagLabel, Name: name}, ok
 }
 func validStreamTag(tag string) bool {
 	if tag == "" || tag == statePrefix+"reading-list" || tag == statePrefix+"read" || tag == statePrefix+"starred" || tag == statePrefix+"kept-unread" || strings.HasPrefix(tag, "feed/") {
@@ -83,20 +86,30 @@ func (h *handler) ids(w http.ResponseWriter, r *http.Request, a service.Actor) e
 	}
 	var require, exclude []service.EntryTag
 	var feedTag, labelTag bool
-	add := func(v string, out *[]service.EntryTag) {
-		t := streamTag(v)
+	add := func(v string, out *[]service.EntryTag) bool {
+		t, ok := streamTag(v)
+		if !ok {
+			return false
+		}
 		feedTag = feedTag || t.Kind == service.TagFeed
 		labelTag = labelTag || t.Kind == service.TagLabel
 		*out = append(*out, t)
+		return true
 	}
 	for _, v := range q["s"] {
-		add(v, &require)
+		if !add(v, &require) {
+			return service.ErrInvalid
+		}
 	}
 	for _, v := range q["it"] {
-		add(v, &require)
+		if !add(v, &require) {
+			return service.ErrInvalid
+		}
 	}
 	for _, v := range q["xt"] {
-		add(v, &exclude)
+		if !add(v, &exclude) {
+			return service.ErrInvalid
+		}
 	}
 	// The page query carries every predicate; the maps below exist only to
 	// recheck it in memory. Feed tags need subscription URLs, label tags also

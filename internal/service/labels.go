@@ -76,7 +76,7 @@ func (s *Service) EntryLabelNames(ctx context.Context, a Actor, entryIDs []int64
 	if len(entryIDs) == 0 {
 		return out, nil
 	}
-	rows, err := s.store.Pool().Query(ctx, `SELECT m.entry_id, l.name FROM entry_labels m JOIN labels l ON l.id = m.label_id WHERE m.user_id = $1 AND m.entry_id = ANY($2) AND m.deleted_at IS NULL ORDER BY m.entry_id, m.label_id`, a.UserID, entryIDs)
+	rows, err := s.store.Pool().Query(ctx, `SELECT m.entry_id, l.name FROM entry_labels m JOIN labels l ON l.id = m.label_id WHERE m.user_id = $1 AND m.entry_id = ANY($2) AND m.deleted_at IS NULL AND l.deleted_at IS NULL ORDER BY m.entry_id, m.label_id`, a.UserID, entryIDs)
 	if err != nil {
 		return nil, fmt.Errorf("list entry labels: %w", err)
 	}

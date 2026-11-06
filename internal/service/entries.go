@@ -490,14 +490,14 @@ func (s *Service) entryPageQuery(ctx context.Context, a Actor, f EntryFilter, pr
 		conds = append(conds, "s.cadence = "+arg(string(f.Cadence)))
 	}
 	for _, t := range f.RequireTags {
-		cond, err := entryTagCondition(t, arg)
+		cond, err := entryTagCondition(t, a.UserID, arg)
 		if err != nil {
 			return "", nil, err
 		}
 		conds = append(conds, cond)
 	}
 	for _, t := range f.ExcludeTags {
-		cond, err := entryTagCondition(t, arg)
+		cond, err := entryTagCondition(t, a.UserID, arg)
 		if err != nil {
 			return "", nil, err
 		}
@@ -537,23 +537,25 @@ func (s *Service) entryPageQuery(ctx context.Context, a Actor, f EntryFilter, pr
 // entryTagCondition renders one tag predicate. Every form is NULL-safe over
 // the LEFT JOINed state row — a missing entry_state reads as the model's
 // unseen/none/false defaults — so ExcludeTags can negate them directly.
-func entryTagCondition(t EntryTag, arg func(any) string) (string, error) {
+// Compound forms are parenthesised: the filter list joins conditions with
+// AND, so an unparenthesised OR would bind to only part of the conjunction.
+func entryTagCondition(t EntryTag, user int64, arg func(any) string) (string, error) {
 	switch t.Kind {
 	case TagAll:
 		return "true", nil
 	case TagRead:
-		return "COALESCE(st.seen, 'unseen') = 'seen' OR COALESCE(st.shelf, 'none') = 'done'", nil
+		return "(COALESCE(st.seen, 'unseen') = 'seen' OR COALESCE(st.shelf, 'none') = 'done')", nil
 	case TagUnread:
-		return "COALESCE(st.seen, 'unseen') = 'unseen' AND COALESCE(st.shelf, 'none') <> 'done'", nil
+		return "(COALESCE(st.seen, 'unseen') = 'unseen' AND COALESCE(st.shelf, 'none') <> 'done')", nil
 	case TagKept:
 		return "COALESCE(st.kept, false)", nil
 	case TagFeed:
 		return "s.feed_id IN (SELECT f2.id FROM feeds f2 WHERE f2.url = " + arg(t.Name) + ")", nil
 	case TagLabel:
-		name := arg(t.Name)
-		return "(EXISTS (SELECT 1 FROM folders fo WHERE fo.user_id = $1 AND fo.id = s.folder_id AND fo.deleted_at IS NULL AND fo.name = " + name + ")" +
+		name, owner := arg(t.Name), arg(user)
+		return "(EXISTS (SELECT 1 FROM folders fo WHERE fo.user_id = " + owner + " AND fo.id = s.folder_id AND fo.deleted_at IS NULL AND fo.name = " + name + ")" +
 			" OR EXISTS (SELECT 1 FROM entry_labels el JOIN labels l ON l.id = el.label_id AND l.user_id = el.user_id" +
-			" WHERE el.user_id = $1 AND el.entry_id = e.id AND el.deleted_at IS NULL AND l.deleted_at IS NULL AND l.name = " + name + "))", nil
+			" WHERE el.user_id = " + owner + " AND el.entry_id = e.id AND el.deleted_at IS NULL AND l.deleted_at IS NULL AND l.name = " + name + "))", nil
 	}
 	return "", fmt.Errorf("entry tag kind %q: %w", t.Kind, ErrInvalid)
 }
