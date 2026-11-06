@@ -17,9 +17,18 @@ const op = () => crypto.randomUUID()
 const message = (e: unknown) => e instanceof Error ? e.message : 'Something went wrong.'
 const json = (body: unknown, method = 'POST'): RequestInit => ({method, body: JSON.stringify(body)})
 
+// formatTimestamp renders an ISO timestamp in the reader's zone, falling
+// back to 'never' for an absent or unparseable value.
+function formatTimestamp(value: string | null | undefined): string {
+  if (!value) return 'never'
+  const at = new Date(value)
+  return Number.isNaN(at.getTime()) ? 'never' : at.toLocaleString()
+}
+
 function Secret({secret, onClose}: {secret:string; onClose:()=>void}) {
   const [error, setError] = useState('')
-  return <section><p>Save this secret now. It will not be shown again.</p><code>{secret}</code> <button type="button" onClick={() => {void (async () => {try {await navigator.clipboard.writeText(secret)} catch(e) {setError(message(e))}})()}}>Copy secret</button> <button type="button" onClick={onClose}>Done</button>{error && <p role="alert">{error}</p>}</section>
+  const [copied, setCopied] = useState(false)
+  return <section><p>Save this secret now. It will not be shown again.</p><code>{secret}</code> <button type="button" onClick={() => {void (async () => {try {await navigator.clipboard.writeText(secret); setCopied(true)} catch(e) {setError(message(e)); setCopied(false)}})()}}>{copied ? 'Copied' : 'Copy secret'}</button> <button type="button" onClick={onClose}>Done</button>{error && <p role="alert">{error}</p>}</section>
 }
 
 export function Tokens() {
@@ -33,15 +42,22 @@ export function Tokens() {
   const [pending, setPending] = useState(false)
   async function run(action:()=>Promise<void>) {setPending(true); setError(''); try {await action()} catch(e) {setError(message(e))} finally {setPending(false)}}
   async function create(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault(); const form = new FormData(e.currentTarget)
+    e.preventDefault()
+    const form = e.currentTarget
+    const data = new FormData(form)
     await run(async () => {
-      const expiry = String(form.get('expires_at'))
-      const result = await request<Schema['TokenSecret']>('/v1/tokens', json({kind:'agent', name:String(form.get('name')), audience:String(form.get('audience')), scopes:selected, daily_budget:Number(form.get('daily_budget')), ...(expiry ? {expires_at:new Date(expiry).toISOString()} : {})}))
+      const expiry = String(data.get('expires_at'))
+      const parsed = expiry ? new Date(expiry) : null
+      if (parsed && Number.isNaN(parsed.getTime())) throw new Error('Enter a valid expiry date.')
+      const result = await request<Schema['TokenSecret']>('/v1/tokens', json({kind:'agent', name:String(data.get('name')), audience:String(data.get('audience')), scopes:selected, daily_budget:Number(data.get('daily_budget')), ...(parsed ? {expires_at:parsed.toISOString()} : {})}))
       setSecret(result.secret); await client.invalidateQueries({queryKey:['tokens']})
+      // Clear the form so the next token starts from a clean slate.
+      form.reset()
+      setSelected([])
     })
   }
   return <section><h2>Tokens and device approval</h2>{(error || list.error) && <p role="alert">{error || list.error?.message}</p>}
-    <ul>{list.data?.map(token => <li key={token.id}><strong>{token.name}</strong> · {token.kind} · {token.audience} · Scopes: {token.scopes?.join(', ') || 'none'} · Daily budget: {token.daily_budget} · Last used: {token.last_used_at || 'never'} · Expires: {token.expires_at || 'never'} {token.revoked_at ? '· Revoked' : <button disabled={pending} onClick={() => {if (window.confirm(`Revoke ${token.name}?`)) void run(async () => {await request(`/v1/tokens/${token.id}`, {method:'DELETE'}); await client.invalidateQueries({queryKey:['tokens']})})}}>Revoke</button>}</li>)}</ul>
+    <ul>{list.data?.map(token => <li key={token.id}><strong>{token.name}</strong> · {token.kind} · {token.audience} · Scopes: {token.scopes?.join(', ') || 'none'} · Daily budget: {token.daily_budget} · Last used: {formatTimestamp(token.last_used_at)} · Expires: {formatTimestamp(token.expires_at)} {token.revoked_at ? '· Revoked' : <button disabled={pending} onClick={() => {if (window.confirm(`Revoke ${token.name}?`)) void run(async () => {await request(`/v1/tokens/${token.id}`, {method:'DELETE'}); await client.invalidateQueries({queryKey:['tokens']})})}}>Revoke</button>}</li>)}</ul>
     <form onSubmit={e => {void create(e)}}><h3>Create an agent token</h3><p>Agents can read everything you subscribe to, including private feeds and full text.</p>
       <label>Name<input name="name" required /></label><label>Audience<select name="audience"><option value="mcp">MCP</option><option value="api">REST</option></select></label>
       <fieldset><legend>Agent scopes</legend>{scopes.map(([scope, description]) => <label key={scope}><input type="checkbox" checked={selected.includes(scope)} onChange={e => setSelected(e.target.checked ? [...selected, scope] : selected.filter(item => item !== scope))} /> {scope}: {description}</label>)}</fieldset>
@@ -61,7 +77,7 @@ export function Webhooks() {
   async function run(action:()=>Promise<void>) {setPending(true);setError('');try {await action(); await client.invalidateQueries({queryKey:['webhooks']})} catch(e) {setError(message(e))} finally {setPending(false)}}
   return <section><h2>Webhooks</h2><p>Webhooks carry IDs only, not article content. Only you can create them.</p>{(error || list.error) && <p role="alert">{error || list.error?.message}</p>}
     <ul>{list.data?.map(hook => <li key={hook.id}>{hook.url} · {hook.events?.join(', ')} · {hook.active ? 'Enabled' : 'Disabled'} · Consecutive failures: {hook.consecutive_failures} <button disabled={pending} onClick={() => {void run(async () => {await request(`/v1/webhooks/${hook.id}`, json({active:!hook.active, op_id:op()}, 'PATCH'))})}}>{hook.active ? 'Disable' : 'Enable'}</button> <button disabled={pending} onClick={() => {if (window.confirm(`Delete webhook ${hook.url}?`)) void run(async () => {await request(`/v1/webhooks/${hook.id}?op_id=${encodeURIComponent(op())}`, {method:'DELETE'})})}}>Delete</button></li>)}</ul>
-    <form onSubmit={e => {e.preventDefault(); const form = new FormData(e.currentTarget); void run(async () => {const result = await request<Schema['WebhookSecret']>('/v1/webhooks', json({url:String(form.get('url')), events:chosen, op_id:op()}));setSecret(result.secret)})}}><h3>Create webhook</h3><label>URL<input name="url" type="url" required /></label><fieldset><legend>Events</legend>{events.map(event => <label key={event}><input type="checkbox" checked={chosen.includes(event)} onChange={e => setChosen(e.target.checked ? [...chosen,event] : chosen.filter(item => item !== event))} /> {event}</label>)}</fieldset><button disabled={pending || Boolean(secret) || chosen.length === 0}>Create webhook</button></form>{secret && <Secret secret={secret} onClose={() => setSecret('')} />}
+    <form onSubmit={e => {e.preventDefault(); const form = e.currentTarget; void run(async () => {const data = new FormData(form); const result = await request<Schema['WebhookSecret']>('/v1/webhooks', json({url:String(data.get('url')), events:chosen, op_id:op()}));setSecret(result.secret); form.reset(); setChosen([])})}}><h3>Create webhook</h3><label>URL<input name="url" type="url" required /></label><fieldset><legend>Events</legend>{events.map(event => <label key={event}><input type="checkbox" checked={chosen.includes(event)} onChange={e => setChosen(e.target.checked ? [...chosen,event] : chosen.filter(item => item !== event))} /> {event}</label>)}</fieldset><button disabled={pending || Boolean(secret) || chosen.length === 0}>Create webhook</button></form>{secret && <Secret secret={secret} onClose={() => setSecret('')} />}
   </section>
 }
 

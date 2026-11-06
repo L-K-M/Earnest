@@ -49,6 +49,46 @@ it('consumes only the notification parameter and does not reopen it after signin
   expect(screen.queryByText('Notification article')).toBeNull()
 })
 
+it('coalesces sync-driven resource refreshes into one burst', async () => {
+  render(app)
+  await screen.findByRole('button',{name:'Sign out'})
+  const count = () => vi.mocked(request).mock.calls.filter(([path]) => path === '/v1/subscriptions').length
+  const before = count()
+  act(() => { sync.refresh!(); sync.refresh!(); sync.refresh!() })
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 500)) })
+  expect(count()).toBe(before)
+  await act(async () => { await waitFor(() => expect(count()).toBe(before + 1), {timeout: 3000}) })
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 600)) })
+  expect(count()).toBe(before + 1)
+})
+
+it('does not starve the refresh while sync keeps acknowledging', async () => {
+  render(app)
+  await screen.findByRole('button',{name:'Sign out'})
+  const count = () => vi.mocked(request).mock.calls.filter(([path]) => path === '/v1/subscriptions').length
+  const before = count()
+  for (let i = 0; i < 10; i++) {
+    act(() => { sync.refresh!() })
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 250)) })
+  }
+  expect(count()).toBeGreaterThan(before)
+})
+
+it('cancels the pending window when the generation rotates', async () => {
+  render(app)
+  await screen.findByRole('button',{name:'Sign out'})
+  const count = () => vi.mocked(request).mock.calls.filter(([path]) => path === '/v1/subscriptions').length
+  const before = count()
+  act(() => { sync.refresh!() })
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 100)) })
+  act(() => { sync.refresh!('generation') })
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 800)) })
+  expect(count()).toBeGreaterThan(before)
+  const settled = count()
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 1700)) })
+  expect(count()).toBe(settled)
+})
+
 it('clears a generation reset error after a successful retry',async () => {
   render(app)
   await screen.findByRole('button',{name:'Sign out'})

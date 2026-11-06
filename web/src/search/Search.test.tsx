@@ -63,6 +63,13 @@ it('switches to hybrid mode, pages using opaque cursors, and saves its exact que
   await waitFor(() => expect(request).toHaveBeenCalledWith('/v1/saved-searches',{method:'POST',body:JSON.stringify({name:'Funding',query:'funding',filters:{mode:'hybrid'}})}))
   expect(await screen.findByText('Search saved in the sidebar.')).toBeTruthy()
 })
+it('deletes a saved search from the search panel',async () => {
+  vi.spyOn(window,'confirm').mockReturnValue(true)
+  mount('enabled',true)
+  fireEvent.click(await screen.findByRole('button',{name:'Delete “Funding view”'}))
+  await waitFor(() => expect(request).toHaveBeenCalledWith('/v1/saved-searches/3',{method:'DELETE'}))
+  expect(await screen.findByText('Saved search deleted. It is gone from the sidebar.')).toBeTruthy()
+})
 it('preserves saved filters and offers full text when hybrid is paused',async () => {
   mount('enabled',true)
   await screen.findByLabelText('Search mode')

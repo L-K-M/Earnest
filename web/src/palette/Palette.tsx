@@ -36,6 +36,10 @@ export function Palette({commands,shortcuts,enabled=true,helpRef}: {commands: Co
   const [index,setIndex] = useState(0)
   const [error,setError] = useState('')
   const [running,setRunning] = useState(false)
+  // The global shortcut listener is registered once; it reads the latest
+  // commands through a ref so a new array identity does not re-bind it.
+  const commandsRef = useRef(commands)
+  useEffect(() => { commandsRef.current = commands }, [commands])
   const matches = fuzzyCommands(commands,query)
   const active = matches[Math.min(index,Math.max(0,matches.length-1))]
   function open(node: HTMLDialogElement | null) {
@@ -50,15 +54,22 @@ export function Palette({commands,shortcuts,enabled=true,helpRef}: {commands: Co
       if (!enabled || event.defaultPrevented || event.repeat || event.isComposing) return
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'k') {event.preventDefault();open(dialog.current);return}
       if (event.ctrlKey || event.metaKey || event.altKey || !shortcutsAllowed(event.target,shortcuts)) return
-      if (event.key === '?') {event.preventDefault();open(help.current);return}
+      if (event.key === '?') {
+        // Toggle: a second press closes the dialog instead of calling
+        // showModal() on an open element, which throws InvalidStateError.
+        event.preventDefault()
+        const node = help.current
+        if (node) { if (node.open) node.close(); else open(node) }
+        return
+      }
       if (event.key === '/') {
-        const search = commands.find(command => command.id === 'search')
+        const search = commandsRef.current.find(command => command.id === 'search')
         if (search) {event.preventDefault();void search.run()}
       }
     }
     window.addEventListener('keydown',keyboard)
     return () => window.removeEventListener('keydown',keyboard)
-  },[enabled,shortcuts,commands,help])
+  },[enabled,shortcuts,help])
   async function run(command: Command | undefined) {
     if (!command || command.disabled || running) return
     setRunning(true);setError('')

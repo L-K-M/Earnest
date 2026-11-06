@@ -120,6 +120,11 @@ func (s *Store) SemanticQueryPut(ctx context.Context, user int64, description, m
 	return nil
 }
 
+// RetrievalTextLimit bounds the text projection of retrieval queries.
+// Consumers render short snippets (the service keeps 200 runes), and whole
+// article texts must not leave the database to build them.
+const RetrievalTextLimit = 2048
+
 // SemanticHit is publisher content with an independently computed cosine score.
 type SemanticHit struct {
 	ID, SubscriptionID, FeedID, Seq int64
@@ -128,12 +133,13 @@ type SemanticHit struct {
 }
 
 // SemanticSearch applies subscription and privacy boundaries before ranking.
+// The text projection is bounded to RetrievalTextLimit characters.
 func (s *Store) SemanticSearch(ctx context.Context, user, subscription, folder, exclude int64, model string, vector []float32, limit int) ([]SemanticHit, error) {
 	literal, err := formatHalfvec(vector)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.pool.Query(ctx, `SELECT e.id,s.id,e.feed_id,e.seq,e.title,coalesce(e.url,''),coalesce(c.text,''),1-(x.embedding <=> $5::halfvec) AS score
+	rows, err := s.pool.Query(ctx, `SELECT e.id,s.id,e.feed_id,e.seq,e.title,coalesce(e.url,''),coalesce(left(c.text,2048),''),1-(x.embedding <=> $5::halfvec) AS score
  FROM embeddings x JOIN entries e ON e.id=x.entry_id AND x.content_hash=e.content_hash AND x.input_title=e.title
  JOIN feeds f ON f.id=e.feed_id JOIN subscriptions s ON s.feed_id=e.feed_id AND s.user_id=$1 AND s.deleted_at IS NULL
  LEFT JOIN LATERAL(SELECT text FROM contents WHERE entry_id=e.id AND content_hash=e.content_hash ORDER BY (source='extracted') DESC,sanitizer_version DESC LIMIT 1)c ON true
@@ -168,10 +174,29 @@ func (s *Store) ClassifierLabels(ctx context.Context, id int64, model, version s
 	return labels, true, nil
 }
 
+// WatchCheckState is a reservation decision for one watch confirmation.
+type WatchCheckState int
+
+const (
+	// WatchCheckRun inserted a reservation; make the provider call now.
+	WatchCheckRun WatchCheckState = iota
+	// WatchCheckCached carries a definite earlier answer in the result.
+	WatchCheckCached
+	// WatchCheckUncertain: an earlier attempt remains unmatched until the
+	// content changes. An uncertain call is not automatically repeated.
+	WatchCheckUncertain
+	// WatchCheckBudget: the rule's daily check budget is exhausted.
+	WatchCheckBudget
+)
+
 // WatchCheckReserve accounts attempts before a call, avoiding repeat spending
-// after a crash. An uncertain attempt remains unmatched until content changes.
-func (s *Store) WatchCheckReserve(ctx context.Context, rule, entry int64, hash []byte, model string, budget int, now time.Time) (bool, *bool, error) {
-	var call bool
+// after a crash. An uncertain attempt remains unmatched until content changes,
+// which the state reports as WatchCheckUncertain so callers can distinguish it
+// from budget exhaustion.
+func (s *Store) WatchCheckReserve(ctx context.Context, rule, entry int64, hash []byte, model string, budget int, now time.Time) (WatchCheckState, *bool, error) {
+	// Defaults to WatchCheckBudget: the budget early-return inside the
+	// transaction leaves state untouched when the daily budget is spent.
+	state := WatchCheckBudget
 	var result *bool
 	err := s.WithTx(ctx, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, rule); err != nil {
@@ -179,6 +204,11 @@ func (s *Store) WatchCheckReserve(ctx context.Context, rule, entry int64, hash [
 		}
 		err := tx.QueryRow(ctx, `SELECT matched FROM watch_checks WHERE rule_id=$1 AND entry_id=$2 AND content_hash=$3 AND model=$4`, rule, entry, hash, model).Scan(&result)
 		if err == nil {
+			if result == nil {
+				state = WatchCheckUncertain
+			} else {
+				state = WatchCheckCached
+			}
 			return nil
 		}
 		if err != pgx.ErrNoRows {
@@ -190,16 +220,19 @@ func (s *Store) WatchCheckReserve(ctx context.Context, rule, entry int64, hash [
 			return err
 		}
 		if used >= budget {
+			state = WatchCheckBudget
 			return nil
 		}
 		_, err = tx.Exec(ctx, `INSERT INTO watch_checks(rule_id,entry_id,content_hash,model,attempted_at) VALUES($1,$2,$3,$4,$5)`, rule, entry, hash, model, now)
-		call = err == nil
+		if err == nil {
+			state = WatchCheckRun
+		}
 		return err
 	})
 	if err != nil {
-		return false, nil, fmt.Errorf("reserve watch check: %w", err)
+		return WatchCheckBudget, nil, fmt.Errorf("reserve watch check: %w", err)
 	}
-	return call, result, nil
+	return state, result, nil
 }
 
 // EmbedCached reuses identical bounded publisher input within one privacy

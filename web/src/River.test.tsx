@@ -7,7 +7,7 @@ import type {Entry, ReaderActions} from './reader'
 import {request} from './request'
 vi.mock('./request', () => ({request:vi.fn()}))
 const virtualItems = vi.hoisted(() => ({items: [0, 1]}))
-vi.mock('@tanstack/react-virtual', () => ({useVirtualizer: ({count}: {count:number}) => ({getTotalSize:()=>count*100, getVirtualItems:()=>virtualItems.items.filter(index=>index<count).map(index=>({index,size:100,start:index*100})), scrollToIndex:vi.fn()})}))
+vi.mock('@tanstack/react-virtual', () => ({useVirtualizer: ({count, scrollMargin = 0}: {count:number; scrollMargin?:number}) => ({getTotalSize:()=>count*100, getVirtualItems:()=>virtualItems.items.filter(index=>index<count).map(index=>({index,size:100,start:index*100 + scrollMargin})), scrollToIndex:vi.fn(), options:{scrollMargin}})}))
 const observers: IntersectionObserverCallback[] = []
 const observed: Element[] = []
 class Observer {
@@ -19,13 +19,13 @@ const entries = [1,2,3].map(id => ({id,seq:id,title:`Article ${id}`,blurb:'A cac
 function withShelf(entry: Entry, value: 'none' | 'later' | 'done'): Entry {
   return {...entry, state: {...entry.state, shelf: {...entry.state.shelf, value}}}
 }
-afterEach(() => {cleanup();vi.clearAllMocks();vi.unstubAllGlobals();virtualItems.items=[0,1];observers.length=0;observed.length=0})
+afterEach(() => {cleanup();vi.clearAllMocks();vi.restoreAllMocks();vi.unstubAllGlobals();virtualItems.items=[0,1];observers.length=0;observed.length=0})
 function mount(shortcuts=true, blurbStatus="disabled", selected=entries[0], rows=entries) {
   vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {blurb:blurbStatus} : path.startsWith('/v1/positions') ? {seq:0} : {entries:rows})
   const act = vi.fn().mockResolvedValue(undefined)
   const actions: ReaderActions = {act,state:entry=>entry.state}
   const onSelect=vi.fn()
-  const view=render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'today',title:'Today'}} subscriptions={[]} actions={actions} selected={selected} onSelect={onSelect} onOpen={vi.fn()} shortcuts={shortcuts} counts={false} summary={{seen:0,done:0,later:0,kept:0}} onHelp={vi.fn()} /></QueryClientProvider>)
+  const view=render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'today',title:'Today'}} subscriptions={[]} actions={actions} selected={selected} onSelect={onSelect} onOpen={vi.fn()} shortcuts={shortcuts} counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>)
   return {act,onSelect,container:view.container}
 }
 function scroller() { return screen.getByLabelText('Article list') }
@@ -52,6 +52,22 @@ describe('river interactions', () => {
     await waitFor(()=>expect(act).toHaveBeenCalledWith(entries[0],'seen','seen','passive'),{timeout:1500})
     expect(act).toHaveBeenCalledTimes(1)
     expect(screen.queryByText('Article 3')).toBeNull()
+  })
+  it('does not mark a row seen while it is still visible below the Today panel', async () => {
+    // The agent panel pushes the list down, so the list starts 40px into the
+    // scroller. The virtualizer must report rows in scroller coordinates.
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return {top: this.classList.contains('virtual-list') ? 40 : 0} as DOMRect
+    })
+    const {act}=mount()
+    await screen.findByText('Article 1')
+    // Row 0 ends at 100px in list coordinates but 140px in the scroller.
+    scroller().scrollTop = 100
+    fireEvent.scroll(scroller())
+    await new Promise(resolve => window.setTimeout(resolve, 700))
+    expect(act).not.toHaveBeenCalled()
+    scrollPast(2)
+    await waitFor(()=>expect(act).toHaveBeenCalledWith(entries[0],'seen','seen','passive'),{timeout:1500})
   })
   it('drops a queued passive seen when the reader marks the row unread', async () => {
     const {act}=mount()

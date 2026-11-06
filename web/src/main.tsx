@@ -21,6 +21,9 @@ import {Ask} from './pipeline/Pipeline'
 import './style.css'
 
 type Identity = {user_id: number; principal_id: number}
+// Sync acknowledges reading actions continuously; coalesce the resource
+// refreshes they trigger so a burst of keystrokes costs one refetch burst.
+const SYNC_REFRESH_DEBOUNCE_MS = 1500
 const standardViews: View[] = [{kind:'today', title:'Today'}, {kind:'edition', title:'Edition'}, {kind:'later', title:'Later'}, {kind:'kept', title:'Kept'}, {kind:'done', title:'Done'}]
 
 function App() {
@@ -110,7 +113,27 @@ function Session({onLogout}: {onLogout: () => void}) {
     }
     invalidateResources()
   }, [queryClient])
-  const sync = useReaderSync(identity, refreshResources)
+  const syncRefresh = useRef<number | undefined>(undefined)
+  const refreshAfterSync = useCallback((reason?: 'generation') => {
+    // A generation rotation must clear caches at once and cancel any pending
+    // window; ordinary cursor changes share one refresh per window. The timer
+    // is scheduled only while idle, so a continuous stream of reading
+    // acknowledgements cannot starve the refresh.
+    if (reason === 'generation') {
+      window.clearTimeout(syncRefresh.current)
+      syncRefresh.current = undefined
+      refreshResources(reason)
+      return
+    }
+    if (syncRefresh.current === undefined) {
+      syncRefresh.current = window.setTimeout(() => {
+        syncRefresh.current = undefined
+        refreshResources()
+      }, SYNC_REFRESH_DEBOUNCE_MS)
+    }
+  }, [refreshResources])
+  useEffect(() => () => window.clearTimeout(syncRefresh.current), [])
+  const sync = useReaderSync(identity, refreshAfterSync)
   const retrySync = sync.retry
   const actions: ReaderActions = {
     state: entry => sync.state(entry),
@@ -194,7 +217,7 @@ function Session({onLogout}: {onLogout: () => void}) {
       {sync.error && <p role="alert">{sync.error} <button onClick={sync.retry}>Retry sync</button></p>}
       </div>
       {firstRun ? <main onChangeCapture={() => setOnboardingStarted(true)} onClickCapture={() => setOnboardingStarted(true)}><Onboarding onComplete={() => {setOnboarded(true);refreshResources();void queryClient.invalidateQueries({queryKey:['position']});choose(standardViews[0])}} /></main> : panel === 'ask' && pipeline.data?.ask === 'enabled' ? <Ask onOpen={openEntry}/> : panel === 'rules' ? <Rules feeds={subscriptions.data ?? []} folders={folders.data ?? []} labels={labels.data ?? []}/> : panel === 'search' ? <Search key={savedSearch?.id ?? 'search'} saved={savedSearch} onOpen={openEntry} subscriptions={subscriptions.data ?? []} folders={folders.data ?? []}/> : panel === 'feeds' ? <main key="feeds" tabIndex={-1} ref={focusPanel}><h2>Feeds</h2><Feeds onChanged={refreshResources} /></main> : panel === 'activity' ? <ActivityScreen /> : panel === 'notifications' ? <Notifications onOpen={entry => {choose(standardViews[0]);setSelected(entry);setOpened(true)}} onOpenSettings={() => {setPanel('settings');setOpened(false)}} /> : panel === 'settings' ? <main key="settings" tabIndex={-1} ref={focusPanel}><Settings key={settings.rev} settings={settings} onSaved={savedSettings} /><Tokens /><Push /><Webhooks /></main> : <>
-        <River since={since} sessionStart={sessionStart} key={viewKey(view)} view={view} subscriptions={subscriptions.data ?? []} actions={actions} selected={selected} onSelect={setSelected} onOpen={entry => {setSelected(entry);setOpened(true)}} shortcuts={settings.single_key_shortcuts && preferences.isSuccess} counts={settings.reading_mode === 'unread_counts'} summary={summary} onHelp={() => help.current?.showModal()} />
+        <River since={since} sessionStart={sessionStart} key={viewKey(view)} view={view} subscriptions={subscriptions.data ?? []} actions={actions} selected={selected} onSelect={setSelected} onOpen={entry => {setSelected(entry);setOpened(true)}} shortcuts={settings.single_key_shortcuts && preferences.isSuccess} counts={settings.reading_mode === 'unread_counts'} summary={summary} />
         {selected && opened ? <Reader key={selected.id} onOpen={openEntry} entry={selected} subscription={subscriptions.data?.find(sub => sub.id === selected.subscription_id)} settings={settings} actions={actions} onSettings={savedSettings} renderBody={url => <iframe title="Article body" src={url} sandbox="allow-popups allow-popups-to-escape-sandbox" />} onClose={() => {setOpened(false);window.requestAnimationFrame(() => document.querySelector<HTMLElement>('.river h2')?.focus())}} /> : <article className="reader-placeholder" aria-label="Reader"><p>Choose an article. It has been waiting patiently.</p></article>}
       </>}
     </div>

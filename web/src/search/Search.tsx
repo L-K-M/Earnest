@@ -72,7 +72,15 @@ export function Search({saved, onOpen, subscriptions = [], folders = []}: {saved
     catch(error) {setError(error instanceof Error ? error.message : 'Could not save search.')}
     finally {setSaving(false)}
   }
+  async function remove() {
+    if (!saved) return
+    setSaving(true);setError('');setSavedMessage('')
+    try {await request(`/v1/saved-searches/${encodeURIComponent(saved.id)}`,{method:'DELETE'});setSavedMessage('Saved search deleted. It is gone from the sidebar.');await cache.invalidateQueries({queryKey:['saved-searches']})}
+    catch(error) {setError(error instanceof Error ? error.message : 'Could not delete the saved search.')}
+    finally {setSaving(false)}
+  }
   return <main aria-label="Search"><h2>{saved?.name ?? 'Search'}</h2>
+    {saved && <p><button disabled={saving} onClick={() => {if (window.confirm(`Delete the saved search “${saved.name}”?`)) void remove()}}>Delete “{saved.name}”</button></p>}
     <form onSubmit={event => {event.preventDefault();setQuery(input.trim());setSavedMessage('')}}><label>Search your feeds<input type="search" required value={input} onChange={event => setInput(event.target.value)}/></label>
       {pipeline.status.embed === 'enabled' && <label>Search mode<select value={mode} onChange={event => setMode(event.target.value)}><option value="fulltext">Full text</option><option value="hybrid">Hybrid: full text and meaning</option></select></label>}
       <label>Feed<select value={subscriptionID} onChange={event => setSubscriptionID(Number(event.target.value))}><option value={0}>All feeds</option>{subscriptions.filter(sub => !sub.deleted).map(sub => <option key={sub.id} value={sub.id}>{sub.title || sub.url}</option>)}</select></label>

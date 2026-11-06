@@ -9,18 +9,30 @@ import type { ClientSnapshot } from "./client.js";
 export interface SyncStore {
   load(): Promise<ClientSnapshot | null>;
   save(snapshot: ClientSnapshot): Promise<void>;
+  // loadVersion returns the version of the persisted snapshot, or null when
+  // the store has no version record (including a pre-version snapshot). The
+  // version travels inside the snapshot and also in a small record so a
+  // reader can check freshness cheaply.
+  loadVersion(): Promise<number | null>;
 }
 
 const deep = <T>(v: T): T => (typeof structuredClone === "function" ? structuredClone(v) : v);
 
+const versionKey = (device: string) => `${device}:version`;
+
 export class MemorySyncStore implements SyncStore {
   private snapshot: ClientSnapshot | null = null;
+  private version: number | null = null;
   load(): Promise<ClientSnapshot | null> {
     return Promise.resolve(this.snapshot === null ? null : deep(this.snapshot));
   }
   save(snapshot: ClientSnapshot): Promise<void> {
     this.snapshot = deep(snapshot);
+    this.version = snapshot.version ?? null;
     return Promise.resolve();
+  }
+  loadVersion(): Promise<number | null> {
+    return Promise.resolve(this.version);
   }
 }
 
@@ -64,14 +76,25 @@ export class IdbSyncStore implements SyncStore {
     return got === undefined ? null : (got as ClientSnapshot);
   }
 
+  async loadVersion(): Promise<number | null> {
+    const db = await this.open();
+    const tx = db.transaction("sync", "readonly");
+    const got = await idbRequest(tx.objectStore("sync").get(versionKey(this.device)));
+    return got === undefined ? null : Number(got);
+  }
+
   async save(snapshot: ClientSnapshot): Promise<void> {
     const db = await this.open();
     const tx = db.transaction("sync", "readwrite");
-    await idbRequest(tx.objectStore("sync").put(snapshot, this.device));
+    const store = tx.objectStore("sync");
+    // The snapshot and its version commit together, so a reader never sees a
+    // version without the matching document.
+    store.put(snapshot, this.device);
+    store.put(snapshot.version ?? 0, versionKey(this.device));
     await new Promise<void>((resolve, reject) => {
       tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error ?? new Error("indexedDB transaction failed"));
-      tx.onabort = () => reject(tx.error ?? new Error("indexedDB transaction aborted"));
+      tx.onerror = () => reject(tx.error ?? new Error("IndexedDB transaction failed"));
+      tx.onabort = () => reject(tx.error ?? new Error("IndexedDB transaction aborted"));
     });
   }
 }
