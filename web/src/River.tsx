@@ -8,6 +8,11 @@ import {TodayAgents, SessionChanges} from './agents/Surfaces'
 import {Edition} from './pipeline/Pipeline'
 import {usePipeline} from './search/pipeline'
 
+// Passive position writes retry after a failure with this backoff, so a long
+// outage cannot cost a write per tick.
+const POSITION_RETRY_MIN_MS = 600
+const POSITION_RETRY_MAX_MS = 30_000
+
 type Page = {entries: Entry[]; next_cursor?: string}
 type PageParam = {direction: 'forward' | 'backward'; cursor?: string; after?: number}
 export type SessionSummary = {done: number; later: number; kept: number; seen: number}
@@ -45,10 +50,12 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   useEffect(() => { entriesRef.current = entries }, [entries])
   // Passive progress only ever advances the resume position: scrolling back
   // through earlier pages must not drag "where you left off" backwards, and a
-  // failed write retries on a later tick instead of being lost.
+  // failed write retries with backoff instead of being lost or hammered out.
   const targetSeq = useRef(0)
   const resumeSeq = useRef(0)
   const pendingSeq = useRef<number | null>(null)
+  const retryDelay = useRef(0)
+  const retryAfter = useRef(0)
   useEffect(() => { if (position.data) resumeSeq.current = Math.max(resumeSeq.current, position.data.seq) }, [position.data])
   useEffect(() => { heading.current?.focus() }, [key])
 
@@ -83,11 +90,16 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
       }
       const reached = rendered.reduce((max, entry) => Math.max(max, entry.seq), targetSeq.current)
       targetSeq.current = reached
-      if (reached > resumeSeq.current && pendingSeq.current === null) {
+      if (reached > resumeSeq.current && pendingSeq.current === null && Date.now() >= retryAfter.current) {
         pendingSeq.current = reached
         void request(`/v1/positions/${encodeURIComponent(key)}`, {method: 'PUT', body: JSON.stringify({seq: reached, op_id: crypto.randomUUID()})})
-          .then(() => { resumeSeq.current = Math.max(resumeSeq.current, reached) })
-          .catch(error => setError(error instanceof Error ? error.message : 'Could not save position.'))
+          .then(() => { resumeSeq.current = Math.max(resumeSeq.current, reached); retryDelay.current = 0 })
+          .catch(error => {
+            // Back off instead of retrying every tick through a long outage.
+            retryDelay.current = Math.min(Math.max(retryDelay.current * 2, POSITION_RETRY_MIN_MS), POSITION_RETRY_MAX_MS)
+            retryAfter.current = Date.now() + retryDelay.current
+            setError(error instanceof Error ? error.message : 'Could not save position.')
+          })
           .finally(() => { pendingSeq.current = null })
       }
     }, 600)
