@@ -5,6 +5,7 @@ const origin = 'https://reader.test'
 describe('offline cache allowlist',() => {
   it.each([
     ['/','shell'],['/assets/app-123.js','shell'],['/assets/app-123.css','shell'],
+    ['/icon-192.png','shell'],['/wordmark.png','shell'],['/icon-512.png',null],
     ['/v1/me','resource'],['/v1/settings','resource'],['/v1/subscriptions','resource'],
     ['/v1/positions/feed%3A7','reading'],['/v1/entries?view=river&after_seq=7','reading'],
     ['/v1/entries/42/content','content'],

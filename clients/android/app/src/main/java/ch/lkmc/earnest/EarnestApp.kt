@@ -46,6 +46,7 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -128,7 +129,8 @@ internal fun EarnestApp(initialEntry: Long?, notificationId: Long?) {
     }
     EarnestTheme(theme) {
         if (!loggedIn) {
-            LoginScreen(onLoggedIn = model::onLoggedIn)
+            // The login has no scaffold, so a surface gives it the theme's background and text colours.
+            Surface(Modifier.fillMaxSize()) { LoginScreen(onLoggedIn = model::onLoggedIn) }
             return@EarnestTheme
         }
         val state by model.state.collectAsState()

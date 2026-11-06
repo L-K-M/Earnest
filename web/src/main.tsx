@@ -15,6 +15,7 @@ import {useReaderSync} from './syncBridge'
 import {type Entry, type ReaderActions, type Subscription, type View, viewKey} from './reader'
 import {Rules} from './rules/Rules'
 import {Search, useSavedSearches, type SavedSearch} from './search/Search'
+import {Brand} from './Brand'
 import {Palette, type Command} from './palette/Palette'
 import {OfflineStatus, clearOffline, registerOffline} from './offline/Offline'
 import {Ask} from './pipeline/Pipeline'
@@ -196,11 +197,11 @@ function Session({onLogout}: {onLogout: () => void}) {
   }
   if (checking) return <main className="login" role="status">Checking your session…</main>
   if (resettingGeneration) return <main className="login" role="status">Refreshing reading copies…{error && <p role="alert">{error} <button onClick={() => refreshResources('generation')}>Retry</button></p>}</main>
-  if (!identity) return <main className="login"><h1>Earnest</h1><form onSubmit={login}><label>Username<input name="username" autoComplete="username" required /></label><label>Password<input name="password" type="password" autoComplete="current-password" required /></label><button>Sign in</button>{error && <p role="alert">{error}</p>}</form></main>
+  if (!identity) return <main className="login"><Brand /><form onSubmit={login}><label>Username<input name="username" autoComplete="username" required /></label><label>Password<input name="password" type="password" autoComplete="current-password" required /></label><button>Sign in</button>{error && <p role="alert">{error}</p>}</form></main>
   const firstRun = panel === 'river' && !opened && !onboarded && (onboardingStarted || (subscriptions.isSuccess && subscriptions.data.length === 0 && preferences.isSuccess && preferences.data.rev === 0))
   return <div className={`layout${opened ? ' reading' : ''}`} data-theme={settings.theme}>
     <a className="skip-link" href="#workspace">Skip to articles</a>
-    <nav aria-label="Views"><h1>Earnest</h1>{standardViews.map(item => <button key={item.kind} aria-current={panel === 'river' && viewKey(view) === viewKey(item) ? 'page' : undefined} onClick={() => choose(item)}>{item.title}</button>)}
+    <nav aria-label="Views"><Brand />{standardViews.map(item => <button key={item.kind} aria-current={panel === 'river' && viewKey(view) === viewKey(item) ? 'page' : undefined} onClick={() => choose(item)}>{item.title}</button>)}
       {(subscriptions.data ?? []).length > 0 && <details open><summary>Feeds</summary>{subscriptions.data?.map(sub => <button key={sub.id} onClick={() => choose({kind:'feed', id:sub.id, title:sub.title})}>{sub.title || sub.url}{settings.reading_mode === 'unread_counts' && unreadCounts.data && ` (${unreadCounts.data.bySubscription[String(sub.id)] ?? 0})`}</button>)}</details>}
       {(folders.data ?? []).length > 0 && <details><summary>Folders</summary>{folders.data?.map(folder => <button key={folder.id} onClick={() => choose({kind:'folder', id:folder.id, title:folder.name})}>{folder.name}</button>)}</details>}
       {(labels.data ?? []).length > 0 && <details><summary>Labels</summary>{labels.data?.filter(label => !label.deleted).map(label => <button key={label.id} onClick={() => choose({kind:'label', id:label.id, title:label.name})}>{label.name}</button>)}</details>}
