@@ -77,7 +77,7 @@ func ntfyBody(dev Device, msg Message) string {
 // example.com, bit.ly/abc or www.example.com. ntfy clients auto-link these just
 // like absolute URIs, so they carry the same open-tracking risk. The leading
 // boundary keeps ordinary words and decimal numbers from matching.
-var bareHostRE = regexp.MustCompile(`(?i)(?:^|[\s([{'"])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}\b`)
+var bareHostRE = regexp.MustCompile(`(?i)(?:^|[^@\w])((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,})(?:[^@\w]|$)`)
 
 // hasURL reports whether s contains something shaped like a URL, with or
 // without a scheme.

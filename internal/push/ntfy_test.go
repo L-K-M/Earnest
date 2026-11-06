@@ -221,10 +221,15 @@ func TestHasURL(t *testing.T) {
 		{"plain text", false},
 		{"version 1.2 is out", false},
 		{"e.g. this", false},
+		{"contact john.smith@example.com", false},
 		{"see https://example.com", true},
 		{"see example.com/story", true},
 		{"bit.ly/abc", true},
 		{"www.example.com", true},
+		{"ping *example.com* now", true},
+		{"see,example.com", true},
+		{"<example.com>", true},
+		{"`example.com`", true},
 	}
 	for _, tt := range tests {
 		if got := hasURL(tt.in); got != tt.want {
