@@ -337,20 +337,20 @@ class AppViewModel internal constructor(
         withContext(Dispatchers.IO) {
             val cache = account ?: return@withContext
             val session = activeSession ?: return@withContext
-            if (!isCurrent(session, cache)) return@withContext
+            if (!currentOrExpired(session, cache)) return@withContext
             try {
                 // withSync serialises the flush against pull cycles; its engine
                 // sections take SyncAccess.mutex only around load-mutate-save,
                 // so the batch request never blocks a queued action.
                 val synced = cache.withSync(apiFactory(session)) { repository ->
-                    if (!isCurrent(session, cache)) return@withSync null
+                    if (!currentOrExpired(session, cache)) return@withSync null
                     val rejected = repository.flush()
                     val expired = repository.expire(Instant.now()).map { it.operation.opId }
                     rejected to expired
                 } ?: return@withContext
                 val (rejected, expired) = synced
                 cache.withEngine { syncEngine ->
-                    if (!isCurrent(session, cache)) return@withEngine
+                    if (!currentOrExpired(session, cache)) return@withEngine
                     // The session's river membership is left alone: only a refresh
                     // starts a new one, so passive seen marks do not drop rows.
                     // The update is atomic: a concurrent writer (refresh's loading
@@ -373,8 +373,13 @@ class AppViewModel internal constructor(
                     }
                 }
             } catch (error: ApiException) {
-                if (!isCurrent(session, cache)) return@withContext
-                if (error.isUnauthorized) logout()
+                if (!currentOrExpired(session, cache)) return@withContext
+                if (error.isUnauthorized && sessions.current() == session) {
+                    // Clear only the session that failed: a login that completed
+                    // concurrently must not lose its token or get signed out.
+                    sessions.clearToken()
+                    if (sessions.current() == null) sessionExpired()
+                }
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
             } catch (error: Exception) {
