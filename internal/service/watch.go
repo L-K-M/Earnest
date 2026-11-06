@@ -201,6 +201,8 @@ func (s *Service) confirmWatch(ctx context.Context, user int64, rule Rule, entry
 	case store.WatchCheckBudget:
 		// Budgets count UTC days; the job waits and resumes tomorrow.
 		return false, ErrPipelinePaused
+	case store.WatchCheckRun:
+		// Reservation inserted; the provider call happens after the switch.
 	}
 	matched, err := engine.CheckWatch(ctx, rule.Predicate.Value, content)
 	if errors.Is(err, llm.ErrBudgetExhausted) || errors.Is(err, llm.ErrDisabled) {

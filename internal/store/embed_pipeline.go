@@ -188,6 +188,8 @@ const (
 // which the state reports as WatchCheckUncertain so callers can distinguish it
 // from budget exhaustion.
 func (s *Store) WatchCheckReserve(ctx context.Context, rule, entry int64, hash []byte, model string, budget int, now time.Time) (WatchCheckState, *bool, error) {
+	// Defaults to WatchCheckBudget: the budget early-return inside the
+	// transaction leaves state untouched when the daily budget is spent.
 	state := WatchCheckBudget
 	var result *bool
 	err := s.WithTx(ctx, func(tx pgx.Tx) error {
@@ -212,6 +214,7 @@ func (s *Store) WatchCheckReserve(ctx context.Context, rule, entry int64, hash [
 			return err
 		}
 		if used >= budget {
+			state = WatchCheckBudget
 			return nil
 		}
 		_, err = tx.Exec(ctx, `INSERT INTO watch_checks(rule_id,entry_id,content_hash,model,attempted_at) VALUES($1,$2,$3,$4,$5)`, rule, entry, hash, model, now)
