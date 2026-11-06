@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -222,6 +223,101 @@ func TestNotificationDelivery(t *testing.T) {
 		})
 	}
 }
+func TestNotificationDeliverySkipsMuted(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := context.Background()
+	id := f.ingest(t, "article")
+	muted := surfaceAgent(t, f, "Muted", 3)
+	clear := surfaceAgent(t, f, "Clear", 3)
+	if _, err := f.db.Pool().Exec(ctx, "INSERT INTO devices(user_id,transport,endpoint) VALUES($1,'webpush','https://push.example/endpoint')", f.a.UserID); err != nil {
+		t.Fatal(err)
+	}
+	var sent []string
+	registry := push.NewRegistry()
+	if err := registry.Register(push.KindWebPush, surfaceTransport{send: func(_ push.Device, m push.Message) error {
+		sent = append(sent, m.NotificationID)
+		return nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	f.s.pushRegistry = registry
+	blocked, err := f.s.SendNotification(ctx, muted, surfaceRequest(t, f, id, "muted"))
+	if err != nil || blocked.Status != NotificationQueued {
+		t.Fatal(blocked, err)
+	}
+	allowed, err := f.s.SendNotification(ctx, clear, surfaceRequest(t, f, id, "clear"))
+	if err != nil || allowed.Status != NotificationQueued {
+		t.Fatal(allowed, err)
+	}
+	// A mute committed after acceptance leaves a queued row; the claim
+	// filters it instead of claiming it.
+	if _, err := f.db.Pool().Exec(ctx, "INSERT INTO notification_mutes(user_id,principal_id) VALUES($1,$2)", f.a.UserID, muted.PrincipalID); err != nil {
+		t.Fatal(err)
+	}
+	count, err := f.s.DeliverNotifications(ctx, 10)
+	if err != nil || count != 1 || len(sent) != 1 || sent[0] != fmt.Sprint(allowed.ID) {
+		t.Fatal("muted candidate delivered", count, sent, err)
+	}
+	got, err := f.s.GetNotification(ctx, f.a, blocked.ID)
+	if err != nil || got.Status != NotificationQueued {
+		t.Fatal("muted row touched", got, err)
+	}
+	if _, err := f.db.Pool().Exec(ctx, "DELETE FROM notification_mutes WHERE user_id=$1 AND principal_id=$2", f.a.UserID, muted.PrincipalID); err != nil {
+		t.Fatal(err)
+	}
+	count, err = f.s.DeliverNotifications(ctx, 10)
+	if err != nil || count != 1 || len(sent) != 2 || sent[1] != fmt.Sprint(blocked.ID) {
+		t.Fatal("unmuted row lost", count, sent, err)
+	}
+}
+func TestNotificationDeliveryHoldsQuietThenContinues(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := context.Background()
+	id := f.ingest(t, "article")
+	a := surfaceAgent(t, f, "Morning", 3)
+	if _, err := f.db.Pool().Exec(ctx, "INSERT INTO devices(user_id,transport,endpoint) VALUES($1,'webpush','https://push.example/endpoint')", f.a.UserID); err != nil {
+		t.Fatal(err)
+	}
+	var sent []string
+	registry := push.NewRegistry()
+	if err := registry.Register(push.KindWebPush, surfaceTransport{send: func(_ push.Device, m push.Message) error {
+		sent = append(sent, m.NotificationID)
+		return nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	f.s.pushRegistry = registry
+	quiet, err := f.s.SendNotification(ctx, a, surfaceRequest(t, f, id, "quiet"))
+	if err != nil || quiet.Status != NotificationQueued {
+		t.Fatal(quiet, err)
+	}
+	a.Scopes = append(a.Scopes, ScopeNotifyUrgent)
+	if _, err := f.db.Pool().Exec(ctx, "UPDATE tokens SET scopes=array_append(scopes,'notify:urgent') WHERE id=$1", a.TokenID); err != nil {
+		t.Fatal(err)
+	}
+	urgent, err := f.s.SendNotification(ctx, a, surfaceRequest(t, f, id, "urgent"))
+	if err != nil || urgent.Status != NotificationQueued {
+		t.Fatal(urgent, err)
+	}
+	// Quiet hours enabled after acceptance: the claim holds the first
+	// candidate and still delivers the urgent one behind it.
+	if _, err := f.db.Pool().Exec(ctx, "INSERT INTO push_settings(user_id,quiet_start,quiet_end,timezone) VALUES($1,'11:00','13:00','UTC')", f.a.UserID); err != nil {
+		t.Fatal(err)
+	}
+	count, err := f.s.DeliverNotifications(ctx, 10)
+	if err != nil || count != 1 || len(sent) != 1 || sent[0] != fmt.Sprint(urgent.ID) {
+		t.Fatal("claim stopped at quiet row", count, sent, err)
+	}
+	got, err := f.s.GetNotification(ctx, f.a, quiet.ID)
+	if err != nil || got.Status != NotificationHeld || got.HeldUntil == nil || !got.HeldUntil.Equal(time.Date(2026, 11, 2, 13, 0, 0, 0, time.UTC)) {
+		t.Fatal("quiet row not held until quiet end", got, err)
+	}
+	f.clock.Store(time.Date(2026, 11, 2, 13, 0, 0, 0, time.UTC).UnixNano())
+	count, err = f.s.DeliverNotifications(ctx, 10)
+	if err != nil || count != 1 || len(sent) != 2 || sent[1] != fmt.Sprint(quiet.ID) {
+		t.Fatal("held row lost after quiet end", count, sent, err)
+	}
+}
 func TestNotificationRestoreAndMute(t *testing.T) {
 	template := storetest.NewTemplate(t)
 	f := newCoreFixture(t, template)
@@ -343,5 +439,85 @@ func TestNotificationPartlyDeliveredIsNotFailed(t *testing.T) {
 	got, err := f.s.GetNotification(ctx, f.a, n.ID)
 	if err != nil || got.Status != NotificationDelivered {
 		t.Fatal("accepted device incorrectly reported failed", got.Status, err)
+	}
+}
+
+func TestListNotificationsPageAndMutes(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := context.Background()
+	id := f.ingest(t, "article")
+	morning := surfaceAgent(t, f, "Morning", 5)
+	evening := surfaceAgent(t, f, "Evening", 5)
+	first, err := f.s.SendNotification(ctx, morning, surfaceRequest(t, f, id, "first"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := f.s.SendNotification(ctx, evening, surfaceRequest(t, f, id, "second"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	third, err := f.s.SendNotification(ctx, morning, surfaceRequest(t, f, id, "third"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.MuteAgent(ctx, f.a, morning.PrincipalID, NotificationsMuted, "mute"); err != nil {
+		t.Fatal(err)
+	}
+	page, err := f.s.ListNotifications(ctx, f.a, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page) != 3 || page[0].ID != third.ID || page[1].ID != second.ID || page[2].ID != first.ID {
+		t.Fatalf("page order: %+v", page)
+	}
+	for i, muted := range []bool{true, false, true} {
+		if page[i].Muted != muted || page[i].Note == "" || page[i].Why.Sender == "" {
+			t.Fatalf("page[%d]: %+v", i, page[i])
+		}
+	}
+	got, err := f.s.GetNotification(ctx, f.a, second.ID)
+	if err != nil || !reflect.DeepEqual(got, page[1]) {
+		t.Fatalf("list row differs from single load: %+v vs %+v", got, page[1])
+	}
+	page, err = f.s.ListNotifications(ctx, f.a, second.ID, 10)
+	if err != nil || len(page) != 1 || page[0].ID != first.ID {
+		t.Fatalf("beforeID page: %+v %v", page, err)
+	}
+}
+
+func TestListNotificationsBatches(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := context.Background()
+	a := surfaceAgent(t, f, "Morning", 30)
+	id := f.ingest(t, "article")
+	const count = 25
+	for i := 0; i < count; i++ {
+		if _, err := f.s.SendNotification(ctx, a, surfaceRequest(t, f, id, fmt.Sprintf("op-%d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := f.s.ListNotifications(ctx, f.a, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != count {
+		t.Fatalf("len = %d, want %d", len(list), count)
+	}
+	for i := 1; i < len(list); i++ {
+		if list[i-1].ID <= list[i].ID {
+			t.Fatalf("not descending: %d then %d", list[i-1].ID, list[i].ID)
+		}
+	}
+	for _, n := range list {
+		if n.Why.Sender != "Morning" || n.Budget.LimitToday != 30 || len(n.EntryIDs) != 1 {
+			t.Fatalf("notification %+v", n)
+		}
+	}
+	page, err := f.s.ListNotifications(ctx, f.a, list[9].ID, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page) != 5 || page[0].ID != list[10].ID {
+		t.Fatalf("page: len=%d first=%d", len(page), page[0].ID)
 	}
 }
