@@ -1,6 +1,7 @@
 {
   "name": "Earnest",
   "short_name": "Earnest",
+  "id": "/",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

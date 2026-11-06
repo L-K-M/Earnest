@@ -140,10 +140,14 @@ func lettering(_ wordmark: CGImage) -> CGImage {
 
     // The source's letters are slightly translucent; stretch their
     // interior coverage to fully opaque.
+    guard !interior.isEmpty else { fatalError("The wordmark's lettering is too faint to extract.") }
     interior.sort()
     let full = Double(interior[interior.count * 9 / 10])
+
+    // Pad the lettering's bounds, but never past the source's edges.
     let pad = 4
-    let crop = (x: start - pad, y: max(top - pad, 0), width: right - start + 1 + 2 * pad, height: min(bottom + pad, height - 1) - max(top - pad, 0) + 1)
+    let left = max(start - pad, 0), upper = max(top - pad, 0)
+    let crop = (x: left, y: upper, width: min(right + pad, width - 1) - left + 1, height: min(bottom + pad, height - 1) - upper + 1)
     var mask = [UInt8](repeating: 0, count: crop.width * crop.height * 4)
     for y in 0..<crop.height {
         for x in 0..<crop.width {
@@ -202,8 +206,9 @@ for (density, scale) in [("mdpi", 1.0), ("hdpi", 1.5), ("xhdpi", 2.0), ("xxhdpi"
 save(rounded(art, 288), "\(res)/drawable-nodpi/brand_icon.png")
 save(scaled(letters, height: 160), "\(res)/drawable-nodpi/brand_wordmark.png")
 
-// Web: favicons, the iOS home screen icon, manifest icons (maskable ones
-// keep the art inside the 80% safe zone), and the header lettering.
+// Web: favicons, the iOS home screen icon, manifest icons, and the header
+// lettering. The maskable icon's art spans 84%, so the 80% safe zone that
+// every mask shows holds only art, never the mirrored margin.
 let web = "web/public"
 save(rounded(art, 32), "\(web)/favicon-32.png")
 save(render(180, 180, .opaque) { $0.draw(art, in: CGRect(x: 0, y: 0, width: 180, height: 180)) }, "\(web)/apple-touch-icon.png")
