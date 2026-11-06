@@ -10,12 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/L-K-M/Earnest/internal/clientip"
 	"github.com/L-K-M/Earnest/internal/service"
 	"github.com/L-K-M/Earnest/internal/syncmodel"
 )
@@ -103,9 +103,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Bad Request", 400)
 			return
 		}
-		client := r.RemoteAddr
-		if host, _, err := net.SplitHostPort(client); err == nil {
-			client = host
+		// Behind a same-host proxy the socket address is the proxy's; use the
+		// forwarded client or a per-credential bucket, never one shared bucket.
+		client, ok := clientip.Key(r)
+		if !ok {
+			client = "user:" + r.Form.Get("Email")
 		}
 		token, err := h.auth.CompatLogin(r.Context(), r.Form.Get("Email"), r.Form.Get("Passwd"), client)
 		if err != nil {
