@@ -65,6 +65,7 @@ import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.core.SyncSnapshot
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -610,9 +611,9 @@ private fun ActivityScreen(
             val activities = group.activities.orEmpty()
             items(activities, key = { it.id }) { activity ->
                 Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    Text(activity.action, style = MaterialTheme.typography.bodyLarge)
+                    Text(describeActivity(activity), style = MaterialTheme.typography.bodyLarge)
                     Text(
-                        "${activity.createdAt.relativeTime()} · ${activity.nextAction}",
+                        "${activity.createdAt.relativeTime()} · ${activityStatus(activity)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -623,6 +624,33 @@ private fun ActivityScreen(
             }
         }
     }
+}
+
+/** Renders an activity action as a sentence instead of a protocol value. */
+private fun describeActivity(activity: ch.lkmc.earnest.core.Activity): String {
+    if (activity.action != "state.updated") {
+        val target = activity.target?.toString()?.takeIf { it.isNotBlank() && it != "null" }
+        return activity.action.replace('.', ' ') + (target?.let { " · $it" } ?: "")
+    }
+    val before = activity.before as? JsonObject
+    val after = activity.after as? JsonObject
+    if (before == null || after == null) return "Changed an article"
+    val changes = listOf("seen", "shelf", "kept").mapNotNull { register ->
+        val from = (before[register] as? JsonObject)?.get("value") as? JsonPrimitive
+        val to = (after[register] as? JsonObject)?.get("value") as? JsonPrimitive
+        if (from != null && to != null && from.content != to.content) {
+            "$register: ${from.content} to ${to.content}"
+        } else {
+            null
+        }
+    }
+    return if (changes.isEmpty()) "Changed an article" else changes.joinToString()
+}
+
+private fun activityStatus(activity: ch.lkmc.earnest.core.Activity): String = when (activity.nextAction) {
+    "revert" -> "Revert available"
+    "cancel" -> "Held notification"
+    else -> activity.reason?.takeIf { it.isNotEmpty() } ?: "Nothing to do"
 }
 
 @Composable
