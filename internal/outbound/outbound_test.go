@@ -267,8 +267,7 @@ func TestHTTP2CheckedDialer(t *testing.T) {
 		t.Fatalf("private destination: %v", err)
 	}
 	c = client(t, Config{AllowPrefixes: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}})
-	u, _ := url.Parse(s.URL)
-	tr := c.transport(u, HTTP2)
+	tr := c.transport(HTTP2)
 	tr.TLSClientConfig = s.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
 	defer tr.CloseIdleConnections()
 	resp, err := tr.RoundTrip(httptest.NewRequest("GET", s.URL, nil))

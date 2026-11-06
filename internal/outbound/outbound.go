@@ -105,20 +105,12 @@ type Client struct {
 	config Config
 	mu     sync.Mutex
 	hosts  map[string]*hostLimiter
-	// Transports are shared per protocol and destination host so connections
-	// are reused. The dial-time address check still runs whenever a new
+	// One transport per protocol. A single pool keeps the connection count
+	// and the transport objects bounded no matter how many destinations the
+	// fetcher sees. The dial-time address check still runs whenever a new
 	// connection is made; a pooled connection is already bound to the
 	// validated address.
-	tmu        sync.Mutex
-	transports map[transportKey]*http.Transport
-}
-
-// transportKey identifies one connection pool. The hostport is the original
-// destination, not the resolved address, so the allowlist can be applied to
-// the name the caller asked for.
-type transportKey struct {
-	protocol Protocol
-	hostport string
+	transports map[Protocol]*http.Transport
 }
 type hostLimiter struct {
 	gate chan struct{}
@@ -152,7 +144,12 @@ func New(config Config) (*Client, error) {
 			return nil, fmt.Errorf("invalid allowed prefix")
 		}
 	}
-	return &Client{config: config, hosts: make(map[string]*hostLimiter), transports: make(map[transportKey]*http.Transport)}, nil
+	c := &Client{config: config, hosts: make(map[string]*hostLimiter)}
+	c.transports = map[Protocol]*http.Transport{
+		HTTP1: c.newTransport(HTTP1),
+		HTTP2: c.newTransport(HTTP2),
+	}
+	return c, nil
 }
 
 func (c *Client) Get(ctx context.Context, rawURL string, policy Policy) (*Result, error) {
@@ -232,7 +229,7 @@ func (c *Client) Do(request *http.Request, p Policy) (*Result, error) {
 		if err != nil {
 			return nil, classifyNetwork(err)
 		}
-		transport := c.transport(req.URL, p.Protocol)
+		transport := c.transport(p.Protocol)
 		resp, err := transport.RoundTrip(req)
 		if err != nil {
 			release()
@@ -387,30 +384,16 @@ func (c *Client) allowed(addr netip.Addr, hostport string) bool {
 	}
 	return false
 }
-func (c *Client) transport(u *url.URL, protocol Protocol) *http.Transport {
-	hostport := u.Host
-	if u.Port() == "" {
-		port := "80"
-		if u.Scheme == "https" {
-			port = "443"
-		}
-		hostport = net.JoinHostPort(u.Hostname(), port)
-	}
-	key := transportKey{protocol: protocol, hostport: hostport}
-	c.tmu.Lock()
-	defer c.tmu.Unlock()
-	if t, ok := c.transports[key]; ok {
-		return t
-	}
-	t := c.newTransport(protocol, hostport)
-	c.transports[key] = t
-	return t
+func (c *Client) transport(protocol Protocol) *http.Transport {
+	return c.transports[protocol]
 }
 
-// newTransport builds one connection pool for a protocol and destination.
-// Compression stays disabled because Do sets Accept-Encoding and readBody
-// decompresses manually; keep-alives stay enabled so the pool is useful.
-func (c *Client) newTransport(protocol Protocol, hostport string) *http.Transport {
+// newTransport builds one connection pool for a protocol. The destination
+// host:port arrives in the dial address, so the allowlist can still be
+// applied to the name the caller asked for. Compression stays disabled
+// because Do sets Accept-Encoding and readBody decompresses manually;
+// keep-alives stay enabled so the pool is useful.
+func (c *Client) newTransport(protocol Protocol) *http.Transport {
 	protocols := new(http.Protocols)
 	if protocol == HTTP2 {
 		protocols.SetHTTP2(true)
@@ -422,6 +405,7 @@ func (c *Client) newTransport(protocol Protocol, hostport string) *http.Transpor
 		if err != nil {
 			return nil, err
 		}
+		hostport := address
 		ips, err := c.config.Resolver.LookupNetIP(ctx, "ip", host)
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
