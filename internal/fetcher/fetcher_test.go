@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/L-K-M/Earnest/internal/feed"
 	"github.com/L-K-M/Earnest/internal/outbound"
 	"github.com/L-K-M/Earnest/internal/service"
 )
@@ -364,6 +365,209 @@ func TestFullTextExtractionOverlaps(t *testing.T) {
 		if item.ContentSource != service.ContentFromExtracted {
 			t.Fatalf("item %d source = %s, want extracted (title %q)", i, item.ContentSource, item.Title)
 		}
+	}
+}
+
+func TestFetchIsolatesUnsalvageableItems(t *testing.T) {
+	deep := strings.Repeat("<div>", 2000) + "deep" + strings.Repeat("</div>", 2000)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `<rss version="2.0"><channel><title>Feed</title>
+<item><guid>good</guid><link>https://example.org/ok</link><description>fine</description></item>
+<item><guid>deep</guid><link>https://example.org/deep</link><description><![CDATA[%s]]></description></item>
+</channel></rss>`, deep)
+	}))
+	defer server.Close()
+	f, s := testFetcher(t, server)
+	if err := f.Fetch(context.Background(), service.FeedToFetch{FeedID: 1, URL: server.URL}); err != nil {
+		t.Fatal(err)
+	}
+	if s.outcomes[0].Status != service.FetchOK {
+		t.Fatalf("one unsalvageable item must not fail the fetch, got %s", s.outcomes[0].Status)
+	}
+	if len(s.outcomes[0].Items) != 2 {
+		t.Fatalf("both items must reach ingest, got %d", len(s.outcomes[0].Items))
+	}
+	for _, item := range s.outcomes[0].Items {
+		switch item.GUID {
+		case "good":
+			if item.ContentHTML != "fine" {
+				t.Fatalf("good item lost its content: %q", item.ContentHTML)
+			}
+		case "deep":
+			if item.ContentHTML != "" || item.ContentText != "" {
+				t.Fatalf("unsalvageable item must store no content, got %q", item.ContentHTML)
+			}
+		default:
+			t.Fatalf("unexpected guid %q", item.GUID)
+		}
+	}
+}
+
+func TestFetchDropsActiveSchemeLinks(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<rss version="2.0"><channel><title>Feed</title><link>../blog</link>
+<item><guid>js</guid><link>javascript:alert(1)</link><description>body</description></item>
+<item><guid>data</guid><link>data:text/html,hi</link><description>body</description></item>
+<item><guid>relative</guid><link>relative/post</link><description>body</description></item>
+<item><guid>ok</guid><link>https://example.org/ok</link><description>body</description></item>
+</channel></rss>`)
+	}))
+	defer server.Close()
+	f, s := testFetcher(t, server)
+	if err := f.Fetch(context.Background(), service.FeedToFetch{FeedID: 1, URL: server.URL}); err != nil {
+		t.Fatal(err)
+	}
+	if s.outcomes[0].Status != service.FetchOK {
+		t.Fatalf("status %s", s.outcomes[0].Status)
+	}
+	for _, item := range s.outcomes[0].Items {
+		switch item.GUID {
+		case "js", "data":
+			if item.URL != "" {
+				t.Fatalf("active-scheme link must not be stored, got %q", item.URL)
+			}
+			if item.ContentHTML != "body" {
+				t.Fatalf("item should keep its content: %q", item.ContentHTML)
+			}
+		case "relative":
+			if item.URL != server.URL+"/relative/post" {
+				t.Fatalf("relative links must resolve against the fetch URL, got %q", item.URL)
+			}
+		case "ok":
+			if item.URL != "https://example.org/ok" {
+				t.Fatalf("http(s) links must be kept, got %q", item.URL)
+			}
+		default:
+			t.Fatalf("unexpected guid %q", item.GUID)
+		}
+	}
+}
+
+func TestIntervalLetsSlowFeedsBackOffToMaxInterval(t *testing.T) {
+	f, _ := testFetcher(t, httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
+	now := time.Now()
+	day := 24 * time.Hour
+	parsed := &feed.Feed{Items: []feed.Item{
+		{Published: func() *time.Time { v := now.Add(-14 * day); return &v }()},
+		{Published: func() *time.Time { v := now.Add(-7 * day); return &v }()},
+		{Published: func() *time.Time { v := now; return &v }()},
+	}}
+	got := f.interval(service.FeedToFetch{}, parsed, service.FetchOK, "")
+	if got != f.config.MaxInterval {
+		t.Fatalf("a weekly feed must poll at MaxInterval (%v), got %v", f.config.MaxInterval, got)
+	}
+}
+
+func TestFetchBoundsExtractionWork(t *testing.T) {
+	var pageHits atomic.Int32
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/page") {
+			pageHits.Add(1)
+			fmt.Fprint(w, "<html><body><article><h1>Story</h1><p>a readable article body with enough words</p></article></body></html>")
+			return
+		}
+		var b strings.Builder
+		b.WriteString(`<rss version="2.0"><channel><title>Feed</title>`)
+		for i := 0; i < 20; i++ {
+			fmt.Fprintf(&b, `<item><guid>g%d</guid><link>%s/page%d</link><description>body %d</description></item>`, i, server.URL, i, i)
+		}
+		b.WriteString(`</channel></rss>`)
+		fmt.Fprint(w, b.String())
+	}))
+	defer server.Close()
+	f, s := testFetcher(t, server)
+	claim := service.FeedToFetch{FeedID: 1, URL: server.URL, Extract: service.ExtractAlways, LeaseUntil: time.Now().Add(10 * time.Minute)}
+	if err := f.Fetch(context.Background(), claim); err != nil {
+		t.Fatal(err)
+	}
+	if s.outcomes[0].Status != service.FetchOK || len(s.outcomes[0].Items) != 20 {
+		t.Fatalf("all items must be ingested, got %s with %d items", s.outcomes[0].Status, len(s.outcomes[0].Items))
+	}
+	if got := pageHits.Load(); got != maxExtractsPerFetch {
+		t.Fatalf("one pass must extract at most %d pages, got %d", maxExtractsPerFetch, got)
+	}
+}
+
+func TestFetchStopsExtractingNearTheLeaseDeadline(t *testing.T) {
+	var pageHits atomic.Int32
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/page") {
+			pageHits.Add(1)
+			fmt.Fprint(w, "<html><body><article><h1>Story</h1><p>a readable article body with enough words</p></article></body></html>")
+			return
+		}
+		fmt.Fprintf(w, `<rss version="2.0"><channel><title>Feed</title><item><guid>g</guid><link>%s/page0</link><description>body</description></item></channel></rss>`, server.URL)
+	}))
+	defer server.Close()
+	f, _ := testFetcher(t, server)
+	claim := service.FeedToFetch{FeedID: 1, URL: server.URL, Extract: service.ExtractAlways, LeaseUntil: time.Now().Add(time.Second)}
+	if err := f.Fetch(context.Background(), claim); err != nil {
+		t.Fatal(err)
+	}
+	if got := pageHits.Load(); got != 0 {
+		t.Fatalf("a lease about to expire must defer extraction, got %d page fetches", got)
+	}
+}
+
+func TestIntervalFailureRetriesAtTwiceTheInterval(t *testing.T) {
+	f, _ := testFetcher(t, httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
+	// The cadence-derived cap applies to successful parses only; failures
+	// retry at twice the feed's interval, bounded by MaxInterval. Pinned
+	// intentionally: dropping the old 1h success-path cap changed the
+	// interval a slow feed carries into this branch.
+	if got := f.interval(service.FeedToFetch{Interval: 48 * time.Hour}, nil, service.FetchFailed, ""); got != f.config.MaxInterval {
+		t.Fatalf("a failed slow feed must retry at MaxInterval (%v), got %v", f.config.MaxInterval, got)
+	}
+	if got := f.interval(service.FeedToFetch{Interval: time.Hour}, nil, service.FetchFailed, ""); got < 108*time.Minute || got > 132*time.Minute {
+		t.Fatalf("a failed fast feed must retry near twice its interval, got %v", got)
+	}
+}
+
+func TestItemsResolveRelativeLinksAgainstTheFetchURL(t *testing.T) {
+	f, _ := testFetcher(t, httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
+	// The ingest boundary must never store a bare relative link (unusable in
+	// a client) nor an active scheme; a relative reference resolves against
+	// the fetch URL even though today's parsers pre-resolve most of them.
+	items, err := f.items(context.Background(), service.FeedToFetch{FeedID: 1, URL: "https://feed.example/rss.xml"}, []feed.Item{
+		{GUID: "relative", URL: "relative/post", ContentHTML: "body"},
+		{GUID: "rooted", URL: "/posts/2", ContentHTML: "body"},
+		{GUID: "active", URL: "javascript:alert(1)", ContentHTML: "body"},
+		{GUID: "blank", URL: "   ", ContentHTML: "body"},
+		{GUID: "fragment", URL: "#top", ContentHTML: "body"},
+		{GUID: "query", URL: "?page=2", ContentHTML: "body"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"relative": "https://feed.example/relative/post",
+		"rooted":   "https://feed.example/posts/2",
+		"active":   "",
+		"blank":    "",
+		"fragment": "",
+		"query":    "",
+	}
+	for _, item := range items {
+		if item.URL != want[item.GUID] {
+			t.Fatalf("%s link = %q, want %q", item.GUID, item.URL, want[item.GUID])
+		}
+	}
+}
+
+func TestItemsResolveRelativeLinksAgainstTheRedirectTarget(t *testing.T) {
+	f, _ := testFetcher(t, httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
+	// After a permanent redirect the bytes come from FetchURL, so a relative
+	// link names a resource on the new origin, not the stale canonical one.
+	items, err := f.items(context.Background(), service.FeedToFetch{FeedID: 1, URL: "https://old.example/rss.xml", FetchURL: "https://new.example/feed/rss.xml"}, []feed.Item{
+		{GUID: "relative", URL: "post", ContentHTML: "body"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].URL != "https://new.example/feed/post" {
+		t.Fatalf("items = %+v, want the link resolved against FetchURL", items)
 	}
 }
 
