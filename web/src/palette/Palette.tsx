@@ -45,6 +45,10 @@ export function Palette({commands,shortcuts,enabled=true,helpRef}: {commands: Co
     if (node === dialog.current) input.current?.focus()
   }
   function restoreFocus() {previousFocus.current?.focus()}
+  // The command list is rebuilt by the parent on every render; read it
+  // through a ref so the window listener is not re-registered each time.
+  const commandsRef = useRef(commands)
+  useEffect(() => {commandsRef.current = commands},[commands])
   useEffect(() => {
     function keyboard(event: KeyboardEvent) {
       if (!enabled || event.defaultPrevented || event.repeat || event.isComposing) return
@@ -52,13 +56,13 @@ export function Palette({commands,shortcuts,enabled=true,helpRef}: {commands: Co
       if (event.ctrlKey || event.metaKey || event.altKey || !shortcutsAllowed(event.target,shortcuts)) return
       if (event.key === '?') {event.preventDefault();open(help.current);return}
       if (event.key === '/') {
-        const search = commands.find(command => command.id === 'search')
+        const search = commandsRef.current.find(command => command.id === 'search')
         if (search) {event.preventDefault();void search.run()}
       }
     }
     window.addEventListener('keydown',keyboard)
     return () => window.removeEventListener('keydown',keyboard)
-  },[enabled,shortcuts,commands,help])
+  },[enabled,shortcuts,help])
   async function run(command: Command | undefined) {
     if (!command || command.disabled || running) return
     setRunning(true);setError('')
