@@ -169,6 +169,11 @@ export interface SyncStatus {
 const BOOTSTRAP_KINDS = ["subscriptions", "folders", "labels", "label_memberships", "positions", "state", "entries"] as const;
 type BootstrapKind = (typeof BOOTSTRAP_KINDS)[number];
 
+// bootstrapFlushPages bounds how many bootstrap pages accumulate before one
+// reload/apply/persist cycle. It trades a little memory for far fewer full
+// snapshot reads and writes on a large account.
+const bootstrapFlushPages = 8;
+
 // request resolves bodies through ordinary JSON.parse, where every integer is
 // a number. Safe integers become bigint so the strict wire decoders see the
 // same tree shape as the lossless parser produces. The shared helper already
@@ -225,6 +230,10 @@ export class ReaderSync {
   private failures = 0;
   private lastError: string | null = null;
   private bootstrapped = false;
+  // version is the store generation of the in-memory snapshot. It lets a
+  // mutate() skip the full reload when no other tab has written since the
+  // last load, which is the common case for a single reader.
+  private version = 0;
 
   constructor(options: ReaderSyncOptions) {
     if (options.principal <= 0n) throw errInvalid("principal required");
@@ -424,10 +433,11 @@ export class ReaderSync {
   // intent must never be visible as if queued.
   private async mutate<T>(fn: () => T): Promise<T> {
     return this.withLock(async () => {
-      await this.reload();
+      await this.reloadIfStale();
       const before = this.client.toSnapshot();
       const wasBootstrapped = this.bootstrapped;
       const rawBefore = new Map(this.rawItems);
+      const versionBefore = this.version;
       let out: T;
       try {
         out = fn();
@@ -436,6 +446,7 @@ export class ReaderSync {
         this.client = SyncClient.fromSnapshot(before);
         this.bootstrapped = wasBootstrapped;
         this.rawItems = rawBefore;
+        this.version = versionBefore;
         this.notify();
         throw err;
       }
@@ -445,9 +456,17 @@ export class ReaderSync {
     });
   }
 
+  // reloadIfStale reads the small version record and only pays for the full
+  // snapshot when another tab (or a pre-version store) changed it.
+  private async reloadIfStale(): Promise<void> {
+    const storedVersion = await this.store.loadVersion();
+    // A null version means the store predates versioning and must be read once.
+    if (storedVersion !== this.version) await this.reload();
+  }
+
   private async refresh(): Promise<void> {
     await this.withLock(async () => {
-      await this.reload();
+      await this.reloadIfStale();
       this.notify();
     });
     this.kick();
@@ -460,6 +479,7 @@ export class ReaderSync {
       // Older caches cannot distinguish gone acknowledgements from tombstones.
       this.bootstrapped = snap.bootstrapped === true && snap.goneEntries !== undefined;
       this.rawItems = new Map(snap.rawItems ?? []);
+      this.version = snap.version ?? 0;
     }
   }
 
@@ -467,6 +487,8 @@ export class ReaderSync {
     const snap = this.client.toSnapshot();
     snap.bootstrapped = this.bootstrapped;
     snap.rawItems = [...this.rawItems];
+    this.version += 1;
+    snap.version = this.version;
     await this.store.save(snap);
   }
 
@@ -596,6 +618,19 @@ export class ReaderSync {
       this.bootstrapped = false;
       this.rawItems.clear();
     });
+    // Pages are buffered so a large bootstrap pays one reload and one persist
+    // per batch instead of per page. A crash between batches leaves the
+    // snapshot unbootstrapped, so the next run starts over.
+    const buffered: {kind: BootstrapKind; items: JsonValue[]}[] = [];
+    const flushBuffer = async () => {
+      if (buffered.length === 0) return;
+      const batch = buffered.splice(0, buffered.length);
+      await this.mutate(() => {
+        for (const page of batch) {
+          for (const item of page.items) this.mergeItem(page.kind, item);
+        }
+      });
+    };
     for (const kind of BOOTSTRAP_KINDS) {
       let afterId = 0n;
       let afterPrincipal = 0n;
@@ -609,15 +644,15 @@ export class ReaderSync {
           "bootstrap-page",
         );
         const items = body.items === undefined || body.items === null ? [] : asArray(body.items, "bootstrap.items");
-        await this.mutate(() => {
-          for (const item of items) this.mergeItem(kind, item);
-        });
+        buffered.push({kind, items});
+        if (buffered.length >= bootstrapFlushPages) await flushBuffer();
         if (body.has_more !== true) break;
         afterId = intIn(body, "next_id", "bootstrap-page");
         afterPrincipal = intIn(body, "next_principal", "bootstrap-page");
         afterView = strIn(body, "next_view", "bootstrap-page");
       }
     }
+    await flushBuffer();
     await this.mutate(() => {
       this.bootstrapped = true;
     });
@@ -744,6 +779,12 @@ export class ReaderSync {
   // stepOnce runs exactly one network step (flush or pull); the internal
   // loop uses it and tests drive it directly.
   async stepOnce(): Promise<void> {
+    // Another tab may have queued intent since this tab last looked; pick it
+    // up before deciding what to do.
+    await this.withLock(async () => {
+      await this.reloadIfStale();
+      this.notify();
+    });
     if (this.client.outbox().length > 0) {
       await this.flushOnce();
       return;
