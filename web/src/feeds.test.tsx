@@ -193,4 +193,23 @@ describe('Feeds', () => {
     expect(post[0]).toBe('/v1/opml:import')
     expect(new Headers(post[1]?.headers).get('Content-Type')).toBe('text/x-opml')
   })
+
+  it('does not revoke the OPML download URL before the download starts', async () => {
+    api({'/v1/subscriptions': [sub()], '/v1/folders': [], '/v1/mutes': [], '/v1/opml': '<opml/>'})
+    render(<Feeds onChanged={() => {}} />)
+    const createObjectURL = vi.fn(() => 'blob:opml')
+    const revokeObjectURL = vi.fn()
+    const originalCreate = URL.createObjectURL
+    const originalRevoke = URL.revokeObjectURL
+    URL.createObjectURL = createObjectURL
+    URL.revokeObjectURL = revokeObjectURL
+    try {
+      fireEvent.click(await screen.findByRole('button', {name: 'Export subscriptions'}))
+      await waitFor(() => expect(createObjectURL).toHaveBeenCalled())
+      expect(revokeObjectURL).not.toHaveBeenCalled()
+    } finally {
+      URL.createObjectURL = originalCreate
+      URL.revokeObjectURL = originalRevoke
+    }
+  })
 })
