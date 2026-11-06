@@ -19,11 +19,11 @@ commit them with the source:
 The lettering ships as a mask, because the wordmark's dark teal is
 unreadable on dark backgrounds. Each client paints it with the brand ink:
 `#07566E`, the wordmark's own teal, on light backgrounds, `#8BD0EF` on dark
-ones, and black in the e-ink theme. Android's Material colour scheme is
-generated from `#07566E`; the Mac accent colour is `#106682` in light mode
-and `#367F9C` in dark mode. These values live in `web/src/style.css`,
-`clients/android/app/src/main/java/ch/lkmc/earnest/Theme.kt` and the Mac
-asset catalog's colour sets.
+ones, and black in the e-ink theme. The Mac accent colour is `#106682` in
+light mode and `#367F9C` in dark mode. These values live in
+`web/src/style.css`,
+`clients/android/app/src/main/java/ch/lkmc/earnest/BrandLockup.kt` and the
+Mac asset catalog's colour sets.
 
 There is no single-colour version of the icon yet, so Android's themed
 launcher icon and its notification icon still use the system defaults.
