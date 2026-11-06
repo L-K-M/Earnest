@@ -330,9 +330,10 @@ func TestFetchIsolatesUnsalvageableItems(t *testing.T) {
 
 func TestFetchDropsActiveSchemeLinks(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `<rss version="2.0"><channel><title>Feed</title>
+		fmt.Fprint(w, `<rss version="2.0"><channel><title>Feed</title><link>../blog</link>
 <item><guid>js</guid><link>javascript:alert(1)</link><description>body</description></item>
 <item><guid>data</guid><link>data:text/html,hi</link><description>body</description></item>
+<item><guid>relative</guid><link>relative/post</link><description>body</description></item>
 <item><guid>ok</guid><link>https://example.org/ok</link><description>body</description></item>
 </channel></rss>`)
 	}))
@@ -352,6 +353,10 @@ func TestFetchDropsActiveSchemeLinks(t *testing.T) {
 			}
 			if item.ContentHTML != "body" {
 				t.Fatalf("item should keep its content: %q", item.ContentHTML)
+			}
+		case "relative":
+			if item.URL != server.URL+"/relative/post" {
+				t.Fatalf("relative links must resolve against the fetch URL, got %q", item.URL)
 			}
 		case "ok":
 			if item.URL != "https://example.org/ok" {
@@ -428,5 +433,44 @@ func TestFetchStopsExtractingNearTheLeaseDeadline(t *testing.T) {
 	}
 	if got := pageHits.Load(); got != 0 {
 		t.Fatalf("a lease about to expire must defer extraction, got %d page fetches", got)
+	}
+}
+
+func TestIntervalFailureRetriesAtTwiceTheInterval(t *testing.T) {
+	f, _ := testFetcher(t, httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
+	// The cadence-derived cap applies to successful parses only; failures
+	// retry at twice the feed's interval, bounded by MaxInterval. Pinned
+	// intentionally: dropping the old 1h success-path cap changed the
+	// interval a slow feed carries into this branch.
+	if got := f.interval(service.FeedToFetch{Interval: 48 * time.Hour}, nil, service.FetchFailed, ""); got != f.config.MaxInterval {
+		t.Fatalf("a failed slow feed must retry at MaxInterval (%v), got %v", f.config.MaxInterval, got)
+	}
+	if got := f.interval(service.FeedToFetch{Interval: time.Hour}, nil, service.FetchFailed, ""); got < 108*time.Minute || got > 132*time.Minute {
+		t.Fatalf("a failed fast feed must retry near twice its interval, got %v", got)
+	}
+}
+
+func TestItemsResolveRelativeLinksAgainstTheFetchURL(t *testing.T) {
+	f, _ := testFetcher(t, httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
+	// The ingest boundary must never store a bare relative link (unusable in
+	// a client) nor an active scheme; a relative reference resolves against
+	// the fetch URL even though today's parsers pre-resolve most of them.
+	items, err := f.items(context.Background(), service.FeedToFetch{FeedID: 1, URL: "https://feed.example/rss.xml"}, []feed.Item{
+		{GUID: "relative", URL: "relative/post", ContentHTML: "body"},
+		{GUID: "rooted", URL: "/posts/2", ContentHTML: "body"},
+		{GUID: "active", URL: "javascript:alert(1)", ContentHTML: "body"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"relative": "https://feed.example/relative/post",
+		"rooted":   "https://feed.example/posts/2",
+		"active":   "",
+	}
+	for _, item := range items {
+		if item.URL != want[item.GUID] {
+			t.Fatalf("%s link = %q, want %q", item.GUID, item.URL, want[item.GUID])
+		}
 	}
 }

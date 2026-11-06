@@ -386,7 +386,18 @@ func (f *Fetcher) items(ctx context.Context, claim service.FeedToFetch, list []f
 		if base != nil {
 			// Only absolute http(s) links reach a client that renders them as
 			// anchors; a stored active-scheme link is a stored attack.
-			link = it.URL
+			link = strings.TrimSpace(it.URL)
+		} else if ref, err := url.Parse(strings.TrimSpace(it.URL)); err == nil && ref.Scheme == "" && it.URL != "" {
+			// Relative item links are valid RSS/Atom. The parser resolves them
+			// against the feed base, but a feed with a broken base URI can still
+			// hand one over; resolve it against the fetch URL so the item keeps
+			// a usable link. Active-scheme values have a scheme and stay dropped.
+			if feedBase := itemBase(claim.URL); feedBase != nil {
+				base = itemBase(feedBase.ResolveReference(ref).String())
+				if base != nil {
+					link = base.String()
+				}
+			}
 		}
 		content := it.ContentHTML
 		if content == "" {
@@ -406,7 +417,7 @@ func (f *Fetcher) items(ctx context.Context, claim service.FeedToFetch, list []f
 		if claim.Extract == service.ExtractAlways && base != nil && !known[feed.IdentityHash(it)] &&
 			extractions < maxExtractsPerFetch && (extractDeadline.IsZero() || time.Now().Before(extractDeadline)) {
 			extractions++
-			r, e := f.client.Get(ctx, it.URL, outbound.Policy{Purpose: outbound.Extract, ExtraPorts: f.config.ExtraPorts})
+			r, e := f.client.Get(ctx, link, outbound.Policy{Purpose: outbound.Extract, ExtraPorts: f.config.ExtraPorts})
 			if e == nil && r != nil {
 				body, readErr := io.ReadAll(r.Response.Body)
 				r.Response.Body.Close()

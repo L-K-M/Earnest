@@ -40,16 +40,12 @@ func TestSanitizeDeepNestingBounded(t *testing.T) {
 	if !strings.Contains(doc.HTML, "hello") {
 		t.Fatalf("ordinary nesting must keep its text: %q", doc.HTML)
 	}
-	if _, err := Sanitize(base, deepHTML(1<<20)); err == nil {
+	if doc, err := Sanitize(base, deepHTML(1<<20)); err == nil {
 		// If a future parser accepts deep input, the result must still be a
 		// bounded fixed point rather than a stack-overflowing walk.
-		doc, err := Sanitize(base, deepHTML(1<<20))
-		if err != nil {
-			t.Fatal(err)
-		}
 		again, err := Sanitize(base, doc.HTML)
 		if err != nil || again.HTML != doc.HTML {
-			t.Fatalf("deep sanitised output must be a fixed point: %v", err)
+			t.Fatalf("deep sanitised output must be a fixed point: err %v, equal %v", err, again.HTML == doc.HTML)
 		}
 	}
 }
