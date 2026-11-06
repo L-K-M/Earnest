@@ -87,8 +87,8 @@ func TestReadPrintsStoredText(t *testing.T) {
 		})
 	}, testToken, "read", "12")
 	requireCode(t, code, exitOK, errOut)
-	if out != "hello world" {
-		t.Fatalf("output = %q, want the stored text", out)
+	if out != "hello world\n" {
+		t.Fatalf("output = %q, want the stored text with a trailing newline", out)
 	}
 }
 
@@ -178,6 +178,31 @@ func TestBriefingUsesPosition(t *testing.T) {
 	}
 	requests := log.snapshot()
 	if len(requests) != 2 || requests[0].path != "/v1/positions/river" {
+		t.Fatalf("requests = %+v", requests)
+	}
+}
+
+func TestBriefingCursor(t *testing.T) {
+	item := testEntry()
+	item.Seq = 102
+	code, _, errOut, log := runStub(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/positions/river":
+			writeJSON(w, position{Principal: 9, View: "river", Seq: 42, Rev: 7})
+		case "/v1/entries":
+			if r.URL.Query().Get("cursor") != "101" {
+				t.Errorf("cursor = %q", r.URL.Query().Get("cursor"))
+			}
+			if r.URL.Query().Get("after_seq") != "" {
+				t.Errorf("after_seq = %q", r.URL.Query().Get("after_seq"))
+			}
+			writeJSON(w, entriesPage{Entries: []entry{item}})
+		default:
+			http.NotFound(w, r)
+		}
+	}, testToken, "briefing", "--cursor", "101")
+	requireCode(t, code, exitOK, errOut)
+	if requests := log.snapshot(); len(requests) != 2 {
 		t.Fatalf("requests = %+v", requests)
 	}
 }

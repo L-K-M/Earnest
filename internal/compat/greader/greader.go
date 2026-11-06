@@ -319,15 +319,13 @@ func (h *handler) editTag(w http.ResponseWriter, r *http.Request, a service.Acto
 		if id == 0 {
 			continue
 		}
-		for _, entry := range ids {
-			if act.add {
-				_, err = h.svc.AddLabel(r.Context(), a, id, entry, opID())
-			} else {
-				_, err = h.svc.RemoveLabel(r.Context(), a, id, entry, opID())
-			}
-			if err != nil && (act.add || !errors.Is(err, service.ErrNotFound)) {
-				return err
-			}
+		if act.add {
+			_, err = h.svc.AddLabels(r.Context(), a, id, ids, opID())
+		} else {
+			_, err = h.svc.RemoveLabels(r.Context(), a, id, ids, opID())
+		}
+		if err != nil && (act.add || !errors.Is(err, service.ErrNotFound)) {
+			return err
 		}
 	}
 	_, _ = fmt.Fprint(w, "OK")

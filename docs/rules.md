@@ -12,12 +12,13 @@ two children, and `not` takes one.
 | `keyword` | `terms` | Title or body contains a term |
 | `author` | `value` | Author equals this value |
 | `classifier_in` | `terms` | Classifier label is in the closed vocabulary |
-| `semantic` | `value` | Reserved semantic query; currently never matches |
+| `semantic` | `value` | Embedding similarity against the stored article vector; needs the embed task and feed consent |
 | `and`, `or`, `not` | `children` | Combine predicates |
 
-The initial classifier vocabulary contains `press_release`. Agent labels are
-a separate namespace and cannot be used as predicates. The classifier and
-semantic predicates are reserved for the future pipeline.
+Agent labels are a separate namespace and cannot be used as predicates. The
+classifier vocabulary, its consent rules and its pause behaviour are documented
+in [pipeline](pipeline.md). A disabled model predicate disables its whole rule,
+including a negated predicate.
 
 For example, a rule for a selected feed and the word funding has this tree:
 

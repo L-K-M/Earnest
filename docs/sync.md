@@ -149,10 +149,14 @@ per principal and view, last committed writer wins, including backward moves.
 (29).
 
 Subscribing or rebinding to a shared feed atomically emits entry backfill events
-with fresh entry revisions, including tombstones. This covers entries whose
-IDs an ongoing bootstrap already passed. In the same transaction, a following
-`state.updated` backfills existing state for those entries for every principal
-of the user, preserving register provenance, register revisions and `state_rev`.
+with fresh entry revisions for the newest 1000 entries of the bootstrap window
+by sequence, tombstones included. This covers the entries an ongoing bootstrap
+could already have passed while bounding the commit lock; older entries were
+never bootstrap-deliverable, keep revision zero, and stay listed through the
+entry views. In the same transaction, a following
+`state.updated` backfills existing state for the feed's entries for every
+principal of the user, preserving register provenance, register revisions and
+`state_rev`.
 These are snapshots, not new state writes; the event has a fresh change revision.
 Feed title and site URL changes emit
 subscription updates with fresh revisions for each affected subscriber;

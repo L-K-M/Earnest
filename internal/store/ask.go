@@ -17,8 +17,10 @@ func (s *Store) AskReserve(ctx context.Context, user int64, day time.Time, limit
 }
 
 // AskLexical searches publisher text only; notes cannot influence candidate selection.
+// The text projection is bounded like SemanticSearch: retrieval renders short
+// snippets only.
 func (s *Store) AskLexical(ctx context.Context, user int64, query string, limit int) ([]SemanticHit, error) {
-	rows, err := s.pool.Query(ctx, `SELECT e.id,sub.id,e.feed_id,e.seq,e.title,coalesce(e.url,''),c.text,ts_rank(e.search_vector,websearch_to_tsquery(entry_search_config(effective_search_language(e.language,f.language)),$2))::float8 AS rank
+	rows, err := s.pool.Query(ctx, `SELECT e.id,sub.id,e.feed_id,e.seq,e.title,coalesce(e.url,''),coalesce(left(c.text,2048),''),ts_rank(e.search_vector,websearch_to_tsquery(entry_search_config(effective_search_language(e.language,f.language)),$2))::float8 AS rank
  FROM entries e JOIN feeds f ON f.id=e.feed_id
  JOIN subscriptions sub ON sub.feed_id=e.feed_id AND sub.user_id=$1 AND sub.deleted_at IS NULL
  JOIN LATERAL(SELECT text FROM contents WHERE entry_id=e.id AND content_hash=e.content_hash ORDER BY (source='extracted') DESC,sanitizer_version DESC LIMIT 1)c ON true

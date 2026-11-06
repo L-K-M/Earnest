@@ -45,6 +45,7 @@ type FeedCredentials struct {
 type FeedToFetch struct {
 	FeedID       int64
 	URL          string
+	FetchURL     string // effective fetch target: permanent_redirect_url once recorded
 	ETag         string
 	LastModified string
 	Credentials  *FeedCredentials // nil for public feeds
