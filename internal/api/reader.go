@@ -190,6 +190,9 @@ func (s *server) readerRoutes() {
 		}
 		return page, err
 	})
+	route(s, http.MethodGet, "/v1/entries:counts", "entry-counts", func(ctx context.Context, in *empty) (service.UnreadCounts, error) {
+		return s.svc.UnreadCounts(ctx, actor(ctx))
+	})
 	route(s, http.MethodGet, "/v1/entries/{id}", "get-entry", func(ctx context.Context, in *idInput) (entry, error) {
 		result, err := s.svc.Entry(ctx, actor(ctx), in.ID)
 		return toEntry(result), err

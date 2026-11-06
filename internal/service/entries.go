@@ -95,6 +95,17 @@ type EntryFilter struct {
 	SuppressClusters bool
 }
 
+// UnreadCounts summarises the resolved principal's unread entries per
+// subscription, plus the Later and Kept totals, in one aggregate query.
+type UnreadCounts struct {
+	// BySubscription is keyed by subscription ID, not feed ID: the sidebar
+	// counts per subscription row.
+	BySubscription map[int64]int64 `json:"by_subscription"`
+	Later          int64           `json:"later"`
+	Kept           int64           `json:"kept"`
+	Total          int64           `json:"total"`
+}
+
 // EntryContent is the sanitised body at the entry's current content hash.
 type EntryContent struct {
 	EntryID          int64
@@ -251,6 +262,45 @@ func (s *Service) getByIDs(ctx context.Context, a Actor, ids []int64, withConten
 	}
 	if err := s.attachBlurbs(ctx, a.UserID, out); err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+// UnreadCounts returns counts for the same visibility rules as an
+// all/unread_only entry page (active subscription, not deleted, unseen, not
+// Done) without transferring one row per entry. A large backlog costs one
+// aggregate scan instead of a page per 200 entries.
+func (s *Service) UnreadCounts(ctx context.Context, a Actor) (UnreadCounts, error) {
+	if err := s.checkActor(ctx, a, ScopeEntriesRead); err != nil {
+		return UnreadCounts{}, err
+	}
+	principal, err := s.statePrincipal(ctx, a, 0)
+	if err != nil {
+		return UnreadCounts{}, err
+	}
+	rows, err := s.store.Pool().Query(ctx, `SELECT s.id, count(*), count(*) FILTER (WHERE st.shelf='later'), count(*) FILTER (WHERE st.kept)
+		FROM entries e
+		JOIN subscriptions s ON s.feed_id=e.feed_id AND s.user_id=$1 AND s.deleted_at IS NULL
+		LEFT JOIN entry_state st ON st.principal_id=$2 AND st.entry_id=e.id
+		WHERE e.deleted_at IS NULL AND COALESCE(st.seen,'unseen')='unseen' AND COALESCE(st.shelf,'none')<>'done'
+		GROUP BY s.id`, a.UserID, principal)
+	if err != nil {
+		return UnreadCounts{}, fmt.Errorf("count unread: %w", err)
+	}
+	defer rows.Close()
+	out := UnreadCounts{BySubscription: map[int64]int64{}}
+	for rows.Next() {
+		var id, total, later, kept int64
+		if err := rows.Scan(&id, &total, &later, &kept); err != nil {
+			return UnreadCounts{}, fmt.Errorf("scan unread count: %w", err)
+		}
+		out.BySubscription[id] = total
+		out.Later += later
+		out.Kept += kept
+		out.Total += total
+	}
+	if err := rows.Err(); err != nil {
+		return UnreadCounts{}, fmt.Errorf("count unread: %w", err)
 	}
 	return out, nil
 }
