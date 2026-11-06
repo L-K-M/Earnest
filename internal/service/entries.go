@@ -146,6 +146,29 @@ func (s *Service) Entries(ctx context.Context, a Actor, f EntryFilter) ([]Entry,
 	return page, nil
 }
 
+// UnreadCount counts the entries an EntryFilter{View: ViewAll, UnreadOnly:
+// true} walk would return: live entries on live subscriptions whose human
+// principal state is unseen and not done.
+func (s *Service) UnreadCount(ctx context.Context, a Actor) (int64, error) {
+	if err := s.checkActor(ctx, a, ScopeEntriesRead); err != nil {
+		return 0, err
+	}
+	principal, err := s.statePrincipal(ctx, a, 0)
+	if err != nil {
+		return 0, err
+	}
+	var count int64
+	err = s.store.Pool().QueryRow(ctx, `SELECT count(*) FROM entries e
+		JOIN subscriptions s ON s.feed_id = e.feed_id AND s.user_id = $1 AND s.deleted_at IS NULL
+		LEFT JOIN entry_state st ON st.principal_id = $2 AND st.entry_id = e.id
+		WHERE e.deleted_at IS NULL AND COALESCE(st.seen, 'unseen') = 'unseen'
+		AND COALESCE(st.shelf, 'none') <> 'done'`, a.UserID, principal).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count unread entries: %w", err)
+	}
+	return count, nil
+}
+
 // Entry returns one entry visible to the actor, tombstones included.
 func (s *Service) Entry(ctx context.Context, a Actor, id int64) (Entry, error) {
 	if err := s.checkActor(ctx, a, ScopeEntriesRead); err != nil {
