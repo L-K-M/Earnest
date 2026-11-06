@@ -53,8 +53,12 @@ it('shows notification provenance, inert note, mute controls and release',async(
 })
 it('opens a cited entry and labels the brief from its own fields',async()=>{
  const cited={id:12,title:'Cited article'}
- vi.mocked(request).mockImplementation(async path=>path.startsWith('/v1/briefs')?[{...brief,entry_ids:[12]}]:path==='/v1/entries/12'?cited:[])
+ const cited2={id:13,title:'Second article'}
+ vi.mocked(request).mockImplementation(async path=>path.startsWith('/v1/briefs')?[{...brief,entry_ids:[12,13]}]:path.startsWith('/v1/entries?ids=12,13')?{entries:[cited,cited2]}:path==='/v1/entries/12'?cited:[])
  const open=vi.fn();mount(<TodayAgents since="2026-01-01T00:00:00Z" onOpen={open}/>);fireEvent.click(await screen.findByText('Cited article'));expect(open).toHaveBeenCalledWith(cited);expect(screen.getByText(`Scout · ${new Date(brief.created_at).toLocaleString()}`)).toBeTruthy();expect(vi.mocked(request).mock.calls.some(([path])=>path.startsWith('/v1/activity?'))).toBe(false)
+ expect(vi.mocked(request).mock.calls.some(([path])=>path.startsWith('/v1/entries/12'))).toBe(false)
+ expect(vi.mocked(request).mock.calls.some(([path])=>path.startsWith('/v1/entries?ids=12,13'))).toBe(true)
+ expect(await screen.findByText('Second article')).toBeTruthy()
 })
 it('cancels a held notification from activity and can unmute',async()=>{
  const held={...row,action:'notification.created',target:{id:8},next_action:'cancel'}
