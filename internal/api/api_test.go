@@ -203,7 +203,7 @@ func TestHTTPReader(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &counts); err != nil {
 			t.Fatal(err)
 		}
-		if counts.ByFeed[f.subID] != 1 || counts.Total != 1 || counts.Later != 0 || counts.Kept != 0 {
+		if counts.BySubscription[f.subID] != 1 || counts.Total != 1 || counts.Later != 0 || counts.Kept != 0 {
 			t.Fatalf("counts=%+v", counts)
 		}
 		body := []syncmodel.Write{f.write(t, "later", syncmodel.Shelf, syncmodel.Later)}
@@ -213,7 +213,7 @@ func TestHTTPReader(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &counts); err != nil {
 			t.Fatal(err)
 		}
-		if counts.ByFeed[f.subID] != 1 || counts.Later != 1 {
+		if counts.BySubscription[f.subID] != 1 || counts.Later != 1 {
 			t.Fatalf("counts after later=%+v", counts)
 		}
 		requireStatus(t, f.do(t, http.MethodGet, "/v1/entries:counts", nil, requestCredentials{bearer: f.token(t, service.AudienceAPI)}), http.StatusOK)

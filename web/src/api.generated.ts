@@ -2000,7 +2000,7 @@ export interface components {
             revert_handle: string;
         };
         UnreadCounts: {
-            by_feed: {
+            by_subscription: {
                 [key: string]: number;
             };
             /** Format: int64 */

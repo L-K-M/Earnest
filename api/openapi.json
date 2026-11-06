@@ -2964,7 +2964,7 @@
       "UnreadCounts": {
         "additionalProperties": false,
         "properties": {
-          "by_feed": {
+          "by_subscription": {
             "additionalProperties": {
               "format": "int64",
               "type": "integer"
@@ -2985,7 +2985,7 @@
           }
         },
         "required": [
-          "by_feed",
+          "by_subscription",
           "later",
           "kept",
           "total"

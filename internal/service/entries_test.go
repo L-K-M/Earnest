@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -644,10 +645,58 @@ func TestUnreadCounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ByFeed[subA] != 3 || got.ByFeed[subB] != 1 {
-		t.Fatalf("by feed: %+v", got.ByFeed)
+	if got.BySubscription[subA] != 3 || got.BySubscription[subB] != 1 {
+		t.Fatalf("by subscription: %+v", got.BySubscription)
 	}
 	if got.Later != 1 || got.Kept != 1 || got.Total != 4 {
 		t.Fatalf("totals: %+v", got)
+	}
+
+	// A soft-deleted subscription's entries no longer count.
+	if _, err := f.db.Pool().Exec(ctx, "UPDATE subscriptions SET deleted_at=now() WHERE id=$1", subB); err != nil {
+		t.Fatal(err)
+	}
+	got, err = f.s.UnreadCounts(ctx, f.a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got.BySubscription[subB]; ok {
+		t.Fatalf("deleted subscription still counted: %+v", got.BySubscription)
+	}
+	if got.BySubscription[subA] != 3 || got.Total != 3 || got.Later != 1 || got.Kept != 1 {
+		t.Fatalf("totals after unsubscribe: %+v", got)
+	}
+
+	// The aggregate must agree with the unread-only list it summarises.
+	var listed []Entry
+	var afterSeq uint64
+	for {
+		page, err := f.s.Entries(ctx, f.a, EntryFilter{View: ViewAll, UnreadOnly: true, Limit: 200, AfterSeq: afterSeq})
+		if err != nil {
+			t.Fatal(err)
+		}
+		listed = append(listed, page...)
+		if len(page) < 200 {
+			break
+		}
+		afterSeq = page[len(page)-1].Seq
+	}
+	bySub := map[int64]int64{}
+	var later, kept, total int64
+	for _, entry := range listed {
+		bySub[entry.SubscriptionID]++
+		if entry.State.Shelf.Value == syncmodel.Later {
+			later++
+		}
+		if entry.State.Kept.Value == syncmodel.True {
+			kept++
+		}
+		total++
+	}
+	if !reflect.DeepEqual(bySub, got.BySubscription) {
+		t.Fatalf("per subscription: list=%v counts=%v", bySub, got.BySubscription)
+	}
+	if later != got.Later || kept != got.Kept || total != got.Total {
+		t.Fatalf("totals: list later=%d kept=%d total=%d counts=%+v", later, kept, total, got)
 	}
 }

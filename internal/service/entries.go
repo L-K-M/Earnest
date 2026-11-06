@@ -94,10 +94,12 @@ type EntryFilter struct {
 // UnreadCounts summarises the resolved principal's unread entries per
 // subscription, plus the Later and Kept totals, in one aggregate query.
 type UnreadCounts struct {
-	ByFeed map[int64]int64 `json:"by_feed"`
-	Later  int64           `json:"later"`
-	Kept   int64           `json:"kept"`
-	Total  int64           `json:"total"`
+	// BySubscription is keyed by subscription ID, not feed ID: the sidebar
+	// counts per subscription row.
+	BySubscription map[int64]int64 `json:"by_subscription"`
+	Later          int64           `json:"later"`
+	Kept           int64           `json:"kept"`
+	Total          int64           `json:"total"`
 }
 
 // EntryContent is the sanitised body at the entry's current content hash.
@@ -266,13 +268,13 @@ func (s *Service) UnreadCounts(ctx context.Context, a Actor) (UnreadCounts, erro
 		return UnreadCounts{}, fmt.Errorf("count unread: %w", err)
 	}
 	defer rows.Close()
-	out := UnreadCounts{ByFeed: map[int64]int64{}}
+	out := UnreadCounts{BySubscription: map[int64]int64{}}
 	for rows.Next() {
 		var id, total, later, kept int64
 		if err := rows.Scan(&id, &total, &later, &kept); err != nil {
 			return UnreadCounts{}, fmt.Errorf("scan unread count: %w", err)
 		}
-		out.ByFeed[id] = total
+		out.BySubscription[id] = total
 		out.Later += later
 		out.Kept += kept
 		out.Total += total
