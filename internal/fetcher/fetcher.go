@@ -410,16 +410,34 @@ type ProbeError struct {
 func (e *ProbeError) Error() string { return e.Class + ": " + e.Err.Error() }
 func (e *ProbeError) Unwrap() error { return e.Err }
 
+// parseOrigin returns the lowercase scheme://host:port of an absolute URL.
+// Default ports are made explicit so https://host and https://host:443 are
+// one origin; relative or malformed URLs report ok=false and compare unequal
+// to anything, so scoping fails closed.
+func parseOrigin(raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", false
+	}
+	port := u.Port()
+	if port == "" {
+		switch strings.ToLower(u.Scheme) {
+		case "https":
+			port = "443"
+		case "http":
+			port = "80"
+		}
+	}
+	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Hostname()) + ":" + port, true
+}
+
 func sameOrigin(a, b string) bool {
-	left, err := url.Parse(a)
-	if err != nil {
+	left, ok := parseOrigin(a)
+	if !ok {
 		return false
 	}
-	right, err := url.Parse(b)
-	if err != nil {
-		return false
-	}
-	return strings.EqualFold(left.Scheme, right.Scheme) && strings.EqualFold(left.Host, right.Host)
+	right, ok := parseOrigin(b)
+	return ok && left == right
 }
 
 // Probe discovers a feed and returns its parsed, sanitised contents.
