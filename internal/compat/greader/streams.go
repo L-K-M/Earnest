@@ -236,7 +236,7 @@ func (h *handler) contents(w http.ResponseWriter, r *http.Request, a service.Act
 		if end > len(ids) {
 			end = len(ids)
 		}
-		entries, err := h.svc.GetByIDs(r.Context(), a, ids[start:end])
+		entries, err := h.svc.GetByIDsWithContent(r.Context(), a, ids[start:end])
 		if err != nil {
 			return err
 		}

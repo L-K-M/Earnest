@@ -74,6 +74,12 @@ interface SyncStore {
     fun load(): SyncSnapshot
     fun save(snapshot: SyncSnapshot)
 
+    /**
+     * A cheap change token for the persisted snapshot, or -1 when the store
+     * cannot tell. Callers compare it before paying for a full [load] decode.
+     */
+    fun version(): Long = -1
+
     /** Completes any coalesced write; the default is a no-op for synchronous stores. */
     fun flush() {}
 }
