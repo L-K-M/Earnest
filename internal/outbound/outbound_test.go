@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -266,8 +267,7 @@ func TestHTTP2CheckedDialer(t *testing.T) {
 		t.Fatalf("private destination: %v", err)
 	}
 	c = client(t, Config{AllowPrefixes: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}})
-	u, _ := url.Parse(s.URL)
-	tr := c.transport(u, HTTP2)
+	tr := c.transport(HTTP2)
 	tr.TLSClientConfig = s.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
 	defer tr.CloseIdleConnections()
 	resp, err := tr.RoundTrip(httptest.NewRequest("GET", s.URL, nil))
@@ -277,5 +277,46 @@ func TestHTTP2CheckedDialer(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.ProtoMajor != 2 {
 		t.Fatalf("protocol = %s", resp.Proto)
+	}
+}
+
+func TestTransportReuse(t *testing.T) {
+	var mu sync.Mutex
+	opened := 0
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			mu.Lock()
+			opened++
+			mu.Unlock()
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+	c := client(t, Config{AllowPrefixes: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}})
+	_, port, err := net.SplitHostPort(srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		result, err := c.Get(context.Background(), srv.URL, Policy{Purpose: Feed, ExtraPorts: []uint16{uint16(portNumber)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.Copy(io.Discard, result.Response.Body); err != nil {
+			t.Fatal(err)
+		}
+		result.Response.Body.Close()
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if opened != 1 {
+		t.Fatalf("opened %d connections, want 1 (keep-alive)", opened)
 	}
 }

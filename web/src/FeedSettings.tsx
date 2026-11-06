@@ -175,7 +175,8 @@ function OPMLTools({busy, act}: {busy: boolean; act: Act}) {
       link.href = url
       link.download = 'earnest-subscriptions.opml'
       link.click()
-      URL.revokeObjectURL(url)
+      // Revoke after the download starts; revoking synchronously can abort it in Safari.
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
     } catch (cause) {
       setError(message(cause, 'Could not export OPML.'))
     } finally {

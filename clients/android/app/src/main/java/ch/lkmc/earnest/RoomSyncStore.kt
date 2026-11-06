@@ -25,6 +25,9 @@ class RoomSyncStore(private val db: AppDatabase) : SyncStore {
         return json.decodeFromString(SyncSnapshot.serializer(), row.json)
     }
 
+    /** The snapshot row's write counter; every flush increments it. */
+    override fun version(): Long = db.snapshot().version() ?: 0
+
     override fun save(snapshot: SyncSnapshot) {
         pending = snapshot
     }
@@ -33,7 +36,11 @@ class RoomSyncStore(private val db: AppDatabase) : SyncStore {
         mutex.withLock {
             pending?.let { snapshot ->
                 val encoded = json.encodeToString(SyncSnapshot.serializer(), snapshot)
-                db.snapshot().save(SyncSnapshotEntity(json = encoded))
+                // A single-statement bump keeps the counter monotonic even if two
+                // stores flush concurrently; seed the row on the first write.
+                if (db.snapshot().rewrite(encoded) == 0) {
+                    db.snapshot().save(SyncSnapshotEntity(json = encoded, version = 1))
+                }
             }
             pending = null
         }

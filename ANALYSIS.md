@@ -1,13 +1,15 @@
 # Earnest analysis
 
 Unimplemented findings from the longcat-1, longcat-2, mimo-1, mimo-2,
-mistral-large-2 and mistral-1 reviews, ordered by severity within each focus
-area. Every blocking and important finding from these reviews has an open
-pull request against main, except the items noted inline whose files are
+mistral-large-2, mistral-1 and Argon reviews, ordered by severity within each
+focus area. Every blocking and important finding from these reviews has an
+open pull request against main, except the items noted inline whose files are
 claimed by concurrent open PRs. Findings implemented in open PRs (including
 mistral-1 PRs #70, #74, #77, #79, #80, #81, mimo-2 PRs #36, #51, #78, #82,
-#83, #84, #85, #86, #87, #88, #89, #90, #91 and concurrent PRs such as #20,
-#26, #32, #41, #42, #45) are removed here and live in their PR descriptions.
+#83, #84, #85, #86, #87, #88, #89, #90, #91, Argon PRs #93, #94, #95, #96,
+#97, #98, #99, #100 and concurrent PRs such as #19, #20, #22, #26, #32, #33,
+#41, #42, #45, #49, #72, #73, #81, #85) are removed here and live in their
+PR descriptions.
 
 ## usability
 
@@ -196,10 +198,13 @@ usability — nice-to-have
 `web/src/agents/Surfaces.tsx` (ActivityScreen) exposes "Principal ID" (a
 number), "Action" (a free-text protocol value like `state.updated`) and
 "Since" (a date). A user cannot discover valid values without reading
-`docs/agents.md`.
+`docs/agents.md`. The screen already loads `agents.data` (principal id, name
+and muted state) but forces a raw numeric id, and there is no inline
+Mute/Unmute action outside an individual notification's detail.
 
-Suggested fix: populate the principal select from `/v1/agents` and the action
-select from the documented vocabulary; about half a day.
+Suggested fix: populate the principal select from the loaded agents list and
+the action select from the documented vocabulary, and add inline Mute/Unmute
+buttons; about half a day.
 
 ### Onboarding can reappear after the user already has feeds
 
@@ -263,6 +268,18 @@ banner; there is no way to inspect or retry dropped actions afterwards even
 though the session end claims "Sync status shows any actions still waiting".
 Suggested fix: keep dropped operations visible in the session end or a
 status popover; half a day.
+
+### The Mac palette has no keyboard handling
+
+usability — nice-to-have
+
+`clients/mac/App/Sources/EarnestApp.swift` (`PaletteView`) opens without
+focusing the filter field, ignores Return (so the top match cannot be run)
+and has no Cancel/Escape action to dismiss the sheet.
+
+Suggested fix: add `@FocusState` to focus the field on appear, `.onSubmit` to
+run the first enabled match, and a Cancel toolbar item with `.cancelAction`;
+about an hour.
 
 ## performance
 
@@ -370,31 +387,6 @@ render, which shows up as jank while flinging or draining the outbox.
 Suggested fix: index pending writes by `(principal, entry, register)` and apply
 only the newest relevant entry; about half a day. Note: `client.ts` is touched
 by concurrent open PR #35.
-
-### GetByIDs loads article content once per entry
-
-performance — nice-to-have
-
-`internal/service/entries.go:222` issues one `LoadContent` query per entry.
-The rules dry run uses it in 200-id batches, so a dry run over thousands of
-matches costs one content query per match. Search opens one entry, so the
-common path is fine.
-
-Suggested fix: load content for the whole ID list in one `ANY($1)` query, or
-add an `include_content` flag and leave it off for dry runs; about half a day.
-Note: `entries.go` is touched by concurrent open PRs #20 and #31.
-
-### ClusterEntries can scan the same 200-row window repeatedly
-
-performance — nice-to-have
-
-`internal/service/cluster_entries.go:10` re-queries 200 rows at a time until
-it accumulates `limit` unsuppressed entries. A river that is mostly duplicates
-scans the whole feed to fill one page.
-
-Suggested fix: fetch cluster suppression for a larger window once, or paginate
-with a keyset over unsuppressed entries; about half a day. Addressed in
-SQL by open PR #74 (mistral-1), which removes this entry once merged.
 
 ### ArticleReader refetches the signed content URL on every open
 
@@ -509,6 +501,17 @@ performance — nice-to-have
 `internal/service/ask.go:82-95` issues one `SummaryContent` query per fused
 candidate (up to ~400 sequential joins) on an interactive endpoint.
 Suggested fix: batch with `e.id = ANY($1)`; hours.
+
+### FeedsScreen parses subscription JSON on every recomposition
+
+performance — nice-to-have
+
+`clients/android/app/src/main/java/ch/lkmc/earnest/EarnestApp.kt`
+(`FeedsScreen`) calls `Json.parseToJsonElement(subscription.raw)` while
+composing each row, so every recomposition re-parses the same JSON.
+
+Suggested fix: parse once with `remember(subscription.raw)` (or hold a parsed
+model in the sync store) and read the fields from that; under an hour.
 
 ## visual issues
 
@@ -659,6 +662,18 @@ views; feed, folder, label and saved-search buttons never show which view is
 open, so the sidebar loses its place. Suggested fix: extend the
 `aria-current` styling to the dynamic nav buttons; under an hour.
 
+### Offline Android articles render without a viewport or image limits
+
+visual issues — nice-to-have
+
+`clients/android/app/src/main/java/ch/lkmc/earnest/Reader.kt` serves the
+offline `cachedHtml` as a raw fragment, so the WebView has no
+`<meta name="viewport">`, no readable margins and no
+`img { max-width: 100% }`. Wide images and pre blocks overflow horizontally.
+
+Suggested fix: wrap `cachedHtml` in a minimal HTML5 document with a viewport
+meta tag and responsive body/img/pre styles; about an hour.
+
 ## aesthetics and theming
 
 ### The eink theme is high-contrast black on white
@@ -743,15 +758,27 @@ aesthetics and theming — nice-to-have
 over dark themes and "add to home screen" gets the default icon. Suggested
 fix: an icon set, a per-theme `theme-color`, and a minimal manifest; hours.
 
-### Android "True black" and "E-ink" are recolours and the notification icon is generic
+### The Android notification icon is generic
 
 aesthetics and theming — nice-to-have
 
-`clients/android/app/src/main/java/ch/lkmc/earnest/Theme.kt:42-51` keeps
-Material 3 accents, elevation and animations for both themes, and
-`Notifications.kt:63` uses the generic `stat_notify_chat` icon. Suggested
-fix: a monochrome palette with reduced emphasis for E-ink, deeper blacks for
-True black, and an app-icon notification icon; hours to a day.
+`clients/android/app/src/main/java/ch/lkmc/earnest/Notifications.kt:63` uses
+the generic `stat_notify_chat` icon rather than an app icon. (Open PR #100
+replaced the Material 3 palette in `Theme.kt`.)
+
+Suggested fix: use an app-icon notification icon; under an hour.
+
+### Watch rules render raw ISO timestamps
+
+aesthetics and theming — nice-to-have
+
+`web/src/rules/Rules.tsx` renders `watch.last_match_at` as a raw RFC 3339
+string (for example `2026-03-15T14:22:09Z`) while standard rules format
+`last_match_at` with `toLocaleString()`.
+
+Suggested fix: format `watch.last_match_at` with
+`new Date(watch.last_match_at).toLocaleString()` when present; under 15
+minutes.
 
 ## missing features
 
@@ -893,6 +920,30 @@ action. (Open PRs #68/#69 cover the reader header and activity wording.)
 Suggested fix: group Edition per subscription, show feed health, and add an
 Unread action; about a day.
 
+### No way to manage native labels from the web UI
+
+missing features — nice-to-have
+
+The backend and OpenAPI expose full CRUD for `/v1/labels` and
+`/v1/labels/{id}/entries/{entry_id}`, and `web/src/main.tsx` renders Labels in
+the sidebar and the rules editor, but there is no UI to create, rename or
+delete a label or to apply/remove one on an article.
+
+Suggested fix: add a Labels section in settings and a label picker on the
+article reader; about half a day.
+
+### Saved searches cannot be renamed from the search panel
+
+missing features — nice-to-have
+
+`web/src/search/Search.tsx` can create and open saved searches and the
+backend supports `PATCH /v1/saved-searches/{id}`, but the panel offers no
+inline rename control, so a misnamed view can only be recreated. (Open PRs
+#81 and #72 add delete and filter controls.)
+
+Suggested fix: add a Rename action when viewing a saved search; about 1.5
+hours.
+
 ## bugs
 
 ### Article iframes let popups escape the sandbox onto the app origin
@@ -966,17 +1017,21 @@ Suggested fix: require the entry to stay intersecting across two consecutive
 timer ticks, or tie passive-seen to an explicit dwell time and never advance
 the saved position past unread entries.
 
-### Single-key actions act on the first article when nothing is selected
+### Single-key actions fall back to the first article
 
 bugs — nice-to-have
 
 `web/src/River.tsx:84` makes `j`/`k`/`e`/`s`/`f`/`m` act on `entries[0]` when
-no entry is selected. A user who presses `e` while the list is still loading,
-or after opening a view with nothing focused, silently marks the first
-article Done.
+no entry is selected, and also when the active article was opened from Search,
+Ask, Briefs, Notifications or More Like This and is not in the loaded river
+page (`findIndex` returns -1). A user who presses `e` while the list is still
+loading silently marks the first article Done. `seen.current` is also never
+cleared when an entry is marked unread or the view changes, so a returning
+reader can see stale seen state.
 
-Suggested fix: require a selection for single-key actions, or make the first
-action only move the selection.
+Suggested fix: require a selection for single-key actions (keep `j`/`k`
+navigation on the loaded entries) and clear `seen.current` on view change and
+on unseen actions; about 2 hours.
 
 ### Clearing the Today decay field saves NaN
 
@@ -1145,6 +1200,45 @@ the deadline fallback could have produced. Suggested fix: consume an attempt
 only on accepted submissions, treating transport errors like
 `ErrUnsupported`; hours.
 
+### Deleted feeds and folders stay in the manage-feeds lists
+
+bugs — nice-to-have
+
+`web/src/FeedSettings.tsx` renders raw Dexie rows without filtering
+`deleted`, so a subscription removed on another device (or a folder deleted
+after a sync tombstone arrives) stays visible in the subscribe form, the
+folder list and every subscription row until the next manual reload.
+
+Suggested fix: filter `!sub.deleted` and `!folder.deleted` consistently across
+`SubscribeForm`, `FolderSection`, `SubscriptionSection` and
+`SubscriptionRow`; under an hour.
+
+### Fetching one entry omits its cached blurb
+
+bugs — nice-to-have
+
+`internal/service/entries.go` (`Service.Entry`, `GET /v1/entries/{id}`) does
+not call `attachBlurbs`, while `Service.Entries` and `Service.GetByIDs` do. A
+client that opens a single entry sees `blurb: null` even when a Summaries
+pipeline blurb exists for the entry's current content hash.
+
+Suggested fix: call `attachBlurbs` in `Service.Entry` before returning; under
+an hour.
+
+### The reader keeps the previous article's typography draft and error
+
+bugs — nice-to-have
+
+`web/src/ArticleReader.tsx` initialises `overrideDraft` and `error` once, so
+navigating between articles while the reader stays open keeps the previous
+feed's typography draft and a stale action error banner. Changing theme,
+measure or font also refetches `/web/content-url/{id}` even though those
+parameters are applied client-side.
+
+Suggested fix: reset `overrideDraft` and clear `error` when `entry.id` or the
+settings change, and key the content-url query on `['content', entry.id]`;
+under an hour.
+
 ## general issues
 
 ### `lastVisit` is only written on pagehide
@@ -1209,17 +1303,6 @@ Suggested fix: delete the dead selectors or retarget them at `.sync-messages`
 children; under an hour. Note: `web/src/style.css` is touched by concurrent
 open PR #19.
 
-### Search computes headlines over full article text for every match
-
-general issues — nice-to-have
-
-`internal/service/search.go:64-82` runs `ts_headline` over the whole stored
-article text of every matching row before `ORDER BY rank … LIMIT`, so broad
-queries pay for thousands of headlines that are never returned.
-
-Suggested fix: rank first, then compute snippets in a second pass over the
-limited rows; about an hour.
-
 ### docs/llm-providers.md understates the budget guarantee
 
 general issues — nice-to-have
@@ -1257,6 +1340,33 @@ general issues — nice-to-have
 changes since now-86400, so agent changes older than a day never reach Today
 (Android persists the last-seen timestamp). Suggested fix: persist a
 per-identity last-seen timestamp like Android's `KEY_CHANGES_SINCE`; hours.
+
+### The image proxy buffers whole images and omits Referrer-Policy
+
+general issues — nice-to-have
+
+`internal/imageproxy/imageproxy.go` (`ServeHTTP`) reads the upstream body with
+`io.ReadAll`, buffering up to 10 MB per image even though MIME and AVIF
+sniffing only need the first 512 bytes. `/img/` responses also omit the
+`Referrer-Policy: no-referrer` header that `/content/` and `/v1/` send.
+
+Suggested fix: read at most 512 bytes for `http.DetectContentType` and
+`isAVIF`, stream the rest with `io.Copy`, and set
+`Referrer-Policy: no-referrer`; about 1.5 hours.
+
+### Manual refresh and OPML import wait up to a poll interval
+
+general issues — nice-to-have
+
+`internal/service/events.go` (`RefreshSubscription`) and
+`internal/service/opml.go` (`ImportOPML`) set `feeds.next_fetch_at` but never
+call `Fetcher.Kick()`, so "Refresh now" and a deferred OPML import wait up to
+`PollInterval` (60 s) before the scheduler wakes. `runRetention` in
+`cmd/earnest/serve.go` also runs outside the worker `WaitGroup`, so
+`db.Close()` can race an active retention sweep on shutdown.
+
+Suggested fix: expose `Kick()` on the feed prober and invoke it after both
+mutations commit, and launch `runRetention` via `workers.Go`; about 2 hours.
 
 ## novel ideas
 
@@ -1398,3 +1508,28 @@ novel ideas — nice-to-have
 `clients/android/app/src/main/java/ch/lkmc/earnest/EarnestApi.kt:174` pins
 `contentUrl` to `mode=click`; a Mac-style "Load Images" control would give
 parity where images are wanted; hours.
+
+### "Catch me up since..." horizon slider and a newspaper colophon
+
+novel ideas — nice-to-have
+
+When a reader returns after a busy week, a lightweight "horizon" control on
+the river header could fold older Today items into a printable weekly Edition
+digest with an editorial colophon (reading time, top authors, quietest feeds),
+turning backlog guilt into a calm finite ritual.
+
+Suggested fix: add a colophon summary card and a "Move older than 24h to
+Edition" batch action in `web/src/River.tsx`; about a day.
+
+### Agent dry-run postcard and provenance diff in the reader margin
+
+novel ideas — nice-to-have
+
+When an agent has annotated, scored or triaged an article, a subtle margin
+"postcard" in the reader could show the agent's note and score with a
+one-click "Agree / Revert and teach rule" action, connecting Earnest's
+governed-agent model directly to the reading experience.
+
+Suggested fix: query `/v1/annotations?entry_id={id}` in
+`web/src/ArticleReader.tsx` and render an expandable margin note with one-click
+revert/rule prefill; about a day.
