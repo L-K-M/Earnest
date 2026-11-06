@@ -219,6 +219,12 @@ type notificationReader interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
+// notificationQuerier is the read surface both a pool and a transaction
+// provide. The list path uses it to load a whole page in one query.
+type notificationQuerier interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
 func loadNotification(ctx context.Context, q notificationReader, user, id int64) (Notification, error) {
 	var out Notification
 	var why []byte
@@ -272,15 +278,35 @@ func (s *Service) ListNotifications(ctx context.Context, a Actor, beforeID int64
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	return loadNotifications(ctx, s.store.Pool(), a.UserID, ids)
+}
+
+// loadNotifications loads a page of notifications in one query. The previous
+// per-id loop cost up to 1000 round trips for a full page.
+func loadNotifications(ctx context.Context, q notificationQuerier, user int64, ids []int64) ([]Notification, error) {
 	out := []Notification{}
-	for _, id := range ids {
-		n, err := loadNotification(ctx, s.store.Pool(), a.UserID, id)
-		if err != nil {
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := q.Query(ctx, `SELECT n.id,n.sender_principal_id,n.note,n.entry_ids,n.category,n.status,n.held_until,n.budget_used,n.budget_limit,n.why,n.generation::text,n.created_at,
+	EXISTS(SELECT 1 FROM notification_mutes m WHERE m.user_id=n.recipient_user_id AND m.principal_id=n.sender_principal_id)
+FROM notifications n WHERE n.recipient_user_id=$1 AND n.id=ANY($2) ORDER BY n.id DESC`, user, ids)
+	if err != nil {
+		return nil, fmt.Errorf("list notifications: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var n Notification
+		var why []byte
+		if err := rows.Scan(&n.ID, &n.PrincipalID, &n.Note, &n.EntryIDs, &n.Category, &n.Status, &n.HeldUntil, &n.Budget.UsedToday, &n.Budget.LimitToday, &why, &n.Generation, &n.CreatedAt, &n.Muted); err != nil {
+			return nil, fmt.Errorf("scan notification: %w", err)
+		}
+		if err := json.Unmarshal(why, &n.Why); err != nil {
 			return nil, err
 		}
 		out = append(out, n)
 	}
-	return out, nil
+	return out, rows.Err()
 }
 
 // CancelNotification permits the human or its author to cancel only while held.

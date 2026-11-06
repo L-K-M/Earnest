@@ -345,3 +345,40 @@ func TestNotificationPartlyDeliveredIsNotFailed(t *testing.T) {
 		t.Fatal("accepted device incorrectly reported failed", got.Status, err)
 	}
 }
+
+func TestListNotificationsBatches(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := context.Background()
+	a := surfaceAgent(t, f, "Morning", 30)
+	id := f.ingest(t, "article")
+	const count = 25
+	for i := 0; i < count; i++ {
+		if _, err := f.s.SendNotification(ctx, a, surfaceRequest(t, f, id, fmt.Sprintf("op-%d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := f.s.ListNotifications(ctx, f.a, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != count {
+		t.Fatalf("len = %d, want %d", len(list), count)
+	}
+	for i := 1; i < len(list); i++ {
+		if list[i-1].ID <= list[i].ID {
+			t.Fatalf("not descending: %d then %d", list[i-1].ID, list[i].ID)
+		}
+	}
+	for _, n := range list {
+		if n.Why.Sender != "Morning" || n.Budget.LimitToday != 30 || len(n.EntryIDs) != 1 {
+			t.Fatalf("notification %+v", n)
+		}
+	}
+	page, err := f.s.ListNotifications(ctx, f.a, list[9].ID, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page) != 5 || page[0].ID != list[10].ID {
+		t.Fatalf("page: len=%d first=%d", len(page), page[0].ID)
+	}
+}
