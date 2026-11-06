@@ -237,7 +237,7 @@ function SubscriptionSection({subs, folders, busy, act}: {subs: Subscription[]; 
   return <section aria-labelledby="subscriptions-heading"><h3 id="subscriptions-heading">Subscriptions</h3>
     {groups.map(group => group.subscriptions.length === 0 ? null : <div key={group.folder?.id ?? 0}>
       {group.folder && <h4>{group.folder.name}</h4>}
-      <ul>{group.subscriptions.map(sub => <SubscriptionRow key={sub.id} sub={sub} folders={folders} busy={busy} act={act} />)}</ul>
+      <ul>{group.subscriptions.map(sub => <SubscriptionRow key={`${sub.id}:${sub.rev}`} sub={sub} folders={folders} busy={busy} act={act} />)}</ul>
     </div>)}
   </section>
 }

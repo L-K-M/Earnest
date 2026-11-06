@@ -193,4 +193,14 @@ describe('Feeds', () => {
     expect(post[0]).toBe('/v1/opml:import')
     expect(new Headers(post[1]?.headers).get('Content-Type')).toBe('text/x-opml')
   })
+
+  it('updates the title input when the feed title changes externally', async () => {
+    const routes: Routes = {'/v1/subscriptions': [sub()], '/v1/folders': [], '/v1/mutes': []}
+    api(routes)
+    render(<Feeds onChanged={() => {}} />)
+    expect((await screen.findByLabelText('Title') as HTMLInputElement).value).toBe('Feed One')
+    routes['/v1/subscriptions'] = [sub({title: 'Renamed', rev: 2})]
+    fireEvent.click(screen.getByRole('button', {name: 'Refresh now'}))
+    await waitFor(() => expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('Renamed'))
+  })
 })
