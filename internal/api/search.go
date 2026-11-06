@@ -177,6 +177,17 @@ func (s *server) searchRoutes() {
 			return searchPage{}, err
 		}
 		rows, err := s.svc.ListSavedSearch(ctx, actor(ctx), in.ID, cursor)
+		// A hybrid saved view reports the semantic path in-band, matching
+		// /v1/search?mode=hybrid. Full-text views keep the plain page.
+		saved, lookupErr := s.svc.SavedSearches(ctx, actor(ctx))
+		if lookupErr != nil {
+			return searchPage{}, lookupErr
+		}
+		for _, row := range saved {
+			if row.ID == in.ID && row.Filters.Mode == service.SearchHybrid {
+				return semanticPage(rows, err)
+			}
+		}
 		return toSearchPage(rows, err)
 	})
 	route(s, http.MethodGet, "/v1/mutes", "list-mutes", func(ctx context.Context, in *empty) ([]service.Mute, error) {
