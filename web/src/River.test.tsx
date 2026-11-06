@@ -52,6 +52,22 @@ describe('river interactions', () => {
     await new Promise(resolve=>setTimeout(resolve,900))
     expect(positionWrites()).toEqual([2])
   })
+  it('retries a failed position write on a later tick', async () => {
+    mount()
+    await screen.findByText('Article 2')
+    await waitFor(()=>expect(observed.length).toBeGreaterThan(1))
+    const row=observed.find(element=>(element as HTMLElement).dataset.entry==='2')!
+    let failed=false
+    vi.mocked(request).mockImplementation(async (path, options) => {
+      if (typeof path === 'string' && path.startsWith('/v1/positions') && (options as RequestInit | undefined)?.method === 'PUT' && !failed) {
+        failed=true
+        throw new Error('offline')
+      }
+      return path === '/v1/pipeline' ? {blurb:'disabled'} : path.startsWith('/v1/positions') ? {seq:0} : {entries}
+    })
+    callbacks.at(-1)!([{target:row,isIntersecting:true,intersectionRatio:1} as IntersectionObserverEntry], {} as IntersectionObserver)
+    await waitFor(()=>expect(positionWrites()).toEqual([2,2]),{timeout:2500})
+  })
   it('handles deliberate shortcuts without changing row order', async () => {
     const {act,onSelect}=mount()
     await screen.findByText('Article 1')

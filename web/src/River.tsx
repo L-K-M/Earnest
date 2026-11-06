@@ -44,8 +44,11 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   const entriesRef = useRef(entries)
   useEffect(() => { entriesRef.current = entries }, [entries])
   // Passive progress only ever advances the resume position: scrolling back
-  // through earlier pages must not drag "where you left off" backwards.
+  // through earlier pages must not drag "where you left off" backwards, and a
+  // failed write retries on a later tick instead of being lost.
+  const targetSeq = useRef(0)
   const resumeSeq = useRef(0)
+  const pendingSeq = useRef<number | null>(null)
   useEffect(() => { if (position.data) resumeSeq.current = Math.max(resumeSeq.current, position.data.seq) }, [position.data])
   useEffect(() => { heading.current?.focus() }, [key])
 
@@ -78,10 +81,14 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
           })
         }
       }
-      const reached = rendered.reduce((max, entry) => Math.max(max, entry.seq), resumeSeq.current)
-      if (reached > resumeSeq.current) {
-        resumeSeq.current = reached
-        void request(`/v1/positions/${encodeURIComponent(key)}`, {method: 'PUT', body: JSON.stringify({seq: reached, op_id: crypto.randomUUID()})}).catch(error => setError(error instanceof Error ? error.message : 'Could not save position.'))
+      const reached = rendered.reduce((max, entry) => Math.max(max, entry.seq), targetSeq.current)
+      targetSeq.current = reached
+      if (reached > resumeSeq.current && pendingSeq.current === null) {
+        pendingSeq.current = reached
+        void request(`/v1/positions/${encodeURIComponent(key)}`, {method: 'PUT', body: JSON.stringify({seq: reached, op_id: crypto.randomUUID()})})
+          .then(() => { resumeSeq.current = Math.max(resumeSeq.current, reached) })
+          .catch(error => setError(error instanceof Error ? error.message : 'Could not save position.'))
+          .finally(() => { pendingSeq.current = null })
       }
     }, 600)
     return () => { observer.disconnect(); window.clearInterval(timer) }
