@@ -2,6 +2,7 @@ package ch.lkmc.earnest
 
 import android.app.Application
 import androidx.core.content.edit
+import androidx.glance.appwidget.updateAll
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import ch.lkmc.earnest.core.Activity
@@ -172,6 +173,7 @@ class AppViewModel internal constructor(
                         expired = expired,
                     )
                 }
+                runCatching { EarnestWidget().updateAll(getApplication()) }
             } catch (error: ApiException) {
                 if (!isCurrent(session, cache)) return@launch
                 if (error.isUnauthorized) {

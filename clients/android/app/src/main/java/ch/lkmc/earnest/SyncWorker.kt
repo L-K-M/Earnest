@@ -9,6 +9,7 @@ import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import androidx.glance.appwidget.updateAll
 import ch.lkmc.earnest.core.ApiException
 import ch.lkmc.earnest.core.EarnestApi
 import ch.lkmc.earnest.core.SyncRepository
@@ -33,6 +34,7 @@ internal class SyncWorker(context: Context, params: WorkerParameters) : Coroutin
                 engine.flush()
                 cache.refreshAgentChanges(api)
             }
+            runCatching { EarnestWidget().updateAll(applicationContext) }
             Result.success()
         } catch (error: ApiException) {
             if (error.isUnauthorized && secrets.current() == session) secrets.clearToken()
