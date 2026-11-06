@@ -99,6 +99,39 @@ func stateEntry(ctx context.Context, tx pgx.Tx, user int64, id syncmodel.ID) (sy
 	return e, nil
 }
 
+// stateEntries is the bulk form of stateEntry. Entries without a visible
+// subscription row stay absent, which ResolveWrite resolves as Gone exactly
+// like stateEntry's zero value. An active (user, feed) subscription is unique,
+// so at most one row matches each entry.
+func stateEntries(ctx context.Context, tx pgx.Tx, user int64, ids []int64) (map[syncmodel.ID]syncmodel.Entry, error) {
+	entries := make(map[syncmodel.ID]syncmodel.Entry, len(ids))
+	if len(ids) == 0 {
+		return entries, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT e.id,s.id,e.seq,e.first_seen_at,e.deleted_at IS NOT NULL
+ FROM entries e JOIN subscriptions s ON s.feed_id=e.feed_id AND s.user_id=$1 AND s.deleted_at IS NULL
+ WHERE e.id=ANY($2) ORDER BY e.id`, user, ids)
+	if err != nil {
+		return nil, fmt.Errorf("state entry visibility: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var e syncmodel.Entry
+		var deleted bool
+		if err := rows.Scan(&e.ID, &e.SubscriptionID, &e.Seq, &e.FirstSeenAt, &deleted); err != nil {
+			return nil, fmt.Errorf("state entry visibility: %w", err)
+		}
+		e.Deleted = deleted
+		if _, ok := entries[e.ID]; !ok {
+			entries[e.ID] = e
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("state entry visibility: %w", err)
+	}
+	return entries, nil
+}
+
 func loadStateOperation(ctx context.Context, tx pgx.Tx, actor int64, id string) (*stateOperation, error) {
 	var body []byte
 	err := tx.QueryRow(ctx, "SELECT result FROM op_ids WHERE principal_id=$1 AND op_id=$2", actor, id).Scan(&body)
@@ -297,6 +330,50 @@ func (s *Service) stateActivity(ctx context.Context, tx pgx.Tx, a Actor, w syncm
 	return nil
 }
 
+// stateActivityItem is one pending agent-activity row for a range member.
+type stateActivityItem struct {
+	write  syncmodel.Write
+	before syncmodel.State
+	after  syncmodel.State
+}
+
+// stateActivities is the batched form of stateActivity: one INSERT preserving
+// member order. Callers collect rows only under stateActivity's condition,
+// agent writes on another principal's entries.
+func (s *Service) stateActivities(ctx context.Context, tx pgx.Tx, a Actor, items []stateActivityItem, at time.Time) error {
+	if len(items) == 0 {
+		return nil
+	}
+	targets := make([]string, len(items))
+	befores := make([]string, len(items))
+	afters := make([]string, len(items))
+	for i, item := range items {
+		w := item.write
+		target, err := json.Marshal(map[string]any{"principal": w.Principal, "entry_id": w.EntryID, "register": w.Register, "op_id": w.OpID})
+		if err != nil {
+			return err
+		}
+		b, err := json.Marshal(item.before)
+		if err != nil {
+			return err
+		}
+		n, err := json.Marshal(item.after)
+		if err != nil {
+			return err
+		}
+		targets[i] = string(target)
+		befores[i] = string(b)
+		afters[i] = string(n)
+	}
+	_, err := tx.Exec(ctx, `INSERT INTO activity(user_id,principal_id,action,target,before,after,revert_state,created_at)
+SELECT $1,$2,'state.updated',r.target::jsonb,r.before::jsonb,r.after::jsonb,r.after::jsonb,$6
+FROM unnest($3::text[],$4::text[],$5::text[]) AS r(target,before,after)`, a.UserID, a.PrincipalID, targets, befores, afters, at)
+	if err != nil {
+		return fmt.Errorf("record agent activity: %w", err)
+	}
+	return nil
+}
+
 // Through commits a resolved, inclusive range and its exception list atomically.
 func (s *Service) Through(ctx context.Context, a Actor, request ThroughRequest) (syncmodel.RangeResult, error) {
 	return s.through(ctx, a, request, "")
@@ -443,32 +520,46 @@ func (s *Service) through(ctx context.Context, a Actor, request ThroughRequest, 
 		if err := rows.Err(); err != nil {
 			return err
 		}
+		memberIDs := make([]int64, len(members))
+		for i, id := range members {
+			memberIDs[i] = int64(id)
+		}
+		states, err := store.LoadStates(ctx, tx, int64(w.Principal), memberIDs)
+		if err != nil {
+			return err
+		}
+		entries, err := stateEntries(ctx, tx, a.UserID, memberIDs)
+		if err != nil {
+			return err
+		}
+		record := a.Kind == PrincipalAgent && int64(w.Principal) != a.PrincipalID
+		applied := []syncmodel.State{}
+		var activity []stateActivityItem
 		for _, id := range members {
 			item := w
 			item.EntryID = id
-			state, err := store.LoadState(ctx, tx, int64(w.Principal), int64(id))
-			if err != nil {
-				return err
-			}
-			entry, err := stateEntry(ctx, tx, a.UserID, id)
-			if err != nil {
-				return err
-			}
+			state := states[int64(id)]
+			entry := entries[id]
 			r, err := syncmodel.ResolveWrite(trusted, item, entry, state, next)
 			if err != nil {
 				return err
 			}
 			if r.Status == syncmodel.Applied {
-				if err := store.SaveState(ctx, tx, r.State); err != nil {
-					return err
-				}
-				if err := s.stateActivity(ctx, tx, a, item, state, r.State, receipt); err != nil {
-					return err
+				applied = append(applied, r.State)
+				states[int64(id)] = r.State
+				if record {
+					activity = append(activity, stateActivityItem{write: item, before: state, after: r.State})
 				}
 			} else {
 				result.Except = append(result.Except, id)
 			}
 			result.Results = append(result.Results, r)
+		}
+		if err := store.SaveStates(ctx, tx, applied); err != nil {
+			return err
+		}
+		if err := s.stateActivities(ctx, tx, a, activity, receipt); err != nil {
+			return err
 		}
 		if _, err := s.change(ctx, tx, a.UserID, syncmodel.StateRange, map[string]any{"range": result}); err != nil {
 			return err
