@@ -332,8 +332,9 @@ func (s *Service) subscribeTx(ctx context.Context, tx pgx.Tx, a Actor, rawURL st
 		return Subscription{}, false, err
 	}
 	var id int64
+	var initialFetchPending bool
 	if err := tx.QueryRow(ctx, `INSERT INTO subscriptions(user_id,feed_id,title_override,folder_id,cadence,full_text_mode,rev,created_at,initial_since,initial_through_seq,initial_fetch_pending)
- VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,(SELECT coalesce(max(seq),0) FROM entries WHERE feed_id=$2),NOT EXISTS(SELECT 1 FROM entries WHERE feed_id=$2)) RETURNING id`, a.UserID, feedID, title, folder, string(cadence), mode, rev, s.now().UTC(), s.now().UTC().Add(-24*time.Hour)).Scan(&id); err != nil {
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,(SELECT coalesce(max(seq),0) FROM entries WHERE feed_id=$2),NOT EXISTS(SELECT 1 FROM entries WHERE feed_id=$2)) RETURNING id, initial_fetch_pending`, a.UserID, feedID, title, folder, string(cadence), mode, rev, s.now().UTC(), s.now().UTC().Add(-24*time.Hour)).Scan(&id, &initialFetchPending); err != nil {
 		return Subscription{}, false, err
 	}
 	sub, err := subscriptionTx(ctx, tx, a.UserID, id)
@@ -368,7 +369,9 @@ func (s *Service) subscribeTx(ctx context.Context, tx pgx.Tx, a Actor, rawURL st
 			return sub, false, err
 		}
 	}
-	return sub, true, nil
+	// The bool means "this subscription scheduled an initial fetch", which is
+	// false when the feed already had entries and backfilled synchronously.
+	return sub, initialFetchPending, nil
 }
 
 const subscriptionStateBatchSize = 500

@@ -329,6 +329,9 @@ func TestSubscriptions(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, result := range repeat {
+			if result.Subscription != nil && result.Error != "" {
+				t.Fatal("repeat import errored:", result.Error)
+			}
 			if result.Subscription != nil && result.Deferred {
 				t.Fatal("repeat import marked an existing feed deferred")
 			}
