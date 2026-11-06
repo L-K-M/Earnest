@@ -53,11 +53,12 @@ describe('river interactions', () => {
     expect(act).not.toHaveBeenCalled()
   })
   it('exposes each row to the virtualizer measurement hook', async () => {
+    measureElementMock.mockClear()
     mount()
     await screen.findByText('Article 1')
-    expect(measureElementMock).toHaveBeenCalled()
     const rows = document.querySelectorAll('.virtual-row')
     expect(rows.length).toBeGreaterThan(0)
+    expect(measureElementMock).toHaveBeenCalledTimes(rows.length)
     for (const row of rows) expect(row.getAttribute('data-index')).toMatch(/^\d+$/)
   })
 })
