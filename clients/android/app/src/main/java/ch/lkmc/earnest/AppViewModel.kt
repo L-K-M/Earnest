@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.MapSerializer
@@ -139,7 +140,9 @@ class AppViewModel internal constructor(
                 if (!isCurrent(session, cache)) return@withEngine
                 val restored = restoredState(engine, cache.identity.principalId)
                 val changes = cache.agentChanges()
-                _state.value = _state.value.copy(
+                // update{} keeps the reload from clobbering a concurrent
+                // foreground write to the state flow.
+                _state.update { previous -> previous.copy(
                     snapshot = restored.snapshot,
                     principalId = restored.principalId,
                     states = restored.states,
@@ -149,7 +152,7 @@ class AppViewModel internal constructor(
                     sessionAgentChanges = activitySince(changes, sessionStartedAt),
                     agentChangesError = if (cache.agentChangesStale) AGENT_CHANGES_STALE_MESSAGE else null,
                     briefs = cache.db.briefs().get(),
-                )
+                ) }
             }
         }
     }
