@@ -81,6 +81,42 @@ func EntryVisible(ctx context.Context, q entryQuerier, user, entry int64) (bool,
 	return ok, nil
 }
 
+// ContentRow is one entry's current sanitised body, in scan order.
+type ContentRow struct {
+	EntryID int64
+	HTML    string
+	Text    string
+	Version int
+	Source  string
+}
+
+// LoadContentMap returns the current body for every id in one query, using the
+// same ordering as LoadContent: extracted text first, then the highest
+// sanitizer version within a source. Callers that render many bodies (Google
+// Reader compatibility) use this instead of a per-entry query.
+func LoadContentMap(ctx context.Context, q entryQuerier, ids []int64) (map[int64]ContentRow, error) {
+	out := map[int64]ContentRow{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := q.Query(ctx, `SELECT DISTINCT ON (c.entry_id) c.entry_id, c.html, c.text, c.sanitizer_version, c.source
+		FROM contents c JOIN entries e ON e.id = c.entry_id
+		WHERE c.entry_id = ANY($1) AND c.content_hash = e.content_hash
+		ORDER BY c.entry_id, (c.source = 'extracted') DESC, c.sanitizer_version DESC`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("load content map: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var c ContentRow
+		if err := rows.Scan(&c.EntryID, &c.HTML, &c.Text, &c.Version, &c.Source); err != nil {
+			return nil, fmt.Errorf("scan content map: %w", err)
+		}
+		out[c.EntryID] = c
+	}
+	return out, rows.Err()
+}
+
 // LoadContent returns the sanitised body for the entry's current content hash,
 // preferring extracted text, then the highest sanitizer version within a
 // source. That ordering matches update_entry_search so display and search
