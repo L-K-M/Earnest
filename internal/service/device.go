@@ -61,7 +61,9 @@ func (a *Auth) throttleDevice(clientKey string) bool {
 
 // StartDeviceAuth begins a device authorization request. clientKey is the
 // caller's address (or another stable client identifier); an empty key skips
-// the per-client cap, which only tests and in-process callers use.
+// the per-client cap, which only tests and in-process callers use. Callers
+// behind one NAT gateway or reverse proxy share a single bucket, so proxied
+// deployments may need a larger limit or trusted X-Forwarded-For support.
 func (a *Auth) StartDeviceAuth(ctx context.Context, clientName, clientKey string) (DeviceAuthorization, error) {
 	if strings.TrimSpace(clientName) == "" {
 		return DeviceAuthorization{}, fmt.Errorf("client name: %w", ErrInvalid)
