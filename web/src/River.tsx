@@ -24,6 +24,8 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   const pipeline = usePipeline()
   const key = viewKey(view)
   const scroller = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  const [scrollMargin, setScrollMargin] = useState(0)
   const heading = useRef<HTMLHeadingElement>(null)
   const seen = useRef(new Set<number>())
   const pending = useRef(new Set<number>())
@@ -47,7 +49,28 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   })
   const entries = orderEntries(list.data?.pages.flatMap(page => page.entries) ?? [], view, subscriptions)
   // eslint-disable-next-line react-hooks/incompatible-library -- Virtual owns mutable scroll measurements; this app does not use React Compiler.
-  const virtual = useVirtualizer({count: entries.length, getScrollElement: () => scroller.current, estimateSize: () => 100, overscan: 5, getItemKey: index => entries[index].id})
+  const virtual = useVirtualizer({count: entries.length, getScrollElement: () => scroller.current, estimateSize: () => 100, overscan: 5, scrollMargin, getItemKey: index => entries[index].id})
+  // The Today panel sits above the list inside the scroller, so the list's own
+  // top is offset from the scroller's content origin. The virtualizer needs
+  // that offset as scrollMargin to report row positions in scroller
+  // coordinates; the seen logic and row transforms then line up.
+  const measureScrollMargin = useCallback(() => {
+    const root = scroller.current
+    const element = listRef.current
+    if (!root || !element) return
+    setScrollMargin(element.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop)
+  }, [])
+  useEffect(() => {
+    measureScrollMargin()
+    const root = scroller.current
+    const element = listRef.current
+    if (typeof ResizeObserver === 'undefined' || !root || !element) return
+    const observer = new ResizeObserver(measureScrollMargin)
+    observer.observe(element)
+    const panel = root.firstElementChild
+    if (panel && panel !== element) observer.observe(panel)
+    return () => observer.disconnect()
+  }, [measureScrollMargin])
   const visible = virtual.getVirtualItems()
   const actionsRef = useRef(actions)
   useEffect(() => { actionsRef.current = actions }, [actions])
@@ -143,13 +166,13 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     {view.kind === 'edition' && <Edition onOpen={onOpen}/>}
     <div className="river-scroll" ref={scroller} onScroll={markScrolledPast} tabIndex={0} aria-label="Article list">
       {view.kind === 'today' && <TodayAgents since={since} onOpen={onOpen}/>}
-      <div className="virtual-list" style={{height: virtual.getTotalSize()}} role="list">
+      <div ref={listRef} className="virtual-list" style={{height: virtual.getTotalSize()}} role="list">
         {visible.map(row => {
           const entry = entries[row.index]
           const state = actions.state(entry)
           const source = subscriptions.find(sub => sub.id === entry.subscription_id)?.title || 'Feed'
           const group = view.kind === 'edition' && (row.index === 0 || entries[row.index - 1].subscription_id !== entry.subscription_id)
-          return <div className="virtual-row" key={entry.id} role="listitem" data-entry={entry.id} style={{height: row.size, transform: `translateY(${row.start}px)`}}>
+          return <div className="virtual-row" key={entry.id} role="listitem" data-entry={entry.id} style={{height: row.size, transform: `translateY(${row.start - virtual.options.scrollMargin}px)`}}>
             {group && <h3 className="feed-group">{source}</h3>}
             <button className="entry" aria-current={selected?.id === entry.id ? 'true' : undefined} onFocus={() => onSelect(entry)} onClick={() => open(entry)}><strong>{entry.title || 'Untitled'}</strong>{pipeline.status.blurb === 'enabled' && entry.blurb && <span>{entry.blurb}</span>}<span>{source} · {statusLabel(state)}{state.kept.value === true ? ' · Kept' : ''}</span></button>
           </div>
