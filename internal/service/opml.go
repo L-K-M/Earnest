@@ -79,19 +79,22 @@ func (s *Service) ImportOPML(ctx context.Context, a Actor, outlines []OPMLOutlin
 					continue
 				}
 				var sub Subscription
+				var created bool
 				err = s.withEvents(ctx, func(tx pgx.Tx) error {
 					if err := store.LockCore(ctx, tx); err != nil {
 						return err
 					}
 					var err error
-					sub, err = s.subscribeTx(ctx, tx, a, rawURL, FeedMeta{Title: item.Title, SiteURL: item.HTMLURL}, SubscribeOptions{Title: item.Title, FolderID: folderID}, nil)
+					sub, created, err = s.subscribeTx(ctx, tx, a, rawURL, FeedMeta{Title: item.Title, SiteURL: item.HTMLURL}, SubscribeOptions{Title: item.Title, FolderID: folderID}, nil)
 					return err
 				})
 				if err != nil {
 					result.Error = domainError(err).Error()
 				} else {
 					result.Subscription = &sub
-					result.Deferred = true
+					// Only a new subscription schedules its first fetch; an
+					// already-subscribed feed is not deferred work.
+					result.Deferred = created
 				}
 			} else if item.Title != "" {
 				folder, err := s.importFolder(ctx, a, item.Title)
