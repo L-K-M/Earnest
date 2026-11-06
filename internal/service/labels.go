@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/L-K-M/Earnest/internal/store"
@@ -360,4 +361,261 @@ func (s *Service) RemoveLabel(ctx context.Context, a Actor, labelID, entryID int
 		return LabelMembership{}, err
 	}
 	return out, nil
+}
+
+// labelSetResult is the committed outcome of a bulk membership mutation.
+// Entries apply in input order and the first failure stops the set, so the
+// memberships cover the applied prefix only; the record lets a replayed
+// op_id return the same partial result and error. Failed is the input index
+// that stopped the set, -1 when every entry was processed.
+type labelSetResult struct {
+	Memberships []LabelMembership `json:"memberships"`
+	Failed      int               `json:"failed"`
+	NotFound    bool              `json:"not_found,omitempty"`
+}
+
+func (r labelSetResult) err() error {
+	switch {
+	case r.Failed < 0:
+		return nil
+	case r.NotFound:
+		return ErrNotFound
+	default:
+		return fmt.Errorf("label or entry id: %w", ErrInvalid)
+	}
+}
+
+// AddLabels assigns a live label to each entry inside one locked mutation and
+// one op record, emitting the same per-entry label.added events a sequential
+// AddLabel loop emits. Entries apply in order; the first entry that would
+// fail AddLabel stops the set with the earlier changes still committed, so a
+// returned error accompanies a committed prefix and reports that first
+// failure. Memberships holds one row per processed entry, including
+// already-member no-ops. A replayed op_id returns the recorded outcome.
+func (s *Service) AddLabels(ctx context.Context, a Actor, labelID int64, entryIDs []int64, opID string) ([]LabelMembership, error) {
+	if err := s.checkLabelWriter(ctx, a, "x", opID); err != nil {
+		return nil, err
+	}
+	if labelID <= 0 {
+		return nil, fmt.Errorf("label id: %w", ErrInvalid)
+	}
+	if len(entryIDs) == 0 {
+		return []LabelMembership{}, nil
+	}
+	var result labelSetResult
+	err := s.withEvents(ctx, func(tx pgx.Tx) error {
+		if err := store.LockCore(ctx, tx); err != nil {
+			return err
+		}
+		replay, err := replayOp(ctx, tx, a.PrincipalID, "AddLabels", opID)
+		if err != nil {
+			return err
+		}
+		if replay != nil {
+			return json.Unmarshal(replay, &result)
+		}
+		result, err = s.addLabelsTx(ctx, tx, a, labelID, entryIDs)
+		if err != nil {
+			return err
+		}
+		return store.FinishOp(ctx, tx, a.PrincipalID, opID, result)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result.Memberships, result.err()
+}
+
+// RemoveLabels tombstones every listed membership inside one locked mutation
+// and one op record, emitting the same per-entry label.removed events a
+// sequential RemoveLabel loop emits for a caller ignoring ErrNotFound: a
+// missing label and missing or tombstoned memberships are skipped. A
+// nonpositive entry id still stops the set with earlier removals committed,
+// matching that loop. A replayed op_id returns the recorded outcome.
+func (s *Service) RemoveLabels(ctx context.Context, a Actor, labelID int64, entryIDs []int64, opID string) ([]LabelMembership, error) {
+	if err := s.checkLabelWriter(ctx, a, "x", opID); err != nil {
+		return nil, err
+	}
+	if labelID <= 0 {
+		return nil, fmt.Errorf("label id: %w", ErrInvalid)
+	}
+	if len(entryIDs) == 0 {
+		return []LabelMembership{}, nil
+	}
+	var result labelSetResult
+	err := s.withEvents(ctx, func(tx pgx.Tx) error {
+		if err := store.LockCore(ctx, tx); err != nil {
+			return err
+		}
+		replay, err := replayOp(ctx, tx, a.PrincipalID, "RemoveLabels", opID)
+		if err != nil {
+			return err
+		}
+		if replay != nil {
+			return json.Unmarshal(replay, &result)
+		}
+		result, err = s.removeLabelsTx(ctx, tx, a, labelID, entryIDs)
+		if err != nil {
+			return err
+		}
+		return store.FinishOp(ctx, tx, a.PrincipalID, opID, result)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result.Memberships, result.err()
+}
+
+// addLabelsTx runs the AddLabels mutation inside the locked transaction.
+// Within one entry the id check precedes the label lookup and the visibility
+// check, matching AddLabel's order, so the first failing entry decides both
+// the applied prefix and the reported error.
+func (s *Service) addLabelsTx(ctx context.Context, tx pgx.Tx, a Actor, labelID int64, entryIDs []int64) (labelSetResult, error) {
+	result := labelSetResult{Memberships: []LabelMembership{}, Failed: -1}
+	limit := len(entryIDs)
+	for i, id := range entryIDs {
+		if id <= 0 {
+			limit = i
+			break
+		}
+	}
+	label, err := store.LoadLabel(ctx, tx, a.UserID, labelID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return result, domainError(err)
+	}
+	if err != nil || label.Deleted {
+		result.Failed = 0
+		result.NotFound = limit > 0
+		return result, nil
+	}
+	ids := entryIDs[:limit]
+	visible, err := store.VisibleEntries(ctx, tx, a.UserID, ids)
+	if err != nil {
+		return result, err
+	}
+	members, err := store.LoadMemberships(ctx, tx, a.UserID, labelID, ids)
+	if err != nil {
+		return result, err
+	}
+	resolved := map[int64]LabelMembership{}
+	var changed []int64
+	processed := limit
+	for i, id := range ids {
+		if !visible[id] {
+			processed = i
+			result.Failed = i
+			result.NotFound = true
+			break
+		}
+		if _, dup := resolved[id]; dup {
+			continue
+		}
+		if m, found := members[id]; found && !m.Deleted {
+			// Already a member: idempotent no-op, no new event.
+			resolved[id] = LabelMembership{ID: m.ID, LabelID: labelID, EntryID: id, Rev: uint64(m.Rev)}
+			continue
+		}
+		resolved[id] = LabelMembership{LabelID: labelID, EntryID: id}
+		changed = append(changed, id)
+	}
+	if result.Failed < 0 && limit < len(entryIDs) {
+		result.Failed = limit
+	}
+	if len(changed) > 0 {
+		alloc, err := store.AllocateCounters(ctx, tx, 0, map[int64]int64{a.UserID: int64(len(changed))})
+		if err != nil {
+			return result, err
+		}
+		base := alloc.Revs[a.UserID].First
+		revs := make([]int64, len(changed))
+		for i := range revs {
+			revs[i] = base + int64(i)
+		}
+		identities, err := store.UpsertMemberships(ctx, tx, a.UserID, labelID, changed, revs)
+		if err != nil {
+			return result, domainError(err)
+		}
+		payloads := make([]json.RawMessage, len(changed))
+		for i, entry := range changed {
+			mID := identities[entry]
+			resolved[entry] = LabelMembership{ID: mID, LabelID: labelID, EntryID: entry, Rev: uint64(revs[i])}
+			obj := labelObject(a, mID, entry, label.Name, uint64(revs[i]), false)
+			payloads[i], err = json.Marshal(map[string]any{"object": obj, "label_id": labelID})
+			if err != nil {
+				return result, err
+			}
+		}
+		if err := insertEvents(ctx, tx, a.UserID, revs, string(syncmodel.LabelAdded), payloads, s.now().UTC()); err != nil {
+			return result, err
+		}
+	}
+	for i := 0; i < processed; i++ {
+		result.Memberships = append(result.Memberships, resolved[ids[i]])
+	}
+	return result, nil
+}
+
+// removeLabelsTx runs the RemoveLabels mutation inside the locked transaction.
+func (s *Service) removeLabelsTx(ctx context.Context, tx pgx.Tx, a Actor, labelID int64, entryIDs []int64) (labelSetResult, error) {
+	result := labelSetResult{Memberships: []LabelMembership{}, Failed: -1}
+	limit := len(entryIDs)
+	for i, id := range entryIDs {
+		if id <= 0 {
+			limit = i
+			break
+		}
+	}
+	label, err := store.LoadLabel(ctx, tx, a.UserID, labelID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return result, domainError(err)
+	}
+	if err == nil && !label.Deleted {
+		ids := entryIDs[:limit]
+		members, err := store.LoadMemberships(ctx, tx, a.UserID, labelID, ids)
+		if err != nil {
+			return result, err
+		}
+		seen := map[int64]bool{}
+		var changed []int64
+		for _, id := range ids {
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			if m, found := members[id]; found && !m.Deleted {
+				changed = append(changed, id)
+			}
+		}
+		if len(changed) > 0 {
+			alloc, err := store.AllocateCounters(ctx, tx, 0, map[int64]int64{a.UserID: int64(len(changed))})
+			if err != nil {
+				return result, err
+			}
+			base := alloc.Revs[a.UserID].First
+			revs := make([]int64, len(changed))
+			for i := range revs {
+				revs[i] = base + int64(i)
+			}
+			if err := store.TombstoneMemberships(ctx, tx, a.UserID, labelID, changed, revs, s.now().UTC()); err != nil {
+				return result, err
+			}
+			payloads := make([]json.RawMessage, len(changed))
+			for i, entry := range changed {
+				m := members[entry]
+				result.Memberships = append(result.Memberships, LabelMembership{ID: m.ID, LabelID: labelID, EntryID: entry, Rev: uint64(revs[i]), Deleted: true})
+				obj := labelObject(a, m.ID, entry, label.Name, uint64(revs[i]), true)
+				payloads[i], err = json.Marshal(map[string]any{"object": obj, "label_id": labelID})
+				if err != nil {
+					return result, err
+				}
+			}
+			if err := insertEvents(ctx, tx, a.UserID, revs, string(syncmodel.LabelRemoved), payloads, s.now().UTC()); err != nil {
+				return result, err
+			}
+		}
+	}
+	if limit < len(entryIDs) {
+		result.Failed = limit
+	}
+	return result, nil
 }

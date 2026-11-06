@@ -246,6 +246,60 @@ func TombstoneLabel(ctx context.Context, tx pgx.Tx, label, rev int64, at time.Ti
 	return nil
 }
 
+// VisibleEntries filters entries down to those reachable through one of the
+// user's active subscriptions and not retention-tombstoned.
+func VisibleEntries(ctx context.Context, q entryQuerier, user int64, entries []int64) (map[int64]bool, error) {
+	out := make(map[int64]bool, len(entries))
+	if len(entries) == 0 {
+		return out, nil
+	}
+	rows, err := q.Query(ctx, `SELECT e.id FROM entries e
+		JOIN subscriptions s ON s.feed_id = e.feed_id AND s.user_id = $1 AND s.deleted_at IS NULL
+		WHERE e.id = ANY($2) AND e.deleted_at IS NULL`, user, entries)
+	if err != nil {
+		return nil, fmt.Errorf("check entry visibility: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan visible entry: %w", err)
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
+// MembershipRow is one stored entry-label membership.
+type MembershipRow struct {
+	ID      int64
+	Rev     int64
+	Deleted bool
+}
+
+// LoadMemberships returns every membership row of (user, label) across entries.
+func LoadMemberships(ctx context.Context, q entryQuerier, user, label int64, entries []int64) (map[int64]MembershipRow, error) {
+	out := make(map[int64]MembershipRow, len(entries))
+	if len(entries) == 0 {
+		return out, nil
+	}
+	rows, err := q.Query(ctx, `SELECT id, entry_id, rev, deleted_at IS NOT NULL FROM entry_labels
+		WHERE user_id = $1 AND label_id = $2 AND entry_id = ANY($3)`, user, label, entries)
+	if err != nil {
+		return nil, fmt.Errorf("load label memberships: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var m MembershipRow
+		var entry int64
+		if err := rows.Scan(&m.ID, &entry, &m.Rev, &m.Deleted); err != nil {
+			return nil, fmt.Errorf("scan label membership: %w", err)
+		}
+		out[entry] = m
+	}
+	return out, rows.Err()
+}
+
 // LoadMembership returns the entry-label membership row and whether it is tombstoned.
 func LoadMembership(ctx context.Context, q entryQuerier, user, entry, label int64) (rev int64, deleted, found bool, err error) {
 	var deletedAt *time.Time
@@ -274,6 +328,52 @@ func UpsertMembership(ctx context.Context, tx pgx.Tx, user, entry, label, rev in
 func TombstoneMembership(ctx context.Context, tx pgx.Tx, user, entry, label, rev int64, at time.Time) error {
 	if _, err := tx.Exec(ctx, "UPDATE entry_labels SET deleted_at = $4, rev = $5 WHERE user_id = $1 AND entry_id = $2 AND label_id = $3", user, entry, label, at, rev); err != nil {
 		return fmt.Errorf("remove label membership: %w", err)
+	}
+	return nil
+}
+
+// UpsertMemberships creates or resurrects each membership at the rev paired
+// with its entry, returning each entry's stable membership identity. Entries
+// must be distinct: an ON CONFLICT clause cannot touch the same row twice.
+func UpsertMemberships(ctx context.Context, tx pgx.Tx, user, label int64, entries, revs []int64) (map[int64]int64, error) {
+	if len(entries) != len(revs) {
+		return nil, fmt.Errorf("entries and revisions must pair")
+	}
+	out := make(map[int64]int64, len(entries))
+	if len(entries) == 0 {
+		return out, nil
+	}
+	rows, err := tx.Query(ctx, `INSERT INTO entry_labels (user_id, entry_id, label_id, rev)
+		SELECT $1, e, $2, r FROM unnest($3::bigint[], $4::bigint[]) AS u(e, r)
+		ON CONFLICT (user_id, entry_id, label_id) DO UPDATE SET deleted_at = NULL, rev = EXCLUDED.rev
+		RETURNING id, entry_id`, user, label, entries, revs)
+	if err != nil {
+		return nil, fmt.Errorf("add label memberships: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, entry int64
+		if err := rows.Scan(&id, &entry); err != nil {
+			return nil, fmt.Errorf("scan membership identity: %w", err)
+		}
+		out[entry] = id
+	}
+	return out, rows.Err()
+}
+
+// TombstoneMemberships marks each listed membership deleted at the rev paired
+// with its entry.
+func TombstoneMemberships(ctx context.Context, tx pgx.Tx, user, label int64, entries, revs []int64, at time.Time) error {
+	if len(entries) != len(revs) {
+		return fmt.Errorf("entries and revisions must pair")
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `UPDATE entry_labels el SET deleted_at = $4, rev = u.rev
+		FROM unnest($2::bigint[], $3::bigint[]) AS u(entry, rev)
+		WHERE el.user_id = $1 AND el.label_id = $5 AND el.entry_id = u.entry`, user, entries, revs, at, label); err != nil {
+		return fmt.Errorf("remove label memberships: %w", err)
 	}
 	return nil
 }
