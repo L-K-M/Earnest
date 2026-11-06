@@ -1,10 +1,12 @@
 # Earnest analysis
 
-Unimplemented findings from the longcat-1, longcat-2, mimo-1 and
-mistral-large-2 reviews, ordered by severity within each focus area.
-Every blocking and important finding from these reviews has an open pull
-request against main, except the items noted inline whose files are
-claimed by concurrent open PRs.
+Unimplemented findings from the longcat-1, longcat-2, mimo-1,
+mistral-large-2 and mistral-1 reviews, ordered by severity within each focus
+area. Every blocking and important finding from these reviews has an open
+pull request against main, except the items noted inline whose files are
+claimed by concurrent open PRs. Findings implemented in open PRs (including
+mistral-1 PRs #70, #74, #77, #79, #80, #81 and concurrent PRs such as #20,
+#26, #32, #41, #42, #45) are removed here and live in their PR descriptions.
 
 ## usability
 
@@ -209,6 +211,17 @@ a sidebar view and returns to the river is greeted with "Welcome to Earnest".
 Suggested fix: drop the `onboardingStarted` term, or use it only to suppress
 onboarding after an import completed in this session; under an hour.
 
+### The sign-in form has no pending state
+
+usability — nice-to-have
+
+`web/src/main.tsx:176` leaves the Sign in button enabled while the login
+request runs, so a double click sends two login attempts that both count
+toward the throttle window.
+
+Suggested fix: disable the button (and show "Signing in…") until the request
+settles; a few minutes.
+
 ## performance
 
 ### The passive-seen observer is rebuilt on every scroll frame
@@ -336,7 +349,8 @@ it accumulates `limit` unsuppressed entries. A river that is mostly duplicates
 scans the whole feed to fill one page.
 
 Suggested fix: fetch cluster suppression for a larger window once, or paginate
-with a keyset over unsuppressed entries; about half a day.
+with a keyset over unsuppressed entries; about half a day. Addressed in
+SQL by open PR #74 (mistral-1), which removes this entry once merged.
 
 ### ArticleReader refetches the signed content URL on every open
 
@@ -362,6 +376,19 @@ two requests, even online with a healthy connection.
 Suggested fix: fetch the signed URL first and reuse the cached HTML when it
 exists; only fall back to the raw content when the signed URL fails or no
 cache exists; about half an hour.
+
+### Android stores the whole agent-change history in SharedPreferences
+
+performance — nice-to-have
+
+`clients/android/app/src/main/java/ch/lkmc/earnest/SessionCache.kt:63-77`
+(`refreshAgentChanges`) pages through every agent change since the last visit
+(1000 per request, unbounded page count) and stores the full list as one JSON
+string in SharedPreferences, which is parsed synchronously on read and grows
+without bound.
+
+Suggested fix: keep only the latest page window plus the cursor, and page the
+Activity screen on demand; about an hour.
 
 ## visual issues
 
@@ -468,6 +495,25 @@ Suggested fix: set `background:var(--paper)` on `:root`/`html` (or set
 `background` explicitly in the dark media query and each `[data-theme]` block);
 under an hour. Note: `web/src/style.css` is touched by concurrent open PR #19.
 
+### Unread river rows are not visually distinguished
+
+visual issues — nice-to-have
+
+`web/src/River.tsx:113-121` marks unread only with the word "Unread" in the
+small meta line, so scanning a long river for what is new is slow.
+
+Suggested fix: bold the title or add a leading dot for unread rows; 30
+minutes.
+
+### The sidebar is a fixed 12 rem and cannot collapse
+
+visual issues — nice-to-have
+
+`web/src/style.css:12` gives the nav a fixed 12 rem column on desktop with no
+way to collapse it, which wastes space on narrow windows.
+
+Suggested fix: collapsible nav with the state remembered; about half a day.
+
 ## aesthetics and theming
 
 ### The eink theme is high-contrast black on white
@@ -530,6 +576,18 @@ the font setting expecting the interface to change too, or vice versa.
 
 Suggested fix: split or annotate the two scopes ("App theme" vs "Article
 type"); about an hour.
+
+### The Mac reader pins styles with 'unsafe-inline' while the web pins a hash
+
+aesthetics and theming — nice-to-have
+
+`clients/mac/App/Sources/Reader.swift:29` serves the article wrapper with CSP
+`style-src 'unsafe-inline'`, while the web content origin pins the wrapper
+style by SHA-256 (`internal/web/content.go:229`). Both are safe because the
+sanitizer strips all style, but the Mac page accepts any inline style.
+
+Suggested fix: hash the wrapper style in the Mac scheme handler like the web
+content origin; about 30 minutes.
 
 ## missing features
 
@@ -617,6 +675,26 @@ snippets, so scanning results is harder than it needs to be.
 
 Suggested fix: highlight query terms server-side (offsets) or in a client-side
 match pass; about half a day.
+
+### The web UI cannot assign labels to articles
+
+missing features — nice-to-have
+
+`web/src/ArticleReader.tsx:46` offers Done/Later/Keep/Unread only. The API
+supports `PUT/DELETE /v1/labels/{id}/entries/{entry_id}`, and label views exist
+in the sidebar, but no web control adds or removes a label, so labels can only
+come from rules or agents and manual triage into labels is impossible on web.
+
+Suggested fix: add a label picker to the reader actions; about half a day.
+
+### Only the latest edition is reachable
+
+missing features — nice-to-have
+
+`web/src/pipeline/Pipeline.tsx:66-80` (`Edition`) fetches only
+`/v1/editions/latest`, so past weekly editions cannot be re-read.
+
+Suggested fix: list recent editions behind the edition view; 1-2 hours.
 
 ## bugs
 
@@ -771,6 +849,16 @@ says "Your choices this session: N seen", but most of those were not choices.
 Suggested fix: only increment `seen` when `kind === 'explicit'`, or word the
 copy as "read this session"; under an hour.
 
+### A feed without a title opens an empty river heading
+
+bugs — nice-to-have
+
+`web/src/main.tsx:181` navigates with `title: sub.title`, which is empty when
+the feed has no title override, so the river `<h2>` renders blank. The command
+palette (`main.tsx:133`) already falls back to `sub.title || sub.url`.
+
+Suggested fix: use the same fallback in the sidebar button; 5 minutes.
+
 ## general issues
 
 ### `lastVisit` is only written on pagehide
@@ -834,6 +922,17 @@ from `.sync-messages`. Harmless, but misleading.
 Suggested fix: delete the dead selectors or retarget them at `.sync-messages`
 children; under an hour. Note: `web/src/style.css` is touched by concurrent
 open PR #19.
+
+### Search computes headlines over full article text for every match
+
+general issues — nice-to-have
+
+`internal/service/search.go:64-82` runs `ts_headline` over the whole stored
+article text of every matching row before `ORDER BY rank … LIMIT`, so broad
+queries pay for thousands of headlines that are never returned.
+
+Suggested fix: rank first, then compute snippets in a second pass over the
+limited rows; about an hour.
 
 ## novel ideas
 
@@ -920,3 +1019,24 @@ the app already honours globally.
 
 Suggested fix: CSS transition on the reader open in `web/src/ArticleReader.tsx`
 and `web/src/style.css`; about half a day.
+
+### The caught-up moment could name today's feeds
+
+novel ideas — nice-to-have
+
+The session-end card (`web/src/River.tsx:126`) shows counts only. Naming the
+feeds that contributed the items read this session would make the "that is
+everything" moment feel earned and point at what to subscribe to more or less.
+
+Suggested fix: group the session's seen entries by subscription title in the
+end card; 1-2 hours.
+
+### Hint at swipe gestures on first Android run
+
+novel ideas — nice-to-have
+
+`clients/android/.../EarnestApp.kt` wires horizontal swipe gestures to
+Done/Later but nothing tells a new user they exist.
+
+Suggested fix: a one-time hint (or a short gesture cheat-sheet in the
+overflow menu); about 30 minutes.
