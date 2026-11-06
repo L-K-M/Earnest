@@ -199,7 +199,7 @@ func TestDeliveryWorkerCancellation(t *testing.T) {
 			}
 			cancel()
 			return 0, errors.New("cancelled send")
-		})
+		}, deliveryInterval)
 	}()
 	select {
 	case <-done:

@@ -5,8 +5,9 @@ import (
 )
 
 // ClusterEntries applies read-time cluster suppression to the river. It keeps
-// the stored state and sequence cursor unchanged, and fills past hidden rows
-// so a fully suppressed chunk cannot incorrectly signal the end of the river.
+// the stored state and sequence cursor unchanged. Suppression runs inside the
+// page query itself (EntryFilter.SuppressClusters), so one query returns the
+// visible page instead of rescanning suppressed chunks round by round.
 func (s *Service) ClusterEntries(ctx context.Context, a Actor, f EntryFilter) ([]Entry, error) {
 	if f.View != "" && f.View != ViewRiver {
 		return s.Entries(ctx, a, f)
@@ -14,49 +15,11 @@ func (s *Service) ClusterEntries(ctx context.Context, a Actor, f EntryFilter) ([
 	if f.Limit < 0 || f.Limit > maxEntryLimit {
 		return nil, ErrInvalid
 	}
-	limit := f.Limit
-	if limit == 0 {
-		limit = defaultEntryLimit
+	if f.Limit == 0 {
+		f.Limit = defaultEntryLimit
 	}
-	scan := f
-	scan.Limit = maxEntryLimit
-	out := []Entry{}
-	for {
-		entries, err := s.Entries(ctx, a, scan)
-		if err != nil {
-			return nil, err
-		}
-		if len(entries) == 0 {
-			break
-		}
-		ids := make([]int64, len(entries))
-		for i, e := range entries {
-			ids[i] = e.ID
-		}
-		suppressed, err := s.ClusterSuppressed(ctx, a, f.PrincipalID, ids)
-		if err != nil {
-			return nil, err
-		}
-		for _, e := range entries {
-			if suppressed[e.ID] {
-				continue
-			}
-			out = append(out, e)
-			if len(out) == limit {
-				return out, nil
-			}
-		}
-		if len(entries) < scan.Limit {
-			break
-		}
-		last := entries[len(entries)-1].Seq
-		if scan.Direction == PageBackward {
-			scan.BeforeSeq = last
-		} else {
-			scan.AfterSeq = last
-		}
-	}
-	return out, nil
+	f.SuppressClusters = true
+	return s.Entries(ctx, a, f)
 }
 
 // ClusterGroups collapses each cluster to one representative per page. The

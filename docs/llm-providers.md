@@ -65,8 +65,15 @@ EARNEST_LLM_PROVIDER_OLLAMA_TOKEN_FIELD=max_tokens
 EARNEST_LLM_TASK_EMBED_PROVIDER=openai
 EARNEST_LLM_TASK_EMBED_MODEL=text-embedding-3-small
 EARNEST_LLM_TASK_BLURB_PROVIDER=ollama
-EARNEST_LLM_TASK_BLURB_MODEL=nomic-embed-text
+EARNEST_LLM_TASK_BLURB_MODEL=llama3.1
 ```
+
+The BLURB task needs a chat model, not an embedding model. Reasoning
+models (for example qwen3 or deepseek-r1 on Ollama) can spend the whole
+`max_tokens` budget on hidden reasoning and return empty content, which
+Earnest rejects; use a non-reasoning model for these tasks. Add a local
+model with a zero price in `EARNEST_LLM_MODELS` when it is not in the
+built-in table.
 
 A local server is a private address. `internal/outbound` denies private
 addresses unless `EARNEST_OUTBOUND_ALLOW_PRIVATE` names them, so add
@@ -105,7 +112,7 @@ names:
 | `input_per_1m` | USD per million input (prompt) tokens. |
 | `output_per_1m` | USD per million output (completion) tokens. |
 | `embedding_per_1m` | USD per million embedding tokens. |
-| `dimensions` | The model's native embedding width, at most 1024. |
+| `dimensions` | The model's native embedding width. At most 1024 unless `truncatable` is set. |
 | `truncatable` | Whether vectors longer than 1024 may be cut to fit. |
 
 The built-in table carries the prices from the research cost section
