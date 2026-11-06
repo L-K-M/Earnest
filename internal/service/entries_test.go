@@ -700,3 +700,75 @@ func TestUnreadCounts(t *testing.T) {
 		t.Fatalf("totals: list later=%d kept=%d total=%d counts=%+v", later, kept, total, got)
 	}
 }
+
+// TestUnreadCountsMatchWalkForAgents pins the Google Reader total against the
+// paging loop it replaced, for the human and for an agent actor (both resolve
+// the human's registers), and checks the read scope is required.
+func TestUnreadCountsMatchWalkForAgents(t *testing.T) {
+	template := storetest.NewTemplate(t)
+	f := entriesTestNew(t, template)
+	ctx := context.Background()
+	user, human := f.a.UserID, f.a.PrincipalID
+
+	feedA := entriesTestFeed(t, f.db, "https://unreadwalk-a.test/rss", 0)
+	feedB := entriesTestFeed(t, f.db, "https://unreadwalk-b.test/rss", 0)
+	entriesTestSub(t, f.db, user, feedA, "today")
+	subB := entriesTestSub(t, f.db, user, feedB, "now")
+
+	ids := f.ingestMany(t, feedA, "uc", 8, f.now())
+	f.ingestMany(t, feedB, "ucB", 4, f.now())
+	f.setClock(entriesTestBase)
+
+	// Later and kept stay unread; seen, done, tombstones and dead
+	// subscriptions drop out.
+	entriesTestState(t, f.db, human, ids[0], "seen", "seen")
+	entriesTestState(t, f.db, human, ids[1], "shelf", "done")
+	entriesTestState(t, f.db, human, ids[2], "shelf", "later")
+	entriesTestState(t, f.db, human, ids[3], "kept", "")
+	if _, err := f.db.Pool().Exec(ctx, "UPDATE entries SET deleted_at=now() WHERE id=$1", ids[4]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.Pool().Exec(ctx, "UPDATE subscriptions SET deleted_at=now() WHERE id=$1", subB); err != nil {
+		t.Fatal(err)
+	}
+	// Other principals' registers never feed the human's count.
+	other := entriesTestOtherUser(t, f.db, "unreadWalkOther")
+	entriesTestState(t, f.db, other.PrincipalID, ids[5], "seen", "seen")
+	agent := entriesTestAgent(t, f.db, user, "ucbot", ScopeEntriesRead)
+	entriesTestState(t, f.db, agent.PrincipalID, ids[6], "seen", "seen")
+
+	// walk replicates the greader unread-count loop it replaced.
+	walk := func() int64 {
+		var total int64
+		filter := EntryFilter{View: ViewAll, UnreadOnly: true, Limit: 5}
+		for {
+			page, err := f.s.Entries(ctx, f.a, filter)
+			if err != nil {
+				t.Fatal(err)
+			}
+			total += int64(len(page))
+			if len(page) < 5 {
+				return total
+			}
+			filter.AfterSeq = page[len(page)-1].Seq
+		}
+	}
+	want := walk()
+	if want != 5 {
+		t.Fatalf("walk counted %d, want 5", want)
+	}
+	for _, a := range []Actor{f.a, agent} {
+		got, err := f.s.UnreadCounts(ctx, a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Total != want {
+			t.Fatalf("UnreadCounts total %d, walk %d", got.Total, want)
+		}
+	}
+	noScope := f.a
+	noScope.Scopes = []Scope{ScopePositionOwn}
+	if _, err := f.s.UnreadCounts(ctx, noScope); !errors.Is(err, ErrForbidden) {
+		t.Fatal("missing scope accepted", err)
+	}
+}
