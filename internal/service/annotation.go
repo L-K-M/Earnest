@@ -122,12 +122,12 @@ func visibleEntries(ctx context.Context, tx pgx.Tx, user int64, ids []int64) err
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
-			return err
+			return fmt.Errorf("visible entries: scan: %w", err)
 		}
 		found[id] = true
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return fmt.Errorf("visible entries: iterate: %w", err)
 	}
 	for _, id := range ids {
 		if !found[id] {
