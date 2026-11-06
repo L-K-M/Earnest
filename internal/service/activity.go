@@ -269,6 +269,8 @@ func (s *Service) ActivityByPrincipal(ctx context.Context, a Actor, f ActivityFi
 }
 
 // Revert uses compare-and-set revisions and the ordinary state resolver, atomically.
+// It runs under withEvents so the restored state, annotation or position emits
+// a live sync hint to connected clients on commit.
 func (s *Service) Revert(ctx context.Context, a Actor, id int64, opID string) error {
 	if err := s.revertActor(ctx, a); err != nil {
 		return err
@@ -276,7 +278,7 @@ func (s *Service) Revert(ctx context.Context, a Actor, id int64, opID string) er
 	if !validOpID(opID) {
 		return ErrInvalid
 	}
-	return s.store.WithTx(ctx, func(tx pgx.Tx) error {
+	return s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
 			return err
 		}
@@ -374,7 +376,7 @@ func (s *Service) revertTx(ctx context.Context, tx pgx.Tx, a Actor, id int64, op
 		if before == nil {
 			kind = syncmodel.AnnotationDeleted
 		}
-		rev, err := s.change(ctx, tx, a.UserID, kind, map[string]any{"id": target.ID})
+		rev, err := changeRev(ctx, tx, a.UserID)
 		if err != nil {
 			return err
 		}
@@ -392,11 +394,10 @@ func (s *Service) revertTx(ctx context.Context, tx pgx.Tx, a Actor, id int64, op
 			return err
 		}
 		restored.Deleted = deleted
-		payload, err := json.Marshal(annotationPayload(restored))
-		if err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, "UPDATE changes SET payload=$3 WHERE user_id=$1 AND rev=$2", a.UserID, rev, payload); err != nil {
+		// Emit the full restored payload directly: the earlier partial
+		// {"id": ...} placeholder was overwritten in the change row, which
+		// left readers without the annotation body until a refetch.
+		if err := insertEvent(ctx, tx, a.UserID, rev, string(kind), annotationPayload(restored), s.now()); err != nil {
 			return err
 		}
 		if err := s.recordActivity(ctx, tx, a, "annotation.reverted", map[string]any{"id": target.ID}, json.RawMessage(row.After), before); err != nil {

@@ -4,6 +4,13 @@ export type Predicate = components['schemas']['RulePredicate']
 export type Action = components['schemas']['RuleAction']
 export const classifierVocabulary = ['press_release', 'news', 'opinion', 'tutorial', 'research', 'review', 'event'] as const
 
+// normalizeTerms trims each keyword and drops blank lines. The keyword editor
+// is a textarea, so a trailing newline would otherwise leave an empty term that
+// fails validation and never matches article text.
+export function normalizeTerms(terms: string[]): string[] {
+  return terms.map(term => term.trim()).filter(Boolean)
+}
+
 export function feedScoped(predicate: Predicate): boolean {
   if (predicate.type === 'feed_in') return Boolean(predicate.ids?.length)
   if (predicate.type === 'and') return Boolean(predicate.children?.some(feedScoped))
@@ -32,7 +39,7 @@ export function predicateError(predicate: Predicate, pipeline: {classify: string
     if (!field) return 'Unknown predicate. Choose a supported condition.'
     if (Object.keys(p).some(key => key !== 'type' && key !== field && p[key as keyof Predicate] != null)) return 'The predicate contains fields that do not belong to its type.'
     if (field === 'ids' && (!p.ids?.length || p.ids.some(id => !Number.isSafeInteger(id) || id <= 0))) return 'Choose at least one feed or folder.'
-    if (field === 'terms' && (!p.terms?.length || p.terms.some(term => !term.trim()))) return 'Enter at least one term.'
+    if (field === 'terms' && normalizeTerms(p.terms ?? []).length === 0) return 'Enter at least one term.'
     if (field === 'value' && !p.value?.trim()) return 'Enter an author or semantic description.'
     if (p.type === 'classifier_in') {
       if (pipeline.classify !== 'enabled') return 'Classification is disabled. Remove this condition to run the rule.'

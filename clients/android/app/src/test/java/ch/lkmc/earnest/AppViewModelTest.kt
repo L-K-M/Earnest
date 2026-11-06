@@ -1,11 +1,13 @@
 package ch.lkmc.earnest
 
 import android.app.Application
+import androidx.core.content.edit
 import androidx.test.core.app.ApplicationProvider
 import ch.lkmc.earnest.core.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -208,5 +210,90 @@ class AppViewModelTest {
         val cached = model.openEntry(2)
         assertEquals("<p>account-a</p>", cached?.cachedHtml)
         assertNull(cached?.url)
+    }
+
+    @Test fun queuedActionsFlushShortlyAfterTheLastAction() = runBlocking(Dispatchers.IO) {
+        val scheduler = TestCoroutineScheduler()
+        Dispatchers.setMain(UnconfinedTestDispatcher(scheduler))
+        val model = model()
+        val saved = java.util.concurrent.atomic.AtomicInteger()
+        model.later(2) { saved.incrementAndGet() }
+        withTimeout(15000) { while (saved.get() == 0) delay(10) }
+        assertFalse("the outbox flushed before the debounce", calls.contains("/v1/state:batch"))
+        scheduler.advanceUntilIdle()
+        withTimeout(15000) { while (!calls.contains("/v1/state:batch")) delay(10) }
+    }
+
+    @Test fun flushDoesNotClobberAConcurrentRefreshLoadingFlag() = runBlocking(Dispatchers.IO) {
+        val scheduler = TestCoroutineScheduler()
+        Dispatchers.setMain(UnconfinedTestDispatcher(scheduler))
+
+        withContext(Dispatchers.IO) { SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) } }
+
+        val batchEntered = CompletableDeferred<Unit>()
+        val refreshChangesEntered = CompletableDeferred<Unit>()
+        val releaseRefresh = CompletableDeferred<Unit>()
+        val blockRefresh = java.util.concurrent.atomic.AtomicBoolean(false)
+        val api = EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { chain ->
+            val path = chain.request().url.encodedPath
+            calls += path
+            val body = when (path) {
+                "/v1/settings" -> """{"today_decay_days":2,"rev":0}"""
+                "/v1/changes" -> {
+                    if (blockRefresh.get()) {
+                        refreshChangesEntered.complete(Unit)
+                        runBlocking { releaseRefresh.await() }
+                    }
+                    """{"changes":[],"next":{"generation":"g1","rev":0},"next_cursor":"g1:0"}"""
+                }
+                "/v1/state:batch" -> {
+                    batchEntered.complete(Unit)
+                    val requestBody = chain.request().body?.let { body ->
+                        val buffer = okio.Buffer()
+                        body.writeTo(buffer)
+                        buffer.readUtf8()
+                    }.orEmpty()
+                    val opId = Regex("\"op_id\":\"([^\"]+)\"").find(requestBody)?.groupValues?.get(1).orEmpty()
+                    """[{"op_id":"$opId","status":"applied","state":{"principal":1,"entry_id":2,"seen":{"value":"unseen","rev":0,"occurred_at":"2026-11-03T00:00:00Z","actor":1,"source":"agent"},"shelf":{"value":"none","rev":0,"occurred_at":"2026-11-03T00:00:00Z","actor":1,"source":"agent"},"kept":{"value":false,"rev":0,"occurred_at":"2026-11-03T00:00:00Z","actor":1,"source":"agent"},"state_rev":0},"replay":false}]"""
+                }
+                else -> "[]"
+            }
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("test")
+                .body(body.toResponseBody()).build()
+        }.build())
+
+        val model = AppViewModel(app, Sessions(AuthenticatedSession(identity, "token"))) { api }
+        try {
+            withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+
+            // A large agent-changes payload makes the flush's state rebuild slow enough to interleave.
+            val activity = """{"id":1,"principal_id":9,"principal_name":"Morning Agent","action":"state.updated","target":{"entry_id":2,"register":"shelf"},"before":null,"after":{"shelf":{"value":"done"}},"generation":"g1","created_at":"2026-11-03T00:00:00Z","next_action":"revert"}"""
+            val changes = (1..50000).joinToString(prefix = "[", postfix = "]", separator = ",") { activity }
+            SessionCache(app, identity).preferences.edit { putString("agent_changes", changes) }
+
+            val saved = java.util.concurrent.atomic.AtomicInteger()
+            model.later(2) { saved.incrementAndGet() }
+            withTimeout(15000) { while (saved.get() == 0) delay(10) }
+
+            // Wait for the debounce to fire and the flush to reach its batch request.
+            withTimeout(15000) {
+                while (!batchEntered.isCompleted) {
+                    scheduler.advanceUntilIdle()
+                    delay(10)
+                }
+            }
+
+            // Let the flush read the state and start its slow rebuild, then refresh.
+            delay(50)
+            blockRefresh.set(true)
+            model.refresh()
+            withTimeout(15000) { refreshChangesEntered.await() }
+            assertTrue("the flush clobbered refresh's loading flag", model.state.value.loading)
+        } finally {
+            releaseRefresh.complete(Unit)
+        }
+
+        withTimeout(15000) { model.state.first { !it.loading } }
+        Unit
     }
 }
