@@ -14,6 +14,16 @@ export function settingsInput(settings: ReadingSettings, opID: string = crypto.r
   return {reading_mode:settings.reading_mode,today_decay_days:settings.today_decay_days,single_key_shortcuts:settings.single_key_shortcuts,theme:settings.theme,measure:settings.measure,font:settings.font,feed_overrides:settings.feed_overrides,op_id:opID}
 }
 
+// withoutFeedOverride returns settings with one feed's typography override
+// removed, so the feed inherits the account-wide typography again. It returns
+// the input unchanged when the feed has no override.
+export function withoutFeedOverride(settings: ReadingSettings, feedID: string): ReadingSettings {
+  if (!(feedID in settings.feed_overrides)) return settings
+  const feed_overrides = {...settings.feed_overrides}
+  delete feed_overrides[feedID]
+  return {...settings, feed_overrides}
+}
+
 export function Settings({settings, onSaved}: {settings: ReadingSettings; onSaved: (settings: ReadingSettings) => void}) {
   const [draft, setDraft] = useState(settings)
   const [error, setError] = useState('')

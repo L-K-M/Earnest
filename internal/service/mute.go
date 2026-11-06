@@ -70,6 +70,8 @@ func (s *Service) DeleteMute(ctx context.Context, a Actor, id int64, opID string
 	return err
 }
 
+// writeMute runs under withEvents so the mute change publishes a live sync
+// hint to connected clients on commit.
 func (s *Service) writeMute(ctx context.Context, a Actor, id int64, kind MuteKind, value, opID string) (Mute, error) {
 	if err := s.checkActor(ctx, a, ScopeFeedsWrite); err != nil {
 		return Mute{}, err
@@ -82,7 +84,7 @@ func (s *Service) writeMute(ctx context.Context, a Actor, id int64, kind MuteKin
 		method = "DeleteMute"
 	}
 	var out Mute
-	err := s.store.WithTx(ctx, func(tx pgx.Tx) error {
+	err := s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
 			return err
 		}

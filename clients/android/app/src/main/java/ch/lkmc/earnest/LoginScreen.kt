@@ -51,8 +51,11 @@ internal fun LoginScreen(onLoggedIn: () -> Unit) {
                 val me = EarnestApi(server, token.accessToken).me()
                 SyncAccess.mutex.withLock { Secrets(context).saveSession(server, token.accessToken, me) }
                 onLoggedIn()
-                SyncWorker.schedule(context)
-                EarnestPushService.register(context)
+                // Permission and push registration start only now that sign-in succeeded.
+                (context as? MainActivity)?.startBackgroundWork() ?: run {
+                    SyncWorker.schedule(context)
+                    EarnestPushService.register(context)
+                }
                 return@LaunchedEffect
             } catch (failure: ApiException) {
                 when (failure.code) {
