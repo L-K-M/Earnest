@@ -345,6 +345,46 @@ func TestSubscriptions(t *testing.T) {
 		}
 		coreCheckGapless(t, f.db, f.a.UserID)
 	})
+	t.Run("opml_chunked_import_keeps_siblings_after_a_failure", func(t *testing.T) {
+		f := newCoreFixture(t, template)
+		input := make([]OPMLOutline, opmlChunkSize*2+10)
+		for i := range input {
+			input[i] = OPMLOutline{Title: fmt.Sprintf("Chunk feed %d", i), XMLURL: fmt.Sprintf("https://chunk.test/%d", i)}
+		}
+		input[opmlChunkSize].XMLURL = "file:///secret"
+		results, err := f.s.ImportOPML(context.Background(), f.a, input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(results) != len(input) {
+			t.Fatalf("results=%d want %d", len(results), len(input))
+		}
+		if results[opmlChunkSize].Error == "" {
+			t.Fatal("bad outline did not report an error")
+		}
+		for i, result := range results {
+			if i == opmlChunkSize {
+				continue
+			}
+			if result.Subscription == nil || !result.Deferred {
+				t.Fatalf("outline %d not subscribed: %+v", i, result)
+			}
+		}
+		subs, err := f.s.Subscriptions(context.Background(), f.a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		imported := 0
+		for _, sub := range subs {
+			if sub.ID != f.subscription {
+				imported++
+			}
+		}
+		if imported != len(input)-1 {
+			t.Fatalf("imported=%d want %d", imported, len(input)-1)
+		}
+		coreCheckGapless(t, f.db, f.a.UserID)
+	})
 }
 
 func TestSubscriptionValidation(t *testing.T) {

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/L-K-M/Earnest/internal/store"
@@ -11,6 +12,11 @@ import (
 
 const maxOPMLOutlines = 10000
 const maxOPMLDepth = 64
+
+// opmlChunkSize bounds how many outlines one import transaction covers. The
+// global sequence lock is released between chunks, so a large import cannot
+// block every other writer for its whole duration.
+const opmlChunkSize = 100
 
 // OPMLOutline is the transport-independent OPML tree, including nested folders.
 type OPMLOutline struct {
@@ -30,8 +36,23 @@ type OPMLResult struct {
 	Error        string        `json:"error,omitempty"`
 }
 
+// opmlWork is one flattened outline in depth-first order. parent is the index
+// of the nearest ancestor folder, or -1.
+type opmlWork struct {
+	path    []int
+	title   string
+	xmlURL  string
+	htmlURL string
+	folder  bool
+	parent  int
+}
+
 // ImportOPML imports a tree without probing. Repeating the same tree reuses
-// existing folders/subscriptions, and per-outline failures do not abort siblings.
+// existing folders/subscriptions, and per-outline failures do not abort
+// siblings. Work is committed in bounded chunks so the global sequence lock is
+// released between chunks and a large import does not block every other writer
+// for its whole duration. A savepoint per outline keeps one bad row from
+// aborting its chunk.
 func (s *Service) ImportOPML(ctx context.Context, a Actor, outlines []OPMLOutline) ([]OPMLResult, error) {
 	if err := s.checkActor(ctx, a, ScopeFeedsWrite); err != nil {
 		return nil, err
@@ -56,93 +77,127 @@ func (s *Service) ImportOPML(ctx context.Context, a Actor, outlines []OPMLOutlin
 	if err := validate(outlines, 0); err != nil {
 		return nil, fmt.Errorf("OPML bounds: %w", err)
 	}
-	results := []OPMLResult{}
-	var visit func([]OPMLOutline, int64, []int) error
-	visit = func(items []OPMLOutline, folderID int64, parent []int) error {
+	works := []opmlWork{}
+	var flatten func(items []OPMLOutline, parent int, parentPath []int)
+	flatten = func(items []OPMLOutline, parent int, parentPath []int) {
 		for i, item := range items {
-			if err := ctx.Err(); err != nil {
-				return err
+			path := append(append([]int{}, parentPath...), i)
+			w := opmlWork{path: path, title: item.Title, xmlURL: item.XMLURL, htmlURL: item.HTMLURL, parent: parent}
+			if item.XMLURL == "" && item.Title != "" {
+				w.folder = true
 			}
-			path := append(append([]int{}, parent...), i)
-			result := OPMLResult{Path: path}
-			nextFolder := folderID
-			if item.XMLURL != "" {
-				rawURL, err := normalizedFeedURL(item.XMLURL)
-				if err != nil {
-					result.Error = "invalid feed URL"
-					results = append(results, result)
-					continue
-				}
-				if len(item.Title) > 1024 {
-					result.Error = "title too long"
-					results = append(results, result)
-					continue
-				}
-				var sub Subscription
-				err = s.withEvents(ctx, func(tx pgx.Tx) error {
-					if err := store.LockCore(ctx, tx); err != nil {
-						return err
-					}
-					var err error
-					sub, err = s.subscribeTx(ctx, tx, a, rawURL, FeedMeta{Title: item.Title, SiteURL: item.HTMLURL}, SubscribeOptions{Title: item.Title, FolderID: folderID}, nil)
-					return err
-				})
-				if err != nil {
-					result.Error = domainError(err).Error()
-				} else {
-					result.Subscription = &sub
-					result.Deferred = true
-				}
-			} else if item.Title != "" {
-				folder, err := s.importFolder(ctx, a, item.Title)
-				if err != nil {
-					result.Error = domainError(err).Error()
-				} else {
-					result.Folder = &folder
-					nextFolder = folder.ID
-				}
+			index := len(works)
+			works = append(works, w)
+			childParent := parent
+			if w.folder {
+				childParent = index
 			}
-			results = append(results, result)
-			if err := visit(item.Outlines, nextFolder, path); err != nil {
-				return err
-			}
+			flatten(item.Outlines, childParent, path)
 		}
-		return nil
 	}
-	if err := visit(outlines, 0, nil); err != nil {
-		return results, err
+	flatten(outlines, -1, nil)
+
+	results := make([]OPMLResult, len(works))
+	for start := 0; start < len(works); start += opmlChunkSize {
+		if err := ctx.Err(); err != nil {
+			return results, err
+		}
+		end := min(start+opmlChunkSize, len(works))
+		err := s.withEvents(ctx, func(tx pgx.Tx) error {
+			if err := store.LockCore(ctx, tx); err != nil {
+				return err
+			}
+			for i := start; i < end; i++ {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				w := works[i]
+				if _, err := tx.Exec(ctx, "SAVEPOINT earnest_opml_item"); err != nil {
+					return err
+				}
+				result, itemErr := s.importOPMLItem(ctx, tx, a, w, folderIDFor(works, results, w))
+				if itemErr != nil {
+					if _, rollbackErr := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT earnest_opml_item"); rollbackErr != nil {
+						return rollbackErr
+					}
+					results[i] = OPMLResult{Path: w.path, Error: domainError(itemErr).Error()}
+				} else {
+					results[i] = result
+				}
+				if _, err := tx.Exec(ctx, "RELEASE SAVEPOINT earnest_opml_item"); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return results, err
+		}
 	}
 	return results, nil
 }
 
-func (s *Service) importFolder(ctx context.Context, a Actor, name string) (Folder, error) {
+// folderIDFor resolves the folder a work item belongs to, walking past folders
+// whose creation failed in this or an earlier chunk.
+func folderIDFor(works []opmlWork, results []OPMLResult, w opmlWork) int64 {
+	for i := w.parent; i >= 0; i = works[i].parent {
+		if results[i].Folder != nil {
+			return results[i].Folder.ID
+		}
+	}
+	return 0
+}
+
+func (s *Service) importOPMLItem(ctx context.Context, tx pgx.Tx, a Actor, w opmlWork, folderID int64) (OPMLResult, error) {
+	result := OPMLResult{Path: w.path}
+	if w.xmlURL != "" {
+		rawURL, err := normalizedFeedURL(w.xmlURL)
+		if err != nil {
+			return result, errors.New("invalid feed URL")
+		}
+		if len(w.title) > 1024 {
+			return result, errors.New("title too long")
+		}
+		sub, err := s.subscribeTx(ctx, tx, a, rawURL, FeedMeta{Title: w.title, SiteURL: w.htmlURL}, SubscribeOptions{Title: w.title, FolderID: folderID}, nil)
+		if err != nil {
+			return result, err
+		}
+		result.Subscription = &sub
+		result.Deferred = true
+		return result, nil
+	}
+	if w.folder {
+		folder, err := s.importFolderTx(ctx, tx, a, w.title)
+		if err != nil {
+			return result, err
+		}
+		result.Folder = &folder
+	}
+	return result, nil
+}
+
+func (s *Service) importFolderTx(ctx context.Context, tx pgx.Tx, a Actor, name string) (Folder, error) {
 	if !validName(name) {
 		return Folder{}, ErrInvalid
 	}
 	var folder Folder
-	err := s.withEvents(ctx, func(tx pgx.Tx) error {
-		if err := store.LockCore(ctx, tx); err != nil {
-			return err
-		}
-		err := tx.QueryRow(ctx, "SELECT id,name,rev FROM folders WHERE user_id=$1 AND name=$2 AND deleted_at IS NULL", a.UserID, name).Scan(&folder.ID, &folder.Name, &folder.Rev)
-		if err == nil {
-			return nil
-		}
-		if err != pgx.ErrNoRows {
-			return err
-		}
-		rev, err := changeRev(ctx, tx, a.UserID)
-		if err != nil {
-			return err
-		}
-		if err := tx.QueryRow(ctx, "INSERT INTO folders(user_id,name,rev) VALUES($1,$2,$3) RETURNING id", a.UserID, name, rev).Scan(&folder.ID); err != nil {
-			return err
-		}
-		folder.Name = name
-		folder.Rev = uint64(rev)
-		return s.emitChange(ctx, tx, a.UserID, rev, syncmodel.FolderUpdated, "folder", folder)
-	})
-	return folder, err
+	err := tx.QueryRow(ctx, "SELECT id,name,rev FROM folders WHERE user_id=$1 AND name=$2 AND deleted_at IS NULL", a.UserID, name).Scan(&folder.ID, &folder.Name, &folder.Rev)
+	if err == nil {
+		return folder, nil
+	}
+	if err != pgx.ErrNoRows {
+		return Folder{}, err
+	}
+	rev, err := changeRev(ctx, tx, a.UserID)
+	if err != nil {
+		return Folder{}, err
+	}
+	if err := tx.QueryRow(ctx, "INSERT INTO folders(user_id,name,rev) VALUES($1,$2,$3) RETURNING id", a.UserID, name, rev).Scan(&folder.ID); err != nil {
+		return Folder{}, err
+	}
+	folder.Name = name
+	folder.Rev = uint64(rev)
+	return folder, s.emitChange(ctx, tx, a.UserID, rev, syncmodel.FolderUpdated, "folder", folder)
 }
 
 // ExportOPML returns the active subscriptions in stable folder/ID order.
