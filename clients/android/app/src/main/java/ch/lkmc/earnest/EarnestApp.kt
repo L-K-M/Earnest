@@ -284,6 +284,7 @@ private fun MainScaffold(
                                         else -> Reader(
                                             url = content.url,
                                             cachedHtml = content.cachedHtml,
+                                            theme = theme,
                                             modifier = Modifier.fillMaxSize(),
                                         )
                                     }
