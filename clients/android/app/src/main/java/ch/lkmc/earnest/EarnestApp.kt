@@ -1,5 +1,6 @@
 package ch.lkmc.earnest
 
+import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -25,12 +26,14 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
@@ -44,7 +47,11 @@ import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaf
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,11 +63,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import androidx.lifecycle.viewmodel.compose.viewModel
 import ch.lkmc.earnest.core.CachedEntry
+import ch.lkmc.earnest.core.River
 import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.core.SyncSnapshot
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -89,7 +101,21 @@ internal fun EarnestApp(initialEntry: Long?, notificationId: Long?) {
     val model: AppViewModel = viewModel()
     val loggedIn by model.loggedIn.collectAsState()
     val context = LocalContext.current
+    val activity = context as? MainActivity
     var theme by remember { mutableStateOf(context.themeSetting()) }
+    var notificationsDenied by remember { mutableStateOf(activity != null && Notifications.permissionNeeded(activity)) }
+    // The post-sign-in prompt and system settings change the permission
+    // outside this screen, so re-check whenever the activity resumes.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, activity) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                notificationsDenied = activity != null && Notifications.permissionNeeded(activity)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     EarnestTheme(theme) {
         if (!loggedIn) {
             LoginScreen(onLoggedIn = model::onLoggedIn)
@@ -106,6 +132,10 @@ internal fun EarnestApp(initialEntry: Long?, notificationId: Long?) {
             },
             initialEntry = initialEntry,
             notificationId = notificationId,
+            notificationsDenied = notificationsDenied,
+            onRequestNotifications = {
+                activity?.requestNotificationPermission { granted -> notificationsDenied = !granted }
+            },
         )
     }
 }
@@ -119,6 +149,8 @@ private fun MainScaffold(
     onThemeChange: (ThemeSetting) -> Unit,
     initialEntry: Long?,
     notificationId: Long?,
+    notificationsDenied: Boolean,
+    onRequestNotifications: () -> Unit,
 ) {
     val navigator = rememberListDetailPaneScaffoldNavigator<Long>()
     var view by remember { mutableStateOf(View.TODAY) }
@@ -128,6 +160,7 @@ private fun MainScaffold(
     var showSubscribe by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val selected = navigator.currentDestination?.contentKey
 
     LaunchedEffect(initialEntry) {
@@ -177,9 +210,13 @@ private fun MainScaffold(
         )
     }
 
-    fun undo(entryId: Long) {
+    fun undo(entryId: Long, target: SwipeTarget) {
         scope.launch {
-            val result = snackbar.showSnackbar("Entry updated", actionLabel = "Undo")
+            val result = snackbar.showSnackbar(
+                message = target.message,
+                actionLabel = "Undo",
+                duration = SnackbarDuration.Short,
+            )
             if (result == SnackbarResult.ActionPerformed) model.undoShelf(entryId)
         }
     }
@@ -201,7 +238,15 @@ private fun MainScaffold(
     ) {
         Scaffold(
             topBar = {
-                EarnestTopBar(view.label, state.loading, model, theme, onThemeChange)
+                EarnestTopBar(
+                    view.label,
+                    state.loading,
+                    model,
+                    theme,
+                    onThemeChange,
+                    notificationsDenied,
+                    onRequestNotifications,
+                )
             },
             snackbarHost = { SnackbarHost(snackbar) },
         ) { padding ->
@@ -223,6 +268,7 @@ private fun MainScaffold(
                                 )
                                 View.ACTIVITY -> ActivityScreen(
                                     groups = activityGroups,
+                                    entryTitles = state.snapshot.entries.associate { it.id to it.title },
                                     onRevert = { model.revert(it) },
                                 )
                                 else -> EntryListScreen(
@@ -241,8 +287,8 @@ private fun MainScaffold(
                                     onOpen = { entryId ->
                                         scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
                                     },
-                                    onLater = { id -> model.later(id) { undo(id) } },
-                                    onDone = { id -> model.done(id) { undo(id) } },
+                                    onLater = { id -> model.later(id) { undo(id, SwipeTarget.LATER) } },
+                                    onDone = { id -> model.done(id) { undo(id, SwipeTarget.DONE) } },
                                     onSeen = model::markSeen,
                                     onKeep = { model.keep(it) },
                                     onUnkeep = { model.unkeep(it) },
@@ -263,17 +309,16 @@ private fun MainScaffold(
                                 }
                             } else {
                                 Column(Modifier.fillMaxSize()) {
-                                    Row(
-                                        Modifier.fillMaxWidth().padding(16.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Text(
-                                            entry.title,
-                                            style = MaterialTheme.typography.titleMedium,
-                                            maxLines = 2,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    }
+                                    val original = originalUrl(entry)
+                                    ReaderHeader(
+                                        entry = entry,
+                                        source = subscriptionTitles[entry.subscriptionId].orEmpty(),
+                                        onOpenOriginal = {
+                                            original?.let { url ->
+                                                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri())) }
+                                            }
+                                        },
+                                    )
                                     val content = reader.content
                                     when {
                                         reader.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -316,11 +361,16 @@ private fun EarnestTopBar(
     model: AppViewModel,
     theme: ThemeSetting,
     onThemeChange: (ThemeSetting) -> Unit,
+    notificationsDenied: Boolean,
+    onRequestNotifications: () -> Unit,
 ) {
     var themeOpen by remember { mutableStateOf(false) }
     TopAppBar(
         title = { Text(title) },
         actions = {
+            if (notificationsDenied) {
+                TextButton(onClick = onRequestNotifications) { Text("Notifications") }
+            }
             if (loading) {
                 CircularProgressIndicator(
                     Modifier.size(20.dp),
@@ -374,6 +424,35 @@ private fun ThemeDialog(
 }
 
 @Composable
+private fun ReaderHeader(entry: CachedEntry, source: String, onOpenOriginal: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 16.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                entry.title,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+            val date = entryDateLabel(entry)
+            val meta = listOfNotNull(source.takeIf { it.isNotBlank() }, date.takeIf { it.isNotBlank() })
+            if (meta.isNotEmpty()) {
+                Text(
+                    meta.joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (originalUrl(entry) != null) {
+            TextButton(onClick = onOpenOriginal) { Text("Open original") }
+        }
+    }
+}
+
+@Composable
 private fun EntryListScreen(
     title: String,
     entries: List<CachedEntry>,
@@ -396,6 +475,13 @@ private fun EntryListScreen(
 ) {
     val listState = rememberLazyListState()
     MarkSeenOnScroll(entries, principalId, listState, onSeen)
+    val headerCount = (if (briefs.isNotEmpty()) 1 else 0) +
+        (if (agentChanges.isNotEmpty() || agentChangesError != null) 1 else 0)
+    LaunchedEffect(headerCount) {
+        if (shouldRevealHeaders(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, headerCount)) {
+            listState.scrollToItem(0)
+        }
+    }
     LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
         if (briefs.isNotEmpty()) {
             item(key = "briefs") {
@@ -529,16 +615,18 @@ private fun SwipeActionRow(
                 .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.CenterEnd,
         ) {
-            val label = if (-offset >= doneThreshold) "Done" else "Later"
+            val target = swipeTargetFor(-offset, laterThreshold, doneThreshold)
             Text(
-                label,
+                target?.label ?: SwipeTarget.LATER.label,
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.padding(end = 24.dp),
             )
         }
+        // The opaque foreground keeps the reveal hidden until the row moves.
         Box(
             Modifier
                 .offset { IntOffset(offset.roundToInt(), 0) }
+                .background(MaterialTheme.colorScheme.surface)
                 .pointerInput(Unit) {
                     detectHorizontalDragGestures(
                         onHorizontalDrag = { change, dragAmount ->
@@ -546,12 +634,13 @@ private fun SwipeActionRow(
                             offset = (offset + dragAmount).coerceIn(-doneThreshold * 1.2f, 0f)
                         },
                         onDragEnd = {
-                            val dragged = -offset
+                            val target = swipeTargetFor(-offset, laterThreshold, doneThreshold)
                             scope.launch {
                                 offset = 0f
-                                when {
-                                    dragged >= doneThreshold -> onDone()
-                                    dragged >= laterThreshold -> onLater()
+                                when (target) {
+                                    SwipeTarget.DONE -> onDone()
+                                    SwipeTarget.LATER -> onLater()
+                                    null -> Unit
                                 }
                             }
                         },
@@ -586,9 +675,17 @@ private fun FeedsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("now" to "Now", "today" to "Today", "week" to "This week").forEach { (value, label) ->
-                        TextButton(onClick = { onCadence(subscription.id, value) }) { Text(label) }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    val selection = cadenceSelection(River.cadence(subscription))
+                    Cadence.entries.forEach { cadence ->
+                        CadenceChip(
+                            cadence = cadence,
+                            selected = selection[cadence] == true,
+                            onSelect = { onCadence(subscription.id, cadence.value) },
+                        )
                     }
                     TextButton(onClick = { onUnsubscribe(subscription.id) }) { Text("Unsubscribe") }
                 }
@@ -598,8 +695,22 @@ private fun FeedsScreen(
 }
 
 @Composable
+private fun CadenceChip(cadence: Cadence, selected: Boolean, onSelect: () -> Unit) {
+    FilterChip(
+        selected = selected,
+        onClick = onSelect,
+        label = { Text(cadence.label) },
+        modifier = Modifier.semantics {
+            this.selected = selected
+            stateDescription = if (selected) "Selected" else "Not selected"
+        },
+    )
+}
+
+@Composable
 private fun ActivityScreen(
     groups: List<ch.lkmc.earnest.core.ActivityGroup>,
+    entryTitles: Map<Long, String>,
     onRevert: (Long) -> Unit,
 ) {
     LazyColumn(Modifier.fillMaxSize()) {
@@ -614,14 +725,21 @@ private fun ActivityScreen(
             val activities = group.activities.orEmpty()
             items(activities, key = { it.id }) { activity ->
                 Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    Text(activity.action, style = MaterialTheme.typography.bodyLarge)
+                    Text(activityDescription(activity, entryTitles), style = MaterialTheme.typography.bodyLarge)
                     Text(
-                        "${activity.createdAt.relativeTime()} · ${activity.nextAction}",
+                        activity.createdAt.relativeTime(),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    val reason = activity.reason
                     if (activity.nextAction == "revert") {
                         TextButton(onClick = { onRevert(activity.id) }) { Text("Revert") }
+                    } else if (!reason.isNullOrBlank()) {
+                        Text(
+                            reason,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }
@@ -635,7 +753,7 @@ private fun SubscribeDialog(
     onSubscribe: (String, String) -> Unit,
 ) {
     var url by remember { mutableStateOf("") }
-    var cadence by remember { mutableStateOf("today") }
+    var selectedCadence by remember { mutableStateOf(Cadence.TODAY.value) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Subscribe by URL") },
@@ -643,16 +761,18 @@ private fun SubscribeDialog(
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(url, { url = it }, label = { Text("Feed URL") }, singleLine = true)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("now" to "Now", "today" to "Today", "week" to "This week").forEach { (value, label) ->
-                        TextButton(onClick = { cadence = value }) {
-                            Text(if (cadence == value) "• $label" else label)
-                        }
+                    Cadence.entries.forEach { cadence ->
+                        CadenceChip(
+                            cadence = cadence,
+                            selected = cadence.value == selectedCadence,
+                            onSelect = { selectedCadence = cadence.value },
+                        )
                     }
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = { onSubscribe(url, cadence) }, enabled = url.isNotBlank()) { Text("Subscribe") }
+            TextButton(onClick = { onSubscribe(url, selectedCadence) }, enabled = url.isNotBlank()) { Text("Subscribe") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )

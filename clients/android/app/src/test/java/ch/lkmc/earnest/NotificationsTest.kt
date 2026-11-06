@@ -1,10 +1,14 @@
 package ch.lkmc.earnest
 
+import android.Manifest
+import android.app.Application
 import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -24,6 +28,18 @@ class NotificationsTest {
         assertEquals(NotificationManager.IMPORTANCE_LOW, importances[Notifications.CHANNEL_DIGEST])
         assertEquals(NotificationManager.IMPORTANCE_LOW, importances[Notifications.CHANNEL_BRIEF])
         assertEquals(NotificationManager.IMPORTANCE_HIGH, importances[Notifications.CHANNEL_ALERT])
+    }
+
+    @Test fun permissionIsNeededOnlyWhenAndroid13PlusAndNotGranted() {
+        val application = ApplicationProvider.getApplicationContext<Application>()
+        shadowOf(application).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        assertTrue(Notifications.permissionNeeded(context))
+        shadowOf(application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        assertFalse(Notifications.permissionNeeded(context))
+    }
+
+    @Test @Config(sdk = [32]) fun noPromptIsNeededBeforeAndroid13() {
+        assertFalse(Notifications.permissionNeeded(context))
     }
 
     @Test fun categoriesMapToTheirChannels() {

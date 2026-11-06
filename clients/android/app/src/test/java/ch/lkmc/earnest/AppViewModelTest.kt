@@ -6,6 +6,7 @@ import ch.lkmc.earnest.core.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -208,5 +209,17 @@ class AppViewModelTest {
         val cached = model.openEntry(2)
         assertEquals("<p>account-a</p>", cached?.cachedHtml)
         assertNull(cached?.url)
+    }
+
+    @Test fun queuedActionsFlushShortlyAfterTheLastAction() = runBlocking(Dispatchers.IO) {
+        val scheduler = TestCoroutineScheduler()
+        Dispatchers.setMain(UnconfinedTestDispatcher(scheduler))
+        val model = model()
+        val saved = java.util.concurrent.atomic.AtomicInteger()
+        model.later(2) { saved.incrementAndGet() }
+        withTimeout(15000) { while (saved.get() == 0) delay(10) }
+        assertFalse("the outbox flushed before the debounce", calls.contains("/v1/state:batch"))
+        scheduler.advanceUntilIdle()
+        withTimeout(15000) { while (!calls.contains("/v1/state:batch")) delay(10) }
     }
 }

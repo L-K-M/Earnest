@@ -69,6 +69,9 @@ class AppViewModel internal constructor(
     private var sessionStartedAt = Instant.now()
     private var changesSince = Instant.EPOCH.toString()
     private val json = Json { ignoreUnknownKeys = true }
+    private val flushScheduler by lazy {
+        DebouncedFlush(viewModelScope, FLUSH_DEBOUNCE_MILLIS) { flushOutbox() }
+    }
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -78,6 +81,11 @@ class AppViewModel internal constructor(
 
     init {
         if (_loggedIn.value) onLoggedIn()
+    }
+
+    override fun onCleared() {
+        flushScheduler.cancel()
+        super.onCleared()
     }
 
     /** Called only after /v1/me established the authenticated account. */
@@ -252,6 +260,7 @@ class AppViewModel internal constructor(
                         sessionAgentChanges = activitySince(cache.agentChanges(), sessionStartedAt),
                     )
                     onSaved()
+                    flushScheduler.request()
                 }
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
@@ -259,6 +268,48 @@ class AppViewModel internal constructor(
                 if (isCurrent(session, cache)) {
                     _state.value = _state.value.copy(error = "Could not save the action: ${error.message}")
                 }
+            }
+        }
+    }
+
+    /**
+     * Sends the durable outbox shortly after the last queued action. A network
+     * failure leaves the queue intact for the periodic sync; only a rejected
+     * operation is reported, because local state still shows the intent.
+     */
+    private suspend fun flushOutbox() {
+        // Room refuses main-thread access, so the flush leaves Main after the debounce.
+        withContext(Dispatchers.IO) {
+            val cache = account ?: return@withContext
+            val session = activeSession ?: return@withContext
+            if (!isCurrent(session, cache)) return@withContext
+            try {
+                cache.withEngine { syncEngine ->
+                    if (!isCurrent(session, cache)) return@withEngine
+                    val repository = SyncRepository(apiFactory(session), syncEngine)
+                    val rejected = repository.flush()
+                    syncEngine.expire(Instant.now())
+                    syncEngine.flush()
+                    if (!isCurrent(session, cache)) return@withEngine
+                    // The session's river membership is left alone: only a refresh
+                    // starts a new one, so passive seen marks do not drop rows.
+                    _state.value = _state.value.copy(
+                        snapshot = syncEngine.snapshot(),
+                        principalId = cache.identity.principalId,
+                        states = effectiveStates(syncEngine, cache.identity.principalId),
+                        agentChanges = cache.agentChanges(),
+                        sessionAgentChanges = activitySince(cache.agentChanges(), sessionStartedAt),
+                        rejected = rejected,
+                        error = if (rejected.isEmpty()) _state.value.error else "Some reading actions could not be synced because they expired or their articles were removed.",
+                    )
+                }
+            } catch (error: ApiException) {
+                if (!isCurrent(session, cache)) return@withContext
+                if (error.isUnauthorized) logout()
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                // The queue is durable; the periodic sync retries without user action.
             }
         }
     }
@@ -411,6 +462,7 @@ class AppViewModel internal constructor(
 
     companion object {
         private const val KEY_PRINCIPALS = "principal_names"
+        private const val FLUSH_DEBOUNCE_MILLIS = 1500L
     }
 }
 

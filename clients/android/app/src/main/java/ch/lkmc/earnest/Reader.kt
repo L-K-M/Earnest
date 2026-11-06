@@ -18,10 +18,31 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.net.toUri
 import androidx.webkit.WebViewAssetLoader
+import ch.lkmc.earnest.core.CachedEntry
 import java.io.ByteArrayInputStream
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 private const val ASSET_HOST = "appassets.androidplatform.net"
 private const val ASSET_URL = "https://$ASSET_HOST/article/index.html"
+
+/** Published date, falling back to when Earnest first saw the entry. */
+internal fun entryDateLabel(entry: CachedEntry, zone: ZoneId = ZoneId.systemDefault()): String {
+    val instant = entry.publishedAt?.let(::parseInstant)
+        ?: entry.firstSeenAt.takeIf { it.isNotBlank() }?.let(::parseInstant)
+    return instant?.atZone(zone)?.format(DateTimeFormatter.ofPattern("MMM d, yyyy")) ?: ""
+}
+
+/** The publisher's page, when the entry carries a browsable URL. */
+internal fun originalUrl(entry: CachedEntry): String? =
+    entry.url.takeIf { it.isNotBlank() }?.let { url ->
+        runCatching { java.net.URI(url) }.getOrNull()
+            ?.takeIf { it.scheme == "https" || it.scheme == "http" }
+            ?.toString()
+    }
+
+private fun parseInstant(value: String): Instant? = runCatching { Instant.parse(value) }.getOrNull()
 
 /**
  * The reading view. JavaScript, file access and content access are off. The
