@@ -51,8 +51,8 @@ internal fun activityDetail(activity: Activity): String = when (activity.action)
             else -> "changed ${register ?: "state"}"
         }
     }
-    "annotation.updated" -> "wrote a ${annotationKind(activity.after, activity.before)}"
-    "annotation.deleted" -> "deleted a ${annotationKind(activity.before)}"
+    "annotation.updated" -> "wrote ${withIndefiniteArticle(annotationKind(activity.after, activity.before))}"
+    "annotation.deleted" -> "deleted ${withIndefiniteArticle(annotationKind(activity.before))}"
     "annotation.reverted" -> "reverted an annotation"
     "position.updated" -> "moved its read position"
     "notification.created" -> "sent a notification"
@@ -71,7 +71,7 @@ internal fun activityDescription(activity: Activity, titles: Map<Long, String>):
 /** Server provenance and register values are text, never publisher or agent HTML. */
 internal fun agentChangeText(activity: Activity, titles: Map<Long, String>): String {
     val id = activityEntryId(activity)
-    val title = id?.let(titles::get)?.takeIf { it.isNotBlank() } ?: "Entry #$id"
+    val title = id?.let(titles::get)?.takeIf { it.isNotBlank() } ?: id?.let { "Entry #$it" } ?: "an entry"
     val name = activity.principalName.ifBlank { "Agent ${activity.principalId}" }
     return "$name ${activityDetail(activity)}: $title"
 }
@@ -79,6 +79,10 @@ internal fun agentChangeText(activity: Activity, titles: Map<Long, String>): Str
 private fun annotationKind(vararg values: JsonElement?): String =
     values.firstNotNullOfOrNull { (it as? JsonObject)?.get("kind") as? JsonPrimitive }
         ?.contentOrNull?.takeIf { it.isNotBlank() } ?: "annotation"
+
+/** The article matches the kind's initial letter; the fallback is vowel-initial. */
+private fun withIndefiniteArticle(kind: String): String =
+    if (kind.first().lowercaseChar() in "aeiou") "an $kind" else "a $kind"
 
 @Composable
 internal fun AgentChangesNotice(

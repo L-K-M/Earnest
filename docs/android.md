@@ -139,9 +139,9 @@ ntfy Android app. Run an ntfy server you control, configure the distributor to
 use it, and select it in Earnest. On registration the app sends the endpoint
 and its `p256dh` and auth keys to `/v1/devices`. The server requires an HTTPS
 endpoint it can reach; private IP literals are rejected. Notification
-permission must be granted on Android 13+; the app asks after sign-in or from
-the top-bar action, and the top bar shows that action only while permission
-is missing.
+permission must be granted on Android 13+; the app asks after sign-in, when
+push registration starts, or from the top-bar action, and the top bar shows
+that action only while permission is missing.
 
 ## Verification
 

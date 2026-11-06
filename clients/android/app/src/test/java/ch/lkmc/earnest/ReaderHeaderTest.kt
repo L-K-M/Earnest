@@ -30,4 +30,10 @@ class ReaderHeaderTest {
         assertNull(originalUrl(CachedEntry(1, url = "")))
         assertNull(originalUrl(CachedEntry(1, url = "javascript:alert(1)")))
     }
+
+    @Test fun openOriginalAcceptsAnUppercaseScheme() {
+        assertEquals("HTTPS://example.test/article", originalUrl(CachedEntry(1, url = "HTTPS://example.test/article")))
+        assertEquals("HTTP://example.test/article", originalUrl(CachedEntry(1, url = "HTTP://example.test/article")))
+        assertNull(originalUrl(CachedEntry(1, url = "JAVASCRIPT:alert(1)")))
+    }
 }

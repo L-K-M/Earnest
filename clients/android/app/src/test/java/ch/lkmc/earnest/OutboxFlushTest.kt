@@ -37,4 +37,24 @@ class OutboxFlushTest {
         testScheduler.advanceTimeBy(2000)
         assertEquals(0, flushes)
     }
+
+    @Test fun aNewRequestDoesNotCancelAnInFlightFlush() = runTest {
+        val flushEntered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val releaseFlush = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val counter = java.util.concurrent.atomic.AtomicInteger()
+        val completed = mutableListOf<Int>()
+        val scheduler = DebouncedFlush(this, 1500) {
+            val index = counter.incrementAndGet()
+            if (index == 1) flushEntered.complete(Unit)
+            releaseFlush.await()
+            completed += index
+        }
+        scheduler.request()
+        testScheduler.advanceUntilIdle()
+        flushEntered.await()
+        scheduler.request()
+        releaseFlush.complete(Unit)
+        testScheduler.advanceUntilIdle()
+        assertEquals(listOf(1, 2), completed)
+    }
 }

@@ -2,8 +2,10 @@ package ch.lkmc.earnest
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Sends the durable outbox shortly after the last request, collapsing a burst
@@ -21,7 +23,10 @@ internal class DebouncedFlush(
         job?.cancel()
         job = scope.launch {
             delay(delayMillis)
-            flush()
+            // Once the debounce fires, the send runs to completion: a later request
+            // must not abort a batch the server may already be applying. That
+            // request schedules its own flush, and the engine lock serialises both.
+            withContext(NonCancellable) { flush() }
         }
     }
 

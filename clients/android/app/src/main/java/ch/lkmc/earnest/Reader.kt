@@ -38,7 +38,8 @@ internal fun entryDateLabel(entry: CachedEntry, zone: ZoneId = ZoneId.systemDefa
 internal fun originalUrl(entry: CachedEntry): String? =
     entry.url.takeIf { it.isNotBlank() }?.let { url ->
         runCatching { java.net.URI(url) }.getOrNull()
-            ?.takeIf { it.scheme == "https" || it.scheme == "http" }
+            // URI keeps the scheme's case; schemes are case-insensitive.
+            ?.takeIf { it.scheme.equals("https", ignoreCase = true) || it.scheme.equals("http", ignoreCase = true) }
             ?.toString()
     }
 

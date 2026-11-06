@@ -45,6 +45,20 @@ class ActivityDescriptionTest {
         assertEquals("Sent a notification", activityDescription(notification, emptyMap()))
     }
 
+    @Test fun annotationKindsTakeTheRightIndefiniteArticle() {
+        val note = activity("annotation.updated", after = """{"kind":"note"}""")
+        assertEquals("Wrote a note", activityDescription(note, emptyMap()))
+        val fallback = activity("annotation.updated", after = """{"value":"hello"}""")
+        assertEquals("Wrote an annotation", activityDescription(fallback, emptyMap()))
+        val deleted = activity("annotation.deleted", before = """{"kind":"note"}""")
+        assertEquals("Deleted a note", activityDescription(deleted, emptyMap()))
+    }
+
+    @Test fun activityWithoutAnEntryIdDoesNotRenderNull() {
+        val deleted = activity("annotation.deleted", before = """{"kind":"note","entry_ids":[2]}""")
+        assertEquals("Morning Agent deleted a note: an entry", agentChangeText(deleted, emptyMap()))
+    }
+
     @Test fun entryIdFallsBackToTheChangePayload() {
         val activity = activity("notification.created", after = """{"entry_ids":[2]}""")
         assertEquals(2L, activityEntryId(activity))
