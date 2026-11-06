@@ -44,6 +44,21 @@ class SessionCacheTest {
         assertEquals(listOf("later"), worker.withEngine { it.snapshot().outbox.map { p -> p.operation.opId } })
     }
 
+    @Test fun consecutiveWritesReuseTheEngineUntilAnotherWriterCommits() = runBlocking(Dispatchers.IO.limitedParallelism(1)) {
+        val cache = SessionCache(context, identity)
+        cache.withEngine { it.beginBootstrap(Revision("g1", 0)); it.queue(write) }
+        val first = cache.engine
+        assertNotNull(first)
+        cache.withEngine { it.queue(write.copy(opId = "done")) }
+        assertSame("write path rebuilt the engine", first, cache.engine)
+        // Another SessionCache (e.g. the sync worker) committing bumps the write
+        // counter, so the next call must reload instead of reusing stale state.
+        SessionCache(context, identity).withEngine { it.beginBootstrap(Revision("g2", 9)) }
+        cache.withEngine { }
+        assertNotSame("external write not detected", first, cache.engine)
+        assertEquals(Revision("g2", 9), cache.withEngine { it.snapshot().cursor })
+    }
+
     @Test fun accountsIsolateSnapshotOutboxContentAndPreferences() = runBlocking(Dispatchers.IO.limitedParallelism(1)) {
         val first = SessionCache(context, identity)
         first.withEngine { it.beginBootstrap(Revision("g1", 0)); it.mergeEntry(CachedEntry(2, title = "Private")); it.queue(write) }

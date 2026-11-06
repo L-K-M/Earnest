@@ -10,6 +10,10 @@ interface SyncSnapshotDao {
     @Query("SELECT * FROM sync_snapshot WHERE id = 1")
     fun load(): SyncSnapshotEntity?
 
+    /** The snapshot's monotonic write counter; callers compare it before decoding the row. */
+    @Query("SELECT version FROM sync_snapshot WHERE id = 1")
+    fun version(): Long?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     fun save(entity: SyncSnapshotEntity)
 }
