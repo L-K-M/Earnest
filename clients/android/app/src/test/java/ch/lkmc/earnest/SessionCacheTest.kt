@@ -145,7 +145,7 @@ class SessionCacheTest {
                 .code(status).message("test")
                 .body(json.encodeToString(kotlinx.serialization.builtins.ListSerializer(Activity.serializer()), page).toResponseBody()).build()
         }.build())
-        cache.withEngine {
+        cache.withSync(api) {
             cache.markAgentChangesStale()
             cache.refreshAgentChanges(api)
         }
@@ -155,7 +155,7 @@ class SessionCacheTest {
         status = 503
         cache.markAgentChangesStale()
         try {
-            cache.withEngine { cache.refreshAgentChanges(api) }
+            cache.withSync(api) { cache.refreshAgentChanges(api) }
             fail("failed notice fetch succeeded")
         } catch (_: ApiException) {
             assertEquals(1000, cache.agentChanges().size)
