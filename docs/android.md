@@ -40,6 +40,18 @@ ownership cannot be established safely. Preserve those files if pending
 actions need manual recovery; the app reports a retained legacy cache. No Room
 schema changes or destructive migrations are used.
 
+### Testing against a local server
+
+Release builds trust only system certificate authorities. Debug builds also
+trust certificates you install yourself (`res/xml/network_security_config.xml`),
+so you can test against a local server behind a reverse proxy with a
+self-signed certificate. In the emulator the host is `10.0.2.2`: issue the
+proxy's certificate for that address, set `EARNEST_BASE_URL` and
+`EARNEST_CONTENT_ORIGIN` to the proxy's `https://10.0.2.2:<port>` origins, and
+install your CA certificate in the emulator under Settings > Security >
+Encryption & credentials > Install a certificate > CA certificate. Cleartext
+HTTP stays disabled in every build.
+
 ## Reading offline
 
 The app caches the sync snapshot (entries, subscriptions and state) in Room
