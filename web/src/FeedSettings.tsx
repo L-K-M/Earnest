@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useRef, useState} from 'react'
+import {useCallback, useEffect, useState} from 'react'
 import {
   CADENCES, EXTRACT_MODES, groupByFolder, isFirehose, newOp, normalizeFeedURLInput, parseCredentialHeaders, summarizeImport,
   createFolder, createMute, deleteFolder, deleteMute, explainHealth, exportOPML, importOPML, readFileText,
@@ -250,20 +250,22 @@ function when(iso: string): string {
 
 function SubscriptionRow({sub, folders, busy, act}: {sub: Subscription; folders: Folder[]; busy: boolean; act: Act}) {
   const [title, setTitle] = useState(sub.title)
-  const titleRef = useRef<HTMLInputElement>(null)
-  // Adopt an external title change, but never discard a draft the user is
-  // typing in the title field right now.
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- prop-to-draft sync, guarded by focus.
-    if (document.activeElement !== titleRef.current) setTitle(sub.title)
-  }, [sub.title])
+  // Adopt an external title change unless the user has an unsaved draft.
+  // Tracking a dirty flag rather than focus keeps the draft when a click
+  // elsewhere (such as Refresh now) moves focus away from the field.
+  const [dirty, setDirty] = useState(false)
+  const [seenTitle, setSeenTitle] = useState(sub.title)
+  if (sub.title !== seenTitle) {
+    setSeenTitle(sub.title)
+    if (!dirty) setTitle(sub.title)
+  }
   const explanation = explainHealth(sub.health)
   const patch = (body: Omit<SubscriptionPatch, 'op_id'>, note: string) => act(() => patchSubscription(sub.id, {...body, op_id: newOp()}), note)
   return <li>
     <strong>{sub.title || sub.url}</strong>{sub.private && ' · private'}{isFirehose(sub) && ' · firehose'}
     {' '}<a href={sub.site_url || sub.url} target="_blank" rel="noopener noreferrer">Site</a>
-    <form onSubmit={event => { event.preventDefault(); void patch({title: title.trim()}, 'Title saved.') }}>
-      <label>Title<input ref={titleRef} value={title} onChange={e => setTitle(e.target.value)} /></label>
+    <form onSubmit={event => { event.preventDefault(); void patch({title: title.trim()}, 'Title saved.').then(saved => { if (saved) setDirty(false) }) }}>
+      <label>Title<input value={title} onChange={e => { setTitle(e.target.value); setDirty(true) }} /></label>
       <button disabled={busy}>Save title</button>
     </form>
     <label>Cadence<select value={sub.cadence} disabled={busy} onChange={e => { void patch({cadence: e.target.value}, 'Cadence updated.') }}>{CADENCES.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
