@@ -409,20 +409,17 @@ class AppViewModel internal constructor(
 
     private fun opId(action: String) = "$action-${java.util.UUID.randomUUID()}"
 
-    /** Names the dropped operations so the user can tell which queued action did not land. */
+    /** Summarises dropped operations without exposing internal operation IDs. */
     private fun droppedOperationMessage(rejected: List<RejectedOperation>, expired: List<String>): String? {
         if (rejected.isEmpty() && expired.isEmpty()) return null
-        return buildString {
-            if (rejected.isNotEmpty()) {
-                append("Some reading actions could not be synced: ")
-                append(rejected.joinToString { "${it.opId} (${it.status})" })
-            }
-            if (expired.isNotEmpty()) {
-                if (isNotEmpty()) append(". ")
-                append("${expired.size} saved action(s) expired before they could sync: ")
-                append(expired.joinToString())
-            }
-        }
+        val expiredCount = rejected.count { it.status == "expired" } + expired.size
+        val goneCount = rejected.count { it.status == "gone" }
+        val otherCount = rejected.size - rejected.count { it.status == "expired" || it.status == "gone" }
+        val parts = mutableListOf<String>()
+        if (expiredCount > 0) parts += "$expiredCount expired before they could sync"
+        if (goneCount > 0) parts += "$goneCount could not be applied because the article was removed"
+        if (otherCount > 0) parts += "$otherCount could not be synced"
+        return "Some reading actions could not be synced: " + parts.joinToString(", ")
     }
 
     companion object {
