@@ -1,10 +1,34 @@
 # Earnest analysis
 
-Unimplemented findings from the longcat-1 and mimo-1 reviews, ordered by
-severity. All entries here are nice-to-have; every blocking and important
-finding from either review has an open pull request against main.
+Unimplemented findings from the longcat-1, mimo-1 and mistral-large-2
+reviews, ordered by severity within each focus area. Every blocking and
+important finding from these reviews has an open pull request against main,
+except the two noted inline whose files are claimed by concurrent open PRs
+(the article iframe sandbox escape and the per-scroll observer rebuild).
 
 ## usability
+
+### River rows show no timestamp
+
+usability — nice-to-have
+
+`web/src/River.tsx:122` renders source and state but no time, so you cannot
+tell how fresh an item is without opening it (the Android app shows a relative
+time).
+
+Suggested fix: add a relative time for `first_seen_at`/`published_at` in the
+meta line, matching the Android `relativeTime()` style.
+
+### Subscription rows are dense when managing many feeds
+
+usability — nice-to-have
+
+`web/src/FeedSettings.tsx:206-224` stacks four selects and a title form in
+every feed row, so managing many feeds means a lot of scrolling and the health
+alert sits above the actions.
+
+Suggested fix: collapse cadence/folder/extract into one inline row and move
+health into an icon/tooltip.
 
 ### Feed health timestamps are absolute and timezone-dependent
 
@@ -165,15 +189,21 @@ under an hour.
 
 ### The passive-seen observer is rebuilt on every scroll frame
 
-performance — nice-to-have
+performance — important
 
-`web/src/River.tsx:50` depends on the joined visible-ID string, so it tears
-down and recreates an IntersectionObserver and a 600 ms timer on every scroll
-frame that changes the visible set. On a long list this is measurable
-main-thread churn and can drop frames.
+`web/src/River.tsx:41,50,81` keys the mark-as-seen effect on the joined
+visible-ID string, so it tears down and recreates the IntersectionObserver and
+the 600 ms timer on every scroll frame that changes the visible set. The timer
+reset means passive "seen" writes lag behind fast scrolling (items can briefly
+reappear as unread), and the churn itself drops frames on a long list. The
+same tick also does an O(n) `entriesRef.current.find(...)` per pending row
+(`River.tsx:64`), i.e. O(n*m) with hundreds of loaded entries.
 
-Suggested fix: observe rows in an effect that depends on the rendered page
-(not the visible set), and keep the timer outside the observer's lifecycle.
+Suggested fix: create the observer and timer once per view, observe/unobserve
+rows as they mount, keep the timer outside the observer's lifecycle, and look
+pending entries up in a `Map`. Must keep the existing "marks only intersecting
+rendered rows" test green. Note: `web/src/River.tsx` is touched by many
+concurrent open PRs, so land this after those merge.
 
 ### The river re-checks freshness on every action
 
@@ -232,6 +262,26 @@ every opened article's full HTML to the `contents` Room table and never evicts
 Suggested fix: bounded LRU eviction on save; a few hours.
 
 ## visual issues
+
+### The reader column can be squeezed between 700 px and 1050 px
+
+visual issues — nice-to-have
+
+`web/src/style.css:12,30-31` only switches `.workspace.with-reader` to a single
+column below 700 px, so at ~900 px the article iframe and list fight for width.
+
+Suggested fix: lower the single-column breakpoint for `.with-reader` (or use
+`auto-fit`) so the reader goes full-width earlier; verify at several widths.
+
+### Sidebar `<details>` are hard-coded open
+
+visual issues — nice-to-have
+
+`web/src/main.tsx:181` renders the Feeds/Folders `<details>` with `open`, so a
+user with many folders scrolls a long sidebar and cannot collapse sections; the
+state is not remembered.
+
+Suggested fix: default to collapsed (or persist open state in localStorage).
 
 ### The mobile sidebar can take a third of the screen
 
@@ -314,6 +364,26 @@ GlanceTheme colours; about half a day.
 
 ## aesthetics and theming
 
+### The eink theme uses pure-black borders
+
+aesthetics and theming — nice-to-have
+
+`web/src/style.css` sets `--line:#000` for the `eink` theme, which draws
+pure-black borders everywhere and reads harsher than the other themes on e-ink
+panels.
+
+Suggested fix: soften `eink` `--line` to a dark gray (e.g. `#444`).
+
+### The sign-in screen is a bare form
+
+aesthetics and theming — nice-to-have
+
+`web/src/style.css` (`.login`) is a bare centered form with no brand mark or
+card, while the rest of the app has a considered paper palette.
+
+Suggested fix: wrap the login in a bordered card using the existing
+`--paper/--line` tokens.
+
 ### The palette has no accent colour
 
 aesthetics and theming — nice-to-have
@@ -352,6 +422,17 @@ Suggested fix: split or annotate the two scopes ("App theme" vs "Article
 type"); about an hour.
 
 ## missing features
+
+### River mode shows no per-feed unread signal
+
+missing features — nice-to-have
+
+`web/src/main.tsx:181` renders unread counts only in `unread_counts` mode; in
+river mode the sidebar has no at-a-glance indication of which feeds have new
+items.
+
+Suggested fix: show a small unread dot/count per feed in river mode too (needs
+the bounded count endpoint from PR #32).
 
 ### Unread counts cover feeds but not folders or labels
 
@@ -428,6 +509,46 @@ Suggested fix: highlight query terms server-side (offsets) or in a client-side
 match pass; about half a day.
 
 ## bugs
+
+### Article iframes let popups escape the sandbox onto the app origin
+
+bugs — important
+
+`web/src/main.tsx:198` renders the article iframe with
+`sandbox="allow-popups allow-popups-to-escape-sandbox"`. A link in untrusted
+article HTML can therefore open a popup that is not sandboxed on the same
+origin as the app. Today the `/content/` CSP (`default-src 'none'`) and JSON
+problem responses make this hard to exploit, but it removes a whole defense
+layer for any future same-origin route that reflects content. Affects every
+web user reading an article.
+
+Suggested fix: drop `allow-popups-to-escape-sandbox` and keep `allow-popups`
+(external links still open in a sandboxed popup; they just cannot reach the
+parent origin). Note: `web/src/main.tsx` is touched by several concurrent open
+PRs, so land this after those merge.
+
+### Google Reader `s=` include filters are AND-ed instead of unioned
+
+bugs — nice-to-have
+
+`internal/compat/greader/streams.go:157` sets `pass=false` when any `s=` value
+does not match, so multiple include-stream parameters require every stream to
+match. The Google Reader protocol treats repeated `s=` as a union; a client
+asking for `s=read&s=starred` gets the intersection. Affects third-party Reader
+clients that combine streams.
+
+Suggested fix: treat `s` as OR (pass if any matches), keep `xt` as AND-NOT.
+Note: `streams.go` has concurrent open PRs (#47, #20).
+
+### The summary shortcut effect re-subscribes on every render
+
+bugs — nice-to-have
+
+`web/src/pipeline/Pipeline.tsx:31` registers a global `keydown` listener in a
+`useEffect` with no dependency array, so it removes and re-adds the listener
+on every render of the Summary section.
+
+Suggested fix: add a dependency array and wrap the handler in `useCallback`.
 
 ### A literal `<!DOCTYPE` in article text rejects a feed
 
@@ -526,6 +647,16 @@ or at least list the behavior in the help dialog; about an hour plus a test.
 
 ## general issues
 
+### `lastVisit` is only written on pagehide
+
+general issues — nice-to-have
+
+`web/src/main.tsx:56-58` writes `earnest.lastVisit` only on `pagehide`, so a
+tab that is killed or crashes keeps a stale timestamp and the next session's
+"While you were out" agent-change window is older than reality.
+
+Suggested fix: also write `lastVisit` periodically or on `visibilitychange`.
+
 ### The outbound host limiter map grows without bound
 
 general issues — nice-to-have
@@ -539,6 +670,17 @@ Suggested fix: add a size bound or idle-time eviction to the per-host limiter
 map; about an hour.
 
 ## novel ideas
+
+### The session end could carry a reading streak
+
+novel ideas — nice-to-have
+
+`web/src/River.tsx:127` already has a session summary card. Extending it with
+a "days in a row you opened Earnest" streak (from `earnest.lastVisit` history)
+would give a gentle, non-gamified nudge alongside the existing choices summary.
+
+Suggested fix: track daily visits in localStorage and render the streak in the
+session-end card.
 
 ### The session end could offer a reset and a real reading count
 
