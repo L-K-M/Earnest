@@ -102,6 +102,27 @@ func TestKeepWriteShape(t *testing.T) {
 	requireCode(t, code, exitOK, errOut)
 }
 
+func TestUnkeepWriteShape(t *testing.T) {
+	code, _, errOut, _ := runStub(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/bootstrap":
+			writeJSON(w, revision{Generation: "g", Rev: 1})
+		case "/v1/me":
+			writeJSON(w, meResult{PrincipalID: 9})
+		case "/v1/state:batch":
+			var writes []stateWrite
+			decodeBody(t, r, &writes)
+			if len(writes) != 1 || writes[0].Register != "kept" || writes[0].Value != false {
+				t.Fatalf("writes = %+v", writes)
+			}
+			writeJSON(w, []stateResult{})
+		default:
+			http.NotFound(w, r)
+		}
+	}, testToken, "unkeep", "10")
+	requireCode(t, code, exitOK, errOut)
+}
+
 func TestStateBatchRequiresIDs(t *testing.T) {
 	code, _, errOut, _ := runStub(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("server should not be called")

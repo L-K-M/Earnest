@@ -34,7 +34,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -ldflags "-s -w -X main.version=${VERSION} -X main.revision=${REVISION}" \
       -o /out/earnest ./cmd/earnest
 
-FROM alpine:3.22
+FROM alpine:3.24
 ARG VERSION REVISION CREATED
 LABEL org.opencontainers.image.title="Earnest" \
       org.opencontainers.image.description="Self-hosted RSS reader whose agent surface is governed: own identity, budget, revert log" \
@@ -46,7 +46,7 @@ LABEL org.opencontainers.image.title="Earnest" \
       org.opencontainers.image.created="${CREATED}" \
       org.opencontainers.image.vendor="L-K-M" \
       org.opencontainers.image.licenses="Unlicense" \
-      org.opencontainers.image.base.name="docker.io/library/alpine:3.22"
+      org.opencontainers.image.base.name="docker.io/library/alpine:3.24"
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=build /out/earnest /usr/local/bin/earnest
 COPY LICENSE /usr/share/doc/earnest/LICENSE
