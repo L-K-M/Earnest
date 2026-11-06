@@ -406,6 +406,15 @@ func TestPlainTextBriefingReplayAndScopes(t *testing.T) {
 	if got := summarized.Groups[0].Entries[0].Summaries; len(got) != 1 || got[0].ID != summary.ID || !got[0].Untrusted {
 		t.Fatalf("stored summary: %+v", got)
 	}
+	summary2, err := f.svc.PutAnnotation(context.Background(), f.pipeline, service.PutAnnotationRequest{OpID: "stored-summary-2", EntryIDs: []int64{f.entryIDs[1]}, Kind: service.AnnotationSummary, Value: "Second summary"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var multi briefing
+	decodeOutput(t, call(t, f, "get_briefing", briefingArgs{IncludeSummaries: true}), &multi)
+	if got := multi.Groups[1].Entries[0].Summaries; len(got) != 1 || got[0].ID != summary2.ID {
+		t.Fatalf("second stored summary: %+v", got)
+	}
 
 	var first briefing
 	decodeOutput(t, call(t, f, "get_briefing", briefingArgs{Limit: 1}), &first)
