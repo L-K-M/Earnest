@@ -24,11 +24,13 @@ type CompiledRule struct {
 	Predicate      RulePredicate  `json:"predicate"`
 	Actions        []RuleAction   `json:"actions"`
 	FeedsToConfirm []CompiledFeed `json:"feeds_to_confirm"`
-	EntryIDs       []int64        `json:"entry_ids"`
-	Matched        int            `json:"matched"`
-	Description    string         `json:"description"`
-	Model          string         `json:"model"`
-	PromptVersion  string         `json:"prompt_version"`
+	// EntryIDs is a sample capped at maxDryRunMatches; Matched is the full
+	// match count, so Matched may exceed len(EntryIDs).
+	EntryIDs      []int64 `json:"entry_ids"`
+	Matched       int     `json:"matched"`
+	Description   string  `json:"description"`
+	Model         string  `json:"model"`
+	PromptVersion string  `json:"prompt_version"`
 }
 
 type compileNode struct {

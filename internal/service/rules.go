@@ -226,7 +226,8 @@ func (s *Service) ruleEntries(ctx context.Context, user int64, since time.Time, 
 // DryRunRule returns a bounded sample of matching entry IDs and the total
 // number of matches in the past seven days. The sample is capped so a broad
 // rule cannot produce a multi-megabyte response or a frozen renderer; the total
-// lets the caller say how much was omitted.
+// lets the caller say how much was omitted. An exact total scans the whole
+// window, so cost scales with window size rather than with maxDryRunMatches.
 func (s *Service) DryRunRule(ctx context.Context, a Actor, p RulePredicate, actions []RuleAction) ([]int64, int, error) {
 	if err := s.ruleHuman(ctx, a); err != nil {
 		return nil, 0, err
