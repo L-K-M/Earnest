@@ -40,9 +40,17 @@ type similarInput struct {
 	Limit int   `query:"limit" default:"10" minimum:"1" maximum:"100"`
 }
 
+// similarPage projects /similar. The route takes no cursor, so the
+// continuation hint toSearchPage would otherwise add is unusable.
+func similarPage(rows []service.SearchResult, err error) (searchPage, error) {
+	page, err := semanticPage(rows, err)
+	page.NextCursor = ""
+	return page, err
+}
+
 func (s *server) semanticRoutes() {
 	route(s, http.MethodGet, "/v1/entries/{id}/similar", "similar-entries", func(ctx context.Context, in *similarInput) (searchPage, error) {
 		rows, err := s.svc.Similar(ctx, actor(ctx), in.ID, in.Limit)
-		return semanticPage(rows, err)
+		return similarPage(rows, err)
 	})
 }

@@ -89,6 +89,10 @@ type EntryFilter struct {
 	BeforeSeq uint64
 	Limit     int
 	Direction PageDirection
+	// SuppressClusters excludes river rows hidden by read-time cluster
+	// suppression, so one page query returns visible rows directly instead of
+	// rescanning suppressed chunks. Only meaningful for the river view.
+	SuppressClusters bool
 }
 
 // EntryContent is the sanitised body at the entry's current content hash.
@@ -175,8 +179,21 @@ func (s *Service) Entry(ctx context.Context, a Actor, id int64) (Entry, error) {
 }
 
 // GetByIDs returns the visible entries among ids in request order, silently
-// omitting entries the user cannot see. Tombstones come back flagged.
+// omitting entries the user cannot see. Tombstones come back flagged. It does
+// not load bodies: list callers never render them, and loading them would cost
+// one query per entry.
 func (s *Service) GetByIDs(ctx context.Context, a Actor, ids []int64) ([]Entry, error) {
+	return s.getByIDs(ctx, a, ids, false)
+}
+
+// GetByIDsWithContent is GetByIDs plus the current sanitised body, loaded in
+// one query. Only callers that render bodies, such as Google Reader
+// compatibility, should ask for it.
+func (s *Service) GetByIDsWithContent(ctx context.Context, a Actor, ids []int64) ([]Entry, error) {
+	return s.getByIDs(ctx, a, ids, true)
+}
+
+func (s *Service) getByIDs(ctx context.Context, a Actor, ids []int64, withContent bool) ([]Entry, error) {
 	if err := s.checkActor(ctx, a, ScopeEntriesRead); err != nil {
 		return nil, err
 	}
@@ -206,6 +223,13 @@ func (s *Service) GetByIDs(ctx context.Context, a Actor, ids []int64) ([]Entry, 
 	if err != nil {
 		return nil, err
 	}
+	var content map[int64]store.ContentRow
+	if withContent {
+		content, err = store.LoadContentMap(ctx, s.store.Pool(), want)
+		if err != nil {
+			return nil, err
+		}
+	}
 	byID := make(map[int64]store.EntryRow, len(rows))
 	for _, r := range rows {
 		byID[r.ID] = r
@@ -218,13 +242,9 @@ func (s *Service) GetByIDs(ctx context.Context, a Actor, ids []int64) ([]Entry, 
 		}
 		e := entryFromRow(r)
 		e.State = states[id]
-		if !e.Deleted {
-			html, text, version, source, err := store.LoadContent(ctx, s.store.Pool(), id)
-			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-				return nil, err
-			}
-			if err == nil {
-				e.Content = &EntryContent{EntryID: id, HTML: html, Text: text, SanitizerVersion: version, Source: ContentSource(source)}
+		if withContent && !e.Deleted {
+			if c, ok := content[id]; ok {
+				e.Content = &EntryContent{EntryID: id, HTML: c.HTML, Text: c.Text, SanitizerVersion: c.Version, Source: ContentSource(c.Source)}
 			}
 		}
 		out = append(out, e)
@@ -400,6 +420,9 @@ func (s *Service) entryPageQuery(ctx context.Context, a Actor, f EntryFilter, pr
 		return "", nil, nil
 	}
 	args := []any{a.UserID, principal}
+	// Named refs for the two fixed params, so clauses deep in the query cannot
+	// drift if the args initialization above ever changes order.
+	userArg, principalArg := "$1", "$2"
 	arg := func(v any) string {
 		args = append(args, v)
 		return fmt.Sprintf("$%d", len(args))
@@ -425,6 +448,20 @@ func (s *Service) entryPageQuery(ctx context.Context, a Actor, f EntryFilter, pr
 		conds = append(conds, "(s.cadence = 'now' OR e.first_seen_at >= CASE s.cadence "+
 			"WHEN 'week' THEN "+arg(s.now().UTC().Add(-weekDecay))+"::timestamptz ELSE "+
 			arg(s.now().UTC().Add(-decay))+"::timestamptz END)")
+		if f.SuppressClusters {
+			// Same predicate as store.SuppressedClusterEntries, expressed against
+			// the row so a page query returns only visible rows in one pass.
+			// st is the resolved principal's entry_state ($2), the same principal
+			// the cluster_dones join keys on, so actor and principal can differ.
+			conds = append(conds, `NOT EXISTS (SELECT 1 FROM entry_clusters ec
+				JOIN cluster_dones d ON d.user_id = ec.user_id AND d.cluster_id = ec.cluster_id AND d.principal_id = `+principalArg+`
+				JOIN clusters c ON c.user_id = ec.user_id AND c.id = ec.cluster_id AND c.deleted_at IS NULL
+				WHERE ec.user_id = `+userArg+` AND ec.entry_id = e.id AND ec.deleted_at IS NULL
+				AND ec.rev > d.rev
+				AND COALESCE(st.seen_rev, 0) <= d.rev
+				AND COALESCE(st.seen, 'unseen') = 'unseen'
+				AND COALESCE(st.shelf, 'none') <> 'done')`)
+		}
 	case ViewLater:
 		conds = append(conds, "st.shelf = 'later'")
 	case ViewDone:

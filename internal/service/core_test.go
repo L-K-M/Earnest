@@ -75,6 +75,28 @@ func TestClaimDueFeedsSkipsInvalidCredentials(t *testing.T) {
 	}
 }
 
+func TestClaimDueFeedsFetchesPermanentRedirect(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := t.Context()
+	if _, err := f.s.RecordFetch(ctx, FetchOutcome{FeedID: f.feed, Status: FetchOK, Items: []IngestItem{coreItem("moved")}, PermanentRedirectURL: "https://moved.test/feed"}); err != nil {
+		t.Fatal(err)
+	}
+	due, err := f.s.ClaimDueFeeds(ctx, f.s.now().Add(time.Hour*365*24), 10, time.Minute)
+	if err != nil || len(due) != 1 || due[0].FeedID != f.feed {
+		t.Fatalf("claim: %+v %v", due, err)
+	}
+	if due[0].FetchURL != "https://moved.test/feed" {
+		t.Fatalf("claim returned stale fetch URL %q after permanent redirect", due[0].FetchURL)
+	}
+	if due[0].URL != "https://example.test/feed" {
+		t.Fatalf("canonical claim URL changed: %q", due[0].URL)
+	}
+	var url string
+	if err := f.db.Pool().QueryRow(ctx, "SELECT url FROM feeds WHERE id=$1", f.feed).Scan(&url); err != nil || url != "https://example.test/feed" {
+		t.Fatalf("canonical feed URL changed: %q %v", url, err)
+	}
+}
+
 func TestFetchErrorUTF8Boundary(t *testing.T) {
 	f := newCoreFixture(t, storetest.NewTemplate(t))
 	ctx := t.Context()
@@ -442,6 +464,125 @@ func TestCoreState(t *testing.T) {
 			t.Fatal("old generation accepted", err)
 		}
 		coreCheckGapless(t, f.db, f.a.UserID)
+	})
+	t.Run("range_bulk_members", func(t *testing.T) {
+		f := newCoreFixture(t, template)
+		const total = 320
+		items := make([]IngestItem, 0, total)
+		for i := 0; i < total; i++ {
+			items = append(items, coreItem(fmt.Sprintf("bulk-%03d", i)))
+		}
+		if _, err := f.s.RecordFetch(context.Background(), FetchOutcome{FeedID: f.feed, Status: FetchOK, Items: items}); err != nil {
+			t.Fatal(err)
+		}
+		rows, err := f.db.Pool().Query(context.Background(), "SELECT id FROM entries WHERE feed_id=$1 ORDER BY id", f.feed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := []int64{}
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				t.Fatal(err)
+			}
+			ids = append(ids, id)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil || len(ids) != total {
+			t.Fatal(len(ids), err)
+		}
+		marked := map[int64]bool{ids[3]: true, ids[160]: true, ids[total-1]: true}
+		writes := []syncmodel.Write{}
+		for _, id := range ids {
+			if marked[id] {
+				writes = append(writes, f.write(t, id, fmt.Sprintf("unread-%d", id), syncmodel.Seen, syncmodel.Unseen))
+			}
+		}
+		if _, err := f.s.Batch(context.Background(), f.a, writes); err != nil {
+			t.Fatal(err)
+		}
+		through := f.write(t, 0, "range-bulk", syncmodel.Seen, syncmodel.SeenValue)
+		through.OccurredAt = through.OccurredAt.Add(-time.Hour)
+		var changesBefore int64
+		if err := f.db.Pool().QueryRow(context.Background(), "SELECT count(*) FROM changes WHERE user_id=$1", f.a.UserID).Scan(&changesBefore); err != nil {
+			t.Fatal(err)
+		}
+		rr, err := f.s.Through(context.Background(), f.a, ThroughRequest{Write: through, Scope: syncmodel.Scope{Kind: syncmodel.ScopeAll}})
+		if err != nil || rr.Status != syncmodel.Applied || len(rr.Results) != total || len(rr.Except) != len(marked) {
+			t.Fatal("range", rr, err)
+		}
+		var rev uint64
+		for i, r := range rr.Results {
+			id := ids[i]
+			if int64(r.State.EntryID) != id || r.OpID != "range-bulk" {
+				t.Fatalf("result %d out of member order: %+v", i, r)
+			}
+			if marked[id] {
+				if r.Status != syncmodel.Superseded || r.State.Seen.Value != syncmodel.Unseen {
+					t.Fatalf("except member %d: %+v", id, r)
+				}
+				continue
+			}
+			if r.Status != syncmodel.Applied || r.State.Seen.Value != syncmodel.SeenValue {
+				t.Fatalf("member %d: %+v", id, r)
+			}
+			if rev == 0 {
+				rev = r.State.Seen.Rev
+			}
+			if r.State.Seen.Rev != rev || r.State.StateRev != rev {
+				t.Fatalf("revision mismatch at %d: %+v", id, r)
+			}
+		}
+		wantExcept := []syncmodel.ID{syncmodel.ID(ids[3]), syncmodel.ID(ids[160]), syncmodel.ID(ids[total-1])}
+		for i, id := range wantExcept {
+			if rr.Except[i] != id {
+				t.Fatal("exception order", rr.Except)
+			}
+		}
+		var seenCount int
+		if err := f.db.Pool().QueryRow(context.Background(), "SELECT count(*) FROM entry_state WHERE principal_id=$1 AND seen='seen'", f.a.PrincipalID).Scan(&seenCount); err != nil || seenCount != total-len(marked) {
+			t.Fatal("seen rows", seenCount, err)
+		}
+		var changesAfter int64
+		if err := f.db.Pool().QueryRow(context.Background(), "SELECT count(*) FROM changes WHERE user_id=$1", f.a.UserID).Scan(&changesAfter); err != nil || changesAfter != changesBefore+1 {
+			t.Fatal("range emitted more than one change", changesBefore, changesAfter, err)
+		}
+		replay, err := f.s.Through(context.Background(), f.a, ThroughRequest{Write: through, Scope: syncmodel.Scope{Kind: syncmodel.ScopeAll}})
+		if err != nil || !replay.Replay || replay.ThroughSeq != rr.ThroughSeq || len(replay.Results) != total || len(replay.Except) != len(marked) {
+			t.Fatal("range replay changed", replay, err)
+		}
+		for _, r := range replay.Results {
+			if !r.Replay {
+				t.Fatalf("replay result not marked: %+v", r)
+			}
+		}
+		coreCheckGapless(t, f.db, f.a.UserID)
+	})
+	t.Run("range_bulk_agent_activity", func(t *testing.T) {
+		f := newCoreFixture(t, template)
+		agent := Actor{UserID: f.a.UserID, Kind: PrincipalAgent, Via: CredentialAgentToken, Scopes: []Scope{ScopeEntriesRead, ScopeStateWriteHuman}}
+		if err := f.db.Pool().QueryRow(context.Background(), "INSERT INTO principals(user_id,kind,name) VALUES($1,'agent','Bot') RETURNING id", f.a.UserID).Scan(&agent.PrincipalID); err != nil {
+			t.Fatal(err)
+		}
+		const total = 120
+		items := make([]IngestItem, 0, total)
+		for i := 0; i < total; i++ {
+			items = append(items, coreItem(fmt.Sprintf("agent-bulk-%03d", i)))
+		}
+		if _, err := f.s.RecordFetch(context.Background(), FetchOutcome{FeedID: f.feed, Status: FetchOK, Items: items}); err != nil {
+			t.Fatal(err)
+		}
+		through := f.write(t, 0, "agent-range", syncmodel.Seen, syncmodel.SeenValue)
+		rr, err := f.s.Through(context.Background(), agent, ThroughRequest{Write: through, Scope: syncmodel.Scope{Kind: syncmodel.ScopeAll}})
+		if err != nil || rr.Status != syncmodel.Applied || len(rr.Results) != total || len(rr.Except) != 0 {
+			t.Fatal("agent range", rr, err)
+		}
+		var count, matched int
+		if err := f.db.Pool().QueryRow(context.Background(), `SELECT count(*),
+ count(*) FILTER (WHERE action='state.updated' AND before->'seen'->>'value'='unseen' AND after->'seen'->>'value'='seen' AND revert_state=after)
+ FROM activity WHERE principal_id=$1`, agent.PrincipalID).Scan(&count, &matched); err != nil || count != total || matched != total {
+			t.Fatal("activity rows", count, matched, err)
+		}
 	})
 	t.Run("cluster_late_member", func(t *testing.T) {
 		f := newCoreFixture(t, template)

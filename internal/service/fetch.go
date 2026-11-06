@@ -40,7 +40,7 @@ func (s *Service) ClaimDueFeeds(ctx context.Context, now time.Time, limit int, l
    AND EXISTS(SELECT 1 FROM subscriptions s WHERE s.feed_id=f.id AND s.deleted_at IS NULL)
    ORDER BY f.next_fetch_at,f.id FOR UPDATE SKIP LOCKED LIMIT $2
   ) UPDATE feeds f SET lease_until=$3 FROM due WHERE f.id=due.id
-  RETURNING f.id,f.url,coalesce(f.etag,''),coalesce(f.last_modified,''),f.credentials_encrypted,
+  RETURNING f.id,f.url,coalesce(nullif(f.permanent_redirect_url,''),f.url),coalesce(f.etag,''),coalesce(f.last_modified,''),f.credentials_encrypted,
   extract(epoch FROM f.fetch_interval)::double precision,f.lease_until,f.consecutive_failures,f.owner_user_id IS NOT NULL,
   EXISTS(SELECT 1 FROM subscriptions s WHERE s.feed_id=f.id AND s.deleted_at IS NULL
   AND (s.full_text_mode='always' OR (s.full_text_mode='inherit' AND f.extraction_mode='always')))`, now.UTC(), limit, now.UTC().Add(lease))
@@ -64,7 +64,7 @@ func (s *Service) ClaimDueFeeds(ctx context.Context, now time.Time, limit int, l
 			var seconds float64
 			var failures int
 			var private, extract bool
-			if err := rows.Scan(&f.FeedID, &f.URL, &f.ETag, &f.LastModified, &encrypted, &seconds, &f.LeaseUntil, &failures, &private, &extract); err != nil {
+			if err := rows.Scan(&f.FeedID, &f.URL, &f.FetchURL, &f.ETag, &f.LastModified, &encrypted, &seconds, &f.LeaseUntil, &failures, &private, &extract); err != nil {
 				return fmt.Errorf("scan feed lease: %w", err)
 			}
 			f.Extract = ExtractNone

@@ -154,6 +154,16 @@ func TestHTTPPipelineBudgetAvailability(t *testing.T) {
 	checkStatus(statusEnabled)
 	checkPage(similar, statusPaused) // No source embedding yet.
 	checkPage("/v1/search?q=stored&mode=hybrid", statusEnabled)
+	// A hybrid saved view reports the semantic path in-band.
+	saved := savedSearchBody{Name: "Hybrid stored", Query: "stored", Filters: service.SearchFilter{Mode: service.SearchHybrid, Limit: 1}}
+	rec := f.do(t, http.MethodPost, "/v1/saved-searches", saved, f.session())
+	requireStatus(t, rec, http.StatusOK)
+	created := decodeBody[savedSearch](t, rec)
+	rec = f.do(t, http.MethodGet, fmt.Sprintf("/v1/saved-searches/%d/entries", created.ID), nil, f.session())
+	requireStatus(t, rec, http.StatusOK)
+	if page := decodeBody[searchPage](t, rec); page.Status != statusEnabled {
+		t.Fatalf("hybrid saved search status = %q", page.Status)
+	}
 	// Warm a source embedding using the same routed, reserved path as backfill.
 	vector, _, err := client.Embed(t.Context(), llm.TaskEmbed, llm.EmbedRequest{Texts: []string{"Stored content"}})
 	if err != nil {
@@ -189,4 +199,18 @@ func TestHTTPPipelineBudgetAvailability(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkStatus(statusEnabled)
+}
+
+func TestSimilarPageOmitsNextCursor(t *testing.T) {
+	rows := []service.SearchResult{{EntryID: 1, Seq: 2, Rank: 0.5}}
+	page, err := similarPage(rows, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.NextCursor != "" {
+		t.Fatalf("next cursor = %q, want empty", page.NextCursor)
+	}
+	if len(page.Matches) != 1 || page.Matches[0].EntryID != 1 {
+		t.Fatalf("matches = %+v", page.Matches)
+	}
 }

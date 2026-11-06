@@ -178,3 +178,53 @@ func TestWatchCreationConcurrentReplay(t *testing.T) {
 		t.Fatalf("cross-method op reused: %v", err)
 	}
 }
+
+func TestWatchTransientFailureDoesNotWedgeTheRulePass(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	p := &pipelineProvider{classifier: `{"labels":["news"]}`}
+	ctx := pipelineTestContext(t, f.db, p, []llm.Task{llm.TaskEmbed, llm.TaskClassify}, 0)
+	watch, err := f.s.CreateWatch(ctx, f.a, WatchRule{Rule: Rule{Name: "Space watch", Predicate: RulePredicate{Type: RuleSemantic, Value: "beacon topic"}, Actions: []RuleAction{{Type: RuleNotify, Budget: 3}}, Enabled: true}, CheckLLM: true, CheckBudget: 3}, "create-watch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One ingest batch with two matches: the newer entry is confirmed first
+	// (rule entries load newest first) and fails transiently, leaving an
+	// uncertain watch_checks row that can never resolve.
+	if _, err := f.s.RecordFetch(context.Background(), FetchOutcome{FeedID: f.feed, Status: FetchOK, Items: []IngestItem{
+		coreItem("beacon first matched passage"),
+		coreItem("beacon second matched passage"),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.RunPipeline(ctx, 10); err != nil {
+		t.Fatal(err)
+	}
+	// The newer entry is confirmed first (rule entries load newest first) and
+	// fails transiently, leaving an uncertain watch_checks row that can never
+	// resolve.
+	p.mu.Lock()
+	p.failFor = "second matched"
+	p.mu.Unlock()
+	f.clock.Add(int64(2 * time.Minute))
+	if _, err := f.s.RunRuleJobs(ctx, 10); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	p.failFor = ""
+	p.mu.Unlock()
+	f.clock.Add(int64(2 * time.Minute))
+	if _, err := f.s.RunRuleJobs(ctx, 10); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := f.db.Pool().QueryRow(ctx, `SELECT count(*) FROM notifications WHERE why->>'matching_rule_id'=$1`, fmt.Sprint(watch.ID)).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("watch notifications %d %v", count, err)
+	}
+	var why string
+	if err := f.db.Pool().QueryRow(ctx, `SELECT why->>'sender' FROM notifications LIMIT 1`).Scan(&why); err != nil || !strings.Contains(why, "first matched") || strings.Contains(why, "second matched") {
+		t.Fatalf("the later entry must still be confirmed, got %q %v", why, err)
+	}
+	if err := f.db.Pool().QueryRow(ctx, `SELECT count(*) FROM jobs WHERE kind='rule'`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("rule job must complete instead of waiting forever, jobs %d %v", count, err)
+	}
+}
