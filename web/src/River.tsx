@@ -12,7 +12,7 @@ type Page = {entries: Entry[]; next_cursor?: string}
 type PageParam = {direction: 'forward' | 'backward'; cursor?: string; after?: number}
 export type SessionSummary = {done: number; later: number; kept: number; seen: number}
 
-export function River({view, subscriptions, actions, selected, onSelect, onOpen, shortcuts, counts, summary, onHelp, since = '1970-01-01T00:00:00Z', sessionStart = '1970-01-01T00:00:00Z'}: {since?:string; sessionStart?:string; view: View; subscriptions: Subscription[]; actions: ReaderActions; selected: Entry | null; onSelect: (entry: Entry) => void; onOpen: (entry: Entry) => void; shortcuts: boolean; counts: boolean; summary: SessionSummary; onHelp: () => void}) {
+export function River({view, subscriptions, actions, selected, onSelect, onOpen, shortcuts, counts, summary, onHelp, onMarkRestRead, since = '1970-01-01T00:00:00Z', sessionStart = '1970-01-01T00:00:00Z'}: {since?:string; sessionStart?:string; view: View; subscriptions: Subscription[]; actions: ReaderActions; selected: Entry | null; onSelect: (entry: Entry) => void; onOpen: (entry: Entry) => void; shortcuts: boolean; counts: boolean; summary: SessionSummary; onHelp: () => void; onMarkRestRead?: (throughSeq: number) => void}) {
   const pipeline = usePipeline()
   const key = viewKey(view)
   const scroller = useRef<HTMLDivElement>(null)
@@ -103,8 +103,13 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   }, [entries, selected, shortcuts, onSelect, onOpen, onHelp, virtual, actions])
 
   const unread = entries.filter(entry => { const state = actions.state(entry); return state.seen.value === 'unseen' && state.shelf.value !== 'done' }).length
+  const markable = onMarkRestRead && unread > 0 && ['today', 'feed', 'folder'].includes(view.kind)
   return <main className="river" aria-label="Articles">
-    <header><h2 ref={heading} tabIndex={-1}>{view.title}</h2><button disabled={!list.isSuccess || list.isRefetching} onClick={() => {void list.refetch()}}>Refresh articles</button>{counts && <p>{unread} unread in loaded articles</p>}</header>
+    <header><h2 ref={heading} tabIndex={-1}>{view.title}</h2><button disabled={!list.isSuccess || list.isRefetching} onClick={() => {void list.refetch()}}>Refresh articles</button>{markable && <button onClick={() => {
+      const through = entries.reduce((max, entry) => Math.max(max, entry.seq), 0)
+      const what = view.kind === 'feed' ? 'every article in this feed' : view.kind === 'folder' ? 'every article in this folder' : 'every article in every feed, including This week items'
+      if (window.confirm(`Mark ${what} read up to the newest one loaded here?`)) onMarkRestRead(through)
+    }}>Mark the rest read</button>}{counts && <p>{unread} unread in loaded articles</p>}</header>
     {(error || position.error || list.error) && <p role="alert">{error || position.error?.message || list.error?.message} <button onClick={() => { void (position.isError ? position.refetch() : list.refetch()) }}>Try again</button></p>}
     {(position.isPending || list.isPending) && <p role="status">Finding your place…</p>}
     {view.kind === 'edition' && <Edition onOpen={onOpen}/>}

@@ -12,7 +12,7 @@ import {Onboarding} from './Onboarding'
 import {ActivityScreen, Notifications} from './agents/Surfaces'
 import {Tokens, Push, Webhooks} from './account/Account'
 import {useReaderSync} from './syncBridge'
-import {type Entry, type ReaderActions, type Subscription, type View, viewKey} from './reader'
+import {type Entry, type ReaderActions, type Subscription, type View, viewKey, viewScope} from './reader'
 import {Rules} from './rules/Rules'
 import {Search, useSavedSearches, type SavedSearch} from './search/Search'
 import {Palette, type Command} from './palette/Palette'
@@ -194,7 +194,7 @@ function Session({onLogout}: {onLogout: () => void}) {
       {sync.error && <p role="alert">{sync.error} <button onClick={sync.retry}>Retry sync</button></p>}
       </div>
       {firstRun ? <main onChangeCapture={() => setOnboardingStarted(true)} onClickCapture={() => setOnboardingStarted(true)}><Onboarding onComplete={() => {setOnboarded(true);refreshResources();void queryClient.invalidateQueries({queryKey:['position']});choose(standardViews[0])}} /></main> : panel === 'ask' && pipeline.data?.ask === 'enabled' ? <Ask onOpen={openEntry}/> : panel === 'rules' ? <Rules feeds={subscriptions.data ?? []} folders={folders.data ?? []} labels={labels.data ?? []}/> : panel === 'search' ? <Search key={savedSearch?.id ?? 'search'} saved={savedSearch} onOpen={openEntry}/> : panel === 'feeds' ? <main key="feeds" tabIndex={-1} ref={focusPanel}><h2>Feeds</h2><Feeds onChanged={refreshResources} /></main> : panel === 'activity' ? <ActivityScreen /> : panel === 'notifications' ? <Notifications onOpen={entry => {choose(standardViews[0]);setSelected(entry);setOpened(true)}} /> : panel === 'settings' ? <main key="settings" tabIndex={-1} ref={focusPanel}><Settings key={settings.rev} settings={settings} onSaved={savedSettings} /><Tokens /><Push /><Webhooks /></main> : <>
-        <River since={since} sessionStart={sessionStart} key={viewKey(view)} view={view} subscriptions={subscriptions.data ?? []} actions={actions} selected={selected} onSelect={setSelected} onOpen={entry => {setSelected(entry);setOpened(true)}} shortcuts={settings.single_key_shortcuts && preferences.isSuccess} counts={settings.reading_mode === 'unread_counts'} summary={summary} onHelp={() => help.current?.showModal()} />
+        <River since={since} sessionStart={sessionStart} key={viewKey(view)} view={view} subscriptions={subscriptions.data ?? []} actions={actions} selected={selected} onSelect={setSelected} onOpen={entry => {setSelected(entry);setOpened(true)}} shortcuts={settings.single_key_shortcuts && preferences.isSuccess} counts={settings.reading_mode === 'unread_counts'} summary={summary} onHelp={() => help.current?.showModal()} onMarkRestRead={throughSeq => { void sync.actRange(viewScope(view), throughSeq).catch(error => setError(error instanceof Error ? error.message : 'Could not mark the rest read.')) }} />
         {selected && opened ? <Reader key={selected.id} onOpen={openEntry} entry={selected} subscription={subscriptions.data?.find(sub => sub.id === selected.subscription_id)} settings={settings} actions={actions} onSettings={savedSettings} renderBody={url => <iframe title="Article body" src={url} sandbox="allow-popups allow-popups-to-escape-sandbox" />} onClose={() => {setOpened(false);window.requestAnimationFrame(() => document.querySelector<HTMLElement>('.river h2')?.focus())}} /> : <article className="reader-placeholder" aria-label="Reader"><p>Choose an article. It has been waiting patiently.</p></article>}
       </>}
     </div>

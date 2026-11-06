@@ -16,13 +16,13 @@ class Observer {
   disconnect() {}
 }
 afterEach(() => {cleanup();vi.clearAllMocks();vi.unstubAllGlobals();callbacks.length=0;observed.length=0})
-function mount(shortcuts=true, blurbStatus="disabled") {
+function mount(shortcuts=true, blurbStatus="disabled", onMarkRestRead?: (throughSeq:number)=>void) {
   vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {blurb:blurbStatus} : path.startsWith('/v1/positions') ? {seq:0} : {entries})
   vi.stubGlobal('IntersectionObserver', Observer)
   const act = vi.fn().mockResolvedValue(undefined)
   const actions: ReaderActions = {act,state:entry=>entry.state}
   const onSelect=vi.fn()
-  render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'today',title:'Today'}} subscriptions={[]} actions={actions} selected={entries[0]} onSelect={onSelect} onOpen={vi.fn()} shortcuts={shortcuts} counts={false} summary={{seen:0,done:0,later:0,kept:0}} onHelp={vi.fn()} /></QueryClientProvider>)
+  render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'today',title:'Today'}} subscriptions={[]} actions={actions} selected={entries[0]} onSelect={onSelect} onOpen={vi.fn()} shortcuts={shortcuts} counts={false} summary={{seen:0,done:0,later:0,kept:0}} onHelp={vi.fn()} onMarkRestRead={onMarkRestRead} /></QueryClientProvider>)
   return {act,onSelect}
 }
 describe('river interactions', () => {
@@ -50,6 +50,30 @@ describe('river interactions', () => {
     await screen.findByText('Article 1')
     fireEvent.keyDown(document.body,{key:'e'})
     expect(act).not.toHaveBeenCalled()
+  })
+  it('marks the rest read through the newest loaded entry', async () => {
+    const confirm = vi.spyOn(window,'confirm').mockReturnValue(true)
+    const onMarkRestRead=vi.fn()
+    mount(true,'disabled',onMarkRestRead)
+    await screen.findByText('Article 2')
+    fireEvent.click(screen.getByRole('button',{name:'Mark the rest read'}))
+    expect(confirm).toHaveBeenCalled()
+    expect(onMarkRestRead).toHaveBeenCalledWith(3)
+    confirm.mockRestore()
+  })
+  it('keeps the rest unmarked when the confirmation is declined', async () => {
+    const confirm = vi.spyOn(window,'confirm').mockReturnValue(false)
+    const onMarkRestRead=vi.fn()
+    mount(true,'disabled',onMarkRestRead)
+    await screen.findByText('Article 2')
+    fireEvent.click(screen.getByRole('button',{name:'Mark the rest read'}))
+    expect(onMarkRestRead).not.toHaveBeenCalled()
+    confirm.mockRestore()
+  })
+  it('hides the mark-rest action without a handler or unread entries', async () => {
+    mount()
+    await screen.findByText('Article 1')
+    expect(screen.queryByRole('button',{name:'Mark the rest read'})).toBeNull()
   })
 })
 it('retries a visible row after sync finishes restoring',async()=>{

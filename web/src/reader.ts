@@ -10,6 +10,13 @@ export type ReaderActions = {
   act: (entry: Entry, register: Register, value: Value, kind?: 'explicit' | 'passive') => Promise<void>
 }
 export function viewKey(view: View): string { return `${view.kind}${view.id === undefined ? '' : `:${view.id}`}` }
+// The sync range scope a view maps to for bulk mark-read. Label views have no
+// range scope in the sync model and fall back to all feeds.
+export function viewScope(view: View): {kind: 'all' | 'subscriptions' | 'folder'; ids: number[]} {
+  if (view.kind === 'feed' && view.id !== undefined) return {kind: 'subscriptions', ids: [view.id]}
+  if (view.kind === 'folder' && view.id !== undefined) return {kind: 'folder', ids: [view.id]}
+  return {kind: 'all', ids: []}
+}
 export function entryQuery(view: View): URLSearchParams {
   const query = new URLSearchParams({view: view.kind === 'today' ? 'river' : ['later', 'kept', 'done'].includes(view.kind) ? view.kind : 'all', limit: '100', direction: 'forward'})
   if (view.kind === 'edition') {query.set('view', 'river');query.set('cadence', 'week')}

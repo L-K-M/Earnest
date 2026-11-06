@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import {describe, expect, it} from 'vitest'
-import {entryQuery, orderEntries, readerURL, shortcutsAllowed, type Entry, type Subscription, type View} from './reader'
+import {entryQuery, orderEntries, readerURL, shortcutsAllowed, viewScope, type Entry, type Subscription, type View} from './reader'
 describe('reader rules', () => {
   it.each(['input', 'textarea', 'select', 'div[contenteditable]', 'div[role=textbox]'])('protects typing in %s', selector => {
     const element = document.createElement(selector.split('[')[0])
@@ -29,5 +29,11 @@ describe('reader rules', () => {
     expect(url.searchParams.get('sig')).toBe('secret')
     expect(url.searchParams.get('theme')).toBe('dark')
     expect(url.searchParams.get('measure')).toBe('64')
+  })
+  it('maps views to sync range scopes', () => {
+    expect(viewScope({kind:'feed', id:7, title:'F'})).toEqual({kind:'subscriptions', ids:[7]})
+    expect(viewScope({kind:'folder', id:3, title:'G'})).toEqual({kind:'folder', ids:[3]})
+    expect(viewScope({kind:'today', title:'Today'})).toEqual({kind:'all', ids:[]})
+    expect(viewScope({kind:'label', id:2, title:'L'})).toEqual({kind:'all', ids:[]})
   })
 })

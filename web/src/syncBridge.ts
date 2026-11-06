@@ -76,6 +76,13 @@ export function useReaderSync(identity: {user_id: number; principal_id: number} 
       await sync.queue(BigInt(entry.id),register,value,kind)
       sync.kick()
     },
+    actRange:async (scope:{kind:'all'|'subscriptions'|'folder'; ids:number[]}, throughSeq:number):Promise<void> => {
+      const sync=runtime.current
+      if (!sync) throw new Error('Reading state is not ready. Try again after sync opens.')
+      if (!sync.status().bootstrapped) throw new Error('Reading state is being restored. Try again when sync finishes.')
+      await sync.queueRange({kind:scope.kind, ids:scope.ids.map(id => BigInt(id))}, {throughSeq:BigInt(throughSeq)})
+      sync.kick()
+    },
     retry:() => {setError('');if(runtime.current)runtime.current.kick();else setAttempt(old=>old+1)},
   }
 }
