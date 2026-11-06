@@ -248,6 +248,9 @@ func getBriefing(ctx context.Context, svc *service.Service, a service.Actor, arg
 		for _, e := range entries {
 			ids = append(ids, e.ID)
 		}
+		// Summaries are upserted one per (principal, kind, entry set), so a
+		// page of at most maxPageSize entries can match at most maxPageSize
+		// annotations; the limit cannot starve later entries.
 		annotations, err := svc.ListAnnotations(ctx, a, service.AnnotationQuery{EntryIDs: ids, Kind: service.AnnotationSummary, Limit: maxPageSize})
 		if err != nil {
 			return nil, err
