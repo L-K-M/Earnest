@@ -363,6 +363,20 @@ func (s *Service) RemoveLabel(ctx context.Context, a Actor, labelID, entryID int
 	return out, nil
 }
 
+// dedupeIDs keeps the first occurrence of each id in input order. A batched
+// upsert cannot touch one row twice, and duplicate ids carry no new intent.
+func dedupeIDs(ids []int64) []int64 {
+	seen := make(map[int64]bool, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // labelSetResult is the committed outcome of a bulk membership mutation.
 // Entries apply in input order and the first failure stops the set, so the
 // memberships cover the applied prefix only; the record lets a replayed
@@ -399,6 +413,7 @@ func (s *Service) AddLabels(ctx context.Context, a Actor, labelID int64, entryID
 	if labelID <= 0 {
 		return nil, fmt.Errorf("label id: %w", ErrInvalid)
 	}
+	entryIDs = dedupeIDs(entryIDs)
 	if len(entryIDs) == 0 {
 		return []LabelMembership{}, nil
 	}
@@ -439,6 +454,7 @@ func (s *Service) RemoveLabels(ctx context.Context, a Actor, labelID int64, entr
 	if labelID <= 0 {
 		return nil, fmt.Errorf("label id: %w", ErrInvalid)
 	}
+	entryIDs = dedupeIDs(entryIDs)
 	if len(entryIDs) == 0 {
 		return []LabelMembership{}, nil
 	}
@@ -596,7 +612,8 @@ func (s *Service) removeLabelsTx(ctx context.Context, tx pgx.Tx, a Actor, labelI
 			for i := range revs {
 				revs[i] = base + int64(i)
 			}
-			if err := store.TombstoneMemberships(ctx, tx, a.UserID, labelID, changed, revs, s.now().UTC()); err != nil {
+			at := s.now().UTC()
+			if err := store.TombstoneMemberships(ctx, tx, a.UserID, labelID, changed, revs, at); err != nil {
 				return result, err
 			}
 			payloads := make([]json.RawMessage, len(changed))
@@ -609,7 +626,7 @@ func (s *Service) removeLabelsTx(ctx context.Context, tx pgx.Tx, a Actor, labelI
 					return result, err
 				}
 			}
-			if err := insertEvents(ctx, tx, a.UserID, revs, string(syncmodel.LabelRemoved), payloads, s.now().UTC()); err != nil {
+			if err := insertEvents(ctx, tx, a.UserID, revs, string(syncmodel.LabelRemoved), payloads, at); err != nil {
 				return result, err
 			}
 		}

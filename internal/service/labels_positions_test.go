@@ -587,3 +587,36 @@ func TestPositionsService(t *testing.T) {
 		}
 	})
 }
+
+// TestBulkLabelsDeduplicateIDs pins the batch contract: a repeated entry id
+// must not crash the batched upsert (one ON CONFLICT clause cannot touch the
+// same row twice) or double-apply the membership change.
+func TestBulkLabelsDeduplicateIDs(t *testing.T) {
+	template := storetest.NewTemplate(t)
+	f := entriesTestNew(t, template)
+	ctx := context.Background()
+	user := f.a.UserID
+	feed := entriesTestFeed(t, f.db, "https://entriesTest-dup.test/rss", 0)
+	entriesTestSub(t, f.db, user, feed, "today")
+	e1 := f.ingest(t, feed, "dup", f.now())
+	f.setClock(entriesTestBase)
+	label, err := f.s.CreateLabel(ctx, f.a, "dup", "op-dup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	twice := []int64{e1, e1}
+	added, err := f.s.AddLabels(ctx, f.a, label.ID, twice, "op-add")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(added) != 1 {
+		t.Fatalf("add applied %d rows for one entry: %+v", len(added), added)
+	}
+	removed, err := f.s.RemoveLabels(ctx, f.a, label.ID, twice, "op-remove")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 1 {
+		t.Fatalf("remove applied %d rows for one entry: %+v", len(removed), removed)
+	}
+}
