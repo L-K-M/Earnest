@@ -120,6 +120,11 @@ func (s *Store) SemanticQueryPut(ctx context.Context, user int64, description, m
 	return nil
 }
 
+// RetrievalTextLimit bounds the text projection of retrieval queries.
+// Consumers render short snippets (the service keeps 200 runes), and whole
+// article texts must not leave the database to build them.
+const RetrievalTextLimit = 2048
+
 // SemanticHit is publisher content with an independently computed cosine score.
 type SemanticHit struct {
 	ID, SubscriptionID, FeedID, Seq int64
@@ -128,12 +133,13 @@ type SemanticHit struct {
 }
 
 // SemanticSearch applies subscription and privacy boundaries before ranking.
+// The text projection is bounded to RetrievalTextLimit characters.
 func (s *Store) SemanticSearch(ctx context.Context, user, subscription, folder, exclude int64, model string, vector []float32, limit int) ([]SemanticHit, error) {
 	literal, err := formatHalfvec(vector)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.pool.Query(ctx, `SELECT e.id,s.id,e.feed_id,e.seq,e.title,coalesce(e.url,''),coalesce(c.text,''),1-(x.embedding <=> $5::halfvec) AS score
+	rows, err := s.pool.Query(ctx, `SELECT e.id,s.id,e.feed_id,e.seq,e.title,coalesce(e.url,''),coalesce(left(c.text,2048),''),1-(x.embedding <=> $5::halfvec) AS score
  FROM embeddings x JOIN entries e ON e.id=x.entry_id AND x.content_hash=e.content_hash AND x.input_title=e.title
  JOIN feeds f ON f.id=e.feed_id JOIN subscriptions s ON s.feed_id=e.feed_id AND s.user_id=$1 AND s.deleted_at IS NULL
  LEFT JOIN LATERAL(SELECT text FROM contents WHERE entry_id=e.id AND content_hash=e.content_hash ORDER BY (source='extracted') DESC,sanitizer_version DESC LIMIT 1)c ON true
