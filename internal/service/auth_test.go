@@ -137,7 +137,7 @@ func TestSessionAndDevice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	device, err := a.StartDeviceAuth(ctx, "phone", "client-device")
+	device, err := a.StartDeviceAuth(ctx, "phone", "client-phone")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestSessionAndDevice(t *testing.T) {
 	if _, err = a.PollDevice(ctx, device.DeviceCode); !errors.Is(err, ErrExpiredToken) {
 		t.Fatalf("consumed: %v", err)
 	}
-	denied, err := a.StartDeviceAuth(ctx, "denied", "client-device")
+	denied, err := a.StartDeviceAuth(ctx, "denied", "client-denied")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestSessionAndDevice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	device2, err := a.StartDeviceAuth(ctx, "expired", "client-device")
+	device2, err := a.StartDeviceAuth(ctx, "expired", "client-expired")
 	if err != nil {
 		t.Fatal(err)
 	}

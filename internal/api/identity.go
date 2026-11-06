@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"time"
 
@@ -119,9 +120,16 @@ func (s *server) identityRoutes() {
 				return deviceResult{}, err
 			}
 		}
-		client, _, err := net.SplitHostPort(request(ctx).RemoteAddr)
-		if err != nil {
-			client = request(ctx).RemoteAddr
+		// Device starts are public: cap them per client, keyed like login
+		// attempts so a trusted proxy's clients get separate buckets. With no
+		// usable client address, share the peer's bucket rather than skip the
+		// cap.
+		client, ok := clientip.Key(request(ctx))
+		if !ok {
+			client = "peer:" + request(ctx).RemoteAddr
+			if host, _, err := net.SplitHostPort(request(ctx).RemoteAddr); err == nil {
+				client = "peer:" + host
+			}
 		}
 		result, err := s.auth.StartDeviceAuth(ctx, in.Body.ClientName, client)
 		if err != nil {
