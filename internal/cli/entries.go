@@ -125,6 +125,11 @@ func (a *app) read(ctx context.Context, args []string) error {
 	if err := decode(raw, &body); err != nil {
 		return err
 	}
+	// Terminate the output so a shell prompt never lands on the last line.
+	if !strings.HasSuffix(body.Text, "\n") {
+		_, err = fmt.Fprint(a.out, body.Text+"\n")
+		return err
+	}
 	_, err = fmt.Fprint(a.out, body.Text)
 	return err
 }
@@ -206,11 +211,13 @@ func (a *app) printSearchPage(page searchPage) {
 func (a *app) briefing(ctx context.Context, args []string) error {
 	view := viewToday
 	limit := defaultEntryLimit
+	cursor := ""
 	fs := newFlagSet("briefing")
 	fs.StringVar((*string)(&view), "view", string(viewToday), "position view: today|later|kept|done|all")
 	fs.IntVar(&limit, "limit", defaultEntryLimit, "maximum entries")
-	if err := parseFlags(fs, args, map[string]bool{"view": true, "limit": true}); err != nil || fs.NArg() != 0 {
-		return usagef("usage: earnest briefing [--view today|later|kept|done|all] [--limit n]")
+	fs.StringVar(&cursor, "cursor", "", "exclusive seq cursor from the previous page")
+	if err := parseFlags(fs, args, map[string]bool{"view": true, "limit": true, "cursor": true}); err != nil || fs.NArg() != 0 {
+		return usagef("usage: earnest briefing [--view today|later|kept|done|all] [--limit n] [--cursor c]")
 	}
 	if !validView(view) {
 		return usagef("invalid --view %q", string(view))
@@ -233,7 +240,9 @@ func (a *app) briefing(ctx context.Context, args []string) error {
 	}
 	query := url.Values{}
 	query.Set("view", positionView)
-	if pos.Seq > 0 {
+	if cursor != "" {
+		query.Set("cursor", cursor)
+	} else if pos.Seq > 0 {
 		query.Set("after_seq", strconv.FormatUint(pos.Seq, 10))
 	}
 	query.Set("limit", strconv.Itoa(limit))

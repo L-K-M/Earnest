@@ -480,3 +480,104 @@ func TestItemsResolveRelativeLinksAgainstTheFetchURL(t *testing.T) {
 		}
 	}
 }
+
+func TestItemsResolveRelativeLinksAgainstTheRedirectTarget(t *testing.T) {
+	f, _ := testFetcher(t, httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
+	// After a permanent redirect the bytes come from FetchURL, so a relative
+	// link names a resource on the new origin, not the stale canonical one.
+	items, err := f.items(context.Background(), service.FeedToFetch{FeedID: 1, URL: "https://old.example/rss.xml", FetchURL: "https://new.example/feed/rss.xml"}, []feed.Item{
+		{GUID: "relative", URL: "post", ContentHTML: "body"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].URL != "https://new.example/feed/post" {
+		t.Fatalf("items = %+v, want the link resolved against FetchURL", items)
+	}
+}
+
+func TestSameOriginScoping(t *testing.T) {
+	cases := []struct {
+		a, b string
+		same bool
+	}{
+		{"https://example.test/feed", "https://example.test/other", true},
+		{"https://example.test/feed", "https://example.test:443/other", true},
+		{"http://example.test/feed", "http://example.test:80/other", true},
+		{"http://[::1]:8080/a", "http://[::1]:8080/b", true},
+		{"https://example.test/feed", "https://other.test/feed", false},
+		{"https://example.test/feed", "http://example.test/feed", false},
+		{"https://example.test:8443/feed", "https://example.test/feed", false},
+		{"/feed", "/other", false},
+		{"https://example.test/feed", "not a url", false},
+	}
+	for _, c := range cases {
+		if sameOrigin(c.a, c.b) != c.same || sameOrigin(c.b, c.a) != c.same {
+			t.Fatalf("sameOrigin(%q,%q) != %v", c.a, c.b, c.same)
+		}
+	}
+}
+
+func TestFetchScopesCredentialsToCanonicalOrigin(t *testing.T) {
+	body := `<rss version="2.0"><channel><title>Feed</title><item><guid>abc</guid><link>https://example.org/article</link><description>d</description></item></channel></rss>`
+	var movedAuth, homeAuth string
+	var movedHits, homeHits atomic.Int32
+	moved := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		movedHits.Add(1)
+		movedAuth = r.Header.Get("Authorization")
+		fmt.Fprint(w, body)
+	}))
+	defer moved.Close()
+	home := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		homeHits.Add(1)
+		homeAuth = r.Header.Get("Authorization")
+		fmt.Fprint(w, body)
+	}))
+	defer home.Close()
+	ports := make([]uint16, 0, 2)
+	for _, server := range []*httptest.Server{home, moved} {
+		u, _ := url.Parse(server.URL)
+		_, p, _ := net.SplitHostPort(u.Host)
+		port, _ := strconv.Atoi(p)
+		ports = append(ports, uint16(port))
+	}
+	c, err := outbound.New(outbound.Config{AllowHosts: []string{mustHost(t, home), mustHost(t, moved)}, Spacing: time.Nanosecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := New(&fakeService{}, c, Config{ExtraPorts: ports})
+	if err != nil {
+		t.Fatal(err)
+	}
+	creds := &service.FeedCredentials{Username: "u", Password: "p"}
+	ctx := context.Background()
+	// A recorded permanent redirect to another origin must not carry the
+	// feed's credentials to the new host.
+	if err := f.Fetch(ctx, service.FeedToFetch{FeedID: 1, URL: home.URL + "/feed", FetchURL: moved.URL + "/feed", Credentials: creds}); err != nil {
+		t.Fatal(err)
+	}
+	// The fetch must target the recorded redirect, or the leak check below
+	// would pass vacuously.
+	if movedHits.Load() != 1 || homeHits.Load() != 0 {
+		t.Fatalf("fetch hit moved=%d home=%d, want the redirect target only", movedHits.Load(), homeHits.Load())
+	}
+	if movedAuth != "" {
+		t.Fatalf("credentials leaked to the redirect target: %q", movedAuth)
+	}
+	// The feed's own origin still receives them, including on another path.
+	if err := f.Fetch(ctx, service.FeedToFetch{FeedID: 1, URL: home.URL + "/feed", FetchURL: home.URL + "/other", Credentials: creds}); err != nil {
+		t.Fatal(err)
+	}
+	if homeHits.Load() != 1 || homeAuth == "" {
+		t.Fatal("credentials missing on the feed's own origin")
+	}
+}
+
+func mustHost(t *testing.T, server *httptest.Server) string {
+	t.Helper()
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u.Host
+}

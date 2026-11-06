@@ -43,6 +43,14 @@ it('asks on submission and opens verified passages while flagging failures', asy
   fireEvent.click(screen.getByRole('button',{name:'Quoted text'}))
   await waitFor(() => expect(open).toHaveBeenCalledWith({id:4}))
 })
+it('uses answer wording for the excerpt notice', async () => {
+  vi.mocked(request).mockImplementation(async path => path === '/v1/ask' ? {remaining_today:19,daily_limit:20,excerpt_notice:'The feed gave an excerpt only. This summary covers the excerpt.',claims:[]} : {})
+  mount(<Ask onOpen={vi.fn()}/>)
+  fireEvent.change(screen.getByLabelText('Question'),{target:{value:'What happened?'}})
+  fireEvent.click(screen.getByRole('button',{name:'Ask'}))
+  expect(await screen.findByText('Some sources gave excerpts only.')).toBeTruthy()
+  expect(screen.queryByText(/The feed gave an excerpt only/)).toBeNull()
+})
 it('shows edition prose and triggers a weekly edition', async () => {
   vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? status : path === '/v1/editions/latest' ? {sections:[{name:'News',claims:[{text:'A story.',verified:true,citations:[{entry_id:4,verified:true,passages:['Evidence']}]}]}]} : {})
   mount(<Edition onOpen={vi.fn()}/>)

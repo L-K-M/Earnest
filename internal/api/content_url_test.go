@@ -47,7 +47,9 @@ func TestContentURLActors(t *testing.T) {
 			if result.URL == "" || result.ExpiresAt.IsZero() {
 				t.Fatalf("result = %+v", result)
 			}
-			if lifetime := time.Until(result.ExpiresAt); lifetime <= 4*time.Minute || lifetime > 5*time.Minute {
+			// The content ticket must outlast a reading session. Keep this in
+			// sync with web.contentLifetime.
+			if lifetime := time.Until(result.ExpiresAt); lifetime <= 11*time.Hour || lifetime > 12*time.Hour {
 				t.Fatalf("expiry lifetime = %s", lifetime)
 			}
 			parsed, err := url.Parse(result.URL)
@@ -126,4 +128,26 @@ func TestContentURLRejectsBadModeAndMissingSigner(t *testing.T) {
 	handler.ServeHTTP(rec, request)
 	requireStatus(t, rec, http.StatusServiceUnavailable)
 	assertProblem(t, rec, "/problems/unavailable")
+}
+
+func TestContentTicketStopsAfterUnsubscribe(t *testing.T) {
+	template := storetest.NewTemplate(t)
+	f := newAPIFixture(t, template)
+	signer := f.content.Signer()
+	sig := signer.Sign(web.Ticket{UserID: f.owner.UserID, PrincipalID: f.owner.PrincipalID, Kind: service.PrincipalHuman, EntryID: f.entryID, Expires: time.Now().Add(time.Hour).Unix(), Mode: web.ImageProxied})
+	path := fmt.Sprintf("/content/%d?sig=%s", f.entryID, url.QueryEscape(sig))
+	serve := func() *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		f.content.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		return w
+	}
+	if w := serve(); w.Code != http.StatusOK {
+		t.Fatalf("before unsubscribe: status = %d: %s", w.Code, w.Body.String())
+	}
+	if err := f.svc.Unsubscribe(t.Context(), f.owner, f.subID, "unsubscribe-mid-ticket"); err != nil {
+		t.Fatal(err)
+	}
+	if w := serve(); w.Code != http.StatusNotFound {
+		t.Fatalf("after unsubscribe: status = %d", w.Code)
+	}
 }

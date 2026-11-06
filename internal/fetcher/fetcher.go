@@ -221,7 +221,17 @@ func credentials(c *service.FeedCredentials) outbound.Credentials {
 func (f *Fetcher) Fetch(ctx context.Context, item service.FeedToFetch) error {
 	now := time.Now().UTC()
 	out := service.FetchOutcome{FeedID: item.FeedID, AttemptedAt: now, Status: service.FetchFailed}
-	result, err := f.client.Get(ctx, item.URL, outbound.Policy{Purpose: outbound.Feed, Credentials: credentials(item.Credentials), ETag: item.ETag, LastModified: item.LastModified, ExtraPorts: f.config.ExtraPorts})
+	target := item.FetchURL
+	if target == "" {
+		target = item.URL
+	}
+	// Credentials belong to the feed's own origin: a recorded permanent
+	// redirect must not send them to another host (mirrors Probe scoping).
+	var scoped *service.FeedCredentials
+	if sameOrigin(item.URL, target) {
+		scoped = item.Credentials
+	}
+	result, err := f.client.Get(ctx, target, outbound.Policy{Purpose: outbound.Feed, Credentials: credentials(scoped), ETag: item.ETag, LastModified: item.LastModified, ExtraPorts: f.config.ExtraPorts})
 	var parsed *feed.Feed
 	if result != nil {
 		resp := result.Response
@@ -394,7 +404,13 @@ func (f *Fetcher) items(ctx context.Context, claim service.FeedToFetch, list []f
 			// a usable link. Active-scheme values have a scheme and stay dropped;
 			// a blank, fragment-only or query-only reference names no resource
 			// and would otherwise resolve to the feed URL itself.
-			if feedBase := itemBase(claim.URL); feedBase != nil {
+			// Resolve against the URL actually fetched: after a permanent
+			// redirect that is FetchURL, not the canonical feed URL.
+			fetched := claim.FetchURL
+			if fetched == "" {
+				fetched = claim.URL
+			}
+			if feedBase := itemBase(fetched); feedBase != nil {
 				base = itemBase(feedBase.ResolveReference(ref).String())
 				if base != nil {
 					link = base.String()
@@ -451,6 +467,36 @@ type ProbeError struct {
 
 func (e *ProbeError) Error() string { return e.Class + ": " + e.Err.Error() }
 func (e *ProbeError) Unwrap() error { return e.Err }
+
+// parseOrigin returns the lowercase scheme://host:port of an absolute URL.
+// Default ports are made explicit so https://host and https://host:443 are
+// one origin; relative or malformed URLs report ok=false and compare unequal
+// to anything, so scoping fails closed.
+func parseOrigin(raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", false
+	}
+	port := u.Port()
+	if port == "" {
+		switch strings.ToLower(u.Scheme) {
+		case "https":
+			port = "443"
+		case "http":
+			port = "80"
+		}
+	}
+	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Hostname()) + ":" + port, true
+}
+
+func sameOrigin(a, b string) bool {
+	left, ok := parseOrigin(a)
+	if !ok {
+		return false
+	}
+	right, ok := parseOrigin(b)
+	return ok && left == right
+}
 
 // Probe discovers a feed and returns its parsed, sanitised contents.
 func (f *Fetcher) Probe(ctx context.Context, rawURL string, creds *service.FeedCredentials) (string, service.FeedMeta, []service.IngestItem, error) {
