@@ -60,7 +60,7 @@ dl > div {display:flex; gap:1rem; margin:.4rem 0} dt {min-width:9rem} dd {margin
 /* The lockup keeps the wordmark's proportions: lettering 0.59 and gap 0.14 of the icon's height. */
 .brand {display:flex; align-items:center; gap:.31rem; margin:0 0 1rem}
 .brand img {width:2.25rem; height:2.25rem}
-.wordmark {height:1.33rem; aspect-ratio:691 / 160; background:var(--brand); mask:url(/wordmark.png) center / contain no-repeat}
+.wordmark {height:1.33rem; aspect-ratio:691 / 160; background:var(--brand); -webkit-mask:url(/wordmark.png) center / contain no-repeat; mask:url(/wordmark.png) center / contain no-repeat}
 .login .brand {justify-content:center; gap:.63rem; margin-bottom:2rem}
 .login .brand img {width:4.5rem; height:4.5rem}
 .login .wordmark {height:2.67rem}
