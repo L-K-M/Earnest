@@ -34,14 +34,19 @@ func Key(r *http.Request) (string, bool) {
 	}
 	ip = ip.Unmap()
 	if ip.IsLoopback() {
-		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+		// Repeated X-Forwarded-For header lines are one comma-joined list, so
+		// combine them in wire order before scanning from the right.
+		if forwarded := strings.Join(r.Header.Values("X-Forwarded-For"), ","); forwarded != "" {
 			entries := strings.Split(forwarded, ",")
 			for i := len(entries) - 1; i >= 0; i-- {
 				addr, err := netip.ParseAddr(strings.TrimSpace(entries[i]))
-				if err != nil || addr.IsUnspecified() {
+				if err != nil {
 					return "", false
 				}
 				addr = addr.Unmap()
+				if addr.IsUnspecified() {
+					return "", false
+				}
 				if addr.IsLoopback() {
 					continue // another same-host proxy hop
 				}

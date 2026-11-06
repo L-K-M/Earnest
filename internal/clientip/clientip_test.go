@@ -101,3 +101,25 @@ func TestKeyUnspecifiedForwarded(t *testing.T) {
 		t.Fatal("unspecified forwarded address must not yield a key")
 	}
 }
+
+func TestKeyMappedUnspecifiedForwarded(t *testing.T) {
+	r := httptest.NewRequest("POST", "/", nil)
+	r.RemoteAddr = "127.0.0.1:8080"
+	r.Header.Set("X-Forwarded-For", "::ffff:0.0.0.0")
+	if _, ok := Key(r); ok {
+		t.Fatal("mapped unspecified forwarded address must not yield a key")
+	}
+}
+
+func TestKeyRepeatedForwardedHeaderLines(t *testing.T) {
+	r := httptest.NewRequest("POST", "/", nil)
+	r.RemoteAddr = "127.0.0.1:8080"
+	// A proxy may append its entry as a separate header line rather than
+	// extending the existing one; the rightmost entry is still the observed peer.
+	r.Header.Add("X-Forwarded-For", "203.0.113.99")
+	r.Header.Add("X-Forwarded-For", "198.51.100.9")
+	key, ok := Key(r)
+	if !ok || key != "198.51.100.9" {
+		t.Fatalf("repeated header lines: got %q, %v", key, ok)
+	}
+}
