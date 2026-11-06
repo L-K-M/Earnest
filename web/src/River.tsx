@@ -108,7 +108,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     <header><h2 ref={heading} tabIndex={-1}>{view.title}</h2><button disabled={!list.isSuccess || list.isRefetching} onClick={() => {void list.refetch()}}>Refresh articles</button>{markable && <button onClick={() => {
       const through = entries.reduce((max, entry) => Math.max(max, entry.seq), 0)
       const what = view.kind === 'feed' ? 'every article in this feed' : view.kind === 'folder' ? 'every article in this folder' : 'every article in every feed, including This week items'
-      if (window.confirm(`Mark ${what} read up to the newest one loaded here?`)) onMarkRestRead(through)
+      if (window.confirm(`Mark ${what} read up to the newest one loaded here?`)) onMarkRestRead?.(through)
     }}>Mark the rest read</button>}{counts && <p>{unread} unread in loaded articles</p>}</header>
     {(error || position.error || list.error) && <p role="alert">{error || position.error?.message || list.error?.message} <button onClick={() => { void (position.isError ? position.refetch() : list.refetch()) }}>Try again</button></p>}
     {(position.isPending || list.isPending) && <p role="status">Finding your place…</p>}

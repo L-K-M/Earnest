@@ -70,7 +70,7 @@ describe('river interactions', () => {
     expect(onMarkRestRead).not.toHaveBeenCalled()
     confirm.mockRestore()
   })
-  it('hides the mark-rest action without a handler or unread entries', async () => {
+  it('hides the mark-rest action without a handler', async () => {
     mount()
     await screen.findByText('Article 1')
     expect(screen.queryByRole('button',{name:'Mark the rest read'})).toBeNull()
