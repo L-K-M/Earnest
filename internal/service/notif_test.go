@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -438,5 +439,85 @@ func TestNotificationPartlyDeliveredIsNotFailed(t *testing.T) {
 	got, err := f.s.GetNotification(ctx, f.a, n.ID)
 	if err != nil || got.Status != NotificationDelivered {
 		t.Fatal("accepted device incorrectly reported failed", got.Status, err)
+	}
+}
+
+func TestListNotificationsPageAndMutes(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := context.Background()
+	id := f.ingest(t, "article")
+	morning := surfaceAgent(t, f, "Morning", 5)
+	evening := surfaceAgent(t, f, "Evening", 5)
+	first, err := f.s.SendNotification(ctx, morning, surfaceRequest(t, f, id, "first"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := f.s.SendNotification(ctx, evening, surfaceRequest(t, f, id, "second"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	third, err := f.s.SendNotification(ctx, morning, surfaceRequest(t, f, id, "third"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.MuteAgent(ctx, f.a, morning.PrincipalID, NotificationsMuted, "mute"); err != nil {
+		t.Fatal(err)
+	}
+	page, err := f.s.ListNotifications(ctx, f.a, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page) != 3 || page[0].ID != third.ID || page[1].ID != second.ID || page[2].ID != first.ID {
+		t.Fatalf("page order: %+v", page)
+	}
+	for i, muted := range []bool{true, false, true} {
+		if page[i].Muted != muted || page[i].Note == "" || page[i].Why.Sender == "" {
+			t.Fatalf("page[%d]: %+v", i, page[i])
+		}
+	}
+	got, err := f.s.GetNotification(ctx, f.a, second.ID)
+	if err != nil || !reflect.DeepEqual(got, page[1]) {
+		t.Fatalf("list row differs from single load: %+v vs %+v", got, page[1])
+	}
+	page, err = f.s.ListNotifications(ctx, f.a, second.ID, 10)
+	if err != nil || len(page) != 1 || page[0].ID != first.ID {
+		t.Fatalf("beforeID page: %+v %v", page, err)
+	}
+}
+
+func TestListNotificationsBatches(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := context.Background()
+	a := surfaceAgent(t, f, "Morning", 30)
+	id := f.ingest(t, "article")
+	const count = 25
+	for i := 0; i < count; i++ {
+		if _, err := f.s.SendNotification(ctx, a, surfaceRequest(t, f, id, fmt.Sprintf("op-%d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := f.s.ListNotifications(ctx, f.a, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != count {
+		t.Fatalf("len = %d, want %d", len(list), count)
+	}
+	for i := 1; i < len(list); i++ {
+		if list[i-1].ID <= list[i].ID {
+			t.Fatalf("not descending: %d then %d", list[i-1].ID, list[i].ID)
+		}
+	}
+	for _, n := range list {
+		if n.Why.Sender != "Morning" || n.Budget.LimitToday != 30 || len(n.EntryIDs) != 1 {
+			t.Fatalf("notification %+v", n)
+		}
+	}
+	page, err := f.s.ListNotifications(ctx, f.a, list[9].ID, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page) != 5 || page[0].ID != list[10].ID {
+		t.Fatalf("page: len=%d first=%d", len(page), page[0].ID)
 	}
 }
