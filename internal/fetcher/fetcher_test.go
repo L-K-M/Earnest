@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -316,12 +317,15 @@ func TestSameOriginScoping(t *testing.T) {
 func TestFetchScopesCredentialsToCanonicalOrigin(t *testing.T) {
 	body := `<rss version="2.0"><channel><title>Feed</title><item><guid>abc</guid><link>https://example.org/article</link><description>d</description></item></channel></rss>`
 	var movedAuth, homeAuth string
+	var movedHits, homeHits atomic.Int32
 	moved := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		movedHits.Add(1)
 		movedAuth = r.Header.Get("Authorization")
 		fmt.Fprint(w, body)
 	}))
 	defer moved.Close()
 	home := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		homeHits.Add(1)
 		homeAuth = r.Header.Get("Authorization")
 		fmt.Fprint(w, body)
 	}))
@@ -348,6 +352,11 @@ func TestFetchScopesCredentialsToCanonicalOrigin(t *testing.T) {
 	if err := f.Fetch(ctx, service.FeedToFetch{FeedID: 1, URL: home.URL + "/feed", FetchURL: moved.URL + "/feed", Credentials: creds}); err != nil {
 		t.Fatal(err)
 	}
+	// The fetch must target the recorded redirect, or the leak check below
+	// would pass vacuously.
+	if movedHits.Load() != 1 || homeHits.Load() != 0 {
+		t.Fatalf("fetch hit moved=%d home=%d, want the redirect target only", movedHits.Load(), homeHits.Load())
+	}
 	if movedAuth != "" {
 		t.Fatalf("credentials leaked to the redirect target: %q", movedAuth)
 	}
@@ -355,7 +364,7 @@ func TestFetchScopesCredentialsToCanonicalOrigin(t *testing.T) {
 	if err := f.Fetch(ctx, service.FeedToFetch{FeedID: 1, URL: home.URL + "/feed", FetchURL: home.URL + "/other", Credentials: creds}); err != nil {
 		t.Fatal(err)
 	}
-	if homeAuth == "" {
+	if homeHits.Load() != 1 || homeAuth == "" {
 		t.Fatal("credentials missing on the feed's own origin")
 	}
 }
