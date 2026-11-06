@@ -169,20 +169,30 @@ private fun MainScaffold(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val selected = navigator.currentDestination?.contentKey
+    // Entries reached through an agent's output (a notification, a deep link
+    // of unknown origin, an agent-change notice) open with click-to-load
+    // images; see AppViewModel.openEntry.
+    val agentSelected = remember { mutableSetOf<Long>() }
 
     LaunchedEffect(initialEntry) {
-        initialEntry?.let { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, it) }
+        initialEntry?.let {
+            agentSelected += it
+            navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, it)
+        }
     }
     LaunchedEffect(notificationId, state.accountKey) {
         if (state.accountKey == null) return@LaunchedEffect
         val id = notificationId ?: return@LaunchedEffect
-        model.notificationEntry(id)?.let { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, it) }
+        model.notificationEntry(id)?.let {
+            agentSelected += it
+            navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, it)
+        }
     }
     LaunchedEffect(selected, state.accountKey) {
         reader.load(selected, state.accountKey) { id ->
             if (model.loadEntry(id) == null) throw java.io.IOException("This entry is no longer available.")
             model.markSeen(id)
-            model.openEntry(id)
+            model.openEntry(id, agentSelected = id in agentSelected)
         }
     }
     LaunchedEffect(view, state.accountKey) {
@@ -294,6 +304,10 @@ private fun MainScaffold(
                                     onOpen = { entryId ->
                                         scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
                                     },
+                                    onOpenAgentSelected = { entryId ->
+                                        agentSelected += entryId
+                                        scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
+                                    },
                                     onLater = { id -> model.later(id) { undo(id, SwipeTarget.LATER) } },
                                     onDone = { id -> model.done(id) { undo(id, SwipeTarget.DONE) } },
                                     onSeen = model::markSeen,
@@ -337,6 +351,7 @@ private fun MainScaffold(
                                         else -> Reader(
                                             url = content.url,
                                             cachedHtml = content.cachedHtml,
+                                            theme = theme,
                                             modifier = Modifier.fillMaxSize(),
                                         )
                                     }
@@ -474,6 +489,7 @@ private fun EntryListScreen(
     agentChangesError: String?,
     onRevert: (Long) -> Unit,
     onOpen: (Long) -> Unit,
+    onOpenAgentSelected: (Long) -> Unit,
     onLater: (Long) -> Unit,
     onDone: (Long) -> Unit,
     onSeen: (Long) -> Unit,
@@ -504,7 +520,7 @@ private fun EntryListScreen(
         }
         if (agentChanges.isNotEmpty() || agentChangesError != null) {
             item(key = "agent-changes") {
-                AgentChangesNotice("While you were out", agentChanges, entryTitles, agentChangesError, onOpen, onRevert)
+                AgentChangesNotice("While you were out", agentChanges, entryTitles, agentChangesError, onOpenAgentSelected, onRevert)
             }
         }
         items(entries, key = { it.id }) { entry ->
@@ -535,7 +551,7 @@ private fun EntryListScreen(
                 modifier = Modifier.fillMaxWidth().padding(24.dp),
             )
             if (sessionChanges.isNotEmpty() || agentChangesError != null) {
-                AgentChangesNotice("Agent changes this session", sessionChanges, entryTitles, agentChangesError, onOpen, onRevert)
+                AgentChangesNotice("Agent changes this session", sessionChanges, entryTitles, agentChangesError, onOpenAgentSelected, onRevert)
             }
         }
     }
