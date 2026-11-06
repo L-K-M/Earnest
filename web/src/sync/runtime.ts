@@ -232,8 +232,9 @@ export class ReaderSync {
   private bootstrapped = false;
   // version is the store generation of the in-memory snapshot. It lets a
   // mutate() skip the full reload when no other tab has written since the
-  // last load, which is the common case for a single reader.
-  private version = 0;
+  // last load, which is the common case for a single reader. It starts below
+  // zero so the first comparison always performs a full load.
+  private version = -1;
 
   constructor(options: ReaderSyncOptions) {
     if (options.principal <= 0n) throw errInvalid("principal required");
@@ -480,6 +481,8 @@ export class ReaderSync {
       this.bootstrapped = snap.bootstrapped === true && snap.goneEntries !== undefined;
       this.rawItems = new Map(snap.rawItems ?? []);
       this.version = snap.version ?? 0;
+    } else {
+      this.version = 0;
     }
   }
 
