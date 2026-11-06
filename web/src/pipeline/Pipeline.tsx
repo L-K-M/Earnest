@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useState} from 'react'
+import {useCallback, useEffect, useRef, useState} from 'react'
 import {useQuery, useQueryClient} from '@tanstack/react-query'
 import type {components} from '../api.generated'
 import type {Entry} from '../reader'
@@ -28,16 +28,20 @@ export function Summary({entryID, shortcuts}: {entryID: number; shortcuts: boole
     catch (error) {setError(message(error))}
     finally {setBusy(false)}
   }, [visible, result, busy, entryID])
+  // Read the latest callback through a ref so the listener does not
+  // re-register while a summary request is in flight.
+  const toggleRef = useRef(toggle)
+  useEffect(() => {toggleRef.current = toggle}, [toggle])
   useEffect(() => {
     if (status.summary !== 'enabled' || !shortcuts || !visible) return
     function key(event: KeyboardEvent) {
       if (event.key !== 'Tab' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.defaultPrevented) return
       if (!(event.target instanceof Element) || event.target.closest('input, textarea, select, button, a, [contenteditable], dialog')) return
-      event.preventDefault();void toggle()
+      event.preventDefault();void toggleRef.current()
     }
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
-  }, [status.summary, shortcuts, visible, toggle])
+  }, [status.summary, shortcuts, visible])
   if (status.summary === 'paused') return <p role="status">Summaries are paused because the provider budget is unavailable.</p>
   if (status.summary !== 'enabled') return null
   return <section aria-label="Summary"><button onClick={() => {void toggle()}} aria-expanded={visible}>Summary</button>{visible && <>{busy && <p role="status">Generating summary…</p>}{error && <p role="alert">{error} <button onClick={() => {setVisible(false)}}>Close</button></p>}{result && <><p>Summary · {result.model} · <time dateTime={result.generated_at}>{new Date(result.generated_at).toLocaleString()}</time></p>{result.excerpt_notice && <p>{result.excerpt_notice}</p>}{result.claims?.map((claim, index) => <div key={index}><p>{claim.text}</p>{!claim.verified && <p>Citation not found in the article</p>}{claim.passages?.map((text, i) => <button key={i} onClick={() => setPassage(text)}>{text}</button>)}</div>)}{passage && <p>Highlighting is unavailable in the article frame. Passage: {passage}</p>}</>}</>}</section>
