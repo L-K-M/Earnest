@@ -47,8 +47,9 @@ export function Palette({commands,shortcuts,enabled=true,helpRef}: {commands: Co
   function restoreFocus() {previousFocus.current?.focus()}
   // The command list is rebuilt by the parent on every render; read it
   // through a ref so the window listener is not re-registered each time.
+  // Updating during render keeps the ref in sync before any keydown.
   const commandsRef = useRef(commands)
-  useEffect(() => {commandsRef.current = commands},[commands])
+  commandsRef.current = commands
   useEffect(() => {
     function keyboard(event: KeyboardEvent) {
       if (!enabled || event.defaultPrevented || event.repeat || event.isComposing) return
