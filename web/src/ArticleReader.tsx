@@ -3,7 +3,7 @@ import {useQuery} from '@tanstack/react-query'
 import type {Entry, ReaderActions, Subscription} from './reader'
 import {readerURL} from './reader'
 import {request} from './request'
-import {Typography, settingsInput, type ReadingSettings} from './Settings'
+import {Typography, settingsInput, withoutFeedOverride, type ReadingSettings} from './Settings'
 import {OfflineArticle, useOnline} from './offline/Offline'
 import {MoreLikeThis} from './search/Search'
 import {Summary} from './pipeline/Pipeline'
@@ -12,7 +12,12 @@ export function Reader({entry, subscription, settings, actions, onClose, onSetti
   const online = useOnline()
   const title = useRef<HTMLHeadingElement>(null)
   const [error, setError] = useState('')
-  const [overrideDraft, setOverrideDraft] = useState(() => ({...settings, ...settings.feed_overrides[String(entry.feed_id)]}))
+  const feedOverrideKey = String(entry.feed_id)
+  const hasOverride = feedOverrideKey in settings.feed_overrides
+  const typography = {...settings, ...settings.feed_overrides[feedOverrideKey]}
+  // The draft holds only the typography triple, so saving stores a clean
+  // per-feed override instead of the whole settings document.
+  const [overrideDraft, setOverrideDraft] = useState<Pick<ReadingSettings, 'theme' | 'measure' | 'font'>>(() => ({theme: typography.theme, measure: typography.measure, font: typography.font}))
   const [savingOverride, setSavingOverride] = useState(false)
   const [dark, setDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
   useEffect(() => { title.current?.focus() }, [entry.id])
@@ -22,7 +27,6 @@ export function Reader({entry, subscription, settings, actions, onClose, onSetti
     query.addEventListener('change', changed)
     return () => query.removeEventListener('change', changed)
   }, [])
-  const typography = {...settings, ...settings.feed_overrides[String(entry.feed_id)]}
   const content = useQuery({queryKey: ['content', entry.id, typography.theme, typography.measure, typography.font], enabled:online, gcTime:0, queryFn: () => request<{url: string}>(`/web/content-url/${entry.id}`)})
   const state = actions.state(entry)
   function act(register: 'seen' | 'shelf' | 'kept', value: 'unseen' | 'done' | 'later' | 'none' | boolean) {
@@ -31,10 +35,20 @@ export function Reader({entry, subscription, settings, actions, onClose, onSetti
   async function override(value: {theme: ReadingSettings['theme']; measure: number; font: ReadingSettings['font']}) {
     setSavingOverride(true)
     try {
-      const next = {...settings, feed_overrides: {...settings.feed_overrides, [String(entry.feed_id)]: value}}
+      const next = {...settings, feed_overrides: {...settings.feed_overrides, [feedOverrideKey]: value}}
       onSettings(await request<ReadingSettings>('/v1/settings', {method: 'PUT', body: JSON.stringify(settingsInput(next))}))
       setError('')
     } catch (error) { setError(error instanceof Error ? error.message : 'Could not save feed typography.') }
+    finally { setSavingOverride(false) }
+  }
+  async function resetOverride() {
+    setSavingOverride(true)
+    try {
+      const next = withoutFeedOverride(settings, feedOverrideKey)
+      onSettings(await request<ReadingSettings>('/v1/settings', {method: 'PUT', body: JSON.stringify(settingsInput(next))}))
+      setOverrideDraft({theme: next.theme, measure: next.measure, font: next.font})
+      setError('')
+    } catch (error) { setError(error instanceof Error ? error.message : 'Could not reset feed typography.') }
     finally { setSavingOverride(false) }
   }
   return <article className="reader" aria-label="Reader">
@@ -45,7 +59,7 @@ export function Reader({entry, subscription, settings, actions, onClose, onSetti
     <Summary entryID={entry.id} shortcuts={settings.single_key_shortcuts}/>
     <div className="actions" aria-label="Article actions"><button onClick={() => act('shelf', 'done')}>Done (e)</button><button aria-pressed={state.shelf.value === 'later'} onClick={() => act('shelf', state.shelf.value === 'later' ? 'none' : 'later')}>Later (s)</button><button aria-pressed={state.kept.value === true} onClick={() => act('kept', state.kept.value !== true)}>Keep (f)</button><button onClick={() => act('seen', 'unseen')}>Unread (m)</button></div>
     {error && <p role="alert">{error}</p>}
-    <details><summary>Typography for this feed</summary><form onSubmit={event => {event.preventDefault();void override(overrideDraft)}}><Typography value={overrideDraft} onChange={value => setOverrideDraft({...overrideDraft, ...value})} /><button disabled={savingOverride}>Save for this feed</button></form></details>
+    <details><summary>Typography for this feed</summary><form onSubmit={event => {event.preventDefault();void override(overrideDraft)}}><Typography value={overrideDraft} onChange={value => setOverrideDraft({...overrideDraft, ...value})} /><button disabled={savingOverride}>Save for this feed</button>{hasOverride && <button type="button" disabled={savingOverride} onClick={() => {void resetOverride()}}>Reset to account default</button>}</form></details>
     {content.error && <p role="alert">{content.error.message} <button onClick={() => { void content.refetch() }}>Try again</button></p>}
     {online && content.isPending && <p role="status">Opening article…</p>}
     {(!online && !content.data) || content.isError ? <OfflineArticle entryID={entry.id}/> : content.data && renderBody(readerURL(content.data.url, typography, dark))}

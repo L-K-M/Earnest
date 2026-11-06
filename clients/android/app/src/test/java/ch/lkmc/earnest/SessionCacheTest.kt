@@ -66,11 +66,37 @@ class SessionCacheTest {
         val pull = async(Dispatchers.IO) { cache.withSync(api) { it.pull() } }
         fetching.await()
         withTimeout(5000) { cache.withEngine { it.queue(write) } }
-        assertTrue("the queued action waited for the pull to finish", release.count > 0)
+        assertTrue("the pull's HTTP was released before the queued action ran", release.count > 0)
         assertEquals(listOf("later"), cache.withEngine { it.snapshot().outbox.map { p -> p.operation.opId } })
         release.countDown()
         pull.await()
         assertEquals(listOf("later"), cache.withEngine { it.snapshot().outbox.map { p -> p.operation.opId } })
+    }
+
+    @Test fun consecutiveWritesReuseTheEngineUntilAnotherWriterCommits() = runBlocking(Dispatchers.IO.limitedParallelism(1)) {
+        val cache = SessionCache(context, identity)
+        cache.withEngine { it.beginBootstrap(Revision("g1", 0)); it.queue(write) }
+        val first = cache.engine
+        assertNotNull(first)
+        cache.withEngine { it.queue(write.copy(opId = "done")) }
+        assertSame("write path rebuilt the engine", first, cache.engine)
+        // Another SessionCache (e.g. the sync worker) committing bumps the write
+        // counter, so the next call must reload instead of reusing stale state.
+        SessionCache(context, identity).withEngine { it.beginBootstrap(Revision("g2", 9)) }
+        cache.withEngine { }
+        assertNotSame("external write not detected", first, cache.engine)
+        assertEquals(Revision("g2", 9), cache.withEngine { it.snapshot().cursor })
+    }
+
+    @Test fun failedBlockDropsEngineSoStagedWriteIsNeverFlushed() = runBlocking(Dispatchers.IO.limitedParallelism(1)) {
+        val cache = SessionCache(context, identity)
+        runCatching {
+            cache.withEngine {
+                it.beginBootstrap(Revision("g1", 0)); it.queue(write); error("boom")
+            }
+        }
+        assertNull(cache.engine)
+        assertEquals(emptyList<String>(), cache.withEngine { it.snapshot().outbox.map { p -> p.operation.opId } })
     }
 
     @Test fun accountsIsolateSnapshotOutboxContentAndPreferences() = runBlocking(Dispatchers.IO.limitedParallelism(1)) {

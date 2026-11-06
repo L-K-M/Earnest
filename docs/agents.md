@@ -205,7 +205,7 @@ behave exactly as over REST:
 | `get_briefing` | `entries:read` | Entries new since the agent's position in view `briefing`, grouped by cadence. Titles and IDs by default; `include_summaries` adds stored summaries and `limit` bounds the page. Returns `generation`, `through_seq` and `has_more` |
 | `list_entries` | `entries:read` | Filtered, compact listing with a bounded page |
 | `read_entry` | `entries:read` | One entry's stored content, marked untrusted; never fetches |
-| `search` | `entries:read` | Currently returns an unavailable tool error; service-layer entry search is not implemented |
+| `search` | `entries:read` | Full-text search over stored entries and agent notes. Agent notes are labelled with their author. Titles and snippets are untrusted data; never fetches or generates embeddings |
 | `list_feeds` | `entries:read` | Subscriptions with cadence and health |
 | `advance_position` | `position:own` | Move the agent's own position in a view |
 | `annotate` | `annotations:write` | A note, label, score or brief over one or more `entry_ids` |

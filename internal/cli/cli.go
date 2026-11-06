@@ -98,6 +98,7 @@ const (
 	actionDone   stateAction = "done"
 	actionLater  stateAction = "later"
 	actionKeep   stateAction = "keep"
+	actionUnkeep stateAction = "unkeep"
 	actionUnread stateAction = "unread"
 )
 
@@ -110,6 +111,8 @@ func (a stateAction) registerValue() (string, any) {
 		return "shelf", "later"
 	case actionKeep:
 		return "kept", true
+	case actionUnkeep:
+		return "kept", false
 	case actionUnread:
 		return "seen", "unseen"
 	}
@@ -171,7 +174,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		err = a.read(ctx, args[1:])
 	case "search":
 		err = a.search(ctx, args[1:])
-	case "done", "later", "keep", "unread":
+	case "done", "later", "keep", "unkeep", "unread":
 		err = a.state(ctx, stateAction(args[0]), args[1:])
 	case "briefing":
 		err = a.briefing(ctx, args[1:])
@@ -263,7 +266,7 @@ Token:  EARNEST_TOKEN or the config written by earnest login
   search [flags] <query>    search entries and notes (--feed, --folder, --limit, --cursor)
   briefing                  entries new since this principal's position
 
-  done|later|keep|unread <id>...
+  done|later|keep|unkeep|unread <id>...
                             change state, one op_id per entry
   annotate <id>... --kind note|label|score|brief --text <text>
                             write an annotation over entries

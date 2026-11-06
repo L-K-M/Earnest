@@ -108,12 +108,29 @@ func canonicalEntries(ids []int64) ([]int64, error) {
 	return slices.Compact(out), nil
 }
 func visibleEntries(ctx context.Context, tx pgx.Tx, user int64, ids []int64) error {
-	for _, id := range ids {
-		e, err := stateEntry(ctx, tx, user, syncmodel.ID(id))
-		if err != nil {
-			return err
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := tx.Query(ctx, `SELECT e.id FROM entries e
+		JOIN subscriptions s ON s.feed_id = e.feed_id AND s.user_id = $1 AND s.deleted_at IS NULL
+		WHERE e.id = ANY($2) AND e.deleted_at IS NULL`, user, ids)
+	if err != nil {
+		return fmt.Errorf("visible entries: %w", err)
+	}
+	defer rows.Close()
+	found := make(map[int64]bool, len(ids))
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("visible entries: scan: %w", err)
 		}
-		if e.ID == 0 || e.Deleted {
+		found[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("visible entries: iterate: %w", err)
+	}
+	for _, id := range ids {
+		if !found[id] {
 			return fmt.Errorf("entry %d: %w", id, ErrNotFound)
 		}
 	}
