@@ -181,6 +181,10 @@ func (s *server) searchRoutes() {
 		// /v1/search?mode=hybrid. Full-text views keep the plain page.
 		saved, lookupErr := s.svc.SavedSearches(ctx, actor(ctx))
 		if lookupErr != nil {
+			// The listing's own failure is the more specific error.
+			if err != nil {
+				return searchPage{}, err
+			}
 			return searchPage{}, lookupErr
 		}
 		for _, row := range saved {

@@ -99,7 +99,8 @@ func (s *Service) Search(ctx context.Context, a Actor, query string, f SearchFil
  ELSE ts_headline('simple',p.note_value,websearch_to_tsquery('simple',$2),'StartSel="", StopSel=""') END AS snippet,
  p.rank,p.annotation_id,p.agent_name
  FROM page p
- LEFT JOIN LATERAL (SELECT text FROM contents WHERE entry_id=p.id AND content_hash=p.content_hash ORDER BY (source='extracted') DESC,sanitizer_version DESC LIMIT 1) c ON p.annotation_id=0`, a.UserID, query, f.SubscriptionID, f.FolderID, rank, seq, annotation, limit)
+ LEFT JOIN LATERAL (SELECT text FROM contents WHERE entry_id=p.id AND content_hash=p.content_hash ORDER BY (source='extracted') DESC,sanitizer_version DESC LIMIT 1) c ON p.annotation_id=0
+ ORDER BY p.rank DESC,p.seq DESC,p.annotation_id DESC`, a.UserID, query, f.SubscriptionID, f.FolderID, rank, seq, annotation, limit)
 	if err != nil {
 		return nil, fmt.Errorf("search entries: %w", err)
 	}
