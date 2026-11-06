@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -343,5 +344,48 @@ func TestNotificationPartlyDeliveredIsNotFailed(t *testing.T) {
 	got, err := f.s.GetNotification(ctx, f.a, n.ID)
 	if err != nil || got.Status != NotificationDelivered {
 		t.Fatal("accepted device incorrectly reported failed", got.Status, err)
+	}
+}
+
+func TestListNotificationsPageAndMutes(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := context.Background()
+	id := f.ingest(t, "article")
+	morning := surfaceAgent(t, f, "Morning", 5)
+	evening := surfaceAgent(t, f, "Evening", 5)
+	first, err := f.s.SendNotification(ctx, morning, surfaceRequest(t, f, id, "first"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := f.s.SendNotification(ctx, evening, surfaceRequest(t, f, id, "second"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	third, err := f.s.SendNotification(ctx, morning, surfaceRequest(t, f, id, "third"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.MuteAgent(ctx, f.a, morning.PrincipalID, NotificationsMuted, "mute"); err != nil {
+		t.Fatal(err)
+	}
+	page, err := f.s.ListNotifications(ctx, f.a, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page) != 3 || page[0].ID != third.ID || page[1].ID != second.ID || page[2].ID != first.ID {
+		t.Fatalf("page order: %+v", page)
+	}
+	for i, muted := range []bool{true, false, true} {
+		if page[i].Muted != muted || page[i].Note == "" || page[i].Why.Sender == "" {
+			t.Fatalf("page[%d]: %+v", i, page[i])
+		}
+	}
+	got, err := f.s.GetNotification(ctx, f.a, second.ID)
+	if err != nil || !reflect.DeepEqual(got, page[1]) {
+		t.Fatalf("list row differs from single load: %+v vs %+v", got, page[1])
+	}
+	page, err = f.s.ListNotifications(ctx, f.a, second.ID, 10)
+	if err != nil || len(page) != 1 || page[0].ID != first.ID {
+		t.Fatalf("beforeID page: %+v %v", page, err)
 	}
 }
