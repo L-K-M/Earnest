@@ -21,6 +21,9 @@ import {Ask} from './pipeline/Pipeline'
 import './style.css'
 
 type Identity = {user_id: number; principal_id: number}
+// Sync acknowledges reading actions continuously; coalesce the resource
+// refreshes they trigger so a burst of keystrokes costs one refetch burst.
+const SYNC_REFRESH_DEBOUNCE_MS = 1500
 const standardViews: View[] = [{kind:'today', title:'Today'}, {kind:'edition', title:'Edition'}, {kind:'later', title:'Later'}, {kind:'kept', title:'Kept'}, {kind:'done', title:'Done'}]
 
 function App() {
@@ -110,7 +113,27 @@ function Session({onLogout}: {onLogout: () => void}) {
     }
     invalidateResources()
   }, [queryClient])
-  const sync = useReaderSync(identity, refreshResources)
+  const syncRefresh = useRef<number | undefined>(undefined)
+  const refreshAfterSync = useCallback((reason?: 'generation') => {
+    // A generation rotation must clear caches at once and cancel any pending
+    // window; ordinary cursor changes share one refresh per window. The timer
+    // is scheduled only while idle, so a continuous stream of reading
+    // acknowledgements cannot starve the refresh.
+    if (reason === 'generation') {
+      window.clearTimeout(syncRefresh.current)
+      syncRefresh.current = undefined
+      refreshResources(reason)
+      return
+    }
+    if (syncRefresh.current === undefined) {
+      syncRefresh.current = window.setTimeout(() => {
+        syncRefresh.current = undefined
+        refreshResources()
+      }, SYNC_REFRESH_DEBOUNCE_MS)
+    }
+  }, [refreshResources])
+  useEffect(() => () => window.clearTimeout(syncRefresh.current), [])
+  const sync = useReaderSync(identity, refreshAfterSync)
   const retrySync = sync.retry
   const actions: ReaderActions = {
     state: entry => sync.state(entry),
