@@ -178,7 +178,9 @@ func (c *Content) URLHandler(w http.ResponseWriter, r *http.Request) {
 func (c *Content) expiredPage(w http.ResponseWriter) {
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
+	// 410 keeps the status contract honest for monitors and prefetchers; the
+	// browser still renders the body inside the reader's iframe.
+	w.WriteHeader(http.StatusGone)
 	_, _ = io.WriteString(w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font:1rem/1.6 system-ui,sans-serif;color:#202020;background:#fff;max-width:34ch;margin:4rem auto;padding:0 1rem}h1{font-size:1.2rem}</style></head><body><h1>This article link has expired</h1><p>Close the article and open it again in Earnest.</p></body></html>`)
 }
 

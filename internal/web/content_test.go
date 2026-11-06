@@ -100,7 +100,7 @@ func TestExpiredTicketPage(t *testing.T) {
 	sig := c.signer.Sign(Ticket{UserID: 1, PrincipalID: 2, Kind: service.PrincipalHuman, EntryID: 3, Expires: 100, Mode: ImageProxied})
 	w := httptest.NewRecorder()
 	c.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/content/3?sig="+sig, nil))
-	if w.Code != http.StatusOK {
+	if w.Code != http.StatusGone {
 		t.Fatalf("status = %d", w.Code)
 	}
 	if !strings.Contains(w.Body.String(), "This article link has expired") {
@@ -108,5 +108,16 @@ func TestExpiredTicketPage(t *testing.T) {
 	}
 	if policy := w.Header().Get("Content-Security-Policy"); !strings.Contains(policy, "default-src 'none'") {
 		t.Fatalf("CSP = %q", policy)
+	}
+	// Invalid signature and entry-ID mismatch take the same branch.
+	w2 := httptest.NewRecorder()
+	c.ServeHTTP(w2, httptest.NewRequest(http.MethodGet, "/content/999?sig="+sig, nil))
+	if !strings.Contains(w2.Body.String(), "This article link has expired") {
+		t.Fatalf("mismatch body = %q", w2.Body.String())
+	}
+	w3 := httptest.NewRecorder()
+	c.ServeHTTP(w3, httptest.NewRequest(http.MethodGet, "/content/3?sig=garbage", nil))
+	if !strings.Contains(w3.Body.String(), "This article link has expired") {
+		t.Fatalf("bad sig body = %q", w3.Body.String())
 	}
 }
