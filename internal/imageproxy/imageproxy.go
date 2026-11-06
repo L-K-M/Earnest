@@ -3,16 +3,19 @@ package imageproxy
 
 import (
 	"bytes"
+	"container/list"
 	"crypto/hkdf"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/L-K-M/Earnest/internal/outbound"
@@ -23,9 +26,115 @@ import (
 const maxImageSize = 10 << 20
 const imageTimeout = 30 * time.Second
 
+const (
+	// imageCacheBytes and imageCacheEntries bound the in-memory image cache.
+	imageCacheBytes   = 64 << 20
+	imageCacheEntries = 512
+	// imageCacheTTL is how long a cached body answers views and browser
+	// revalidations before the proxy revalidates with the publisher. It
+	// exceeds the browser max-age the proxy advertises (86400s), so daily
+	// revalidations land inside the cache window and never reach the
+	// publisher; repeat views cost no egress and reveal nothing upstream.
+	imageCacheTTL = 72 * time.Hour
+)
+
+// cachedImage is one image body with its validators.
+type cachedImage struct {
+	body    []byte
+	kind    string
+	etag    string // body-derived validator sent to clients
+	upETag  string // the publisher's validator, for cheap revalidation
+	lastMod string
+	added   time.Time
+}
+
+// imageCache is a bounded LRU over image bodies keyed by source URL. It is
+// process-local: a restart simply refetches.
+type imageCache struct {
+	mu      sync.Mutex
+	maxByte int64
+	bytes   int64
+	items   map[string]*list.Element
+	order   *list.List // front is most recent
+}
+
+type imageCacheItem struct {
+	key   string
+	image cachedImage
+}
+
+func newImageCache() *imageCache {
+	return &imageCache{maxByte: imageCacheBytes, items: map[string]*list.Element{}, order: list.New()}
+}
+
+func (c *imageCache) get(key string) (cachedImage, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	elem, ok := c.items[key]
+	if !ok {
+		return cachedImage{}, false
+	}
+	c.order.MoveToFront(elem)
+	return elem.Value.(*imageCacheItem).image, true
+}
+
+func (c *imageCache) put(key string, image cachedImage) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if elem, ok := c.items[key]; ok {
+		item := elem.Value.(*imageCacheItem)
+		c.bytes += int64(len(image.body)) - int64(len(item.image.body))
+		item.image = image
+		c.order.MoveToFront(elem)
+	} else {
+		c.items[key] = c.order.PushFront(&imageCacheItem{key: key, image: image})
+		c.bytes += int64(len(image.body))
+	}
+	for c.bytes > c.maxByte || c.order.Len() > imageCacheEntries {
+		oldest := c.order.Back()
+		if oldest == nil {
+			return
+		}
+		item := oldest.Value.(*imageCacheItem)
+		c.order.Remove(oldest)
+		delete(c.items, item.key)
+		c.bytes -= int64(len(item.image.body))
+	}
+}
+
+// touch refreshes the recency of an existing entry without replacing its
+// body, so a stale fallback cannot overwrite a newer copy stored by a
+// concurrent request.
+func (c *imageCache) touch(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	elem, ok := c.items[key]
+	if !ok {
+		return
+	}
+	elem.Value.(*imageCacheItem).image.added = time.Now()
+	c.order.MoveToFront(elem)
+}
+
+// remove drops an entry, e.g. after a definitive upstream answer that the
+// cached body is gone.
+func (c *imageCache) remove(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	elem, ok := c.items[key]
+	if !ok {
+		return
+	}
+	item := elem.Value.(*imageCacheItem)
+	c.order.Remove(elem)
+	delete(c.items, key)
+	c.bytes -= int64(len(item.image.body))
+}
+
 // Mode controls whether images load automatically. Use ClickToLoad for
-// agent-selected entries unless their bytes were cached at ingest: otherwise
-// a publisher can observe which entry an agent selected.
+// agent-selected entries: the proxy's cache is a view-time optimization, not
+// an ingest-time copy of the bytes, so a cache miss would still let a
+// publisher observe which entry an agent selected.
 type Mode uint8
 
 const (
@@ -39,6 +148,8 @@ type Proxy struct {
 	client     *outbound.Client
 	base       *url.URL
 	extraPorts []uint16
+	cache      *imageCache
+	ttl        time.Duration
 }
 
 // New creates a proxy using a deployment secret and the public origin at
@@ -56,7 +167,7 @@ func New(secret []byte, client *outbound.Client, origin string, extraPorts ...ui
 	if err != nil {
 		return nil, fmt.Errorf("derive image key: %w", err)
 	}
-	return &Proxy{key: key, client: client, base: u, extraPorts: append([]uint16(nil), extraPorts...)}, nil
+	return &Proxy{key: key, client: client, base: u, extraPorts: append([]uint16(nil), extraPorts...), cache: newImageCache(), ttl: imageCacheTTL}, nil
 }
 
 // URL returns a signed proxy URL for a source image.
@@ -137,6 +248,27 @@ func (p *Proxy) Rewrite(input string, mode Mode) (string, error) {
 	return b.String(), nil
 }
 
+// transientFailure reports whether a failed fetch is worth retrying later:
+// a network or timeout fault, or an HTTP 429/5xx. A definitive upstream
+// answer (any other 4xx) must evict the cached entry instead of serving the
+// old body.
+func transientFailure(err error) bool {
+	switch outbound.ErrorClass(err) {
+	case outbound.DNS, outbound.Connect, outbound.TLS, outbound.Timeout, outbound.HTTP5xx, outbound.HTTP429:
+		return true
+	default:
+		return false
+	}
+}
+
+// transientStatus reports whether an HTTP status is a transient failure
+// (429 or 5xx). outbound classifies those as typed errors, so the status
+// branch only sees other codes; the check keeps the classification in one
+// place.
+func transientStatus(status int) bool {
+	return status == http.StatusTooManyRequests || status >= 500
+}
+
 // ServeHTTP serves only signed GET requests. Signed destinations still pass
 // the outbound client's address and redirect checks on every fetch.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -163,18 +295,60 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	result, err := p.client.Get(r.Context(), string(raw), outbound.Policy{Purpose: outbound.Image, MaxBodySize: maxImageSize, Timeout: imageTimeout, ExtraPorts: p.extraPorts})
+	source := string(raw)
+	image, hit := p.cache.get(source)
+	// stale keeps answering views from the last good body when the publisher
+	// is unreachable or changes its mind about the media type, and pushes the
+	// next revalidation out so a dead publisher is not retried per view. It
+	// only touches the cached entry: a concurrent request may have stored a
+	// newer body, and re-putting this snapshot would lose it.
+	stale := func() {
+		p.cache.touch(source)
+		p.serve(w, r, image)
+	}
+	if hit && time.Since(image.added) < p.ttl {
+		p.serve(w, r, image)
+		return
+	}
+	policy := outbound.Policy{Purpose: outbound.Image, MaxBodySize: maxImageSize, Timeout: imageTimeout, ExtraPorts: p.extraPorts}
+	if hit {
+		policy.ETag = image.upETag
+		policy.LastModified = image.lastMod
+	}
+	result, err := p.client.Get(r.Context(), source, policy)
 	if err != nil || result == nil {
+		if hit && transientFailure(err) {
+			stale()
+			return
+		}
+		if hit {
+			p.cache.remove(source)
+		}
 		http.Error(w, "image unavailable", http.StatusBadGateway)
 		return
 	}
 	defer result.Response.Body.Close()
+	if result.Response.StatusCode == http.StatusNotModified && hit {
+		stale()
+		return
+	}
 	if result.Response.StatusCode != http.StatusOK {
+		if hit && transientStatus(result.Response.StatusCode) {
+			stale()
+			return
+		}
+		if hit {
+			p.cache.remove(source)
+		}
 		http.Error(w, "image unavailable", http.StatusBadGateway)
 		return
 	}
 	data, err := io.ReadAll(result.Response.Body)
 	if err != nil {
+		if hit {
+			stale()
+			return
+		}
 		http.Error(w, "image unavailable", http.StatusBadGateway)
 		return
 	}
@@ -186,15 +360,63 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch kind {
 	case "image/jpeg", "image/png", "image/gif", "image/webp", "image/avif":
 	default:
+		if hit {
+			stale()
+			return
+		}
 		http.Error(w, "unsupported image", http.StatusUnsupportedMediaType)
 		return
 	}
-	w.Header().Set("Content-Type", kind)
-	w.Header().Set("Cache-Control", "public, max-age=86400")
-	if etag := result.Response.Header.Get("ETag"); etag != "" {
-		w.Header().Set("ETag", etag)
+	sum := sha256.Sum256(data)
+	validator := result.Response.Header.Get("ETag")
+	if validator == "" {
+		// Mint a validator when the publisher has none, so browser
+		// revalidation can always be answered from the cache.
+		validator = `"` + hex.EncodeToString(sum[:8]) + `"`
 	}
-	w.Write(data)
+	image = cachedImage{
+		body:    data,
+		kind:    kind,
+		etag:    validator,
+		upETag:  result.Response.Header.Get("ETag"),
+		lastMod: result.Response.Header.Get("Last-Modified"),
+		added:   time.Now(),
+	}
+	p.cache.put(source, image)
+	p.serve(w, r, image)
+}
+
+// serve writes a cached image and answers browser revalidation from the
+// cache, so a repeat view never reaches the publisher.
+func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, image cachedImage) {
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("ETag", image.etag)
+	if match := r.Header.Get("If-None-Match"); match != "" && etagMatches(match, image.etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("Content-Type", image.kind)
+	w.Write(image.body)
+}
+
+// etagMatches reports whether an If-None-Match header matches the cached
+// validator: "*" matches any current entity, and any listed entity tag
+// weakly equal to it matches (RFC 9110 weak comparison ignores the W/
+// indicator).
+func etagMatches(header, etag string) bool {
+	for _, part := range strings.Split(header, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if part == "*" {
+			return true
+		}
+		if strings.TrimPrefix(part, "W/") == strings.TrimPrefix(etag, "W/") {
+			return true
+		}
+	}
+	return false
 }
 
 func isAVIF(data []byte) bool {
