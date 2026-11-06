@@ -21,7 +21,13 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -56,6 +62,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -74,14 +81,14 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 
-private enum class View(val label: String) {
-    TODAY("Today"),
-    EDITION("Edition"),
-    LATER("Later"),
-    KEPT("Kept"),
-    DONE("Done"),
-    FEEDS("Feeds"),
-    ACTIVITY("Activity"),
+private enum class View(val label: String, val icon: ImageVector) {
+    TODAY("Today", Icons.Filled.DateRange),
+    EDITION("Edition", Icons.AutoMirrored.Filled.List),
+    LATER("Later", Icons.Filled.Notifications),
+    KEPT("Kept", Icons.Filled.Star),
+    DONE("Done", Icons.Filled.CheckCircle),
+    FEEDS("Feeds", Icons.Filled.Home),
+    ACTIVITY("Activity", Icons.Filled.Info),
 }
 
 @Composable
@@ -192,7 +199,7 @@ private fun MainScaffold(
                         view = destination
                         scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.List) }
                     },
-                    icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = null) },
+                    icon = { Icon(destination.icon, contentDescription = null) },
                     label = { Text(destination.label) },
                 )
             }
