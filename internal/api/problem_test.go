@@ -82,6 +82,7 @@ func TestOrigins(t *testing.T) {
 		{"null", "https://reader.example", false},
 		{"https://user@reader.example", "https://reader.example", false},
 		{"https://reader.example/other", "https://reader.example", false},
+		{"https:reader.example", "https://reader.example", false},
 	} {
 		if got := sameOrigin(tc.provided, tc.base); got != tc.want {
 			t.Errorf("sameOrigin(%q,%q)=%v", tc.provided, tc.base, got)
