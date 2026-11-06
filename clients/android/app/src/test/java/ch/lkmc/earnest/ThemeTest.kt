@@ -1,6 +1,7 @@
 package ch.lkmc.earnest
 
 import android.content.Context
+import androidx.compose.ui.graphics.Color
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -27,5 +28,17 @@ class ThemeTest {
     @Test fun labelsNameTheTheme() {
         assertEquals("True black", ThemeSetting.BLACK.label)
         assertEquals("E-ink", ThemeSetting.E_INK.label)
+    }
+
+    @Test fun lightPaletteIsWarmPaperWithInkAndTeal() {
+        assertEquals(Color(0xFFF8F6EF), LightColors.background)
+        assertEquals(Color(0xFF282620), LightColors.onBackground)
+        assertEquals(Color(0xFF1F4E5F), LightColors.primary)
+    }
+
+    @Test fun darkPaletteIsInkWithCoolHighlight() {
+        assertEquals(Color(0xFF141413), DarkColors.background)
+        assertEquals(Color(0xFFE8E4DA), DarkColors.onBackground)
+        assertEquals(Color(0xFF85B8CB), DarkColors.primary)
     }
 }
