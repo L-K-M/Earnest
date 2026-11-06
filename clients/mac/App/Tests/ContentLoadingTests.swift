@@ -147,6 +147,99 @@ import Network
         }
     }
 
+    /// A transient /v1/me failure attaches the remembered account's cache and
+    /// the next attempt recovers, instead of killing the session.
+    func testTransientMeFailureShowsCacheAndRecovers() async throws {
+        let (directory, defaults, store, identity, _) = try offlineFixture()
+        defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+        let session = ContentHTTP.install([
+            .init(path: "/v1/me", status: 503, body: "{}"),
+            .init(path: "/v1/me", body: #"{"user_id":1,"principal_id":7,"kind":"human","scopes":[]}"#),
+        ])
+        let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
+        let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+        defer { model.signOut(); session.invalidateAndCancel() }
+        model.loggedIn = true
+        let offline = try await model.establishSession()
+        XCTAssertFalse(offline)
+        XCTAssertNil(model.error)
+        XCTAssertEqual(model.rows.map(\.id), [42])
+        XCTAssertEqual(model.connectionNote, "Offline. Showing what was last synced.")
+        let recovered = try await model.establishSession()
+        XCTAssertTrue(recovered)
+        XCTAssertNil(model.error)
+        XCTAssertTrue(model.loggedIn)
+        ContentHTTP.assertFinished()
+    }
+
+    /// Permanent failures must still surface instead of retrying forever.
+    func testUnauthorizedMeFailureStaysFatal() async throws {
+        let (directory, defaults, store, identity, _) = try offlineFixture()
+        defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+        let session = ContentHTTP.install([.init(path: "/v1/me", status: 401, body: "{}")])
+        let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
+        let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+        defer { model.signOut(); session.invalidateAndCancel() }
+        model.loggedIn = true
+        do {
+            _ = try await model.establishSession()
+            XCTFail("A 401 from /v1/me must not resolve")
+        } catch {
+            XCTAssertTrue(ErrorPresentation.isUnauthorized(error))
+            XCTAssertFalse(ErrorPresentation.isTransient(error))
+        }
+        ContentHTTP.assertFinished()
+    }
+
+    /// A snapshot blob that no longer decodes is a cold cache: the session
+    /// still comes up and the next sync repopulates it.
+    func testCorruptedCacheStartsColdAndSessionStillEstablishes() async throws {
+        let (directory, defaults, store, identity, cache) = try offlineFixture()
+        defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+        try await corruptStoredSnapshot(in: directory, identity: identity)
+        let session = ContentHTTP.install([
+            .init(path: "/v1/me", body: #"{"user_id":1,"principal_id":7,"kind":"human","scopes":[]}"#),
+        ])
+        let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
+        let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+        defer { model.signOut(); session.invalidateAndCancel() }
+        model.loggedIn = true
+        let online = try await model.establishSession()
+        XCTAssertTrue(online)
+        XCTAssertNil(model.error)
+        XCTAssertTrue(model.rows.isEmpty)
+        XCTAssertEqual(try cache.load(), SyncSnapshot())
+        XCTAssertNil(try cache.article(entryID: 42, generation: "g"))
+        XCTAssertTrue(try cache.resource("briefs", generation: "g").isEmpty)
+        ContentHTTP.assertFinished()
+    }
+
+    /// The same cold-cache rule applies to the offline resolution.
+    func testCorruptedCacheStillAllowsOfflineSession() async throws {
+        let (directory, defaults, store, identity, cache) = try offlineFixture()
+        defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+        try await corruptStoredSnapshot(in: directory, identity: identity)
+        let session = ContentHTTP.install([.init(path: "/v1/me", body: "", failure: .cannotConnectToHost)])
+        let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
+        let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+        defer { model.signOut(); session.invalidateAndCancel() }
+        model.loggedIn = true
+        let online = try await model.establishSession()
+        XCTAssertFalse(online)
+        XCTAssertNil(model.error)
+        XCTAssertEqual(model.connectionNote, "Offline. Showing what was last synced.")
+        XCTAssertTrue(model.rows.isEmpty)
+        XCTAssertEqual(try cache.load(), SyncSnapshot())
+        ContentHTTP.assertFinished()
+    }
+
+    private func corruptStoredSnapshot(in directory: URL, identity: AccountIdentity) async throws {
+        let db = try DatabaseQueue(path: directory.appendingPathComponent("cache.sqlite").path)
+        try await db.write { db in
+            try db.execute(sql: "UPDATE snapshots SET value = x'00ff' WHERE key = ?", arguments: [identity.cacheKey])
+        }
+    }
+
     func testListAndKeyboardSelectionsUseProxiedImages() async throws {
         let (model, session) = try makeModel([
             .signed(mode: "proxied"), .article,

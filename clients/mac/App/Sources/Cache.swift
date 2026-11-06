@@ -8,11 +8,17 @@ final class Cache: SyncStore {
     private let db: DatabaseQueue
     private let key: String
 
+    /// Location of the SQLite file shared by every identity.
+    static func databaseURL(in directory: URL?) throws -> URL {
+        let directory = try directory ?? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("Earnest", isDirectory: true)
+        return directory.appendingPathComponent("cache.sqlite")
+    }
+
     init(identity: AccountIdentity, directory: URL? = nil) throws {
         key = identity.cacheKey
-        let directory = try directory ?? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("Earnest", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        db = try DatabaseQueue(path: directory.appendingPathComponent("cache.sqlite").path)
+        let database = try Self.databaseURL(in: directory)
+        try FileManager.default.createDirectory(at: database.deletingLastPathComponent(), withIntermediateDirectories: true)
+        db = try DatabaseQueue(path: database.path)
         try db.write { db in
             try db.execute(sql: "CREATE TABLE IF NOT EXISTS snapshots (key TEXT PRIMARY KEY, value BLOB NOT NULL)")
             try db.execute(sql: """
@@ -28,6 +34,15 @@ final class Cache: SyncStore {
                     PRIMARY KEY (identity, entry_id)
                 )
                 """)
+        }
+    }
+
+    /// Forget everything persisted for this identity, as if it never synced.
+    func clear() throws {
+        try db.write { db in
+            try db.execute(sql: "DELETE FROM snapshots WHERE key = ?", arguments: [key])
+            try db.execute(sql: "DELETE FROM cached_resources WHERE identity = ?", arguments: [key])
+            try db.execute(sql: "DELETE FROM article_copies WHERE identity = ?", arguments: [key])
         }
     }
 
