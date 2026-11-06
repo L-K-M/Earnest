@@ -1,7 +1,6 @@
 package greader
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,37 +10,31 @@ import (
 	"github.com/L-K-M/Earnest/internal/syncmodel"
 )
 
-type membership struct {
-	LabelID int64  `json:"label_id"`
-	EntryID int64  `json:"entry_id"`
-	Name    string `json:"name"`
-	Deleted bool   `json:"deleted"`
-}
-
-func (h *handler) memberships(r *http.Request, a service.Actor) (map[int64][]string, error) {
-	out := map[int64][]string{}
-	req := service.BootstrapRequest{Kind: service.BootstrapLabelMemberships, Limit: 200}
-	for {
-		p, err := h.svc.Bootstrap(r.Context(), a, req)
-		if err != nil {
-			return nil, err
-		}
-		for _, b := range p.Items {
-			var m membership
-			if err = json.Unmarshal(b, &m); err != nil {
-				return nil, err
-			}
-			if !m.Deleted {
-				out[m.EntryID] = append(out[m.EntryID], m.Name)
-			}
-		}
-		if !p.HasMore {
-			break
-		}
-		req.AfterID = p.NextID
-		req.AfterPrincipal = p.NextPrincipal
+// streamTag maps one Google Reader stream or tag parameter to the service's
+// entry predicate. Callers must check it with validStreamTag first.
+func streamTag(tag string) service.EntryTag {
+	switch tag {
+	case "", statePrefix + "reading-list":
+		return service.EntryTag{Kind: service.TagAll}
+	case statePrefix + "read":
+		return service.EntryTag{Kind: service.TagRead}
+	case statePrefix + "starred":
+		return service.EntryTag{Kind: service.TagKept}
+	case statePrefix + "kept-unread":
+		return service.EntryTag{Kind: service.TagUnread}
 	}
-	return out, nil
+	if strings.HasPrefix(tag, "feed/") {
+		return service.EntryTag{Kind: service.TagFeed, Name: strings.TrimPrefix(tag, "feed/")}
+	}
+	name, _ := labelName(tag)
+	return service.EntryTag{Kind: service.TagLabel, Name: name}
+}
+func validStreamTag(tag string) bool {
+	if tag == "" || tag == statePrefix+"reading-list" || tag == statePrefix+"read" || tag == statePrefix+"starred" || tag == statePrefix+"kept-unread" || strings.HasPrefix(tag, "feed/") {
+		return true
+	}
+	_, ok := labelName(tag)
+	return ok
 }
 func entryTime(e service.Entry) time.Time {
 	if e.PublishedAt != nil {
@@ -81,91 +74,111 @@ func (h *handler) ids(w http.ResponseWriter, r *http.Request, a service.Actor) e
 			return service.ErrInvalid
 		}
 	}
-	subs, err := h.svc.Subscriptions(r.Context(), a)
-	if err != nil {
-		return err
+	for _, key := range []string{"s", "xt", "it"} {
+		for _, v := range q[key] {
+			if !validStreamTag(v) {
+				return service.ErrInvalid
+			}
+		}
 	}
-	folders, err := h.svc.Folders(r.Context(), a)
-	if err != nil {
-		return err
+	var require, exclude []service.EntryTag
+	var feedTag, labelTag bool
+	add := func(v string, out *[]service.EntryTag) {
+		t := streamTag(v)
+		feedTag = feedTag || t.Kind == service.TagFeed
+		labelTag = labelTag || t.Kind == service.TagLabel
+		*out = append(*out, t)
 	}
-	members, err := h.memberships(r, a)
-	if err != nil {
-		return err
+	for _, v := range q["s"] {
+		add(v, &require)
 	}
-	urls := map[int64]string{}
-	subfolders := map[int64]int64{}
-	for _, s := range subs {
-		urls[s.ID] = s.URL
-		subfolders[s.ID] = s.FolderID
+	for _, v := range q["it"] {
+		add(v, &require)
 	}
-	foldernames := map[int64]string{}
-	for _, f := range folders {
-		foldernames[f.ID] = f.Name
+	for _, v := range q["xt"] {
+		add(v, &exclude)
 	}
-	matches := func(tag string, e service.Entry) bool {
-		switch tag {
-		case "", statePrefix + "reading-list":
+	// The page query carries every predicate; the maps below exist only to
+	// recheck it in memory. Feed tags need subscription URLs, label tags also
+	// need folder names and each page's memberships — fetched for the page
+	// rather than bootstrapping the whole membership set.
+	var urls, foldernames map[int64]string
+	var subfolders map[int64]int64
+	if feedTag || labelTag {
+		subs, err := h.svc.Subscriptions(r.Context(), a)
+		if err != nil {
+			return err
+		}
+		urls = map[int64]string{}
+		subfolders = map[int64]int64{}
+		for _, s := range subs {
+			urls[s.ID] = s.URL
+			subfolders[s.ID] = s.FolderID
+		}
+	}
+	if labelTag {
+		folders, err := h.svc.Folders(r.Context(), a)
+		if err != nil {
+			return err
+		}
+		foldernames = map[int64]string{}
+		for _, f := range folders {
+			foldernames[f.ID] = f.Name
+		}
+	}
+	var members map[int64][]string
+	matches := func(t service.EntryTag, e service.Entry) bool {
+		switch t.Kind {
+		case service.TagAll:
 			return true
-		case statePrefix + "read":
+		case service.TagRead:
 			return e.State.GoogleRead()
-		case statePrefix + "starred":
+		case service.TagKept:
 			return e.State.Kept.Value == syncmodel.True
-		case statePrefix + "kept-unread":
+		case service.TagUnread:
 			return e.State.Unread()
-		}
-		if strings.HasPrefix(tag, "feed/") {
-			return urls[e.SubscriptionID] == strings.TrimPrefix(tag, "feed/")
-		}
-		if name, ok := labelName(tag); ok {
-			if foldernames[subfolders[e.SubscriptionID]] == name {
+		case service.TagFeed:
+			return urls[e.SubscriptionID] == t.Name
+		case service.TagLabel:
+			if foldernames[subfolders[e.SubscriptionID]] == t.Name {
 				return true
 			}
 			for _, m := range members[e.ID] {
-				if m == name {
+				if m == t.Name {
 					return true
 				}
 			}
 		}
 		return false
 	}
-	valid := func(tag string) bool {
-		if tag == "" || tag == statePrefix+"reading-list" || tag == statePrefix+"read" || tag == statePrefix+"starred" || tag == statePrefix+"kept-unread" || strings.HasPrefix(tag, "feed/") {
-			return true
-		}
-		_, ok := labelName(tag)
-		return ok
-	}
-	for _, key := range []string{"s", "xt", "it"} {
-		for _, v := range q[key] {
-			if !valid(v) {
-				return service.ErrInvalid
-			}
-		}
-	}
 	list := []any{}
 	last := uint64(0)
 	more := false
-	f := service.EntryFilter{View: service.ViewAll, Limit: 200, Direction: service.PageBackward, BeforeSeq: before}
+	f := service.EntryFilter{View: service.ViewAll, Limit: 200, Direction: service.PageBackward, BeforeSeq: before, RequireTags: require, ExcludeTags: exclude, AfterTime: ot, BeforeTime: nt}
 	for {
 		entries, err := h.svc.Entries(r.Context(), a, f)
 		if err != nil {
 			return err
 		}
+		if labelTag && len(entries) > 0 {
+			entryIDs := make([]int64, len(entries))
+			for i, e := range entries {
+				entryIDs[i] = e.ID
+			}
+			members, err = h.svc.EntryLabelNames(r.Context(), a, entryIDs)
+			if err != nil {
+				return err
+			}
+		}
 		for _, e := range entries {
 			pass := true
-			for _, s := range q["s"] {
-				if !matches(s, e) {
+			for _, t := range require {
+				if !matches(t, e) {
 					pass = false
 				}
 			}
-			for _, s := range q["xt"] {
-				if matches(s, e) {
-					pass = false
-				}
-			}
-			for _, s := range q["it"] {
-				if !matches(s, e) {
+			for _, t := range exclude {
+				if matches(t, e) {
 					pass = false
 				}
 			}
@@ -218,10 +231,6 @@ func (h *handler) contents(w http.ResponseWriter, r *http.Request, a service.Act
 	if err != nil {
 		return err
 	}
-	members, err := h.memberships(r, a)
-	if err != nil {
-		return err
-	}
 	subMap := map[int64]service.Subscription{}
 	folderMap := map[int64]string{}
 	for _, s := range subs {
@@ -237,6 +246,10 @@ func (h *handler) contents(w http.ResponseWriter, r *http.Request, a service.Act
 			end = len(ids)
 		}
 		entries, err := h.svc.GetByIDs(r.Context(), a, ids[start:end])
+		if err != nil {
+			return err
+		}
+		members, err := h.svc.EntryLabelNames(r.Context(), a, ids[start:end])
 		if err != nil {
 			return err
 		}

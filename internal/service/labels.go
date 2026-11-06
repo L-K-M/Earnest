@@ -63,6 +63,35 @@ func (s *Service) Labels(ctx context.Context, a Actor) ([]Label, error) {
 	return out, nil
 }
 
+// EntryLabelNames returns the live memberships of the requested entries as
+// label names, ordered by label ID like the membership bootstrap page.
+func (s *Service) EntryLabelNames(ctx context.Context, a Actor, entryIDs []int64) (map[int64][]string, error) {
+	if err := s.checkActor(ctx, a, ScopeEntriesRead); err != nil {
+		return nil, err
+	}
+	if len(entryIDs) > maxEntryIDs {
+		return nil, fmt.Errorf("more than %d entry ids: %w", maxEntryIDs, ErrInvalid)
+	}
+	out := map[int64][]string{}
+	if len(entryIDs) == 0 {
+		return out, nil
+	}
+	rows, err := s.store.Pool().Query(ctx, `SELECT m.entry_id, l.name FROM entry_labels m JOIN labels l ON l.id = m.label_id WHERE m.user_id = $1 AND m.entry_id = ANY($2) AND m.deleted_at IS NULL ORDER BY m.entry_id, m.label_id`, a.UserID, entryIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list entry labels: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, fmt.Errorf("scan entry label: %w", err)
+		}
+		out[id] = append(out[id], name)
+	}
+	return out, rows.Err()
+}
+
 func (s *Service) checkLabelWriter(ctx context.Context, a Actor, name, opID string) error {
 	if err := s.checkActor(ctx, a, ScopeStateWrite); err != nil {
 		return err
