@@ -185,14 +185,21 @@ func (s *Service) confirmWatch(ctx context.Context, user int64, rule Rule, entry
 	hash = key[:]
 	engine := pipelineEngine(ctx)
 	model, _ := engine.Model(llm.TaskClassify)
-	call, cached, err := s.store.WatchCheckReserve(ctx, rule.ID, entry.ID, hash, model, budget, s.now().UTC())
+	decision, cached, err := s.store.WatchCheckReserve(ctx, rule.ID, entry.ID, hash, model, budget, s.now().UTC())
 	if err != nil {
 		return false, err
 	}
-	if cached != nil {
+	switch decision {
+	case store.WatchCheckCached:
 		return *cached, nil
-	}
-	if !call {
+	case store.WatchCheckUncertain:
+		// The design keeps an uncertain attempt unmatched until the content
+		// changes; an uncertain call is not automatically repeated
+		// (docs/pipeline.md). Confirming it as "no" keeps one provider blip
+		// from pausing the rule pass forever over a row that can never resolve.
+		return false, nil
+	case store.WatchCheckBudget:
+		// Budgets count UTC days; the job waits and resumes tomorrow.
 		return false, ErrPipelinePaused
 	}
 	matched, err := engine.CheckWatch(ctx, rule.Predicate.Value, content)
