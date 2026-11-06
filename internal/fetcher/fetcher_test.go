@@ -290,3 +290,73 @@ func TestHostSpacing(t *testing.T) {
 		t.Fatalf("spacing: %v", hits)
 	}
 }
+
+func TestFetchIsolatesUnsalvageableItems(t *testing.T) {
+	deep := strings.Repeat("<div>", 2000) + "deep" + strings.Repeat("</div>", 2000)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `<rss version="2.0"><channel><title>Feed</title>
+<item><guid>good</guid><link>https://example.org/ok</link><description>fine</description></item>
+<item><guid>deep</guid><link>https://example.org/deep</link><description><![CDATA[%s]]></description></item>
+</channel></rss>`, deep)
+	}))
+	defer server.Close()
+	f, s := testFetcher(t, server)
+	if err := f.Fetch(context.Background(), service.FeedToFetch{FeedID: 1, URL: server.URL}); err != nil {
+		t.Fatal(err)
+	}
+	if s.outcomes[0].Status != service.FetchOK {
+		t.Fatalf("one unsalvageable item must not fail the fetch, got %s", s.outcomes[0].Status)
+	}
+	if len(s.outcomes[0].Items) != 2 {
+		t.Fatalf("both items must reach ingest, got %d", len(s.outcomes[0].Items))
+	}
+	for _, item := range s.outcomes[0].Items {
+		switch item.GUID {
+		case "good":
+			if item.ContentHTML != "fine" {
+				t.Fatalf("good item lost its content: %q", item.ContentHTML)
+			}
+		case "deep":
+			if item.ContentHTML != "" || item.ContentText != "" {
+				t.Fatalf("unsalvageable item must store no content, got %q", item.ContentHTML)
+			}
+		default:
+			t.Fatalf("unexpected guid %q", item.GUID)
+		}
+	}
+}
+
+func TestFetchDropsActiveSchemeLinks(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<rss version="2.0"><channel><title>Feed</title>
+<item><guid>js</guid><link>javascript:alert(1)</link><description>body</description></item>
+<item><guid>data</guid><link>data:text/html,hi</link><description>body</description></item>
+<item><guid>ok</guid><link>https://example.org/ok</link><description>body</description></item>
+</channel></rss>`)
+	}))
+	defer server.Close()
+	f, s := testFetcher(t, server)
+	if err := f.Fetch(context.Background(), service.FeedToFetch{FeedID: 1, URL: server.URL}); err != nil {
+		t.Fatal(err)
+	}
+	if s.outcomes[0].Status != service.FetchOK {
+		t.Fatalf("status %s", s.outcomes[0].Status)
+	}
+	for _, item := range s.outcomes[0].Items {
+		switch item.GUID {
+		case "js", "data":
+			if item.URL != "" {
+				t.Fatalf("active-scheme link must not be stored, got %q", item.URL)
+			}
+			if item.ContentHTML != "body" {
+				t.Fatalf("item should keep its content: %q", item.ContentHTML)
+			}
+		case "ok":
+			if item.URL != "https://example.org/ok" {
+				t.Fatalf("http(s) links must be kept, got %q", item.URL)
+			}
+		default:
+			t.Fatalf("unexpected guid %q", item.GUID)
+		}
+	}
+}
