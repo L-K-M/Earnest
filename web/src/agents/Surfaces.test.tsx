@@ -54,10 +54,18 @@ it('shows notification provenance, inert note, mute controls and release',async(
 it('opens a cited entry and labels the brief from its own fields',async()=>{
  const cited={id:12,title:'Cited article'}
  const cited2={id:13,title:'Second article'}
- vi.mocked(request).mockImplementation(async path=>path.startsWith('/v1/briefs')?[{...brief,entry_ids:[12,13]}]:path.startsWith('/v1/entries?ids=12,13')?{entries:[cited,cited2]}:path==='/v1/entries/12'?cited:[])
+ vi.mocked(request).mockImplementation(async path=>{
+   if (path.startsWith('/v1/briefs')) return [{...brief,entry_ids:[12,13]}]
+   if (path.startsWith('/v1/entries?ids=')) {
+     const wanted=new Set((new URLSearchParams(path.split('?')[1]).get('ids') ?? '').split(',').map(Number))
+     return {entries:[cited,cited2].filter(entry=>wanted.has(entry.id))}
+   }
+   if (path==='/v1/entries/12') return cited
+   return []
+ })
  const open=vi.fn();mount(<TodayAgents since="2026-01-01T00:00:00Z" onOpen={open}/>);fireEvent.click(await screen.findByText('Cited article'));expect(open).toHaveBeenCalledWith(cited);expect(screen.getByText(`Scout · ${new Date(brief.created_at).toLocaleString()}`)).toBeTruthy();expect(vi.mocked(request).mock.calls.some(([path])=>path.startsWith('/v1/activity?'))).toBe(false)
  expect(vi.mocked(request).mock.calls.some(([path])=>path.startsWith('/v1/entries/12'))).toBe(false)
- expect(vi.mocked(request).mock.calls.some(([path])=>path.startsWith('/v1/entries?ids=12,13'))).toBe(true)
+ expect(vi.mocked(request).mock.calls.some(([path])=>path.startsWith('/v1/entries?ids='))).toBe(true)
  expect(await screen.findByText('Second article')).toBeTruthy()
 })
 it('cancels a held notification from activity and can unmute',async()=>{
@@ -75,4 +83,13 @@ it('explains a failed notification and links to push settings',async()=>{
  await screen.findByText(/No push destination accepted/)
  fireEvent.click(screen.getByText('Check push settings'))
  expect(openSettings).toHaveBeenCalled()
+})
+it('shows a placeholder, not unavailable, while cited entries load',async()=>{
+ vi.mocked(request).mockImplementation(async path=>{
+   if (path.startsWith('/v1/briefs')) return [{...brief,entry_ids:[12]}]
+   if (path.startsWith('/v1/entries?ids=')) return new Promise(()=>{})
+   return []
+ })
+ mount(<TodayAgents since="2026-01-01T00:00:00Z" onOpen={vi.fn()}/>)
+ expect(await screen.findByText('Article 12…')).toBeTruthy()
 })
