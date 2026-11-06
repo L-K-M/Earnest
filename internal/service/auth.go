@@ -138,6 +138,21 @@ func (a *Auth) UserActor(ctx context.Context, username string) (Actor, error) {
 	return actor, nil
 }
 
+// failureKeys returns the throttle keys for a username/client pair.
+func failureKeys(username, client string) []string {
+	return []string{"u:" + username, "c:" + client}
+}
+
+// pruneExpired drops entries whose lockout window has elapsed.
+// Callers must hold a.mu.
+func (a *Auth) pruneExpired(now time.Time) {
+	for key, v := range a.attempts {
+		if !now.Before(v.until) {
+			delete(a.attempts, key)
+		}
+	}
+}
+
 // throttle reports whether the username or client is currently locked out.
 // Only failures count, so a user who signs in successfully several times in a
 // row is not locked out by their own activity.
@@ -145,12 +160,8 @@ func (a *Auth) throttle(username, client string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	now := a.now()
-	for key, v := range a.attempts {
-		if !now.Before(v.until) {
-			delete(a.attempts, key)
-		}
-	}
-	for _, key := range []string{"u:" + username, "c:" + client} {
+	a.pruneExpired(now)
+	for _, key := range failureKeys(username, client) {
 		if a.attempts[key].count >= loginLimit {
 			return true
 		}
@@ -159,22 +170,30 @@ func (a *Auth) throttle(username, client string) bool {
 }
 
 // recordFailure counts a failed attempt against the username and client.
+// Counters are in-process only: they are neither shared across service
+// instances nor persisted across restarts.
 func (a *Auth) recordFailure(username, client string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	now := a.now()
-	for key, v := range a.attempts {
-		if !now.Before(v.until) {
-			delete(a.attempts, key)
-		}
-	}
-	for _, key := range []string{"u:" + username, "c:" + client} {
+	a.pruneExpired(now)
+	for _, key := range failureKeys(username, client) {
 		v := a.attempts[key]
 		if v.until.IsZero() {
 			v.until = now.Add(loginWindow)
 		}
 		v.count++
 		a.attempts[key] = v
+	}
+}
+
+// clearFailures forgets recorded failures once a successful login proves
+// knowledge of the password.
+func (a *Auth) clearFailures(username, client string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, key := range failureKeys(username, client) {
+		delete(a.attempts, key)
 	}
 }
 
@@ -197,6 +216,7 @@ func (a *Auth) Authenticate(ctx context.Context, username, password, clientKey s
 		a.recordFailure(username, clientKey)
 		return Actor{}, ErrUnauthorized
 	}
+	a.clearFailures(username, clientKey)
 	actor.Kind = PrincipalHuman
 	actor.Scopes = append([]Scope(nil), HumanScopes...)
 	return actor, nil
