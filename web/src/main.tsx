@@ -115,11 +115,22 @@ function Session({onLogout}: {onLogout: () => void}) {
   }, [queryClient])
   const syncRefresh = useRef<number | undefined>(undefined)
   const refreshAfterSync = useCallback((reason?: 'generation') => {
-    // A generation rotation must clear caches at once; ordinary cursor changes
-    // can wait briefly so consecutive reading actions share one refresh.
-    if (reason === 'generation') { refreshResources(reason); return }
-    window.clearTimeout(syncRefresh.current)
-    syncRefresh.current = window.setTimeout(() => refreshResources(), SYNC_REFRESH_DEBOUNCE_MS)
+    // A generation rotation must clear caches at once and cancel any pending
+    // window; ordinary cursor changes share one refresh per window. The timer
+    // is scheduled only while idle, so a continuous stream of reading
+    // acknowledgements cannot starve the refresh.
+    if (reason === 'generation') {
+      window.clearTimeout(syncRefresh.current)
+      syncRefresh.current = undefined
+      refreshResources(reason)
+      return
+    }
+    if (syncRefresh.current === undefined) {
+      syncRefresh.current = window.setTimeout(() => {
+        syncRefresh.current = undefined
+        refreshResources()
+      }, SYNC_REFRESH_DEBOUNCE_MS)
+    }
   }, [refreshResources])
   useEffect(() => () => window.clearTimeout(syncRefresh.current), [])
   const sync = useReaderSync(identity, refreshAfterSync)
