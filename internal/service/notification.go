@@ -219,6 +219,26 @@ type notificationReader interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
+// rowScanner is satisfied by both pgx.Row and pgx.Rows, so the single-row and
+// batch loaders share one scan implementation.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+// scanNotification scans one notification row. The column list lives here
+// only, so the single-row and batch paths cannot drift apart.
+func scanNotification(row rowScanner) (Notification, error) {
+	var out Notification
+	var why []byte
+	if err := row.Scan(&out.ID, &out.PrincipalID, &out.Note, &out.EntryIDs, &out.Category, &out.Status, &out.HeldUntil, &out.Budget.UsedToday, &out.Budget.LimitToday, &why, &out.Generation, &out.CreatedAt, &out.Muted); err != nil {
+		return Notification{}, err
+	}
+	if err := json.Unmarshal(why, &out.Why); err != nil {
+		return Notification{}, fmt.Errorf("unmarshal notification why: %w", err)
+	}
+	return out, nil
+}
+
 // notificationQuerier is the read surface both a pool and a transaction
 // provide. The list path uses it to load a whole page in one query.
 type notificationQuerier interface {
@@ -226,14 +246,9 @@ type notificationQuerier interface {
 }
 
 func loadNotification(ctx context.Context, q notificationReader, user, id int64) (Notification, error) {
-	var out Notification
-	var why []byte
-	err := q.QueryRow(ctx, "SELECT n.id,n.sender_principal_id,n.note,n.entry_ids,n.category,n.status,n.held_until,n.budget_used,n.budget_limit,n.why,n.generation::text,n.created_at,EXISTS(SELECT 1 FROM notification_mutes m WHERE m.user_id=n.recipient_user_id AND m.principal_id=n.sender_principal_id) FROM notifications n WHERE n.recipient_user_id=$1 AND n.id=$2", user, id).Scan(&out.ID, &out.PrincipalID, &out.Note, &out.EntryIDs, &out.Category, &out.Status, &out.HeldUntil, &out.Budget.UsedToday, &out.Budget.LimitToday, &why, &out.Generation, &out.CreatedAt, &out.Muted)
+	out, err := scanNotification(q.QueryRow(ctx, "SELECT n.id,n.sender_principal_id,n.note,n.entry_ids,n.category,n.status,n.held_until,n.budget_used,n.budget_limit,n.why,n.generation::text,n.created_at,EXISTS(SELECT 1 FROM notification_mutes m WHERE m.user_id=n.recipient_user_id AND m.principal_id=n.sender_principal_id) FROM notifications n WHERE n.recipient_user_id=$1 AND n.id=$2", user, id))
 	if err != nil {
 		return out, domainError(err)
-	}
-	if err := json.Unmarshal(why, &out.Why); err != nil {
-		return out, err
 	}
 	return out, nil
 }
@@ -296,12 +311,8 @@ FROM notifications n WHERE n.recipient_user_id=$1 AND n.id=ANY($2) ORDER BY n.id
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var n Notification
-		var why []byte
-		if err := rows.Scan(&n.ID, &n.PrincipalID, &n.Note, &n.EntryIDs, &n.Category, &n.Status, &n.HeldUntil, &n.Budget.UsedToday, &n.Budget.LimitToday, &why, &n.Generation, &n.CreatedAt, &n.Muted); err != nil {
-			return nil, fmt.Errorf("scan notification: %w", err)
-		}
-		if err := json.Unmarshal(why, &n.Why); err != nil {
+		n, err := scanNotification(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, n)
