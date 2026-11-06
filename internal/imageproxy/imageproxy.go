@@ -102,6 +102,35 @@ func (c *imageCache) put(key string, image cachedImage) {
 	}
 }
 
+// touch refreshes the recency of an existing entry without replacing its
+// body, so a stale fallback cannot overwrite a newer copy stored by a
+// concurrent request.
+func (c *imageCache) touch(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	elem, ok := c.items[key]
+	if !ok {
+		return
+	}
+	elem.Value.(*imageCacheItem).image.added = time.Now()
+	c.order.MoveToFront(elem)
+}
+
+// remove drops an entry, e.g. after a definitive upstream answer that the
+// cached body is gone.
+func (c *imageCache) remove(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	elem, ok := c.items[key]
+	if !ok {
+		return
+	}
+	item := elem.Value.(*imageCacheItem)
+	c.order.Remove(elem)
+	delete(c.items, key)
+	c.bytes -= int64(len(item.image.body))
+}
+
 // Mode controls whether images load automatically. Use ClickToLoad for
 // agent-selected entries: the proxy's cache is a view-time optimization, not
 // an ingest-time copy of the bytes, so a cache miss would still let a
@@ -219,6 +248,27 @@ func (p *Proxy) Rewrite(input string, mode Mode) (string, error) {
 	return b.String(), nil
 }
 
+// transientFailure reports whether a failed fetch is worth retrying later:
+// a network or timeout fault, or an HTTP 429/5xx. A definitive upstream
+// answer (any other 4xx) must evict the cached entry instead of serving the
+// old body.
+func transientFailure(err error) bool {
+	switch outbound.ErrorClass(err) {
+	case outbound.DNS, outbound.Connect, outbound.TLS, outbound.Timeout, outbound.HTTP5xx, outbound.HTTP429:
+		return true
+	default:
+		return false
+	}
+}
+
+// transientStatus reports whether an HTTP status is a transient failure
+// (429 or 5xx). outbound classifies those as typed errors, so the status
+// branch only sees other codes; the check keeps the classification in one
+// place.
+func transientStatus(status int) bool {
+	return status == http.StatusTooManyRequests || status >= 500
+}
+
 // ServeHTTP serves only signed GET requests. Signed destinations still pass
 // the outbound client's address and redirect checks on every fetch.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -249,10 +299,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	image, hit := p.cache.get(source)
 	// stale keeps answering views from the last good body when the publisher
 	// is unreachable or changes its mind about the media type, and pushes the
-	// next revalidation out so a dead publisher is not retried per view.
+	// next revalidation out so a dead publisher is not retried per view. It
+	// only touches the cached entry: a concurrent request may have stored a
+	// newer body, and re-putting this snapshot would lose it.
 	stale := func() {
-		image.added = time.Now()
-		p.cache.put(source, image)
+		p.cache.touch(source)
 		p.serve(w, r, image)
 	}
 	if hit && time.Since(image.added) < p.ttl {
@@ -266,9 +317,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := p.client.Get(r.Context(), source, policy)
 	if err != nil || result == nil {
-		if hit {
+		if hit && transientFailure(err) {
 			stale()
 			return
+		}
+		if hit {
+			p.cache.remove(source)
 		}
 		http.Error(w, "image unavailable", http.StatusBadGateway)
 		return
@@ -279,9 +333,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if result.Response.StatusCode != http.StatusOK {
-		if hit {
+		if hit && transientStatus(result.Response.StatusCode) {
 			stale()
 			return
+		}
+		if hit {
+			p.cache.remove(source)
 		}
 		http.Error(w, "image unavailable", http.StatusBadGateway)
 		return
@@ -334,12 +391,32 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, image cachedImage) {
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.Header().Set("ETag", image.etag)
-	if match := r.Header.Get("If-None-Match"); match != "" && match == image.etag {
+	if match := r.Header.Get("If-None-Match"); match != "" && etagMatches(match, image.etag) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 	w.Header().Set("Content-Type", image.kind)
 	w.Write(image.body)
+}
+
+// etagMatches reports whether an If-None-Match header matches the cached
+// validator: "*" matches any current entity, and any listed entity tag
+// weakly equal to it matches (RFC 9110 weak comparison ignores the W/
+// indicator).
+func etagMatches(header, etag string) bool {
+	for _, part := range strings.Split(header, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if part == "*" {
+			return true
+		}
+		if strings.TrimPrefix(part, "W/") == strings.TrimPrefix(etag, "W/") {
+			return true
+		}
+	}
+	return false
 }
 
 func isAVIF(data []byte) bool {

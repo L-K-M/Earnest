@@ -256,3 +256,157 @@ func TestProxyServesStaleWhenPublisherFails(t *testing.T) {
 		t.Fatalf("a cached body must survive publisher failure: status %d", second.Code)
 	}
 }
+
+func TestProxyStaleFallbackClassification(t *testing.T) {
+	png := "\x89PNG\r\n\x1a\n" + strings.Repeat("x", 20)
+	for _, tc := range []struct {
+		name       string
+		status     int
+		wantSecond int
+	}{
+		{"404 evicts", http.StatusNotFound, http.StatusBadGateway},
+		{"410 evicts", http.StatusGone, http.StatusBadGateway},
+		{"401 evicts", http.StatusUnauthorized, http.StatusBadGateway},
+		{"500 serves stale", http.StatusInternalServerError, http.StatusOK},
+		{"429 serves stale", http.StatusTooManyRequests, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var hits int
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits++
+				if hits == 1 {
+					fmt.Fprint(w, png)
+					return
+				}
+				w.WriteHeader(tc.status)
+			}))
+			defer s.Close()
+			p := newTestProxy(t, true, s)
+			p.ttl = time.Nanosecond
+			u, _ := url.Parse(s.URL)
+			signed, _ := p.URL(u)
+
+			first := httptest.NewRecorder()
+			p.ServeHTTP(first, httptest.NewRequest(http.MethodGet, signed.String(), nil))
+			if first.Code != http.StatusOK {
+				t.Fatalf("first view: status %d", first.Code)
+			}
+			second := httptest.NewRecorder()
+			p.ServeHTTP(second, httptest.NewRequest(http.MethodGet, signed.String(), nil))
+			if second.Code != tc.wantSecond {
+				t.Fatalf("second view: status %d, want %d", second.Code, tc.wantSecond)
+			}
+			if tc.wantSecond == http.StatusOK && second.Body.String() != first.Body.String() {
+				t.Fatal("transient failure must serve the cached body")
+			}
+			if tc.wantSecond == http.StatusBadGateway {
+				third := httptest.NewRecorder()
+				p.ServeHTTP(third, httptest.NewRequest(http.MethodGet, signed.String(), nil))
+				if third.Code != http.StatusBadGateway || hits != 3 {
+					t.Fatalf("definitive failure must evict and refetch upstream: status %d hits %d", third.Code, hits)
+				}
+			}
+		})
+	}
+}
+
+func TestProxyStaleTouchKeepsNewerEntry(t *testing.T) {
+	png := "\x89PNG\r\n\x1a\n" + strings.Repeat("x", 20)
+	var p *Proxy
+	var source string
+	var hits int
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		if hits == 1 {
+			fmt.Fprint(w, png)
+			return
+		}
+		// Simulate a concurrent request storing a newer body while this
+		// request's revalidation is in flight.
+		p.cache.put(source, cachedImage{body: []byte("newer"), kind: "image/png", etag: `"newer"`, added: time.Now()})
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer s.Close()
+	p = newTestProxy(t, true, s)
+	p.ttl = time.Nanosecond
+	source = s.URL
+	u, _ := url.Parse(s.URL)
+	signed, _ := p.URL(u)
+
+	first := httptest.NewRecorder()
+	p.ServeHTTP(first, httptest.NewRequest(http.MethodGet, signed.String(), nil))
+	if first.Code != http.StatusOK {
+		t.Fatalf("first view: status %d", first.Code)
+	}
+	second := httptest.NewRecorder()
+	p.ServeHTTP(second, httptest.NewRequest(http.MethodGet, signed.String(), nil))
+	if second.Code != http.StatusOK || second.Body.String() != png {
+		t.Fatalf("transient failure must serve the cached snapshot: status %d", second.Code)
+	}
+	got, ok := p.cache.get(source)
+	if !ok || string(got.body) != "newer" {
+		t.Fatalf("stale fallback must not overwrite a newer cached body: %q", got.body)
+	}
+}
+
+func TestProxyIfNoneMatchRevalidation(t *testing.T) {
+	png := "\x89PNG\r\n\x1a\n" + strings.Repeat("x", 20)
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"v1"`)
+		fmt.Fprint(w, png)
+	}))
+	defer s.Close()
+	p := newTestProxy(t, true, s)
+	u, _ := url.Parse(s.URL)
+	signed, _ := p.URL(u)
+
+	first := httptest.NewRecorder()
+	p.ServeHTTP(first, httptest.NewRequest(http.MethodGet, signed.String(), nil))
+	if first.Code != http.StatusOK {
+		t.Fatalf("first view: status %d", first.Code)
+	}
+	for _, tc := range []struct {
+		name, header string
+		want         int
+	}{
+		{"exact", `"v1"`, http.StatusNotModified},
+		{"list", `"other", "v1"`, http.StatusNotModified},
+		{"weak", `W/"v1"`, http.StatusNotModified},
+		{"weak list", `W/"other", W/"v1"`, http.StatusNotModified},
+		{"star", `*`, http.StatusNotModified},
+		{"miss", `"v2"`, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, signed.String(), nil)
+			req.Header.Set("If-None-Match", tc.header)
+			w := httptest.NewRecorder()
+			p.ServeHTTP(w, req)
+			if w.Code != tc.want {
+				t.Fatalf("If-None-Match %q: status %d, want %d", tc.header, w.Code, tc.want)
+			}
+		})
+	}
+}
+
+func TestEtagMatches(t *testing.T) {
+	for _, tc := range []struct {
+		name, header, etag string
+		want               bool
+	}{
+		{"exact", `"v1"`, `"v1"`, true},
+		{"list", `"a", "v1"`, `"v1"`, true},
+		{"weak client", `W/"v1"`, `"v1"`, true},
+		{"weak cached", `"v1"`, `W/"v1"`, true},
+		{"weak both", `W/"v1"`, `W/"v1"`, true},
+		{"star", `*`, `"v1"`, true},
+		{"miss", `"v2"`, `"v1"`, false},
+		{"weak miss", `W/"v2"`, `"v1"`, false},
+		{"empty", ``, `"v1"`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := etagMatches(tc.header, tc.etag); got != tc.want {
+				t.Fatalf("etagMatches(%q, %q) = %v, want %v", tc.header, tc.etag, got, tc.want)
+			}
+		})
+	}
+}
