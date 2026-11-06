@@ -117,7 +117,11 @@ func (s *server) identityRoutes() {
 				return deviceResult{}, err
 			}
 		}
-		result, err := s.auth.StartDeviceAuth(ctx, in.Body.ClientName)
+		client, _, err := net.SplitHostPort(request(ctx).RemoteAddr)
+		if err != nil {
+			client = request(ctx).RemoteAddr
+		}
+		result, err := s.auth.StartDeviceAuth(ctx, in.Body.ClientName, client)
 		if err != nil {
 			return deviceResult{}, err
 		}

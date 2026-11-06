@@ -137,7 +137,7 @@ func TestSessionAndDevice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	device, err := a.StartDeviceAuth(ctx, "phone")
+	device, err := a.StartDeviceAuth(ctx, "phone", "client-device")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestSessionAndDevice(t *testing.T) {
 	if _, err = a.PollDevice(ctx, device.DeviceCode); !errors.Is(err, ErrExpiredToken) {
 		t.Fatalf("consumed: %v", err)
 	}
-	denied, err := a.StartDeviceAuth(ctx, "denied")
+	denied, err := a.StartDeviceAuth(ctx, "denied", "client-device")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestSessionAndDevice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	device2, err := a.StartDeviceAuth(ctx, "expired")
+	device2, err := a.StartDeviceAuth(ctx, "expired", "client-device")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,5 +196,26 @@ func TestSessionAndDevice(t *testing.T) {
 	now = now.Add(sessionIdle)
 	if _, err = a.ResolveSession(ctx, session.ID); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("expired session: %v", err)
+	}
+}
+
+func TestDeviceStartRateLimited(t *testing.T) {
+	db := storetest.NewTemplate(t).New(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	a := NewAuth(db, func() time.Time { return now }, []byte(strings.Repeat("k", 32)))
+	for i := 0; i < deviceStartLimit; i++ {
+		if _, err := a.StartDeviceAuth(ctx, "phone", "client-flood"); err != nil {
+			t.Fatalf("start %d: %v", i, err)
+		}
+	}
+	if _, err := a.StartDeviceAuth(ctx, "phone", "client-flood"); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("overflow: %v", err)
+	}
+	if _, err := a.StartDeviceAuth(ctx, "phone", "client-other"); err != nil {
+		t.Fatalf("other client: %v", err)
+	}
+	if _, err := a.StartDeviceAuth(ctx, "phone", ""); err != nil {
+		t.Fatalf("empty key: %v", err)
 	}
 }
