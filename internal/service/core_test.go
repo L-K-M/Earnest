@@ -57,10 +57,19 @@ func TestClaimDueFeedsSkipsInvalidCredentials(t *testing.T) {
 			if err != nil || len(claimed) != 1 || claimed[0].FeedID != f.feed {
 				t.Fatalf("invalid credentials blocked healthy feed: %+v %v", claimed, err)
 			}
-			// Both rows keep their leases, so the poisoned row cannot spin.
-			again, err := f.s.ClaimDueFeeds(ctx, now, 2, time.Minute)
-			if err != nil || len(again) != 0 {
-				t.Fatalf("claimed rows did not retain leases: %+v %v", again, err)
+			var class string
+			var failures int
+			var next time.Time
+			if err := f.db.Pool().QueryRow(ctx, "SELECT coalesce(error_class,''),consecutive_failures,next_fetch_at FROM feeds WHERE id=$1", poisoned).Scan(&class, &failures, &next); err != nil {
+				t.Fatal(err)
+			}
+			if class != "policy" || failures != 1 || !next.After(now) {
+				t.Fatalf("undecryptable feed left healthy: class=%q failures=%d next=%v", class, failures, next)
+			}
+			// The backed-off next_fetch_at, not the lease, keeps it unclaimed.
+			again, err := f.s.ClaimDueFeeds(ctx, now.Add(2*time.Minute), 2, time.Minute)
+			if err != nil || len(again) != 1 || again[0].FeedID != f.feed {
+				t.Fatalf("backed-off feed re-claimed: %+v %v", again, err)
 			}
 		})
 	}
