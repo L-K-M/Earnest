@@ -233,6 +233,79 @@ import Network
         ContentHTTP.assertFinished()
     }
 
+    /// A garbage database file is unrecoverable: it is quarantined, not
+    /// deleted, and a fresh cache opens in its place. Older quarantine copies
+    /// are removed.
+    func testCorruptCacheFileIsQuarantinedAndReopened() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        addTeardownBlock { try FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let garbage = Data("this is not a sqlite database".utf8)
+        try garbage.write(to: directory.appendingPathComponent("cache.sqlite"))
+        let staleQuarantine = directory.appendingPathComponent("cache.sqlite.corrupt-2000-01-01T00:00:00Z")
+        try Data("older corrupt cache".utf8).write(to: staleQuarantine)
+        let defaults = UserDefaults(suiteName: defaultsSuite)!
+        defaults.removePersistentDomain(forName: defaultsSuite)
+        defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+        let store = IdentityStore(defaults: defaults)
+        let identity = try AccountIdentity(server: URL(string: "https://api.test")!, userID: 1, principalID: 7)
+        let session = ContentHTTP.install([.init(path: "/v1/me", body: #"{"user_id":1,"principal_id":7,"kind":"human","scopes":[]}"#)])
+        let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
+        let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+        defer { model.signOut(); session.invalidateAndCancel() }
+        model.loggedIn = true
+        let online = try await model.establishSession()
+        XCTAssertTrue(online)
+        XCTAssertNil(model.error)
+        let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        XCTAssertFalse(files.contains(staleQuarantine.lastPathComponent), "Older quarantine copies must be removed")
+        let quarantine = try XCTUnwrap(files.first { $0.contains(".corrupt-") })
+        XCTAssertTrue(quarantine.hasPrefix("cache.sqlite"))
+        XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent(quarantine)), garbage)
+        let reopened = try Cache(identity: identity, directory: directory)
+        XCTAssertEqual(try reopened.load(), SyncSnapshot())
+        var snapshot = SyncSnapshot()
+        snapshot.cursor = Cursor(generation: "fresh", rev: 1)
+        try reopened.save(snapshot)
+        XCTAssertEqual(try reopened.load(), snapshot)
+        ContentHTTP.assertFinished()
+    }
+
+    /// A non-corruption open failure must be rethrown without touching the
+    /// cache path, so a transient problem cannot wipe every account's cache.
+    func testNonCorruptionCacheFailureRethrowsAndLeavesCacheUntouched() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        addTeardownBlock { try FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // A directory where the database file belongs makes SQLite fail with
+        // SQLITE_CANTOPEN, which is not corruption.
+        let database = directory.appendingPathComponent("cache.sqlite")
+        try FileManager.default.createDirectory(at: database, withIntermediateDirectories: false)
+        let marker = database.appendingPathComponent("marker.txt")
+        try Data("keep".utf8).write(to: marker)
+        let defaults = UserDefaults(suiteName: defaultsSuite)!
+        defaults.removePersistentDomain(forName: defaultsSuite)
+        defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+        let store = IdentityStore(defaults: defaults)
+        let identity = try AccountIdentity(server: URL(string: "https://api.test")!, userID: 1, principalID: 7)
+        let session = ContentHTTP.install([.init(path: "/v1/me", body: #"{"user_id":1,"principal_id":7,"kind":"human","scopes":[]}"#)])
+        let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
+        let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+        defer { model.signOut(); session.invalidateAndCancel() }
+        model.loggedIn = true
+        do {
+            _ = try await model.establishSession()
+            XCTFail("A directory at the cache path must not open a cache")
+        } catch {
+            XCTAssertFalse(Cache.isUnrecoverableOpenFailure(error), "The test premise must be a non-corruption failure")
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: database.path))
+        XCTAssertEqual(try Data(contentsOf: marker), Data("keep".utf8))
+        let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        XCTAssertFalse(files.contains { $0.contains(".corrupt-") })
+        ContentHTTP.assertFinished()
+    }
+
     private func corruptStoredSnapshot(in directory: URL, identity: AccountIdentity) async throws {
         let db = try DatabaseQueue(path: directory.appendingPathComponent("cache.sqlite").path)
         try await db.write { db in

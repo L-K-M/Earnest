@@ -240,15 +240,15 @@ import AppKit
         return true
     }
 
-    /// A cache file that cannot be opened is a cold cache: remove it once and
-    /// start empty. A second failure is a real problem and surfaces.
+    /// A cache that cannot be opened is only unrecoverable when the database
+    /// file itself is corrupt or undecodable. Any other failure (permissions,
+    /// disk full, SQLITE_BUSY, directory creation) is rethrown so the retry and
+    /// offline paths handle it, and the shared cache file is left untouched.
     private func makeCache(for identity: AccountIdentity) throws -> Cache {
         do { return try Cache(identity: identity, directory: cacheDirectory) }
         catch {
-            let database = try Cache.databaseURL(in: cacheDirectory)
-            for suffix in ["", "-wal", "-shm"] {
-                try? FileManager.default.removeItem(at: URL(fileURLWithPath: database.path + suffix))
-            }
+            guard Cache.isUnrecoverableOpenFailure(error) else { throw error }
+            try Cache.quarantineCorruptCache(in: cacheDirectory)
             return try Cache(identity: identity, directory: cacheDirectory)
         }
     }
