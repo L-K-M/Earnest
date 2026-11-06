@@ -161,3 +161,98 @@ func TestConfiguredExtraPort(t *testing.T) {
 		t.Fatalf("status = %d", w.Code)
 	}
 }
+
+func TestProxyCachesBodiesAndAnswersRevalidation(t *testing.T) {
+	png := "\x89PNG\r\n\x1a\n" + strings.Repeat("x", 20)
+	var hits int
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		fmt.Fprint(w, png)
+	}))
+	defer s.Close()
+	p := newTestProxy(t, true, s)
+	u, _ := url.Parse(s.URL)
+	signed, _ := p.URL(u)
+
+	first := httptest.NewRecorder()
+	p.ServeHTTP(first, httptest.NewRequest(http.MethodGet, signed.String(), nil))
+	if first.Code != 200 || hits != 1 {
+		t.Fatalf("first view: status %d upstream hits %d", first.Code, hits)
+	}
+	etag := first.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("a validator must be emitted so browsers can revalidate")
+	}
+
+	// A repeat view and a browser revalidation both answer from the cache.
+	again := httptest.NewRecorder()
+	p.ServeHTTP(again, httptest.NewRequest(http.MethodGet, signed.String(), nil))
+	if again.Code != 200 || again.Body.String() != first.Body.String() || hits != 1 {
+		t.Fatalf("cached view: status %d hits %d", again.Code, hits)
+	}
+	revalidated := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, signed.String(), nil)
+	req.Header.Set("If-None-Match", etag)
+	p.ServeHTTP(revalidated, req)
+	if revalidated.Code != http.StatusNotModified || hits != 1 {
+		t.Fatalf("revalidation: status %d hits %d", revalidated.Code, hits)
+	}
+}
+
+func TestProxyRevalidatesUpstreamAfterTTL(t *testing.T) {
+	png := "\x89PNG\r\n\x1a\n" + strings.Repeat("x", 20)
+	var hits int
+	var sawValidator string
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		sawValidator = r.Header.Get("If-None-Match")
+		if hits == 1 {
+			w.Header().Set("ETag", `"tag"`)
+			fmt.Fprint(w, png)
+			return
+		}
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	defer s.Close()
+	p := newTestProxy(t, true, s)
+	p.ttl = time.Nanosecond // force revalidation on every view
+	u, _ := url.Parse(s.URL)
+	signed, _ := p.URL(u)
+
+	first := httptest.NewRecorder()
+	p.ServeHTTP(first, httptest.NewRequest(http.MethodGet, signed.String(), nil))
+	second := httptest.NewRecorder()
+	p.ServeHTTP(second, httptest.NewRequest(http.MethodGet, signed.String(), nil))
+	if second.Code != 200 || second.Body.String() != first.Body.String() {
+		t.Fatalf("304 upstream must keep the cached body: status %d", second.Code)
+	}
+	if hits != 2 || sawValidator != `"tag"` {
+		t.Fatalf("upstream revalidation must be conditional: hits %d validator %q", hits, sawValidator)
+	}
+}
+
+func TestProxyServesStaleWhenPublisherFails(t *testing.T) {
+	png := "\x89PNG\r\n\x1a\n" + strings.Repeat("x", 20)
+	var hits int
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		if hits == 1 {
+			fmt.Fprint(w, png)
+			return
+		}
+		http.Error(w, "down", http.StatusInternalServerError)
+	}))
+	defer s.Close()
+	p := newTestProxy(t, true, s)
+	p.ttl = time.Nanosecond
+	u, _ := url.Parse(s.URL)
+	signed, _ := p.URL(u)
+
+	first := httptest.NewRecorder()
+	p.ServeHTTP(first, httptest.NewRequest(http.MethodGet, signed.String(), nil))
+	second := httptest.NewRecorder()
+	p.ServeHTTP(second, httptest.NewRequest(http.MethodGet, signed.String(), nil))
+	if second.Code != 200 || second.Body.String() != first.Body.String() {
+		t.Fatalf("a cached body must survive publisher failure: status %d", second.Code)
+	}
+}
