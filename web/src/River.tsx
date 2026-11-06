@@ -8,8 +8,8 @@ import {TodayAgents, SessionChanges} from './agents/Surfaces'
 import {Edition} from './pipeline/Pipeline'
 import {usePipeline} from './search/pipeline'
 
-type ClusterGroup = {entry: Entry; cluster_id: number; also_in: number}
-type Page = {entries: Entry[]; next_cursor?: string; groups?: ClusterGroup[]; status?: string}
+type ClusterGroup = {entry: Entry; also_in: number}
+type Page = {entries: Entry[]; next_cursor?: string; groups?: ClusterGroup[]}
 type PageParam = {direction: 'forward' | 'backward'; cursor?: string; after?: number}
 export type SessionSummary = {done: number; later: number; kept: number; seen: number}
 const seenWriteInterval = 600
@@ -48,9 +48,9 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     refetchOnWindowFocus: false, staleTime: Infinity,
   })
   const entries = orderEntries(list.data?.pages.flatMap(page => page.entries) ?? [], view, subscriptions)
-  const clusterInfo = new Map<number, {cluster_id: number; also_in: number}>()
+  const clusterInfo = new Map<number, number>()
   for (const page of list.data?.pages ?? []) {
-    for (const group of page.groups ?? []) clusterInfo.set(group.entry.id, {cluster_id: group.cluster_id, also_in: group.also_in})
+    for (const group of page.groups ?? []) clusterInfo.set(group.entry.id, group.also_in)
   }
   // eslint-disable-next-line react-hooks/incompatible-library -- Virtual owns mutable scroll measurements; this app does not use React Compiler.
   const virtual = useVirtualizer({count: entries.length, getScrollElement: () => scroller.current, estimateSize: () => 100, overscan: 5, getItemKey: index => entries[index].id})
@@ -143,7 +143,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
 
   const unread = entries.filter(entry => { const state = actions.state(entry); return state.seen.value === 'unseen' && state.shelf.value !== 'done' }).length
   return <main className="river" aria-label="Articles">
-    <header><h2 ref={heading} tabIndex={-1}>{view.title}</h2><button disabled={!list.isSuccess || list.isRefetching} onClick={() => {void list.refetch()}}>Refresh articles</button><button disabled={!list.isSuccess || list.isFetchingPreviousPage} onClick={() => { void list.fetchPreviousPage() }}>Earlier articles</button><button aria-pressed={cluster} onClick={() => setCluster(value => !value)}>{cluster ? 'All articles' : 'One per story'}</button>{counts && <p>{unread} unread {cluster ? 'stories' : 'articles'} in loaded articles</p>}</header>
+    <header><h2 ref={heading} tabIndex={-1}>{view.title}</h2><button disabled={!list.isSuccess || list.isRefetching} onClick={() => {void list.refetch()}}>Refresh articles</button><button disabled={!list.isSuccess || list.isFetchingPreviousPage} onClick={() => { void list.fetchPreviousPage() }}>Earlier articles</button><button aria-pressed={cluster} onClick={() => setCluster(value => !value)}>One per story</button>{counts && <p>{unread} unread {cluster ? 'stories' : 'articles'} in loaded articles</p>}</header>
     {(error || position.error || list.error) && <p role="alert">{error || position.error?.message || list.error?.message} <button onClick={() => { void (position.isError ? position.refetch() : list.refetch()) }}>Try again</button></p>}
     {(position.isPending || list.isPending) && <p role="status">Finding your place…</p>}
     {view.kind === 'edition' && <Edition onOpen={onOpen}/>}
@@ -155,9 +155,10 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
           const state = actions.state(entry)
           const source = subscriptions.find(sub => sub.id === entry.subscription_id)?.title || 'Feed'
           const group = view.kind === 'edition' && (row.index === 0 || entries[row.index - 1].subscription_id !== entry.subscription_id)
+          const alsoIn = clusterInfo.get(entry.id) ?? 0
           return <div className="virtual-row" key={entry.id} role="listitem" data-entry={entry.id} style={{height: row.size, transform: `translateY(${row.start}px)`}}>
             {group && <h3 className="feed-group">{source}</h3>}
-            <button className="entry" aria-current={selected?.id === entry.id ? 'true' : undefined} onFocus={() => onSelect(entry)} onClick={() => open(entry)}><strong>{entry.title || 'Untitled'}</strong>{pipeline.status.blurb === 'enabled' && entry.blurb && <span>{entry.blurb}</span>}<span>{source} · {statusLabel(state)}{state.kept.value === true ? ' · Kept' : ''}{cluster && (clusterInfo.get(entry.id)?.also_in ?? 0) > 0 ? ` · also in ${clusterInfo.get(entry.id)!.also_in}` : ''}</span></button>
+            <button className="entry" aria-current={selected?.id === entry.id ? 'true' : undefined} onFocus={() => onSelect(entry)} onClick={() => open(entry)}><strong>{entry.title || 'Untitled'}</strong>{pipeline.status.blurb === 'enabled' && entry.blurb && <span>{entry.blurb}</span>}<span>{source} · {statusLabel(state)}{state.kept.value === true ? ' · Kept' : ''}{cluster && alsoIn > 0 ? ` · also in ${alsoIn}` : ''}</span></button>
           </div>
         })}
       </div>
