@@ -394,8 +394,12 @@ private fun EarnestTopBar(
                 }
             }
             TextButton(onClick = { themeOpen = true }) { Text("Theme") }
-            IconButton(onClick = { menuOpen = true }) {
-                Icon(Icons.Filled.MoreVert, contentDescription = "More options")
+            // The menu anchors to this Box, beside the button rather than
+            // inside the button's content slot.
+            Box {
+                IconButton(onClick = { menuOpen = true }) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = "More options")
+                }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                     DropdownMenuItem(
                         text = { Text("Sign out") },
