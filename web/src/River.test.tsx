@@ -7,7 +7,8 @@ import type {Entry, ReaderActions} from './reader'
 import {request} from './request'
 vi.mock('./request', () => ({request:vi.fn()}))
 const virtualItems = vi.hoisted(() => ({items: [0, 1]}))
-vi.mock('@tanstack/react-virtual', () => ({useVirtualizer: ({count, scrollMargin = 0}: {count:number; scrollMargin?:number}) => ({getTotalSize:()=>count*100, getVirtualItems:()=>virtualItems.items.filter(index=>index<count).map(index=>({index,size:100,start:index*100 + scrollMargin})), scrollToIndex:vi.fn(), options:{scrollMargin}})}))
+const {measureElementMock} = vi.hoisted(() => ({measureElementMock: vi.fn()}))
+vi.mock('@tanstack/react-virtual', () => ({useVirtualizer: ({count, scrollMargin = 0}: {count:number; scrollMargin?:number}) => ({getTotalSize:()=>count*100, getVirtualItems:()=>virtualItems.items.filter(index=>index<count).map(index=>({index,size:100,start:index*100 + scrollMargin})), scrollToIndex:vi.fn(), options:{scrollMargin}, measureElement:measureElementMock})}))
 const observers: IntersectionObserverCallback[] = []
 const observed: Element[] = []
 class Observer {
@@ -135,6 +136,29 @@ describe('river interactions', () => {
     await screen.findByText('Article 1')
     fireEvent.keyDown(document.body,{key:'e'})
     expect(act).not.toHaveBeenCalled()
+  })
+  it('exposes each row to the virtualizer measurement hook', async () => {
+    measureElementMock.mockClear()
+    mount()
+    await screen.findByText('Article 1')
+    const rows = document.querySelectorAll('.virtual-row')
+    expect(rows.length).toBeGreaterThan(0)
+    expect(measureElementMock).toHaveBeenCalledTimes(rows.length)
+    for (const row of rows) expect(row.getAttribute('data-index')).toMatch(/^\d+$/)
+  })
+  it('shows one representative per story with its also-in count', async () => {
+    vi.mocked(request).mockImplementation(async path => {
+      if (path === '/v1/pipeline') return {blurb:'disabled'}
+      if (path.startsWith('/v1/positions')) return {seq:0}
+      return path.includes('group=cluster') ? {entries, groups:[{entry:entries[0],also_in:2}]} : {entries}
+    })
+    vi.stubGlobal('IntersectionObserver', Observer)
+    const actions: ReaderActions = {act:vi.fn().mockResolvedValue(undefined),state:entry=>entry.state}
+    render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'today',title:'Today'}} subscriptions={[]} actions={actions} selected={entries[0]} onSelect={vi.fn()} onOpen={vi.fn()} shortcuts={false} counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>)
+    await screen.findByText('Article 1')
+    fireEvent.click(screen.getByText('One per story'))
+    await waitFor(()=>expect(screen.getByText(/also in 2/)).toBeTruthy())
+    expect(vi.mocked(request).mock.calls.some(([path]) => path.includes('group=cluster'))).toBe(true)
   })
 })
 it('retries a scrolled-past row after sync finishes restoring',async()=>{
