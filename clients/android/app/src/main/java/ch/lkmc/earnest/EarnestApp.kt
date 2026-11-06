@@ -26,11 +26,14 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -387,6 +390,7 @@ private fun EarnestTopBar(
     onRequestNotifications: () -> Unit,
 ) {
     var themeOpen by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
     TopAppBar(
         title = { Text(title) },
         actions = {
@@ -405,6 +409,22 @@ private fun EarnestTopBar(
                 }
             }
             TextButton(onClick = { themeOpen = true }) { Text("Theme") }
+            // The menu anchors to this Box, beside the button rather than
+            // inside the button's content slot.
+            Box {
+                IconButton(onClick = { menuOpen = true }) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = "More options")
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Sign out") },
+                        onClick = {
+                            menuOpen = false
+                            model.logout()
+                        },
+                    )
+                }
+            }
         },
     )
     if (themeOpen) {
@@ -536,6 +556,10 @@ private fun EntryListScreen(
             if (effective.kept.value == kotlinx.serialization.json.JsonPrimitive(true)) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
                     TextButton(onClick = { onUnkeep(entry.id) }) { Text("Unkeep") }
+                }
+            } else {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                    TextButton(onClick = { onKeep(entry.id) }) { Text("Keep") }
                 }
             }
         }
