@@ -9,6 +9,7 @@ import ch.lkmc.earnest.core.Annotation
 import ch.lkmc.earnest.core.ApiException
 import ch.lkmc.earnest.core.EarnestApi
 import ch.lkmc.earnest.core.RejectedOperation
+import kotlinx.coroutines.sync.withLock
 import ch.lkmc.earnest.core.Revision
 import ch.lkmc.earnest.core.State
 import ch.lkmc.earnest.core.StateWrite
@@ -134,14 +135,15 @@ class AppViewModel internal constructor(
             if (!isCurrent(session, cache)) return@launch
             _state.value = _state.value.copy(loading = true, error = null)
             try {
-                val api = apiFactory(session)
-                cache.withEngine { syncEngine ->
-                    if (!isCurrent(session, cache)) return@withEngine
-                    val repository = SyncRepository(api, syncEngine)
+                SyncAccess.refresh.withLock {
+                    val api = apiFactory(session)
+                    // The repository wraps each snapshot mutation in its own
+                    // short engine section and runs HTTP between sections, so
+                    // queued reading actions do not wait for this sync.
+                    val repository = SyncRepository(api, cache.engineSections)
                     cache.markAgentChangesStale()
                     val rejected = repository.pull() + repository.flush()
-                    val expired = syncEngine.expire(Instant.now()).map { it.operation.opId }
-                    syncEngine.flush()
+                    val expired = cache.withEngine { it.expire(Instant.now()) }.map { it.operation.opId }
                     val briefs = runCatching { api.todaysBriefs() }.getOrNull()
                     if (briefs != null) cacheBriefs(cache, briefs)
                     val cached = briefs?.map { BriefEntity(it.principalId, it.value, it.rev) } ?: cache.db.briefs().get()
@@ -153,24 +155,26 @@ class AppViewModel internal constructor(
                             putString(SessionCache.KEY_CHANGES_SINCE, sessionStartedAt.toString())
                         }
                     }
-                    if (!isCurrent(session, cache)) return@withEngine
-                    val restored = restoredState(syncEngine, cache.identity.principalId)
+                    if (!isCurrent(session, cache)) return@withLock
                     val changes = changesResult.getOrNull() ?: _state.value.agentChanges
-                    _state.value = _state.value.copy(
-                        snapshot = syncEngine.snapshot(),
-                        principalId = cache.identity.principalId,
-                        states = effectiveStates(syncEngine, cache.identity.principalId),
-                        cadences = restored.cadences,
-                        riverEntryIds = restored.riverEntryIds,
-                        agentChanges = changes,
-                        sessionAgentChanges = activitySince(changes, sessionStartedAt),
-                        agentChangesError = changesResult.exceptionOrNull()?.let { "Could not refresh agent changes: ${it.message}" },
-                        briefs = cached,
-                        principals = names.ifEmpty { cachedPrincipalNames(cache) },
-                        rejected = rejected,
-                        error = if (rejected.isEmpty()) null else "Some reading actions could not be synced because they expired or their articles were removed.",
-                        expired = expired,
-                    )
+                    cache.withEngine { syncEngine ->
+                        val restored = restoredState(syncEngine, cache.identity.principalId)
+                        _state.value = _state.value.copy(
+                            snapshot = syncEngine.snapshot(),
+                            principalId = cache.identity.principalId,
+                            states = effectiveStates(syncEngine, cache.identity.principalId),
+                            cadences = restored.cadences,
+                            riverEntryIds = restored.riverEntryIds,
+                            agentChanges = changes,
+                            sessionAgentChanges = activitySince(changes, sessionStartedAt),
+                            agentChangesError = changesResult.exceptionOrNull()?.let { "Could not refresh agent changes: ${it.message}" },
+                            briefs = cached,
+                            principals = names.ifEmpty { cachedPrincipalNames(cache) },
+                            rejected = rejected,
+                            error = if (rejected.isEmpty()) null else "Some reading actions could not be synced because they expired or their articles were removed.",
+                            expired = expired,
+                        )
+                    }
                 }
             } catch (error: ApiException) {
                 if (!isCurrent(session, cache)) return@launch
@@ -350,16 +354,16 @@ class AppViewModel internal constructor(
     internal suspend fun loadEntry(entryId: Long): ch.lkmc.earnest.core.CachedEntry? = withContext(Dispatchers.IO) {
         val cache = account ?: return@withContext null
         val session = activeSession ?: return@withContext null
+        if (!isCurrent(session, cache)) return@withContext null
+        val entry = SyncRepository(apiFactory(session), cache.engineSections).loadEntry(entryId)
+        if (!isCurrent(session, cache)) return@withContext null
         cache.withEngine { engine ->
-            if (!isCurrent(session, cache)) return@withEngine null
-            val entry = SyncRepository(apiFactory(session), engine).loadEntry(entryId)
-            if (!isCurrent(session, cache)) return@withEngine null
             _state.value = _state.value.copy(
                 snapshot = engine.snapshot(),
                 states = effectiveStates(engine, cache.identity.principalId),
             )
-            entry
         }
+        entry
     }
 
     private fun isCurrent(session: AuthenticatedSession, cache: SessionCache): Boolean =

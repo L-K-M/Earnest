@@ -489,4 +489,37 @@ class SyncRepositoryTest {
         assertEquals(original, SyncEngine(store).snapshot())
     }
 
+    @Test
+    fun httpHappensOutsideEngineSections() = runBlocking {
+        // Sections are short load-mutate-save critical sections; a user action
+        // queued mid-sync must not wait behind HTTP.
+        val store = Store(SyncSnapshot(Revision("g1", 0), outbox = listOf(Pending(write = write("queued")))))
+        var inSection = false
+        val sections = object : EngineSection {
+            override suspend fun <T> use(block: suspend (SyncEngine) -> T): T {
+                check(!inSection) { "engine sections must not nest" }
+                inSection = true
+                try {
+                    return block(SyncEngine(store))
+                } finally {
+                    inSection = false
+                }
+            }
+        }
+        val repository = SyncRepository(api { request ->
+            check(!inSection) { "HTTP ran inside an engine section: ${request.url.encodedPath}" }
+            when (request.url.encodedPath) {
+                "/v1/changes" -> 200 to """{"changes":[],"next":{"generation":"g1","rev":0},"next_cursor":"g1:0"}"""
+                "/v1/state:batch" -> 200 to json.encodeToString(
+                    kotlinx.serialization.builtins.ListSerializer(Result.serializer()),
+                    listOf(Result("queued", "applied", SyncEngine.initialState(1, 2), false)),
+                )
+                else -> error("unexpected request ${request.url.encodedPath}")
+            }
+        }, sections)
+        repository.pull()
+        repository.flush()
+        assertTrue(store.data.outbox.isEmpty())
+    }
+
 }

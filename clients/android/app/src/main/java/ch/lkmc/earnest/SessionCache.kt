@@ -6,6 +6,7 @@ import ch.lkmc.earnest.core.Activity
 import ch.lkmc.earnest.core.EarnestApi
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import ch.lkmc.earnest.core.EngineSection
 import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.db.AppDatabase
 import kotlinx.coroutines.sync.Mutex
@@ -39,6 +40,9 @@ internal interface SessionStore {
 
 internal object SyncAccess {
     val mutex = Mutex()
+
+    /** Full syncs serialise with each other; short engine sections do not wait for them. */
+    val refresh = Mutex()
 }
 
 /** Reload, mutate and flush form one critical section for every snapshot writer. */
@@ -86,6 +90,15 @@ internal class SessionCache(context: Context, val identity: AccountIdentity) {
         val result = block(engine)
         engine.flush()
         result
+    }
+
+    /**
+     * Short load-mutate-save sections for the sync repository. HTTP happens
+     * between sections, so a queued reading action never waits behind a
+     * full network sync.
+     */
+    val engineSections: EngineSection = object : EngineSection {
+        override suspend fun <T> use(block: suspend (SyncEngine) -> T): T = withEngine(block)
     }
     companion object {
         const val KEY_CHANGES_SINCE = "agent_changes_since"
