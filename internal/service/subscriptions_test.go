@@ -51,6 +51,57 @@ func TestSubscribeDeduplicatesDefaultPorts(t *testing.T) {
 	}
 }
 
+// Resubscribing with credentials must not stack a second subscription on a
+// parallel feed row: the existing subscription rebinds to the user's own
+// credential-bearing feed, the same conversion UpdateSubscription performs.
+func TestSubscribeSameURLWithCredentials(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	f.s.prober = &subscriptionsProber{}
+	ctx := context.Background()
+	first, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/dup", SubscribeOptions{OpID: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	creds := &FeedCredentials{Username: "reader", Password: "very-secret"}
+	second, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/dup", SubscribeOptions{OpID: "second", Credentials: creds})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID != first.ID || !second.Private || second.FeedID == first.FeedID {
+		t.Fatalf("credentials did not rebind the existing subscription: %+v -> %+v", first, second)
+	}
+	var subs int
+	if err := f.db.Pool().QueryRow(ctx, `SELECT count(*) FROM subscriptions s JOIN feeds f ON f.id=s.feed_id WHERE s.user_id=$1 AND s.deleted_at IS NULL AND f.url='https://feeds.test/dup'`, f.a.UserID).Scan(&subs); err != nil || subs != 1 {
+		t.Fatalf("subscriptions for URL: %d %v", subs, err)
+	}
+	var feeds int
+	if err := f.db.Pool().QueryRow(ctx, "SELECT count(*) FROM feeds WHERE url='https://feeds.test/dup'").Scan(&feeds); err != nil || feeds != 2 {
+		t.Fatalf("feed rows for URL: %d %v", feeds, err)
+	}
+	var envelope []byte
+	if err := f.db.Pool().QueryRow(ctx, "SELECT credentials_encrypted FROM feeds WHERE id=$1", second.FeedID).Scan(&envelope); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := f.s.openCredentials(envelope)
+	if err != nil || decoded.Password != creds.Password {
+		t.Fatal("credentials not bound to private feed", err)
+	}
+	// Rotated credentials on the bound feed keep the same subscription.
+	rotated := &FeedCredentials{Username: "reader", Password: "rotated"}
+	third, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/dup", SubscribeOptions{OpID: "third", Credentials: rotated})
+	if err != nil || third.ID != first.ID || third.FeedID != second.FeedID {
+		t.Fatalf("rotated credentials changed binding: %+v %v", third, err)
+	}
+	if err := f.db.Pool().QueryRow(ctx, "SELECT credentials_encrypted FROM feeds WHERE id=$1", second.FeedID).Scan(&envelope); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err = f.s.openCredentials(envelope)
+	if err != nil || decoded.Password != rotated.Password {
+		t.Fatal("credentials not rotated", err)
+	}
+	coreCheckGapless(t, f.db, f.a.UserID)
+}
+
 func TestRebindPreservesCanonicalFeedMetadata(t *testing.T) {
 	template := storetest.NewTemplate(t)
 	for _, private := range []bool{false, true} {
@@ -165,7 +216,7 @@ func TestSubscriptions(t *testing.T) {
 			t.Fatal("get subscription", got, err)
 		}
 		listed, err := f.s.Subscriptions(ctx, f.a)
-		if err != nil || len(listed) != 3 {
+		if err != nil || len(listed) != 2 {
 			t.Fatal("list subscriptions", listed, err)
 		}
 		if _, err := f.s.Subscription(ctx, other, sub.ID); !errors.Is(err, ErrNotFound) {
