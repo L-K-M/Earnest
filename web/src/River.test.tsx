@@ -25,6 +25,11 @@ function mount(shortcuts=true, blurbStatus="disabled") {
   render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'today',title:'Today'}} subscriptions={[]} actions={actions} selected={entries[0]} onSelect={onSelect} onOpen={vi.fn()} shortcuts={shortcuts} counts={false} summary={{seen:0,done:0,later:0,kept:0}} onHelp={vi.fn()} /></QueryClientProvider>)
   return {act,onSelect}
 }
+function positionWrites(): number[] {
+  return vi.mocked(request).mock.calls
+    .filter(([path, options]) => typeof path === 'string' && path.startsWith('/v1/positions') && (options as RequestInit | undefined)?.method === 'PUT')
+    .map(([, options]) => JSON.parse(String((options as RequestInit).body)).seq as number)
+}
 describe('river interactions', () => {
   it('marks only intersecting rendered rows, never virtual overscan or absent rows', async () => {
     const {act}=mount()
@@ -35,6 +40,17 @@ describe('river interactions', () => {
     await waitFor(()=>expect(act).toHaveBeenCalledWith(entries[0],'seen','seen','passive'),{timeout:1500})
     expect(act).toHaveBeenCalledTimes(1)
     expect(screen.queryByText('Article 3')).toBeNull()
+  })
+  it('never regresses the resume position when earlier rows are seen later', async () => {
+    mount()
+    await screen.findByText('Article 2')
+    await waitFor(()=>expect(observed.length).toBeGreaterThan(1))
+    const rows = [1,2].map(id => observed.find(element=>(element as HTMLElement).dataset.entry===String(id))!)
+    callbacks.at(-1)!([{target:rows[1],isIntersecting:true,intersectionRatio:1} as IntersectionObserverEntry], {} as IntersectionObserver)
+    await waitFor(()=>expect(positionWrites()).toEqual([2]),{timeout:1500})
+    callbacks.at(-1)!([{target:rows[0],isIntersecting:true,intersectionRatio:1} as IntersectionObserverEntry], {} as IntersectionObserver)
+    await new Promise(resolve=>setTimeout(resolve,900))
+    expect(positionWrites()).toEqual([2])
   })
   it('handles deliberate shortcuts without changing row order', async () => {
     const {act,onSelect}=mount()

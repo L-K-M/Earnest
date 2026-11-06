@@ -43,6 +43,10 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   useEffect(() => { actionsRef.current = actions }, [actions])
   const entriesRef = useRef(entries)
   useEffect(() => { entriesRef.current = entries }, [entries])
+  // Passive progress only ever advances the resume position: scrolling back
+  // through earlier pages must not drag "where you left off" backwards.
+  const resumeSeq = useRef(0)
+  useEffect(() => { if (position.data) resumeSeq.current = Math.max(resumeSeq.current, position.data.seq) }, [position.data])
   useEffect(() => { heading.current?.focus() }, [key])
 
   useEffect(() => {
@@ -74,8 +78,11 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
           })
         }
       }
-      const last = rendered.at(-1)
-      if (last) void request(`/v1/positions/${encodeURIComponent(key)}`, {method: 'PUT', body: JSON.stringify({seq: last.seq, op_id: crypto.randomUUID()})}).catch(error => setError(error instanceof Error ? error.message : 'Could not save position.'))
+      const reached = rendered.reduce((max, entry) => Math.max(max, entry.seq), resumeSeq.current)
+      if (reached > resumeSeq.current) {
+        resumeSeq.current = reached
+        void request(`/v1/positions/${encodeURIComponent(key)}`, {method: 'PUT', body: JSON.stringify({seq: reached, op_id: crypto.randomUUID()})}).catch(error => setError(error instanceof Error ? error.message : 'Could not save position.'))
+      }
     }, 600)
     return () => { observer.disconnect(); window.clearInterval(timer) }
   }, [ids, key])
