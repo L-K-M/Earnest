@@ -15,7 +15,6 @@ import ch.lkmc.earnest.core.StateWrite
 import ch.lkmc.earnest.core.SubscriptionBody
 import ch.lkmc.earnest.core.SubscriptionPatch
 import ch.lkmc.earnest.core.SyncEngine
-import ch.lkmc.earnest.core.SyncRepository
 import ch.lkmc.earnest.core.SyncSnapshot
 import ch.lkmc.earnest.db.BriefEntity
 import ch.lkmc.earnest.db.ContentEntity
@@ -135,24 +134,26 @@ class AppViewModel internal constructor(
             _state.value = _state.value.copy(loading = true, error = null)
             try {
                 val api = apiFactory(session)
-                cache.withEngine { syncEngine ->
-                    if (!isCurrent(session, cache)) return@withEngine
-                    val repository = SyncRepository(api, syncEngine)
+                val synced = cache.withSync(api) { repository ->
+                    if (!isCurrent(session, cache)) return@withSync null
                     cache.markAgentChangesStale()
                     val rejected = repository.pull() + repository.flush()
-                    val expired = syncEngine.expire(Instant.now()).map { it.operation.opId }
-                    syncEngine.flush()
-                    val briefs = runCatching { api.todaysBriefs() }.getOrNull()
-                    if (briefs != null) cacheBriefs(cache, briefs)
-                    val cached = briefs?.map { BriefEntity(it.principalId, it.value, it.rev) } ?: cache.db.briefs().get()
-                    val names = principalNames(api)
-                    savePrincipalNames(cache, names)
-                    val changesResult = runCatching { cache.refreshAgentChanges(api, changesSince) }
-                    changesResult.getOrNull()?.let {
-                        cache.preferences.edit {
-                            putString(SessionCache.KEY_CHANGES_SINCE, sessionStartedAt.toString())
-                        }
+                    val expired = repository.expire(Instant.now()).map { it.operation.opId }
+                    rejected to expired
+                } ?: return@launch
+                val (rejected, expired) = synced
+                val briefs = runCatching { api.todaysBriefs() }.getOrNull()
+                if (briefs != null) cacheBriefs(cache, briefs)
+                val cached = briefs?.map { BriefEntity(it.principalId, it.value, it.rev) } ?: cache.db.briefs().get()
+                val names = principalNames(api)
+                savePrincipalNames(cache, names)
+                val changesResult = runCatching { cache.refreshAgentChanges(api, changesSince) }
+                changesResult.getOrNull()?.let {
+                    cache.preferences.edit {
+                        putString(SessionCache.KEY_CHANGES_SINCE, sessionStartedAt.toString())
                     }
+                }
+                cache.withEngine { syncEngine ->
                     if (!isCurrent(session, cache)) return@withEngine
                     val restored = restoredState(syncEngine, cache.identity.principalId)
                     val changes = changesResult.getOrNull() ?: _state.value.agentChanges
@@ -350,9 +351,9 @@ class AppViewModel internal constructor(
     internal suspend fun loadEntry(entryId: Long): ch.lkmc.earnest.core.CachedEntry? = withContext(Dispatchers.IO) {
         val cache = account ?: return@withContext null
         val session = activeSession ?: return@withContext null
+        if (!isCurrent(session, cache)) return@withContext null
+        val entry = cache.repository(apiFactory(session)).loadEntry(entryId)
         cache.withEngine { engine ->
-            if (!isCurrent(session, cache)) return@withEngine null
-            val entry = SyncRepository(apiFactory(session), engine).loadEntry(entryId)
             if (!isCurrent(session, cache)) return@withEngine null
             _state.value = _state.value.copy(
                 snapshot = engine.snapshot(),

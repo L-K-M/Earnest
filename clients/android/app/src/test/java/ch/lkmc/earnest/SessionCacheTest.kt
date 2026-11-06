@@ -44,6 +44,35 @@ class SessionCacheTest {
         assertEquals(listOf("later"), worker.withEngine { it.snapshot().outbox.map { p -> p.operation.opId } })
     }
 
+    @Test fun queuedActionCompletesWhilePullWaitsOnTheNetwork() = runBlocking(Dispatchers.IO) {
+        val cache = SessionCache(context, identity)
+        cache.withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val fetching = CompletableDeferred<Unit>()
+        val release = java.util.concurrent.CountDownLatch(1)
+        val api = EarnestApi(identity.server, "token", okhttp3.OkHttpClient.Builder().addInterceptor { chain ->
+            val body = when (chain.request().url.encodedPath) {
+                "/v1/mutes" -> "[]"
+                "/v1/settings" -> """{"today_decay_days":2,"rev":0}"""
+                "/v1/changes" -> {
+                    fetching.complete(Unit)
+                    release.await()
+                    """{"changes":[],"next":{"generation":"g1","rev":0},"next_cursor":"g1:0"}"""
+                }
+                else -> "[]"
+            }
+            okhttp3.Response.Builder().request(chain.request()).protocol(okhttp3.Protocol.HTTP_1_1)
+                .code(200).message("test").body(body.toResponseBody()).build()
+        }.build())
+        val pull = async(Dispatchers.IO) { cache.withSync(api) { it.pull() } }
+        fetching.await()
+        withTimeout(5000) { cache.withEngine { it.queue(write) } }
+        assertTrue("the queued action waited for the pull to finish", release.count > 0)
+        assertEquals(listOf("later"), cache.withEngine { it.snapshot().outbox.map { p -> p.operation.opId } })
+        release.countDown()
+        pull.await()
+        assertEquals(listOf("later"), cache.withEngine { it.snapshot().outbox.map { p -> p.operation.opId } })
+    }
+
     @Test fun accountsIsolateSnapshotOutboxContentAndPreferences() = runBlocking(Dispatchers.IO.limitedParallelism(1)) {
         val first = SessionCache(context, identity)
         first.withEngine { it.beginBootstrap(Revision("g1", 0)); it.mergeEntry(CachedEntry(2, title = "Private")); it.queue(write) }

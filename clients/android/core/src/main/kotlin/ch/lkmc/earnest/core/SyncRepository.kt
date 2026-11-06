@@ -19,21 +19,39 @@ data class RejectedOperation(
 )
 
 /**
+ * Runs one read-through-commit section against the durable engine. The app
+ * implements this over its snapshot lock so the repository's HTTP waits never
+ * serialize behind other writers; a bound engine answers every section itself.
+ */
+interface EngineSession {
+    suspend operator fun <T> invoke(section: suspend (SyncEngine) -> T): T
+}
+
+/**
  * Coordinates HTTP pages and the durable sync engine. Call off the UI thread.
  * A 410 from the change feed re-bootstraps and then replays the outbox once,
  * so intent queued before the retention gap is not lost.
  */
 class SyncRepository(
     private val api: EarnestApi,
-    private val engine: SyncEngine,
+    private val session: EngineSession,
 ) {
+    /** Binds one engine for callers that already own its serialization. */
+    constructor(api: EarnestApi, engine: SyncEngine) : this(
+        api,
+        object : EngineSession {
+            override suspend fun <T> invoke(section: suspend (SyncEngine) -> T): T = section(engine)
+        },
+    )
+
     private val json = Json { ignoreUnknownKeys = true }
 
     suspend fun bootstrap() {
         val cursor = api.bootstrap()
         // Stage the replacement so an interrupted bootstrap retains its old cursor and cache.
+        val base = session { it.snapshot() }
         val staged = SyncEngine(object : SyncStore {
-            private var data = engine.snapshot()
+            private var data = base
             override fun load() = data
             override fun save(snapshot: SyncSnapshot) { data = snapshot }
         })
@@ -53,21 +71,24 @@ class SyncRepository(
                 }
             } while (page.hasMore)
         }
-        refreshRiverResources(staged, RiverRefresh.REQUIRED)
-        engine.installBootstrap(staged.snapshot())
-        engine.flush()
+        riverResources(RiverRefresh.REQUIRED)?.let { (mutes, settings) ->
+            staged.replaceRiverResources(mutes, settings)
+        }
+        session { it.installBootstrap(staged.snapshot()); it.flush() }
     }
 
     /** Pulls pages and reports operations rejected during retention-gap recovery. */
     suspend fun pull(): List<RejectedOperation> {
         val rejected = mutableListOf<RejectedOperation>()
-        if (engine.snapshot().cursor.generation.isEmpty()) {
+        if (session { it.snapshot().cursor.generation }.isEmpty()) {
             bootstrap()
         } else {
-            refreshRiverResources(engine, RiverRefresh.ALLOW_CACHED)
+            riverResources(RiverRefresh.ALLOW_CACHED)?.let { (mutes, settings) ->
+                session { it.replaceRiverResources(mutes, settings); it.flush() }
+            }
         }
         while (true) {
-            val cursor = engine.snapshot().cursor
+            val cursor = session { it.snapshot().cursor }
             val page = try {
                 api.changes(cursor.generation, cursor.rev)
             } catch (error: ApiException) {
@@ -76,9 +97,8 @@ class SyncRepository(
                 rejected += flush()
                 continue
             }
-            val changes = page.changes.orEmpty()
-            engine.applyPage(changes.map { change(it) }, page.next)
-            engine.flush()
+            val changes = page.changes.orEmpty().map { change(it) }
+            session { it.applyPage(changes, page.next); it.flush() }
             if (changes.isEmpty()) return rejected
         }
     }
@@ -91,46 +111,46 @@ class SyncRepository(
     suspend fun flush(): List<RejectedOperation> {
         val rejected = mutableListOf<RejectedOperation>()
         while (true) {
-            val item = engine.snapshot().outbox.firstOrNull() ?: return rejected
+            val item = session { it.snapshot().outbox.firstOrNull() } ?: return rejected
             val generation = item.operation.base.generation
             val range = item.range
             if (range != null) {
-                engine.markInFlight(range.write.opId)
-                engine.flush()
+                session { it.markInFlight(range.write.opId); it.flush() }
                 val result = api.through(ThroughBody(range.write, range.scope, range.throughSeq))
-                engine.acknowledgeRange(range.write.opId, generation, result)
-                engine.flush()
+                session { it.acknowledgeRange(range.write.opId, generation, result); it.flush() }
                 if (result.status == SyncEngine.STATUS_EXPIRED || result.status == SyncEngine.STATUS_GONE) {
                     rejected += RejectedOperation(range.write.opId, result.status)
                 }
                 continue
             }
 
-            val writes = mutableListOf<StateWrite>()
-            val targets = mutableSetOf<Triple<Long, Long, String>>()
-            val ids = mutableSetOf<String>()
-            for (next in engine.snapshot().outbox.take(BATCH_LIMIT)) {
-                if (next.range != null) break
-                val operation = next.operation
-                if (operation.base.generation != generation) break
-                if (!targets.add(Triple(operation.principal, operation.entryId, operation.register))) break
-                if (!ids.add(operation.opId)) break
-                writes += operation
-                engine.markInFlight(operation.opId)
+            val writes = session { engine ->
+                val writes = mutableListOf<StateWrite>()
+                val targets = mutableSetOf<Triple<Long, Long, String>>()
+                val ids = mutableSetOf<String>()
+                for (next in engine.snapshot().outbox.take(BATCH_LIMIT)) {
+                    if (next.range != null) break
+                    val operation = next.operation
+                    if (operation.base.generation != generation) break
+                    if (!targets.add(Triple(operation.principal, operation.entryId, operation.register))) break
+                    if (!ids.add(operation.opId)) break
+                    writes += operation
+                    engine.markInFlight(operation.opId)
+                }
+                engine.flush()
+                writes
             }
-            engine.flush()
             require(writes.isNotEmpty()) { "outbox advanced without a request" }
             val results = api.batch(writes)
             require(results.size == writes.size) { "batch acknowledgement size mismatch" }
-            engine.acknowledge(generation, results)
-            engine.flush()
+            session { it.acknowledge(generation, results); it.flush() }
             results.filter { it.status == SyncEngine.STATUS_GONE || it.status == SyncEngine.STATUS_EXPIRED }
                 .forEach { rejected += RejectedOperation(it.opId, it.status) }
         }
     }
 
     /** Drops queue items older than 30 days and returns them for reporting. */
-    fun expire(now: java.time.Instant): List<Pending> = engine.expire(now)
+    suspend fun expire(now: java.time.Instant): List<Pending> = session { it.expire(now) }
 
     private fun resource(kind: String, value: JsonElement): SyncChange {
         val item = value.jsonObject
@@ -219,8 +239,8 @@ class SyncRepository(
 
     private enum class RiverRefresh { REQUIRED, ALLOW_CACHED }
 
-    /** Bootstrap needs a complete set; incremental replay can update the cached set. */
-    private suspend fun refreshRiverResources(target: SyncEngine, mode: RiverRefresh) {
+    /** Fetches the active river resources; a transient failure keeps the cached set. */
+    private suspend fun riverResources(mode: RiverRefresh): Pair<List<SyncObject>, SyncObject>? {
         val (mutes, settings) = try {
             api.mutes() to api.settings()
         } catch (error: IOException) {
@@ -228,10 +248,9 @@ class SyncRepository(
 
             // Keep both cached resources on a transient failure. The change feed below
             // still replays their updates, and the next pull retries the refresh.
-            return
+            return null
         }
-        target.replaceRiverResources(mutes.map { riverResource(River.MUTE, it) }, riverResource(River.SETTINGS, settings))
-        target.flush()
+        return mutes.map { riverResource(River.MUTE, it) } to riverResource(River.SETTINGS, settings)
     }
 
     private fun riverResource(kind: String, value: JsonElement): SyncObject {
@@ -266,12 +285,11 @@ class SyncRepository(
 
     /** Resolves a deep link absent from the snapshot, hiding a 404 until a newer projection. */
     suspend fun loadEntry(id: Long): CachedEntry? {
-        val cached = engine.snapshot().entries.firstOrNull { it.id == id }
+        val cached = session { it.snapshot().entries.firstOrNull { entry -> entry.id == id } }
         if (cached != null) return cached.takeUnless { it.deleted }
 
         val entry = hydrate(CachedEntry(id))
-        engine.mergeEntry(entry)
-        engine.flush()
+        session { it.mergeEntry(entry); it.flush() }
         return entry.takeUnless { it.deleted }
     }
 
