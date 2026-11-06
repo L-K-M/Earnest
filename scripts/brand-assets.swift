@@ -113,9 +113,13 @@ func bleed(_ art: CGImage, _ size: Int, _ fraction: CGFloat) -> CGImage {
 func lettering(_ wordmark: CGImage) -> CGImage {
     let width = wordmark.width, height = wordmark.height
     var pixels = [UInt8](repeating: 0, count: width * height * 4)
-    let context = CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
-                            space: sRGB, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-    context.draw(wordmark, in: CGRect(x: 0, y: 0, width: width, height: height))
+    // The context draws into the array's storage, which stays valid only
+    // inside this closure, so the context must not outlive it.
+    pixels.withUnsafeMutableBytes { buffer in
+        let context = CGContext(data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                space: sRGB, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        context.draw(wordmark, in: CGRect(x: 0, y: 0, width: width, height: height))
+    }
     let alpha = { (x: Int, y: Int) in Int(pixels[(y * width + x) * 4 + 3]) }
     let visible = 16
 
