@@ -33,13 +33,14 @@ class AppViewModelTest {
     private val calls = CopyOnWriteArrayList<String>()
     private class Sessions(@Volatile var value: AuthenticatedSession?) : SessionStore {
         @Volatile var onRead: (() -> Unit)? = null
+        @Volatile var onClear: (() -> Unit)? = null
         override fun current(): AuthenticatedSession? {
             val callback = onRead
             onRead = null
             callback?.invoke()
             return value
         }
-        override fun clearToken() { value = null }
+        override fun clearToken() { value = null; onClear?.invoke() }
     }
     @Before fun setup() {
         Dispatchers.setMain(UnconfinedTestDispatcher())
@@ -220,6 +221,28 @@ class AppViewModelTest {
         withTimeout(15000) { model.loggedIn.first { !it } }
         assertFalse(model.loggedIn.value)
         assertEquals("Your session expired. Sign in again.", model.sessionNotice.value)
+    }
+
+    @Test fun reLoginDuringExpiryIsNotSignedOut() = runBlocking(Dispatchers.IO) {
+        val sessions = Sessions(AuthenticatedSession(identity, "token"))
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val unauthorized = EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { chain ->
+            calls += chain.request().url.encodedPath
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(401).message("unauthorized")
+                .body("""{"detail":"expired"}""".toResponseBody()).build()
+        }.build())
+        var factory: () -> EarnestApi = { api() }
+        val model = AppViewModel(app, sessions) { factory() }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        val fresh = AuthenticatedSession(identity, "fresh-token")
+        // The session fails with a 401 while the login flow stores a new one.
+        factory = { unauthorized }
+        sessions.onClear = { sessions.value = fresh }
+        model.refresh()
+        withTimeout(15000) { model.state.first { it.error != null } }
+        assertTrue(model.loggedIn.value)
+        assertEquals(fresh, sessions.current())
+        assertNull(model.sessionNotice.value)
     }
 
     @Test fun clearedTokenSignsOutOnQueuedAction() = runBlocking(Dispatchers.IO) {

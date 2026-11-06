@@ -182,9 +182,11 @@ class AppViewModel internal constructor(
                 }
             } catch (error: ApiException) {
                 if (!currentOrExpired(session, cache)) return@launch
-                if (error.isUnauthorized) {
+                if (error.isUnauthorized && sessions.current() == session) {
+                    // Clear only the session that failed: a login that completed
+                    // concurrently must not lose its token or get signed out.
                     sessions.clearToken()
-                    sessionExpired()
+                    if (sessions.current() == null) sessionExpired()
                 }
                 _state.value = _state.value.copy(error = error.message)
             } catch (error: Exception) {
