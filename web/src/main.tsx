@@ -121,6 +121,7 @@ function Session({onLogout}: {onLogout: () => void}) {
       setSummary(old => ({...old, seen: old.seen + Number(register === 'seen' && value === 'seen'), done: old.done + Number(register === 'shelf' && value === 'done'), later: old.later + Number(register === 'shelf' && value === 'later'), kept: old.kept + Number(register === 'kept' && value === true)}))
     },
     markAll: async view => {
+      if ((view.kind === 'feed' || view.kind === 'folder') && view.id === undefined) throw new Error('This view is missing its feed or folder.')
       const scope: Scope = view.kind === 'feed' ? {kind: 'subscriptions', ids: [BigInt(view.id ?? 0)]}
         : view.kind === 'folder' ? {kind: 'folder', ids: [BigInt(view.id ?? 0)]}
         : {kind: 'all', ids: []}
