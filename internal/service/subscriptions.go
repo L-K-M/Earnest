@@ -292,7 +292,7 @@ func (s *Service) Subscribe(ctx context.Context, a Actor, rawURL string, options
 		if replay != nil {
 			return json.Unmarshal(replay, &sub)
 		}
-		sub, err = s.subscribeTx(ctx, tx, a, resolved, meta, options, encrypted)
+		sub, _, err = s.subscribeTx(ctx, tx, a, resolved, meta, options, encrypted)
 		if err != nil {
 			return err
 		}
@@ -309,21 +309,22 @@ func (s *Service) Subscribe(ctx context.Context, a Actor, rawURL string, options
 	return sub, nil
 }
 
-func (s *Service) subscribeTx(ctx context.Context, tx pgx.Tx, a Actor, rawURL string, meta FeedMeta, options SubscribeOptions, encrypted []byte) (Subscription, error) {
+func (s *Service) subscribeTx(ctx context.Context, tx pgx.Tx, a Actor, rawURL string, meta FeedMeta, options SubscribeOptions, encrypted []byte) (Subscription, bool, error) {
 	if err := ensureFolder(ctx, tx, a.UserID, options.FolderID); err != nil {
-		return Subscription{}, err
+		return Subscription{}, false, err
 	}
 	var feedID int64
 	if err := ensureFeed(ctx, tx, a.UserID, rawURL, meta, encrypted, s.now().UTC(), &feedID); err != nil {
-		return Subscription{}, err
+		return Subscription{}, false, err
 	}
 	var existing int64
 	err := tx.QueryRow(ctx, "SELECT id FROM subscriptions WHERE user_id=$1 AND feed_id=$2 AND deleted_at IS NULL", a.UserID, feedID).Scan(&existing)
 	if err == nil {
-		return subscriptionTx(ctx, tx, a.UserID, existing)
+		sub, err := subscriptionTx(ctx, tx, a.UserID, existing)
+		return sub, false, err
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		return Subscription{}, err
+		return Subscription{}, false, err
 	}
 	cadence := options.Cadence
 	if cadence == "" {
@@ -331,7 +332,7 @@ func (s *Service) subscribeTx(ctx context.Context, tx pgx.Tx, a Actor, rawURL st
 	}
 	mode, err := subscriptionExtract(options.Extract)
 	if err != nil {
-		return Subscription{}, err
+		return Subscription{}, false, err
 	}
 	var folder any
 	if options.FolderID != 0 {
@@ -343,46 +344,49 @@ func (s *Service) subscribeTx(ctx context.Context, tx pgx.Tx, a Actor, rawURL st
 	}
 	rev, err := changeRev(ctx, tx, a.UserID)
 	if err != nil {
-		return Subscription{}, err
+		return Subscription{}, false, err
 	}
 	var id int64
+	var initialFetchPending bool
 	if err := tx.QueryRow(ctx, `INSERT INTO subscriptions(user_id,feed_id,title_override,folder_id,cadence,full_text_mode,rev,created_at,initial_since,initial_through_seq,initial_fetch_pending)
- VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,(SELECT coalesce(max(seq),0) FROM entries WHERE feed_id=$2),NOT EXISTS(SELECT 1 FROM entries WHERE feed_id=$2)) RETURNING id`, a.UserID, feedID, title, folder, string(cadence), mode, rev, s.now().UTC(), s.now().UTC().Add(-24*time.Hour)).Scan(&id); err != nil {
-		return Subscription{}, err
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,(SELECT coalesce(max(seq),0) FROM entries WHERE feed_id=$2),NOT EXISTS(SELECT 1 FROM entries WHERE feed_id=$2)) RETURNING id, initial_fetch_pending`, a.UserID, feedID, title, folder, string(cadence), mode, rev, s.now().UTC(), s.now().UTC().Add(-24*time.Hour)).Scan(&id, &initialFetchPending); err != nil {
+		return Subscription{}, false, err
 	}
 	sub, err := subscriptionTx(ctx, tx, a.UserID, id)
 	if err != nil {
-		return sub, err
+		return sub, false, err
 	}
 	if err := s.emitChange(ctx, tx, a.UserID, rev, syncmodel.SubscriptionCreated, "subscription", sub); err != nil {
-		return sub, err
+		return sub, false, err
 	}
 	if err := s.backfillSubscription(ctx, tx, a.UserID, sub); err != nil {
-		return sub, err
+		return sub, false, err
 	}
 	seq, err := store.CurrentSeq(ctx, tx)
 	if err != nil {
-		return sub, err
+		return sub, false, err
 	}
 	view := "river:" + string(cadence)
 	var exists bool
 	if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM positions WHERE principal_id=$1 AND view=$2)", a.PrincipalID, view).Scan(&exists); err != nil {
-		return sub, err
+		return sub, false, err
 	}
 	if !exists {
 		positionRev, err := changeRev(ctx, tx, a.UserID)
 		if err != nil {
-			return sub, err
+			return sub, false, err
 		}
 		if err := store.UpsertPosition(ctx, tx, a.PrincipalID, view, uint64(seq), positionRev); err != nil {
-			return sub, err
+			return sub, false, err
 		}
 		position := syncmodel.Position{Principal: syncmodel.ID(a.PrincipalID), View: view, Seq: uint64(seq), Rev: uint64(positionRev)}
 		if err := s.emitChange(ctx, tx, a.UserID, positionRev, syncmodel.PositionUpdated, "position", position); err != nil {
-			return sub, err
+			return sub, false, err
 		}
 	}
-	return sub, nil
+	// The bool means "this subscription scheduled an initial fetch", which is
+	// false when the feed already had entries and backfilled synchronously.
+	return sub, initialFetchPending, nil
 }
 
 const (

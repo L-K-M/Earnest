@@ -324,8 +324,17 @@ func TestSubscriptions(t *testing.T) {
 		if err != nil || len(first) != 3 {
 			t.Fatal("export", first, err)
 		}
-		if _, err := f.s.ImportOPML(context.Background(), f.a, input); err != nil {
+		repeat, err := f.s.ImportOPML(context.Background(), f.a, input)
+		if err != nil {
 			t.Fatal(err)
+		}
+		for _, result := range repeat {
+			if result.Subscription != nil && result.Error != "" {
+				t.Fatal("repeat import errored:", result.Error)
+			}
+			if result.Subscription != nil && result.Deferred {
+				t.Fatal("repeat import marked an existing feed deferred")
+			}
 		}
 		second, err := f.s.ExportOPML(context.Background(), f.a)
 		b1, _ := json.Marshal(first)
