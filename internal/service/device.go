@@ -39,7 +39,8 @@ type DeviceAuthorization struct {
 }
 
 // throttleDevice caps device authorization starts per client key. It shares
-// the login attempt map so one abusive client is counted in one place.
+// the login attempt map but uses its own "d:" key namespace, so device starts
+// never count against login attempts.
 func (a *Auth) throttleDevice(clientKey string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()

@@ -218,4 +218,8 @@ func TestDeviceStartRateLimited(t *testing.T) {
 	if _, err := a.StartDeviceAuth(ctx, "phone", ""); err != nil {
 		t.Fatalf("empty key: %v", err)
 	}
+	now = now.Add(deviceStartWindow + time.Second)
+	if _, err := a.StartDeviceAuth(ctx, "phone", "client-flood"); err != nil {
+		t.Fatalf("window reset: %v", err)
+	}
 }
