@@ -39,13 +39,9 @@ import AppKit
     private var coordinator: SyncCoordinator?
     private(set) var principalID: Int64 = 0
     private(set) var feedMap: [Int64: FeedInfo] = [:]
-    var cachedPresentation = false
     private(set) var session = 0
     private var tasks: [String: Task<Void, Never>] = [:]
     var sessionActions = SessionCounts()
-    /// The last list restored from the durable snapshot; a new window seeds
-    /// its presentation from it when no sibling on its section exists.
-    private(set) var cachedEntries: [APIEntry] = []
     private var windowRefs: [WindowRef] = []
 
     private struct WindowRef {
@@ -107,8 +103,6 @@ import AppKit
         briefs = []
         agentChanges = []
         principalNames = [:]
-        cachedPresentation = false
-        cachedEntries = []
         code = nil
         loggingIn = false
         loggedIn = false
@@ -219,9 +213,7 @@ import AppKit
             } catch {
                 // A cache that cannot be read or decoded is a cold cache, not
                 // a fatal error: clear it and let the next sync rebuild it.
-                cachedPresentation = false
-                cachedEntries = []
-                for window in windows { window.entries = [] }
+                for window in windows { window.restoreCachedEntries([]) }
                 feeds = []
                 feedMap = [:]
                 principalNames = [:]
@@ -250,14 +242,20 @@ import AppKit
         }
     }
 
+    /// A newly opened window reads the current engine, not a list captured
+    /// before the latest sync or the section another window happens to show.
+    func currentEntries() throws -> [APIEntry] {
+        guard let engine else { return [] }
+        let snapshot = try engine.snapshot()
+        let cached = snapshot.entries.filter { !$0.deleted && $0.hasBody }.sorted { $0.seq < $1.seq }
+        let states = try engine.states(principal: principalID, entryIDs: cached.map(\.id))
+        return try cached.map { try cachedEntry($0, principal: principalID, engine: engine, state: states[$0.id]) }
+    }
+
     func restoreCachedPresentation() throws {
         guard let engine, let cache else { return }
         let snapshot = try engine.snapshot()
-        cachedPresentation = true
-        // Oldest first, like the server river, so offline reading order matches online.
-        let cached = snapshot.entries.filter { !$0.deleted && $0.hasBody }.sorted { $0.seq < $1.seq }
-        let prefetched = (try? engine.states(principal: principalID, entryIDs: cached.map(\.id))) ?? [:]
-        cachedEntries = try cached.map { try cachedEntry($0, principal: principalID, engine: engine, state: prefetched[$0.id]) }
+        let entries = try currentEntries()
         let generation = snapshot.cursor?.generation ?? ""
         feeds = try cache.resource("feeds", generation: generation).compactMap(FeedInfo.init).filter { !$0.deleted }
         let subscriptions = snapshot.objects.filter { $0.kind == .subscription && !$0.deleted }
@@ -275,7 +273,7 @@ import AppKit
         }, uniquingKeysWith: { _, last in last })
         feedMap = Dictionary(feeds.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         briefs = try cache.resource("briefs", generation: generation).compactMap(BriefItem.init)
-        for window in windows { window.entries = cachedEntries }
+        for window in windows { window.restoreCachedEntries(entries) }
         rebuildPresentation()
     }
 

@@ -28,7 +28,7 @@ import Network
         relaunched.loggedIn = true
         let online = try await relaunched.establishSession()
         XCTAssertFalse(online)
-        XCTAssertEqual(relaunched.cachedEntries.map(\.id), [42])
+        XCTAssertEqual(try relaunched.currentEntries().map(\.id), [42])
         XCTAssertEqual(relaunched.briefs.map(\.text), ["Cached brief"])
         ContentHTTP.assertFinished()
     }
@@ -50,7 +50,7 @@ import Network
         XCTAssertTrue(model.loggedIn)
         XCTAssertNil(model.error)
         XCTAssertNotNil(model.connectionNote)
-        XCTAssertTrue(model.cachedEntries.isEmpty)
+        XCTAssertTrue(try model.currentEntries().isEmpty)
         XCTAssertTrue(model.briefs.isEmpty)
         XCTAssertNil(try store.load(server: identity.server))
         ContentHTTP.assertFinished()
@@ -528,6 +528,37 @@ import Network
         ContentHTTP.assertFinished()
     }
 
+    func testOnlineRefreshDoesNotRelaxAnotherWindowsCachedRiver() async throws {
+        let (directory, defaults, store, identity, cache) = try offlineFixture()
+        defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+        let engine = SyncEngine(store: cache)
+        try engine.mergeBootstrap(kind: "subscriptions", items: [.object([
+            "id": .integer(1), "rev": .integer(2), "title": .string("Cached feed"), "cadence": .string("now"),
+            "initial_since": .string("2026-01-01T00:00:00Z"), "initial_through_seq": .integer(100),
+        ])])
+        try engine.mergeEntry(SyncEntry(id: 43, subscriptionID: 1, seq: 4, title: "Imported backlog",
+                                       publishedAt: DateFormatting.parse("2006-01-01T00:00:00Z"), firstSeenAt: Date()))
+        let session = ContentHTTP.install([
+            .init(path: "/v1/me", body: "", failure: .cannotConnectToHost),
+            .init(path: "/v1/entries", body: #"{"entries":[]}"#),
+        ])
+        let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
+        let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+        let today = WindowModel(app: model)
+        let later = WindowModel(app: model)
+        later.section = .later
+        defer { model.signOut(); session.invalidateAndCancel() }
+        model.loggedIn = true
+        _ = try await model.establishSession()
+        XCTAssertEqual(today.rows.map(\.id), [42])
+
+        await later.refreshEntries()
+        model.rebuildPresentation()
+
+        XCTAssertEqual(today.rows.map(\.id), [42], "Another window's online fetch must not admit imported backlog")
+        ContentHTTP.assertFinished()
+    }
+
     /// An article never opened before has no offline copy; the reader must say
     /// so instead of staying blank.
     func testOfflineArticleWithoutSavedCopyIsMarkedUnavailable() async throws {
@@ -579,7 +610,7 @@ import Network
         model.loggedIn = true
         let online = try await model.establishSession()
         XCTAssertTrue(online)
-        XCTAssertTrue(model.cachedEntries.isEmpty)
+        XCTAssertTrue(try model.currentEntries().isEmpty)
         XCTAssertTrue(model.briefs.isEmpty)
         XCTAssertTrue(model.feeds.isEmpty)
         XCTAssertEqual(try store.load(server: identity.server)?.principalID, 8)
@@ -603,7 +634,7 @@ import Network
         defer { model.signOut(); session.invalidateAndCancel() }
         model.loggedIn = true
         _ = try await model.establishSession()
-        XCTAssertEqual(model.cachedEntries.map(\.id), [42])
+        XCTAssertEqual(try model.currentEntries().map(\.id), [42])
         XCTAssertEqual(model.pendingOps, 1)
         _ = try await model.establishSession()
         let deadline = Date().addingTimeInterval(5)
@@ -612,7 +643,7 @@ import Network
         }
         XCTAssertTrue(model.loggedIn)
         XCTAssertNil(model.error)
-        XCTAssertTrue(model.cachedEntries.isEmpty)
+        XCTAssertTrue(try model.currentEntries().isEmpty)
         XCTAssertTrue(model.briefs.isEmpty)
         XCTAssertEqual(model.pendingOps, 0)
         XCTAssertEqual(try store.load(server: identity.server)?.principalID, 8)
@@ -792,6 +823,10 @@ import Network
         let engine = SyncEngine(store: MemorySyncStore())
         try engine.bootstrap(Cursor(generation: "g", rev: 1))
         try engine.mergeEntries([entry], generation: "g")
+        try engine.mergeBootstrap(kind: "subscriptions", items: [.object([
+            "id": .integer(1), "cadence": .string("now"),
+            "initial_since": .null, "initial_through_seq": .integer(0),
+        ])])
         try engine.finishBootstrap()
         let session = ContentHTTP.install(replies)
         let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: ContentTokens(), session: session)

@@ -11,6 +11,10 @@ import EarnestKit
         let engine = SyncEngine(store: MemorySyncStore())
         try engine.bootstrap(Cursor(generation: "g", rev: 1))
         try engine.mergeEntries([try entry(42), try entry(43)], generation: "g")
+        try engine.mergeBootstrap(kind: "subscriptions", items: [.object([
+            "id": .integer(1), "title": .string("Feed"), "cadence": .string("now"),
+            "initial_since": .null, "initial_through_seq": .integer(0),
+        ])])
         try engine.finishBootstrap()
         let model = AppModel(api: api, engine: engine, principalID: 7)
         model.loggedIn = true
@@ -77,7 +81,8 @@ import EarnestKit
         first.section = .later
         second.section = .done
         first.entries = [try entry(42), try entry(43)]
-        second.entries = first.entries
+        // A real Done window has no copy of the entry before the action.
+        second.entries = []
         model.rebuildPresentation()
         XCTAssertTrue(first.rows.isEmpty)
         XCTAssertTrue(second.rows.isEmpty)
@@ -88,6 +93,68 @@ import EarnestKit
         XCTAssertTrue(first.rows.isEmpty, "The entry leaves the acting window's Later list")
         XCTAssertEqual(second.rows.map(\.id), [42], "The other window's Done list gains it from the shared engine")
         XCTAssertEqual(model.pendingOps, 1)
+    }
+
+    func testNewWindowUsesCurrentSharedSnapshotWithoutASibling() throws {
+        let model = try makeModel()
+        defer { model.signOut() }
+        let engine = try XCTUnwrap(model.engine)
+        try engine.mergeBootstrap(kind: "subscriptions", items: [.object([
+            "id": .integer(1), "title": .string("Feed"), "cadence": .string("now"),
+            "initial_since": .null, "initial_through_seq": .integer(0),
+        ])])
+        let existing = WindowModel(app: model)
+        existing.section = .done
+        existing.entries = []
+
+        let opened = WindowModel(app: model)
+        XCTAssertEqual(opened.rows.map(\.id), [42, 43])
+        XCTAssertEqual(existing.section, .done)
+        XCTAssertTrue(existing.entries.isEmpty)
+    }
+
+    func testUnreadInAnotherWindowUpdatesAnOnlineRiverWithoutAddingMutedEntries() async throws {
+        for muted in [false, true] {
+            let session = ContentHTTP.install([.init(path: "/v1/entries", body: #"{"entries":[]}"#)])
+            let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: ContentTokens(), session: session)
+            let model = try makeModel(api: api)
+            defer { model.signOut(); session.invalidateAndCancel() }
+            let engine = try XCTUnwrap(model.engine)
+            var done = State(principal: 7, entryID: 42)
+            done.seen = Stamp(value: .text("seen"), rev: 2)
+            done.shelf = Stamp(value: .text("done"), rev: 2)
+            try engine.mergeBootstrap([done])
+            try engine.replaceRiverResources(mutes: muted ? [.object([
+                "id": .integer(1), "kind": .string("keyword"), "value": .string("Article"),
+            ])] : [], settings: .object(["today_decay_days": .integer(2)]))
+            let today = WindowModel(app: model)
+            await today.refreshEntries()
+            let acting = WindowModel(app: model)
+            acting.section = .done
+            model.rebuildPresentation()
+            XCTAssertTrue(today.rows.isEmpty)
+
+            acting.selected = 42
+            acting.command(.unread)
+
+            XCTAssertEqual(today.rows.map(\.id), muted ? [] : [42])
+            ContentHTTP.assertFinished()
+        }
+    }
+
+    func testGoneEntryDisappearsFromBothWindows() throws {
+        let model = try makeModel()
+        defer { model.signOut() }
+        let first = WindowModel(app: model)
+        let second = WindowModel(app: model)
+        XCTAssertEqual(first.rows.map(\.id), [42, 43])
+        XCTAssertEqual(second.rows.map(\.id), [42, 43])
+
+        try model.engine?.markGone(entryID: 42)
+        model.rebuildPresentation()
+
+        XCTAssertEqual(first.rows.map(\.id), [43])
+        XCTAssertEqual(second.rows.map(\.id), [43])
     }
 
     func testWindowCommandsAffectOnlyTheirWindow() throws {

@@ -34,15 +34,27 @@ import AppKit
 
     let app: AppModel
     private var tasks: [String: Task<Void, Never>] = [:]
+    // Whether this window's candidates came from the cache or the server's
+    // filtered river. Another window's successful fetch must not change it.
+    private var cachedPresentation = false
 
-    /// A new window seeds its list from a sibling on the same section, else
-    /// the restored cache, so it never opens blank before its first refresh.
     init(app: AppModel) {
         self.app = app
-        entries = app.windows.first(where: { $0.section == section && !$0.entries.isEmpty })?.entries
-            ?? app.cachedEntries
+        if let sibling = app.windows.first(where: { $0.section == section && !$0.entries.isEmpty }) {
+            entries = sibling.entries
+            cachedPresentation = sibling.cachedPresentation
+        } else {
+            do { entries = try app.currentEntries() }
+            catch { app.report(error) }
+            cachedPresentation = true
+        }
         app.register(self)
         rebuildPresentation()
+    }
+
+    func restoreCachedEntries(_ entries: [APIEntry]) {
+        self.entries = entries
+        cachedPresentation = true
     }
 
     /// Every chunk of async work is a named task so selection changes cancel
@@ -62,6 +74,7 @@ import AppKit
         tasks.values.forEach { $0.cancel() }
         tasks.removeAll()
         entries = []
+        cachedPresentation = false
         rows = []
         editionGroups = []
         selected = nil
@@ -129,7 +142,7 @@ import AppKit
             } while cursor != nil && !Task.isCancelled
             guard self.section == expected, app.loggedIn, app.session == expectedSession, !Task.isCancelled else { return }
             try engine.mergeEntries(all, generation: generation)
-            app.cachedPresentation = false
+            cachedPresentation = false
             entries = all
         } catch is CancellationError {
         } catch {
@@ -171,15 +184,45 @@ import AppKit
 
     func rebuildPresentation() {
         let snapshot = try? app.engine?.snapshot()
-        let visible = entries.filter { !$0.deleted }
-        // One snapshot load for the whole list: state() per row cost a full
-        // snapshot decode each and dominated rebuilds on large libraries.
+        let knownIDs = Set(entries.map(\.id))
+        let pendingIDs = Set(snapshot?.outbox.filter { $0.principal == app.principalID }.map(\.entryID) ?? [])
+        let isRiver = section == .today || section == .edition
+        let missing = (snapshot?.entries ?? []).filter {
+            !$0.deleted && $0.hasBody && !knownIDs.contains($0.id) && section.entryView != nil
+                && (!isRiver || cachedPresentation || pendingIDs.contains($0.id))
+        }
+        // Prefetch states for fetched candidates and possible additions once.
+        // A shelf window may not have fetched an entry that another window
+        // just moved there, especially while offline.
         let bulk: [Int64: EarnestKit.State]? = app.principalID > 0
-            ? (try? app.engine?.states(principal: app.principalID, entryIDs: visible.map(\.id))) ?? nil
+            ? (try? app.engine?.states(principal: app.principalID, entryIDs: entries.map(\.id) + missing.map(\.id))) ?? nil
             : nil
+        if let snapshot, let engine = app.engine {
+            let subscriptions = Dictionary(snapshot.objects.filter { $0.kind == .subscription }.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+            let resources = snapshot.objects.filter { $0.kind == .mute || $0.kind == .settings }
+            let now = Date()
+            do {
+                let additions = try missing.compactMap { entry -> APIEntry? in
+                    guard let state = bulk?[entry.id] else { return nil }
+                    let belongs: Bool
+                    switch section {
+                    case .today, .edition:
+                        belongs = River.contains(entry, state: state, subscription: subscriptions[entry.subscriptionID], resources: resources, now: now)
+                    case .later: belongs = state.shelf.value == .text("later")
+                    case .kept: belongs = state.kept.value == .flag(true)
+                    case .done: belongs = state.shelf.value == .text("done")
+                    case .feeds, .activity: belongs = false
+                    }
+                    return belongs ? try cachedEntry(entry, principal: app.principalID, engine: engine, state: state) : nil
+                }
+                if !additions.isEmpty { entries = (entries + additions).sorted { $0.seq < $1.seq } }
+            } catch { app.report(error) }
+        }
+        let goneIDs = Set(snapshot?.entries.filter(\.deleted).map(\.id) ?? [])
+        let visible = entries.filter { !$0.deleted && !goneIDs.contains($0.id) }
         let presented = visible.map { ($0, bulk?[$0.id] ?? $0.state.syncState) }
         let riverIDs: Set<Int64>
-        if app.cachedPresentation, let snapshot {
+        if cachedPresentation, let snapshot {
             let subscriptions = Dictionary(snapshot.objects.filter { $0.kind == .subscription }.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
             let states = Dictionary(presented.map { ($0.0.id, $0.1) }, uniquingKeysWith: { _, last in last })
             let resources = snapshot.objects.filter { $0.kind == .mute || $0.kind == .settings }
