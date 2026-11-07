@@ -63,4 +63,11 @@ class NotificationsTest {
         assertEquals(MainActivity::class.java.name, saved.component?.className)
         assertEquals(42L, saved.getLongExtra(Notifications.EXTRA_NOTIFICATION_ID, -1L))
     }
+
+    @Test fun usesTheAppGlyphAsTheStatusBarIcon() {
+        Notifications.ensureChannels(context)
+        Notifications.show(context, 7L, "alert", "Title", "Body")
+        val notification = context.getSystemService(NotificationManager::class.java).activeNotifications[0].notification
+        assertEquals(R.drawable.ic_notification, notification.smallIcon.resId)
+    }
 }
