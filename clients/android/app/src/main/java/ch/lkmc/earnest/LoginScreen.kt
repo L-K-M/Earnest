@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -73,10 +74,12 @@ internal fun LoginScreen(onLoggedIn: () -> Unit) {
         }
     }
 
+    // The activity draws edge to edge, so keep the form clear of the status bar and keyboard.
     Column(
-        modifier = Modifier.padding(16.dp),
+        modifier = Modifier.safeDrawingPadding().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        BrandLockup()
         Text("Connect to Earnest", style = MaterialTheme.typography.headlineSmall)
         OutlinedTextField(
             value = server,

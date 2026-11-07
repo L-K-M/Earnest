@@ -3,10 +3,10 @@ package api
 import (
 	"context"
 	"errors"
-	"net"
 	"net/http"
 	"time"
 
+	"github.com/L-K-M/Earnest/internal/clientip"
 	"github.com/L-K-M/Earnest/internal/service"
 )
 
@@ -59,9 +59,11 @@ func (s *server) cookie(value string, expires time.Time) *http.Cookie {
 
 func (s *server) identityRoutes() {
 	register(s, http.MethodPost, "/v1/session/login", "session-login", publicAccess, func(ctx context.Context, in *bodyInput[loginBody]) (loginResult, error) {
-		client, _, err := net.SplitHostPort(request(ctx).RemoteAddr)
-		if err != nil {
-			client = request(ctx).RemoteAddr
+		// Behind a same-host proxy the socket address is the proxy's; use the
+		// forwarded client or a per-credential bucket, never one shared bucket.
+		client, ok := clientip.Key(request(ctx))
+		if !ok {
+			client = "user:" + in.Body.Username
 		}
 		a, err := s.auth.Authenticate(ctx, in.Body.Username, in.Body.Password, client)
 		if err != nil {
@@ -117,7 +119,18 @@ func (s *server) identityRoutes() {
 				return deviceResult{}, err
 			}
 		}
-		result, err := s.auth.StartDeviceAuth(ctx, in.Body.ClientName)
+		// Device starts are public: cap them per client, keyed like login
+		// attempts so a trusted proxy's clients get separate buckets. With no
+		// usable client address, share the peer's bucket rather than skip the
+		// cap.
+		client, ok := clientip.Key(request(ctx))
+		if !ok {
+			client = "peer:" + request(ctx).RemoteAddr
+			if host, _, err := net.SplitHostPort(request(ctx).RemoteAddr); err == nil {
+				client = "peer:" + host
+			}
+		}
+		result, err := s.auth.StartDeviceAuth(ctx, in.Body.ClientName, client)
 		if err != nil {
 			return deviceResult{}, err
 		}

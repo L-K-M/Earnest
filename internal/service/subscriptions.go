@@ -220,6 +220,8 @@ func ensureFolder(ctx context.Context, tx pgx.Tx, user, folder int64) error {
 
 // Subscribe probes outside the commit lock, shares public feeds and encrypts
 // private credentials. A replay never initiates another outbound request.
+// Subscribing to a URL the user already follows reuses their subscription;
+// supplied credentials rebind it to their own feed, as UpdateSubscription does.
 func (s *Service) Subscribe(ctx context.Context, a Actor, rawURL string, options SubscribeOptions) (Subscription, error) {
 	if err := s.checkActor(ctx, a, ScopeFeedsWrite); err != nil {
 		return Subscription{}, err
@@ -313,17 +315,22 @@ func (s *Service) subscribeTx(ctx context.Context, tx pgx.Tx, a Actor, rawURL st
 	if err := ensureFolder(ctx, tx, a.UserID, options.FolderID); err != nil {
 		return Subscription{}, false, err
 	}
-	var feedID int64
-	if err := ensureFeed(ctx, tx, a.UserID, rawURL, meta, encrypted, s.now().UTC(), &feedID); err != nil {
-		return Subscription{}, false, err
-	}
+	// One URL can back two feed rows: the shared public row and the user's
+	// own credential-bearing row. Deduplicate subscriptions by URL so a second
+	// subscribe cannot stack a parallel feed showing every item twice.
 	var existing int64
-	err := tx.QueryRow(ctx, "SELECT id FROM subscriptions WHERE user_id=$1 AND feed_id=$2 AND deleted_at IS NULL", a.UserID, feedID).Scan(&existing)
+	err := tx.QueryRow(ctx, `SELECT s.id FROM subscriptions s JOIN feeds f ON f.id=s.feed_id
+  WHERE s.user_id=$1 AND s.deleted_at IS NULL AND f.url=$2
+  AND (f.owner_user_id IS NULL OR f.owner_user_id=$1) ORDER BY f.owner_user_id NULLS LAST,s.id`, a.UserID, rawURL).Scan(&existing)
 	if err == nil {
-		sub, err := subscriptionTx(ctx, tx, a.UserID, existing)
+		sub, err := s.resubscribeTx(ctx, tx, a, rawURL, meta, encrypted, existing)
 		return sub, false, err
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
+		return Subscription{}, false, err
+	}
+	var feedID int64
+	if err := ensureFeed(ctx, tx, a.UserID, rawURL, meta, encrypted, s.now().UTC(), &feedID); err != nil {
 		return Subscription{}, false, err
 	}
 	cadence := options.Cadence
@@ -387,6 +394,43 @@ func (s *Service) subscribeTx(ctx context.Context, tx pgx.Tx, a Actor, rawURL st
 	// The bool means "this subscription scheduled an initial fetch", which is
 	// false when the feed already had entries and backfilled synchronously.
 	return sub, initialFetchPending, nil
+}
+
+// resubscribeTx returns the existing subscription for a followed URL.
+// Credentials cannot sit on a shared feed, so a resubscribe carrying them
+// rebinds to the user's own feed row, the conversion UpdateSubscription
+// performs for a credential change. Other subscribe options never patch an
+// existing subscription.
+func (s *Service) resubscribeTx(ctx context.Context, tx pgx.Tx, a Actor, rawURL string, meta FeedMeta, encrypted []byte, id int64) (Subscription, error) {
+	sub, err := subscriptionTx(ctx, tx, a.UserID, id)
+	if err != nil || encrypted == nil {
+		return sub, err
+	}
+	var feedID int64
+	if err := ensureFeed(ctx, tx, a.UserID, rawURL, meta, encrypted, s.now().UTC(), &feedID); err != nil {
+		return Subscription{}, err
+	}
+	if feedID == sub.FeedID {
+		return sub, nil
+	}
+	rev, err := changeRev(ctx, tx, a.UserID)
+	if err != nil {
+		return Subscription{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE subscriptions SET feed_id=$2,rev=$3,initial_since=$4,initial_through_seq=(SELECT coalesce(max(seq),0) FROM entries WHERE feed_id=$2),initial_fetch_pending=NOT EXISTS(SELECT 1 FROM entries WHERE feed_id=$2) WHERE id=$1`, id, feedID, rev, s.now().UTC().Add(-24*time.Hour)); err != nil {
+		return Subscription{}, domainError(err)
+	}
+	sub, err = subscriptionTx(ctx, tx, a.UserID, id)
+	if err != nil {
+		return sub, err
+	}
+	if err := s.emitChange(ctx, tx, a.UserID, rev, syncmodel.SubscriptionUpdated, "subscription", sub); err != nil {
+		return sub, err
+	}
+	if err := s.backfillSubscription(ctx, tx, a.UserID, sub); err != nil {
+		return sub, err
+	}
+	return sub, nil
 }
 
 const (

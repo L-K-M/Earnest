@@ -171,7 +171,16 @@ class EarnestApi(
 
     suspend fun content(id: Long): Content = get(url("/v1/entries/$id/content")).decode()
 
-    suspend fun contentUrl(id: Long): ContentUrl = get(url("/v1/entries/$id/content-url") { it.addQueryParameter("mode", "click") }).decode()
+    /**
+     * Issues a signed content URL. [mode] selects the server's image
+     * handling: omitted (or "proxied") serves inline images through the
+     * image proxy; "click" rewrites each image into a click-to-load link.
+     * In-app display needs proxied images, so callers leave [mode] unset;
+     * the parameter remains for surfaces that deliberately want
+     * click-to-load.
+     */
+    suspend fun contentUrl(id: Long, mode: String? = null): ContentUrl =
+        get(url("/v1/entries/$id/content-url") { mode?.let { value -> it.addQueryParameter("mode", value) } }).decode()
 
     suspend fun mutes(): List<JsonElement> = get(url("/v1/mutes")).decode()
 
