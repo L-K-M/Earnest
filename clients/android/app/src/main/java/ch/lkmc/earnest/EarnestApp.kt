@@ -63,11 +63,14 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -186,8 +189,10 @@ private fun MainScaffold(
     val selected = navigator.currentDestination?.contentKey
     // Entries reached through an agent's output (a notification, a deep link
     // of unknown origin, an agent-change notice) open with click-to-load
-    // images; see AppViewModel.openEntry.
-    val agentSelected = remember { mutableSetOf<Long>() }
+    // images; see AppViewModel.openEntry. The set is saved with the navigator's
+    // destination: after a rotation or process death the reader reopens the
+    // same entry, and a plain remember would reload it with automatic images.
+    var agentSelected by rememberSaveable(saver = AgentSelectedSaver) { mutableStateOf(emptySet<Long>()) }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(lifecycleOwner) {
@@ -200,7 +205,7 @@ private fun MainScaffold(
     }
     LaunchedEffect(initialEntry) {
         initialEntry?.let {
-            agentSelected += it
+            agentSelected = agentSelected + it
             navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, it)
         }
     }
@@ -208,7 +213,7 @@ private fun MainScaffold(
         if (state.accountKey == null) return@LaunchedEffect
         val id = notificationId ?: return@LaunchedEffect
         model.notificationEntry(id)?.let {
-            agentSelected += it
+            agentSelected = agentSelected + it
             navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, it)
         }
     }
@@ -329,7 +334,7 @@ private fun MainScaffold(
                                         scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
                                     },
                                     onOpenAgentSelected = { entryId ->
-                                        agentSelected += entryId
+                                        agentSelected = agentSelected + entryId
                                         scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
                                     },
                                     onLater = { id -> model.later(id) { undo(id, SwipeTarget.LATER) } },
@@ -866,3 +871,12 @@ private fun String.relativeTime(): String = runCatching {
         else -> "${minutes / (60 * 24)}d ago"
     }
 }.getOrDefault("")
+
+/**
+ * Saves the ids of entries an agent surfaced across configuration changes and
+ * process death. A LongArray fits the saved-state bundle directly.
+ */
+internal val AgentSelectedSaver: Saver<MutableState<Set<Long>>, LongArray> = Saver(
+    save = { it.value.toLongArray() },
+    restore = { mutableStateOf(it.toSet()) },
+)
