@@ -147,9 +147,18 @@ class SyncEngine(private val store: SyncStore) {
         commit(SyncSnapshot(cursor = cursor, outbox = pending))
     }
 
-    /** Installs a fully paged bootstrap; incomplete pages never replace the live cache. */
+    /**
+     * Installs a fully paged bootstrap; incomplete pages never replace the live
+     * cache. Live intent survives like [beginBootstrap], so operations queued
+     * while the replacement was fetched are not lost.
+     */
     internal fun installBootstrap(completed: SyncSnapshot) {
-        commit(completed)
+        val pending = if (completed.cursor.generation == snapshot.cursor.generation) {
+            snapshot.outbox
+        } else {
+            snapshot.outbox.map { stale(it, completed.cursor.generation) }
+        }
+        commit(completed.copy(outbox = pending))
     }
 
     private fun stale(item: Pending, generation: String): Pending {

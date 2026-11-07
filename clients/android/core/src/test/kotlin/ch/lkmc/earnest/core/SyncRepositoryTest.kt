@@ -491,4 +491,47 @@ class SyncRepositoryTest {
         assertEquals(original, SyncEngine(store).snapshot())
     }
 
+    @Test
+    fun expiredOperationsPersistAfterReload() = runBlocking {
+        val stale = Pending(write = write("ancient").copy(occurredAt = "2020-01-01T00:00:00Z"))
+        val store = Store(SyncSnapshot(Revision("g1", 0), outbox = listOf(stale)))
+        val repository = SyncRepository(api { 200 to "[]" }, SyncEngine(store))
+        val dropped = repository.expire(java.time.Instant.parse("2026-01-01T00:00:00Z"))
+        assertEquals(listOf("ancient"), dropped.map { it.operation.opId })
+        // A fresh engine over the same store must not resurrect the dropped operation.
+        assertTrue(SyncEngine(store).snapshot().outbox.isEmpty())
+    }
+
+    @Test
+    fun httpHappensOutsideEngineSections() = runBlocking {
+        // Sections are short load-mutate-save critical sections; a user action
+        // queued mid-sync must not wait behind HTTP.
+        val store = Store(SyncSnapshot(Revision("g1", 0), outbox = listOf(Pending(write = write("queued")))))
+        var inSection = false
+        val sections = object : EngineSession {
+            override suspend fun <T> invoke(section: suspend (SyncEngine) -> T): T {
+                check(!inSection) { "engine sections must not nest" }
+                inSection = true
+                try {
+                    return section(SyncEngine(store))
+                } finally {
+                    inSection = false
+                }
+            }
+        }
+        val repository = SyncRepository(api { request ->
+            check(!inSection) { "HTTP ran inside an engine section: ${request.url.encodedPath}" }
+            when (request.url.encodedPath) {
+                "/v1/changes" -> 200 to """{"changes":[],"next":{"generation":"g1","rev":0},"next_cursor":"g1:0"}"""
+                "/v1/state:batch" -> 200 to json.encodeToString(
+                    kotlinx.serialization.builtins.ListSerializer(Result.serializer()),
+                    listOf(Result("queued", "applied", SyncEngine.initialState(1, 2), false)),
+                )
+                else -> error("unexpected request ${request.url.encodedPath}")
+            }
+        }, sections)
+        repository.pull()
+        repository.flush()
+        assertTrue(store.data.outbox.isEmpty())
+    }
 }
