@@ -66,7 +66,10 @@ public struct EntriesPage: Codable, Sendable {
     public let nextCursor: String?
     public let status: String?
     public let groups: [ClusterGroup]?
-    enum CodingKeys: String, CodingKey { case entries, nextCursor = "next_cursor", status, groups }
+    /// Full match count for a dry run; may exceed `entries?.count` because
+    /// the sample is capped.
+    public let total: Int64?
+    enum CodingKeys: String, CodingKey { case entries, nextCursor = "next_cursor", status, groups, total }
 }
 /// One story in a clustered page: its representative entry and how many
 /// other entries tell the same story ("also in 3 others").

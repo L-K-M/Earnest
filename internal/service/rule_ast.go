@@ -55,6 +55,11 @@ type RuleAction struct {
 
 const maxRuleNodes = 256
 
+// maxDryRunMatches bounds how many matching entry IDs a dry run returns.
+// The total match count is still computed so the UI can report how much was
+// omitted; only the sample is bounded.
+const maxDryRunMatches = 500
+
 // DefaultRuleNotificationBudget limits notifications per rule per day.
 const DefaultRuleNotificationBudget = 3
 

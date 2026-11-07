@@ -46,7 +46,7 @@ class OpenApiContractTest {
         "Scope" to encode(Scope.serializer(), Scope("subscriptions", listOf(1, 2))),
         "ThroughBody" to encode(ThroughBody.serializer(), ThroughBody(write(), Scope("all"), 4, "2026-11-02T12:00:00Z")),
         "Entry" to encode(Entry.serializer(), entry()),
-        "EntriesPage" to encode(EntriesPage.serializer(), EntriesPage(listOf(entry()), "42")),
+        "EntriesPage" to encode(EntriesPage.serializer(), EntriesPage(listOf(entry()), "42", 42)),
         "FeedHealth" to encode(
             FeedHealth.serializer(),
             FeedHealth("2026-11-01T00:00:00Z", "2026-11-02T00:00:00Z", "2026-11-03T00:00:00Z", "dns", "boom", 3, 500, 12.5, true),

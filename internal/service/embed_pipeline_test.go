@@ -150,7 +150,7 @@ func TestPipelinePrivacyVocabularyAndIdempotency(t *testing.T) {
 		t.Fatalf("labels %v found %v error %v", labels, found, err)
 	}
 	predicate := RulePredicate{Type: RuleClassifierIn, Terms: []string{"press_release"}}
-	ids, err := f.s.DryRunRule(ctx, f.a, predicate, []RuleAction{{Type: RuleNotify}})
+	ids, _, err := f.s.DryRunRule(ctx, f.a, predicate, []RuleAction{{Type: RuleNotify}})
 	if err != nil || len(ids) != 1 || ids[0] != id {
 		t.Fatalf("classifier rule %v %v", ids, err)
 	}

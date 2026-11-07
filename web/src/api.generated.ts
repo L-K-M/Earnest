@@ -1446,6 +1446,8 @@ export interface components {
             groups?: components["schemas"]["ClusterGroup"][] | null;
             next_cursor?: string;
             status?: string;
+            /** Format: int64 */
+            total?: number;
         };
         Entry: {
             author: string;

@@ -88,6 +88,8 @@ type entriesPage struct {
 	Status     string         `json:"status,omitempty"`
 	Groups     []clusterGroup `json:"groups,omitempty"`
 	NextCursor string         `json:"next_cursor,omitempty"`
+	// Total is the full match count for a dry run, which may exceed len(Entries).
+	Total int `json:"total,omitempty"`
 }
 
 // clusterGroup annotates one listed entry with its cluster identity and how

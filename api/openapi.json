@@ -945,6 +945,10 @@
           },
           "status": {
             "type": "string"
+          },
+          "total": {
+            "format": "int64",
+            "type": "integer"
           }
         },
         "required": [
