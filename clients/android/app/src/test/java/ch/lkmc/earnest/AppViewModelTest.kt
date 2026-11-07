@@ -386,8 +386,15 @@ class AppViewModelTest {
         model.later(2) { saved.incrementAndGet() }
         withTimeout(15000) { while (saved.get() == 0) delay(10) }
         assertFalse("the outbox flushed before the debounce", calls.contains("/v1/state:batch"))
-        scheduler.advanceUntilIdle()
-        withTimeout(15000) { while (!calls.contains("/v1/state:batch")) delay(10) }
+        // queue() reports the save before it schedules the debounced flush on
+        // another thread, so keep advancing the clock until the flush runs
+        // instead of advancing once and racing the scheduling.
+        withTimeout(15000) {
+            while (!calls.contains("/v1/state:batch")) {
+                scheduler.advanceUntilIdle()
+                delay(10)
+            }
+        }
     }
 
     @Test fun flushDoesNotClobberAConcurrentRefreshLoadingFlag() = runBlocking(Dispatchers.IO) {
