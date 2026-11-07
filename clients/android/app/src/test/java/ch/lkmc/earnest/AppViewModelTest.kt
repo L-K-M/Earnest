@@ -37,13 +37,14 @@ class AppViewModelTest {
     private val contentUrlQueries = CopyOnWriteArrayList<String?>()
     private class Sessions(@Volatile var value: AuthenticatedSession?) : SessionStore {
         @Volatile var onRead: (() -> Unit)? = null
+        @Volatile var onClear: (() -> Unit)? = null
         override fun current(): AuthenticatedSession? {
             val callback = onRead
             onRead = null
             callback?.invoke()
             return value
         }
-        override fun clearToken() { value = null }
+        override fun clearToken() { value = null; onClear?.invoke() }
     }
     @Before fun setup() {
         Dispatchers.setMain(UnconfinedTestDispatcher())
@@ -256,6 +257,125 @@ class AppViewModelTest {
         val cached = model.openEntry(2)
         assertEquals("<p>account-a</p>", cached?.cachedHtml)
         assertNull(cached?.url)
+    }
+
+    @Test fun clearedTokenSignsOutOnRefresh() = runBlocking(Dispatchers.IO) {
+        val sessions = Sessions(AuthenticatedSession(identity, "token"))
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val model = AppViewModel(app, sessions) { api() }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        sessions.clearToken()
+        model.refresh()
+        withTimeout(15000) { model.loggedIn.first { !it } }
+        assertFalse(model.loggedIn.value)
+        assertEquals("Your session expired. Sign in again.", model.sessionNotice.value)
+    }
+
+    @Test fun reLoginDuringExpiryIsNotSignedOut() = runBlocking(Dispatchers.IO) {
+        val sessions = Sessions(AuthenticatedSession(identity, "token"))
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val unauthorized = EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { chain ->
+            calls += chain.request().url.encodedPath
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(401).message("unauthorized")
+                .body("""{"detail":"expired"}""".toResponseBody()).build()
+        }.build())
+        var factory: () -> EarnestApi = { api() }
+        val model = AppViewModel(app, sessions) { factory() }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        val fresh = AuthenticatedSession(identity, "fresh-token")
+        // The session fails with a 401 while the login flow stores a new one.
+        factory = { unauthorized }
+        sessions.onClear = { sessions.value = fresh }
+        model.refresh()
+        withTimeout(15000) { model.state.first { it.error != null } }
+        assertTrue(model.loggedIn.value)
+        assertEquals(fresh, sessions.current())
+        assertNull(model.sessionNotice.value)
+    }
+
+    @Test fun unauthorizedFlushSignsOutTheExpiredSession() = runBlocking(Dispatchers.IO) {
+        val scheduler = TestCoroutineScheduler()
+        Dispatchers.setMain(UnconfinedTestDispatcher(scheduler))
+        val sessions = Sessions(AuthenticatedSession(identity, "token"))
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val unauthorized = EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { chain ->
+            calls += chain.request().url.encodedPath
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(401).message("unauthorized")
+                .body("""{"detail":"expired"}""".toResponseBody()).build()
+        }.build())
+        var factory: () -> EarnestApi = { api() }
+        val model = AppViewModel(app, sessions) { factory() }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        factory = { unauthorized }
+        val saved = java.util.concurrent.atomic.AtomicInteger()
+        model.later(2) { saved.incrementAndGet() }
+        withTimeout(15000) { while (saved.get() == 0) delay(10) }
+        withTimeout(15000) {
+            while (!calls.contains("/v1/state:batch")) {
+                scheduler.advanceUntilIdle()
+                delay(10)
+            }
+        }
+        withTimeout(15000) { model.loggedIn.first { !it } }
+        assertNull(sessions.current())
+        assertEquals("Your session expired. Sign in again.", model.sessionNotice.value)
+    }
+
+    @Test fun reLoginDuringFlushExpiryIsNotSignedOut() = runBlocking(Dispatchers.IO) {
+        val scheduler = TestCoroutineScheduler()
+        Dispatchers.setMain(UnconfinedTestDispatcher(scheduler))
+        val sessions = Sessions(AuthenticatedSession(identity, "token"))
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val unauthorized = EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { chain ->
+            calls += chain.request().url.encodedPath
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(401).message("unauthorized")
+                .body("""{"detail":"expired"}""".toResponseBody()).build()
+        }.build())
+        var factory: () -> EarnestApi = { api() }
+        val model = AppViewModel(app, sessions) { factory() }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        val fresh = AuthenticatedSession(identity, "fresh-token")
+        // The flush fails with a 401 while the login flow stores a new session.
+        factory = { unauthorized }
+        sessions.onClear = { sessions.value = fresh }
+        val saved = java.util.concurrent.atomic.AtomicInteger()
+        model.later(2) { saved.incrementAndGet() }
+        withTimeout(15000) { while (saved.get() == 0) delay(10) }
+        withTimeout(15000) {
+            while (sessions.value != fresh) {
+                scheduler.advanceUntilIdle()
+                delay(10)
+            }
+        }
+        assertTrue(model.loggedIn.value)
+        assertEquals(fresh, sessions.current())
+        assertNull(model.sessionNotice.value)
+    }
+
+    @Test fun clearedTokenSignsOutOnQueuedAction() = runBlocking(Dispatchers.IO) {
+        val sessions = Sessions(AuthenticatedSession(identity, "token"))
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val model = AppViewModel(app, sessions) { api() }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        sessions.clearToken()
+        val saved = java.util.concurrent.atomic.AtomicInteger()
+        model.later(2) { saved.incrementAndGet() }
+        withTimeout(15000) { model.loggedIn.first { !it } }
+        assertEquals("Your session expired. Sign in again.", model.sessionNotice.value)
+        assertEquals("dropped swipe still reported success", 0, saved.get())
+        assertTrue(SessionCache(app, identity).withEngine { it.snapshot().outbox.isEmpty() })
+    }
+
+    @Test fun clearedTokenSignsOutOnEntryLoad() = runBlocking(Dispatchers.IO) {
+        val sessions = Sessions(AuthenticatedSession(identity, "token"))
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val model = AppViewModel(app, sessions) { api() }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        sessions.clearToken()
+        assertNull(model.loadEntry(2))
+        withTimeout(15000) { model.loggedIn.first { !it } }
+        assertFalse(model.loggedIn.value)
+        assertEquals("Your session expired. Sign in again.", model.sessionNotice.value)
     }
 
     @Test fun queuedActionsFlushShortlyAfterTheLastAction() = runBlocking(Dispatchers.IO) {
