@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"reflect"
 	"strings"
 	"testing"
@@ -22,6 +23,7 @@ var allEnvVars = []string{
 	"EARNEST_CONTENT_ORIGIN",
 	"EARNEST_SECRET_KEY",
 	"EARNEST_OUTBOUND_ALLOW_PRIVATE",
+	"EARNEST_TRUSTED_PROXIES",
 	"EARNEST_LOG_LEVEL",
 	"EARNEST_FETCH_MIN_INTERVAL",
 	"EARNEST_FETCH_MAX_INTERVAL",
@@ -90,6 +92,7 @@ func TestLoadValid(t *testing.T) {
 				"EARNEST_CONTENT_ORIGIN":         "https://content.example.com",
 				"EARNEST_SECRET_KEY":             "another-secret-key-material-32bytes!",
 				"EARNEST_OUTBOUND_ALLOW_PRIVATE": " ollama.lan:11434 , 10.0.0.2:443 ",
+				"EARNEST_TRUSTED_PROXIES":        " 172.18.0.1 , 10.0.0.0/8 ,::ffff:192.0.2.1",
 				"EARNEST_LOG_LEVEL":              "debug",
 				"EARNEST_FETCH_MIN_INTERVAL":     "5m",
 				"EARNEST_FETCH_MAX_INTERVAL":     "12h",
@@ -104,6 +107,7 @@ func TestLoadValid(t *testing.T) {
 					ContentOrigin:        "https://content.example.com",
 					SecretKey:            []byte("another-secret-key-material-32bytes!"),
 					OutboundAllowPrivate: []string{"ollama.lan:11434", "10.0.0.2:443"},
+					TrustedProxies:       []netip.Prefix{netip.MustParsePrefix("172.18.0.1/32"), netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("192.0.2.1/32")},
 					LogLevel:             slog.LevelDebug,
 					FetchMinInterval:     5 * time.Minute,
 					FetchMaxInterval:     12 * time.Hour,
@@ -205,6 +209,9 @@ func TestLoadInvalid(t *testing.T) {
 			"EARNEST_CONTENT_ORIGIN": "http://app.internal",
 		}, "EARNEST_CONTENT_ORIGIN"},
 		{"allow private interior empty", map[string]string{"EARNEST_OUTBOUND_ALLOW_PRIVATE": "a.lan:443,,b.lan:80"}, "EARNEST_OUTBOUND_ALLOW_PRIVATE"},
+		{"trusted proxies hostname", map[string]string{"EARNEST_TRUSTED_PROXIES": "proxy.lan"}, "EARNEST_TRUSTED_PROXIES"},
+		{"trusted proxies bad prefix", map[string]string{"EARNEST_TRUSTED_PROXIES": "10.0.0.0/33"}, "EARNEST_TRUSTED_PROXIES"},
+		{"trusted proxies trailing comma", map[string]string{"EARNEST_TRUSTED_PROXIES": "172.18.0.1,"}, "EARNEST_TRUSTED_PROXIES"},
 		{"allow private trailing comma", map[string]string{"EARNEST_OUTBOUND_ALLOW_PRIVATE": "a.lan:443,"}, "EARNEST_OUTBOUND_ALLOW_PRIVATE"},
 		{"allow private missing port", map[string]string{"EARNEST_OUTBOUND_ALLOW_PRIVATE": "a.lan"}, "EARNEST_OUTBOUND_ALLOW_PRIVATE"},
 		{"allow private nonnumeric port", map[string]string{"EARNEST_OUTBOUND_ALLOW_PRIVATE": "a.lan:abc"}, "EARNEST_OUTBOUND_ALLOW_PRIVATE"},

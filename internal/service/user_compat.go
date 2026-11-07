@@ -47,8 +47,10 @@ func (a *Auth) CompatLogin(ctx context.Context, username, password, clientKey st
 		candidate = *hash
 	}
 	if !checkPassword(candidate, password) || err != nil || hash == nil {
+		a.recordFailure(username, clientKey)
 		return TokenSecret{}, ErrUnauthorized
 	}
+	a.clearFailures(username)
 	secret, err := makeSecret("earnest_compat_token_")
 	if err != nil {
 		return TokenSecret{}, err
