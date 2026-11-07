@@ -27,6 +27,8 @@ import AppKit
     /// The selected article could not be fetched and has no offline copy.
     @Published private(set) var articleUnavailable = false
     @Published var palette = false
+    @Published var editingSearch = false
+    let search: SearchModel
     @Published var endTitle = ""
     @Published var endDetail = ""
     @Published var subscribeURL = ""
@@ -40,6 +42,7 @@ import AppKit
 
     init(app: AppModel) {
         self.app = app
+        search = SearchModel(app: app)
         if let sibling = app.windows.first(where: { $0.section == section && !$0.entries.isEmpty }) {
             entries = sibling.entries
             cachedPresentation = sibling.cachedPresentation
@@ -73,6 +76,8 @@ import AppKit
     func endSession() {
         tasks.values.forEach { $0.cancel() }
         tasks.removeAll()
+        search.reset()
+        editingSearch = false
         entries = []
         cachedPresentation = false
         rows = []
@@ -116,6 +121,8 @@ import AppKit
             await app.refreshFeeds()
         case .activity:
             await app.refreshActivity()
+        case .search:
+            search.loadMetadata()
         }
         guard self.section == expected, app.loggedIn, !Task.isCancelled else { return }
         app.rebuildPresentation()
@@ -183,6 +190,7 @@ import AppKit
     }
 
     func rebuildPresentation() {
+        search.invalidateAfterRestore()
         let snapshot = try? app.engine?.snapshot()
         let knownIDs = Set(entries.map(\.id))
         let pendingIDs = Set(snapshot?.outbox.filter { $0.principal == app.principalID }.map(\.entryID) ?? [])
@@ -211,7 +219,7 @@ import AppKit
                     case .later: belongs = state.shelf.value == .text("later")
                     case .kept: belongs = state.kept.value == .flag(true)
                     case .done: belongs = state.shelf.value == .text("done")
-                    case .feeds, .activity: belongs = false
+                    case .feeds, .activity, .search: belongs = false
                     }
                     return belongs ? try cachedEntry(entry, principal: app.principalID, engine: engine, state: state) : nil
                 }
@@ -263,7 +271,7 @@ import AppKit
         case .kept:
             rows = presented.filter { $0.1.kept.value == .flag(true) }.map { row($0.0, $0.1) }
             editionGroups = []
-        case .feeds, .activity:
+        case .feeds, .activity, .search:
             rows = []
             editionGroups = []
         }
@@ -298,13 +306,16 @@ import AppKit
     private func visibleEntryIDs() -> [Int64] {
         switch section {
         case .edition: return editionGroups.flatMap(\.rowIDs)
+        case .search:
+            var seen = Set<Int64>()
+            return search.matches.map(\.entryID).filter { seen.insert($0).inserted }
         default: return rows.map(\.id)
         }
     }
 
     // MARK: - Commands
 
-    var canBrowse: Bool { app.loggedIn && section.entryView != nil }
+    var canBrowse: Bool { app.loggedIn && !editingSearch && (section.entryView != nil || section == .search) }
     var canActOnEntry: Bool { canBrowse && selected != nil && app.engine != nil && app.principalID > 0 }
 
     func command(_ command: EntryCommand) {
@@ -369,7 +380,12 @@ import AppKit
         let ids = visibleEntryIDs()
         guard !ids.isEmpty else { return }
         let current = ids.firstIndex(of: selected ?? -1) ?? (offset > 0 ? -1 : ids.count)
-        selectFromList(ids[min(ids.count - 1, max(0, current + offset))])
+        let id = ids[min(ids.count - 1, max(0, current + offset))]
+        if section == .search, let match = search.matches.first(where: { $0.entryID == id }) {
+            selectSearchMatch(match)
+        } else {
+            selectFromList(id)
+        }
     }
 
     func openOriginal() {
@@ -390,6 +406,12 @@ import AppKit
         imageMode = .proxied
         if selected == id { open(id) }
         else { selected = id }
+    }
+
+    func selectSearchMatch(_ match: APISearchMatch) {
+        imageMode = match.kind == "agent_note" || match.untrusted ? .click : .proxied
+        if selected == match.entryID { open(match.entryID) }
+        else { selected = match.entryID }
     }
 
     func openDeepLink(_ url: URL) {

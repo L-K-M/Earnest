@@ -245,6 +245,8 @@ private struct GoCommands: Commands {
             FeedsView()
         case .activity:
             ActivityView()
+        case .search:
+            SearchView(search: window.search)
         }
     }
 

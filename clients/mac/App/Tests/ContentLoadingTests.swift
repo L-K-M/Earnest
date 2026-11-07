@@ -855,6 +855,7 @@ final class ContentHTTP: URLProtocol {
         var method = "GET"
         var failure: URLError.Code?
         var beforeResponse: (@Sendable () -> Void)?
+        var query: String?
 
         static func signed(mode: String) -> Self {
             .init(path: "/v1/entries/42/content-url", body: #"{"url":"https://content.test:8081/article/42?signature=abc","expires_at":"2099-01-01T00:00:00Z"}"#, mode: mode)
@@ -884,6 +885,7 @@ final class ContentHTTP: URLProtocol {
         XCTAssertEqual(request.url?.path, reply.path)
         XCTAssertEqual(request.httpMethod, reply.method)
         if let mode = reply.mode { XCTAssertEqual(request.url?.query, "mode=\(mode)") }
+        if let query = reply.query { XCTAssertEqual(request.url?.query, query) }
         if let failure = reply.failure {
             client?.urlProtocol(self, didFailWithError: URLError(failure))
             return

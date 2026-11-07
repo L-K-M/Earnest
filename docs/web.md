@@ -48,6 +48,11 @@ placeholder until the web bundle has been copied into `internal/web/dist`.
    or export OPML, and mute keywords/authors. Feed health explains failure classes
    and shows the service's last attempt/success and next scheduled fetch.
 
+Search separates publisher matches from labelled agent notes and supports
+full-text search without models. When embeddings are enabled, Hybrid search and
+More like this show semantic results. Saved views can be opened, renamed or
+deleted from the search panel without changing their query or filters.
+
 Only unread-count mode requests and displays unread totals. Per-feed counts come
 from one grouped server query (`/v1/entries:counts`), so totals stay exact
 without paging unread entries through the entry list. The list's separate count

@@ -32,11 +32,27 @@ private func example(_ schema: [String: Any], schemas: [String: Any], alternativ
 }
 private enum SchemaError: Error { case unsupported }
 
-private func check<T: Codable>(_ type: T.Type, name: String, schemas: [String: Any]) throws {
+private func applyOverride(_ input: inout Any?, path: [String], value: Any) throws {
+    guard var object = input as? [String: Any], let key = path.first else { throw SchemaError.unsupported }
+    if path.count == 1 {
+        object[key] = value
+        input = object
+    } else {
+        var nested: Any? = object[key]
+        try applyOverride(&nested, path: Array(path.dropFirst()), value: value)
+        object[key] = nested
+        input = object
+    }
+}
+
+private func check<T: Codable>(_ type: T.Type, name: String, schemas: [String: Any], overrides: [String: Any] = [:]) throws {
     let schema = try #require(schemas[name] as? [String: Any])
     for alternative in 0...1 {
-        let input = try example(schema, schemas: schemas, alternative: alternative)
-        let data = try JSONSerialization.data(withJSONObject: input, options: [.sortedKeys, .fragmentsAllowed])
+        var input: Any? = try example(schema, schemas: schemas, alternative: alternative)
+        for (path, value) in overrides {
+            try applyOverride(&input, path: path.split(separator: ".").map(String.init), value: value)
+        }
+        let data = try JSONSerialization.data(withJSONObject: input ?? NSNull(), options: [.sortedKeys, .fragmentsAllowed])
         let model = try JSONDecoder().decode(type, from: data)
         let output = try JSONSerialization.jsonObject(with: JSONEncoder().encode(model), options: [.fragmentsAllowed])
         #expect((input as? NSDictionary) == (output as? NSDictionary), "\(name) does not preserve schema fields or values")
@@ -60,6 +76,20 @@ private func check<T: Codable>(_ type: T.Type, name: String, schemas: [String: A
     try check(APIChangesPage.self, name: "ChangesPage", schemas: schemas)
     try check(LabelDefinition.self, name: "Label", schemas: schemas)
     try check(APIProblem.self, name: "Problem", schemas: schemas)
+    // The schema leaves SearchFilter.mode a free string; the server restricts it to the enum.
+    try check(APISearchFilter.self, name: "SearchFilter", schemas: schemas, overrides: ["mode": "fulltext"])
+    try check(APISearchMatch.self, name: "SearchMatch", schemas: schemas)
+    try check(APISearchPage.self, name: "SearchPage", schemas: schemas)
+    try check(APISavedSearch.self, name: "SavedSearch", schemas: schemas, overrides: ["filters.mode": "fulltext"])
+}
+
+@Test func searchModeEncodesRawValuesAndAllCases() throws {
+    #expect(APISearchMode.allCases.map(\.rawValue) == ["fulltext", "hybrid"])
+    for mode in APISearchMode.allCases {
+        let data = try JSONEncoder().encode(mode)
+        #expect(String(data: data, encoding: .utf8) == "\"\(mode.rawValue)\"")
+        #expect(try JSONDecoder().decode(APISearchMode.self, from: data) == mode)
+    }
 }
 
 @Test func labelMembershipMatchesOpenAPISchema() throws {

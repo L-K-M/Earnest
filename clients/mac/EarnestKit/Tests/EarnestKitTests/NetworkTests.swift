@@ -315,4 +315,133 @@ extension NetworkTests {
     }
 }
 
+extension NetworkTests {
+    @Test func searchEncodesQueryFilterCursorAndDecodesNoteMetadata() async throws {
+        let session = ScriptedHTTP.install([
+            .init(
+                path: "/v1/search",
+                body: #"{"matches":[{"kind":"entry","entry_id":9223372036854775807,"subscription_id":9007199254740993,"feed_id":9223372036854775806,"seq":7,"title":"Beacon","url":"https://example.test/a","snippet":"A beacon","rank":1.5,"untrusted":false},{"kind":"agent_note","entry_id":9223372036854775807,"subscription_id":9007199254740993,"feed_id":9223372036854775806,"seq":7,"title":"Note","url":"https://example.test/a#note","snippet":"observed","rank":0.5,"annotation_id":9007199254740999,"agent_name":"Scout","untrusted":true}],"next_cursor":"abc/123=","status":"disabled"}"#,
+                query: "q=hello%20world%20%26%20more%3F&mode=hybrid&subscription_id=9223372036854775807&folder_id=42&limit=25&cursor=abc%2F123%3D"
+            ),
+        ])
+        defer { session.invalidateAndCancel() }
+        let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: TestTokens(), session: session)
+        let page = try await api.search(query: "hello world & more?", filter: APISearchFilter(mode: .hybrid, subscriptionID: Int64.max, folderID: 42, limit: 25), cursor: "abc/123=")
+        #expect(page.status == "disabled")
+        #expect(page.nextCursor == "abc/123=")
+        let matches = try #require(page.matches)
+        #expect(matches.count == 2)
+        let entry = matches[0]
+        #expect(entry.kind == "entry")
+        #expect(entry.entryID == Int64.max)
+        #expect(entry.subscriptionID == 9007199254740993)
+        #expect(entry.feedID == Int64.max - 1)
+        #expect(entry.annotationID == nil)
+        #expect(entry.agentName == nil)
+        #expect(!entry.untrusted)
+        #expect(entry.id == "entry:\(Int64.max):0")
+        let note = matches[1]
+        #expect(note.kind == "agent_note")
+        #expect(note.annotationID == 9007199254740999)
+        #expect(note.agentName == "Scout")
+        #expect(note.untrusted)
+        #expect(note.id == "agent_note:\(Int64.max):9007199254740999")
+        #expect(note.id != entry.id)
+        ScriptedHTTP.assertFinished()
+    }
+}
+
+extension NetworkTests {
+    @Test func savedSearchCRUDPreservesIDsAndFilterEncoding() async throws {
+        let session = ScriptedHTTP.install([
+            .init(path: "/v1/saved-searches", body: #"[{"id":9223372036854775807,"name":"Saved","query":"beacon","filters":{"mode":"hybrid","subscription_id":9007199254740993}},{"id":7,"name":"Legacy","query":"old","filters":{"folder_id":5}}]"#),
+            .init(method: "POST", path: "/v1/saved-searches", body: #"{"id":42,"name":"New","query":"fresh","filters":{"mode":"fulltext","folder_id":7,"limit":25}}"#, checkBody: { data in
+                let body = try JSONDecoder().decode([String: APIValue].self, from: #require(data))
+                #expect(body["name"] == .string("New"))
+                #expect(body["query"] == .string("fresh"))
+                guard case .object(let filters) = body["filters"] else { Issue.record("Missing filters"); return }
+                #expect(filters["mode"] == .string("fulltext"))
+                #expect(filters["folder_id"] == .integer(7))
+                #expect(filters["limit"] == .integer(25))
+                #expect(filters["subscription_id"] == nil)
+            }),
+            .init(method: "PATCH", path: "/v1/saved-searches/9223372036854775807", body: "{}", checkBody: { data in
+                let body = try JSONDecoder().decode([String: APIValue].self, from: #require(data))
+                #expect(body["name"] == .string("Renamed"))
+            }),
+            .init(method: "DELETE", path: "/v1/saved-searches/9223372036854775807", body: "{}"),
+        ])
+        defer { session.invalidateAndCancel() }
+        let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: TestTokens(), session: session)
+        let saved = try await api.savedSearches()
+        #expect(saved.count == 2)
+        #expect(saved[0].id == Int64.max)
+        #expect(saved[0].filters.mode == .hybrid)
+        #expect(saved[0].filters.subscriptionID == 9007199254740993)
+        #expect(saved[1].filters.mode == .fulltext)
+        #expect(saved[1].filters.folderID == 5)
+        let created = try await api.createSavedSearch(name: "New", query: "fresh", filter: APISearchFilter(folderID: 7, limit: 25))
+        #expect(created.id == 42)
+        #expect(created.name == "New")
+        #expect(created.filters.mode == .fulltext)
+        #expect(created.filters.folderID == 7)
+        try await api.renameSavedSearch(id: Int64.max, name: "Renamed")
+        try await api.deleteSavedSearch(id: Int64.max)
+        ScriptedHTTP.assertFinished()
+    }
+}
+
+extension NetworkTests {
+    @Test func searchSurfacesInBandStatusAndNullMatches() async throws {
+        let session = ScriptedHTTP.install([
+            .init(path: "/v1/search", body: #"{"matches":null,"status":"paused"}"#, query: "q=fresh&mode=fulltext"),
+            .init(path: "/v1/search", body: #"{"matches":[],"status":"disabled"}"#, query: "q=again&mode=fulltext"),
+        ])
+        defer { session.invalidateAndCancel() }
+        let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: TestTokens(), session: session)
+        let paused = try await api.search(query: "fresh")
+        #expect(paused.matches == nil)
+        #expect(paused.status == "paused")
+        let disabled = try await api.search(query: "again")
+        #expect(try #require(disabled.matches).isEmpty)
+        #expect(disabled.status == "disabled")
+        ScriptedHTTP.assertFinished()
+    }
+}
+
+extension NetworkTests {
+    @Test func searchAndSavedSearchProblemsSurfaceAsAPIProblem() async throws {
+        let session = ScriptedHTTP.install([
+            .init(path: "/v1/search", status: 400, body: #"{"type":"about:blank","title":"Bad Request","status":400,"detail":"query too long"}"#),
+            .init(method: "POST", path: "/v1/saved-searches", status: 409, body: #"{"type":"about:blank","title":"Conflict","status":409,"detail":"duplicate name"}"#),
+        ])
+        defer { session.invalidateAndCancel() }
+        let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: TestTokens(), session: session)
+        do {
+            _ = try await api.search(query: "too long")
+            Issue.record("Expected search 400")
+        } catch let problem as APIProblem { #expect(problem.status == 400) }
+        do {
+            _ = try await api.createSavedSearch(name: "Duplicate", query: "fresh", filter: .init())
+            Issue.record("Expected create 409")
+        } catch let problem as APIProblem { #expect(problem.status == 409) }
+        ScriptedHTTP.assertFinished()
+    }
+}
+
+extension NetworkTests {
+    @Test func pipelineStatusDecodesEveryField() async throws {
+        let session = ScriptedHTTP.install([
+            .init(path: "/v1/pipeline", body: #"{"embed":"ok","classify":"ok","semantic":"disabled","watch":"ok","blurb":"ok","summary":"ok","edition":"ok","ask":"ok","compile_rule":"ok"}"#),
+        ])
+        defer { session.invalidateAndCancel() }
+        let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: TestTokens(), session: session)
+        guard case .object(let fields) = try await api.pipelineStatus() else { Issue.record("Expected object"); return }
+        #expect(fields.count == 9)
+        #expect(fields["semantic"] == .string("disabled"))
+        #expect(fields["compile_rule"] == .string("ok"))
+        ScriptedHTTP.assertFinished()
+    }
+}
+
 private let readerSettingsJSON = #"{"reading_mode":"river","today_decay_days":2,"single_key_shortcuts":true,"theme":"system","measure":68,"font":"serif","feed_overrides":{},"rev":0}"#

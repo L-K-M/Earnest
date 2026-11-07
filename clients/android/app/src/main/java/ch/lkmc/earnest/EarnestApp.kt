@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -115,6 +116,7 @@ private enum class View(val label: String, val icon: ImageVector) {
     DONE("Done", Icons.Filled.CheckCircle),
     FEEDS("Feeds", Icons.Filled.Home),
     ACTIVITY("Activity", Icons.Filled.Info),
+    SEARCH("Search", Icons.Filled.Search),
 }
 
 @Composable
@@ -267,7 +269,7 @@ private fun MainScaffold(
 
     NavigationSuiteScaffold(
         navigationSuiteItems = {
-            View.entries.forEach { destination ->
+            View.entries.filter { it != View.SEARCH }.forEach { destination ->
                 item(
                     selected = view == destination,
                     onClick = {
@@ -290,6 +292,10 @@ private fun MainScaffold(
                     onThemeChange,
                     notificationsDenied,
                     onRequestNotifications,
+                    onSearch = {
+                        view = View.SEARCH
+                        scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.List) }
+                    },
                 )
             },
             snackbarHost = { SnackbarHost(snackbar) },
@@ -304,6 +310,15 @@ private fun MainScaffold(
                     listPane = {
                         AnimatedPane {
                             when (view) {
+                                View.SEARCH -> SearchScreen(
+                                    search = model.search,
+                                    accountKey = state.accountKey,
+                                    snapshot = state.snapshot,
+                                    onOpen = { match ->
+                                        if (match.kind == "agent_note" || match.untrusted) agentSelected = agentSelected + match.entryId
+                                        scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, match.entryId) }
+                                    },
+                                )
                                 View.FEEDS -> FeedsScreen(
                                     state = state,
                                     onSubscribe = { showSubscribe = true },
@@ -414,12 +429,14 @@ private fun EarnestTopBar(
     onThemeChange: (ThemeSetting) -> Unit,
     notificationsDenied: Boolean,
     onRequestNotifications: () -> Unit,
+    onSearch: () -> Unit,
 ) {
     var themeOpen by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     TopAppBar(
         title = { Text(title) },
         actions = {
+            IconButton(onClick = onSearch) { Icon(Icons.Filled.Search, contentDescription = "Search") }
             if (notificationsDenied) {
                 TextButton(onClick = onRequestNotifications) { Text("Notifications") }
             }
