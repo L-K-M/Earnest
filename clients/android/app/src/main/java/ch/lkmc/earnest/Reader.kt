@@ -1,5 +1,6 @@
 package ch.lkmc.earnest
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.os.Build
@@ -45,6 +46,17 @@ internal fun originalUrl(entry: CachedEntry): String? =
     }
 
 private fun parseInstant(value: String): Instant? = runCatching { Instant.parse(value) }.getOrNull()
+
+/** Opens the publisher's page, reporting false when the browser cannot launch. */
+internal fun openOriginal(context: Context, url: String): Boolean = try {
+    // The helper accepts any context, so the browser may need its own task.
+    context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    true
+} catch (_: ActivityNotFoundException) {
+    false
+} catch (_: SecurityException) {
+    false
+}
 
 /**
  * The reading view. JavaScript, file access and content access are off. The

@@ -65,6 +65,38 @@ class ActivityDescriptionTest {
         assertEquals("Sent a notification: Headline", activityDescription(activity, mapOf(2L to "Headline")))
     }
 
+    @Test fun shelfValuesNameTheirEffect() {
+        val none = activity("state.updated", """{"entry_id":2,"register":"shelf"}""", after = """{"shelf":{"value":"none"}}""")
+        assertEquals("Cleared the shelf: Headline", activityDescription(none, mapOf(2L to "Headline")))
+        val unknown = activity("state.updated", """{"entry_id":2,"register":"shelf"}""", after = """{"shelf":{"value":"archived"}}""")
+        assertEquals("Changed the shelf: Headline", activityDescription(unknown, mapOf(2L to "Headline")))
+        val missing = activity("state.updated", """{"entry_id":2,"register":"shelf"}""", after = """{"shelf":{}}""")
+        assertEquals("Changed the shelf: Headline", activityDescription(missing, mapOf(2L to "Headline")))
+    }
+
+    @Test fun batchChangesCountTheArticlesTheyTouched() {
+        val one = activity("notification.created", after = """{"entry_ids":[2]}""")
+        assertEquals("Sent a notification: Headline", activityDescription(one, mapOf(2L to "Headline")))
+        assertEquals("Sent a notification", activityDescription(one, emptyMap()))
+        assertEquals("Morning Agent sent a notification: Headline", agentChangeText(one, mapOf(2L to "Headline")))
+        assertEquals("Morning Agent sent a notification: Entry #2", agentChangeText(one, emptyMap()))
+
+        val two = activity("notification.created", after = """{"entry_ids":[2,3]}""")
+        assertEquals("Sent a notification: Headline and 1 more", activityDescription(two, mapOf(2L to "Headline")))
+        assertEquals("Sent a notification: 2 articles", activityDescription(two, emptyMap()))
+        assertEquals("Morning Agent sent a notification: Headline and 1 more", agentChangeText(two, mapOf(2L to "Headline")))
+        assertEquals("Morning Agent sent a notification: 2 articles", agentChangeText(two, emptyMap()))
+
+        val many = activity("notification.created", after = """{"entry_ids":[2,3,4,5,6]}""")
+        assertEquals("Sent a notification: Headline and 4 more", activityDescription(many, mapOf(2L to "Headline")))
+        assertEquals("Sent a notification: 5 articles", activityDescription(many, emptyMap()))
+        assertEquals("Morning Agent sent a notification: 5 articles", agentChangeText(many, emptyMap()))
+
+        val none = activity("notification.created", """{"id":7}""")
+        assertEquals("Sent a notification", activityDescription(none, emptyMap()))
+        assertEquals("Morning Agent sent a notification: an entry", agentChangeText(none, emptyMap()))
+    }
+
     @Test fun unknownActionsReplaceDotsWithSpaces() {
         assertEquals("Rule updated", activityDescription(activity("rule.updated"), emptyMap()))
     }

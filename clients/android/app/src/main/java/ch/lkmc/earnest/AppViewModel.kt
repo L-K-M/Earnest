@@ -132,7 +132,7 @@ class AppViewModel internal constructor(
                 }
             } catch (error: Exception) {
                 if (sessions.current() == session) {
-                    _state.value = UiState(error = "Could not restore the account cache: ${error.message}")
+                    _state.value = UiState(error = failureText("Could not restore the account cache", error))
                     _loggedIn.value = true
                 } else if (sessions.current() == null) {
                     sessionExpired()
@@ -222,7 +222,7 @@ class AppViewModel internal constructor(
                         riverEntryIds = restored.riverEntryIds,
                         agentChanges = changes,
                         sessionAgentChanges = activitySince(changes, sessionStartedAt),
-                        agentChangesError = changesResult.exceptionOrNull()?.let { "Could not refresh agent changes: ${it.message}" },
+                        agentChangesError = changesResult.exceptionOrNull()?.let { failureText("Could not refresh agent changes", it) },
                         briefs = cached,
                         principals = names.ifEmpty { cachedPrincipalNames(cache) },
                         rejected = rejected,
@@ -239,9 +239,11 @@ class AppViewModel internal constructor(
                     sessions.clearToken()
                     if (sessions.current() == null) sessionExpired()
                 }
-                _state.update { current -> current.copy(error = error.message) }
+                _state.update { current -> current.copy(error = failureText("Could not refresh", error)) }
             } catch (error: Exception) {
-                if (currentOrExpired(session, cache)) _state.update { current -> current.copy(error = error.message) }
+                if (currentOrExpired(session, cache)) {
+                    _state.update { current -> current.copy(error = failureText("Could not refresh", error)) }
+                }
             } finally {
                 if (currentOrExpired(session, cache)) _state.update { current -> current.copy(loading = false) }
             }
@@ -321,7 +323,7 @@ class AppViewModel internal constructor(
                 throw error
             } catch (error: Exception) {
                 if (currentOrExpired(session, cache)) {
-                    _state.update { current -> current.copy(error = "Could not save the action: ${error.message}") }
+                    _state.update { current -> current.copy(error = failureText("Could not save the action", error)) }
                 }
             }
         }
@@ -393,7 +395,7 @@ class AppViewModel internal constructor(
             val api = api() ?: return@launch
             runCatching { api.subscribe(SubscriptionBody(url = url, opId = opId("subscribe"), cadence = cadence)) }
                 .onSuccess { refresh() }
-                .onFailure { _state.update { current -> current.copy(error = it.message) } }
+                .onFailure { _state.update { current -> current.copy(error = failureText("Could not subscribe", it)) } }
         }
     }
 
@@ -402,7 +404,7 @@ class AppViewModel internal constructor(
             val api = api() ?: return@launch
             runCatching { api.unsubscribe(subscriptionId, opId("unsubscribe")) }
                 .onSuccess { refresh() }
-                .onFailure { _state.update { current -> current.copy(error = it.message) } }
+                .onFailure { _state.update { current -> current.copy(error = failureText("Could not unsubscribe", it)) } }
         }
     }
 
@@ -412,7 +414,7 @@ class AppViewModel internal constructor(
             runCatching {
                 api.updateSubscription(subscriptionId, SubscriptionPatch(opId = opId("cadence"), cadence = cadence))
             }.onSuccess { refresh() }
-            .onFailure { _state.update { current -> current.copy(error = it.message) } }
+            .onFailure { _state.update { current -> current.copy(error = failureText("Could not save the cadence", it)) } }
         }
     }
 
@@ -421,7 +423,7 @@ class AppViewModel internal constructor(
             val api = api() ?: return@launch
             runCatching { api.revertActivity(activityId, opId("revert")) }
                 .onSuccess { refresh() }
-                .onFailure { _state.update { current -> current.copy(error = it.message) } }
+                .onFailure { _state.update { current -> current.copy(error = failureText("Could not revert the change", it)) } }
         }
     }
 
@@ -582,6 +584,10 @@ class AppViewModel internal constructor(
         private const val FLUSH_DEBOUNCE_MILLIS = 1500L
     }
 }
+
+/** Names the failed action; a blank message still leaves a readable error. */
+private fun failureText(action: String, error: Throwable): String =
+    error.message?.takeIf { it.isNotBlank() }?.let { "$action: $it" } ?: "$action."
 
 /** The signed content URL plus the cached HTML fallback for offline reading. */
 data class ContentUrlResult(

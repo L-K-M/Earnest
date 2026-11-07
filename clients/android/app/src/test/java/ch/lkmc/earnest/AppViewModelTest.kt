@@ -1,6 +1,7 @@
 package ch.lkmc.earnest
 
 import android.app.Application
+import android.content.SharedPreferences
 import androidx.core.content.edit
 import androidx.test.core.app.ApplicationProvider
 import ch.lkmc.earnest.core.*
@@ -118,6 +119,31 @@ class AppViewModelTest {
         model.later(2) { saved.incrementAndGet() }
         withTimeout(15000) { model.state.first { it.error?.startsWith("Could not save the action") == true } }
         assertEquals(0, saved.get())
+    }
+
+    @Test fun messageLessFailuresStillNameTheFailedAction() = runBlocking(Dispatchers.IO) {
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        var factory: () -> EarnestApi = { api() }
+        val model = AppViewModel(app, Sessions(AuthenticatedSession(identity, "token"))) { factory() }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+
+        factory = {
+            EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { throw java.io.IOException() }.build())
+        }
+        model.subscribe("https://feed.test/rss", "daily")
+        withTimeout(15000) { model.state.first { it.error != null } }
+        val error = model.state.value.error
+        assertNotNull(error)
+        assertFalse("error showed null: $error", error!!.contains("null"))
+        assertEquals("Could not subscribe.", error)
+
+        // A present message stays visible after the action text.
+        factory = {
+            EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { throw java.io.IOException("feed unreachable") }.build())
+        }
+        model.refresh()
+        withTimeout(15000) { model.state.first { it.error == "Could not refresh: feed unreachable" } }
+        assertEquals("Could not refresh: feed unreachable", model.state.value.error)
     }
 
     @Test fun operationIdsRemainUniqueWithinTheSameMillisecond() = runBlocking(Dispatchers.IO) {
@@ -397,23 +423,26 @@ class AppViewModelTest {
         }
     }
 
-    @Test fun flushDoesNotClobberAConcurrentRefreshLoadingFlag() = runBlocking(Dispatchers.IO) {
+    @Test @Config(application = GateApplication::class)
+    fun flushDoesNotClobberAConcurrentRefreshLoadingFlag() = runBlocking(Dispatchers.IO) {
         val scheduler = TestCoroutineScheduler()
         Dispatchers.setMain(UnconfinedTestDispatcher(scheduler))
+        val gateApp = ApplicationProvider.getApplicationContext<GateApplication>()
 
         withContext(Dispatchers.IO) { SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) } }
 
         val batchEntered = CompletableDeferred<Unit>()
+        val releaseBatch = CompletableDeferred<Unit>()
         val refreshChangesEntered = CompletableDeferred<Unit>()
         val releaseRefresh = CompletableDeferred<Unit>()
-        val blockRefresh = java.util.concurrent.atomic.AtomicBoolean(false)
+        val blockChanges = java.util.concurrent.atomic.AtomicBoolean(false)
         val api = EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { chain ->
             val path = chain.request().url.encodedPath
             calls += path
             val body = when (path) {
                 "/v1/settings" -> """{"today_decay_days":2,"rev":0}"""
                 "/v1/changes" -> {
-                    if (blockRefresh.get()) {
+                    if (blockChanges.get()) {
                         refreshChangesEntered.complete(Unit)
                         runBlocking { releaseRefresh.await() }
                     }
@@ -421,6 +450,9 @@ class AppViewModelTest {
                 }
                 "/v1/state:batch" -> {
                     batchEntered.complete(Unit)
+                    // Hold the batch response until the gate is armed, so the final
+                    // rebuild cannot read the cached changes before the hook exists.
+                    runBlocking { releaseBatch.await() }
                     val requestBody = chain.request().body?.let { body ->
                         val buffer = okio.Buffer()
                         body.writeTo(buffer)
@@ -439,11 +471,6 @@ class AppViewModelTest {
         try {
             withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
 
-            // A large agent-changes payload makes the flush's state rebuild slow enough to interleave.
-            val activity = """{"id":1,"principal_id":9,"principal_name":"Morning Agent","action":"state.updated","target":{"entry_id":2,"register":"shelf"},"before":null,"after":{"shelf":{"value":"done"}},"generation":"g1","created_at":"2026-11-03T00:00:00Z","next_action":"revert"}"""
-            val changes = (1..50000).joinToString(prefix = "[", postfix = "]", separator = ",") { activity }
-            SessionCache(app, identity).preferences.edit { putString("agent_changes", changes) }
-
             val saved = java.util.concurrent.atomic.AtomicInteger()
             model.later(2) { saved.incrementAndGet() }
             withTimeout(15000) { while (saved.get() == 0) delay(10) }
@@ -456,17 +483,55 @@ class AppViewModelTest {
                 }
             }
 
-            // Let the flush read the state and start its slow rebuild, then refresh.
-            delay(50)
-            blockRefresh.set(true)
-            model.refresh()
+            // The flush is past queueing and blocked on its batch response. Arm the
+            // gate and inject a small payload only the final rebuild will publish.
+            val activity = """{"id":42,"principal_id":9,"principal_name":"Morning Agent","action":"state.updated","target":{"entry_id":2,"register":"shelf"},"before":null,"after":{"shelf":{"value":"done"}},"generation":"g1","created_at":"2026-11-03T00:00:00Z","next_action":"revert"}"""
+            SessionCache(app, identity).preferences.edit { putString("agent_changes", "[$activity]") }
+            blockChanges.set(true)
+            gateApp.agentChangesGate = {
+                model.refresh()
+                // The flush holds the engine lock here, so refresh sets its loading
+                // flag and then waits for the lock instead of publishing first.
+                runBlocking { withTimeout(15000) { model.state.first { it.loading } } }
+            }
+            releaseBatch.complete(Unit)
+
+            // /changes is requested only after the flush published and released the
+            // engine lock, so refresh's loading flag must still be set.
             withTimeout(15000) { refreshChangesEntered.await() }
             assertTrue("the flush clobbered refresh's loading flag", model.state.value.loading)
+            assertEquals("the flush's rebuilt agent changes were lost", listOf(42L), model.state.value.agentChanges.map { it.id })
         } finally {
+            gateApp.agentChangesGate = null
+            releaseBatch.complete(Unit)
             releaseRefresh.complete(Unit)
         }
 
         withTimeout(15000) { model.state.first { !it.loading } }
         Unit
+    }
+}
+
+/**
+ * Test application that gates the flush's agent-changes read. The final rebuild
+ * is the only reader after the test arms [agentChangesGate]; the one-shot
+ * callback lets the test interleave refresh's loading flag.
+ */
+class GateApplication : Application() {
+    @Volatile var agentChangesGate: (() -> Unit)? = null
+
+    override fun getSharedPreferences(name: String, mode: Int): SharedPreferences {
+        val delegate = super.getSharedPreferences(name, mode)
+        val app = this
+        return object : SharedPreferences by delegate {
+            override fun getString(key: String?, defValue: String?): String? {
+                if (key == "agent_changes") {
+                    val gate = app.agentChangesGate
+                    app.agentChangesGate = null
+                    gate?.invoke()
+                }
+                return delegate.getString(key, defValue)
+            }
+        }
     }
 }
