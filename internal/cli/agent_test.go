@@ -270,6 +270,49 @@ func TestRevertPostsHandle(t *testing.T) {
 	}
 }
 
+func TestRevertPreservesOpaqueHandles(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		args   []string
+		handle string
+	}{
+		{"leading dash", []string{"revert", "-handle_9"}, "-handle_9"},
+		{"leading double dash", []string{"revert", "--handle_9"}, "--handle_9"},
+		{"separator", []string{"revert", "--", "-handle_9"}, "-handle_9"},
+		{"json before handle", []string{"revert", "--json", "-handle_9"}, "-handle_9"},
+		{"json after handle", []string{"revert", "-handle_9", "--json"}, "-handle_9"},
+		{"literal json", []string{"revert", "--", "--json"}, "--json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, _, errOut, log := runStub(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/triage:revert" || r.Method != http.MethodPost {
+					http.NotFound(w, r)
+					return
+				}
+				var body revertBody
+				decodeBody(t, r, &body)
+				if body.RevertHandle != tc.handle || body.OpID == "" {
+					t.Errorf("body = %+v", body)
+				}
+				writeJSON(w, struct{}{})
+			}, testToken, tc.args...)
+			requireCode(t, code, exitOK, errOut)
+			if requests := log.snapshot(); len(requests) != 1 {
+				t.Fatalf("requests = %d", len(requests))
+			}
+		})
+	}
+}
+
+func TestRevertRequiresOneHandle(t *testing.T) {
+	for _, args := range [][]string{{"revert"}, {"revert", "--"}, {"revert", "one", "two"}} {
+		code, _, errOut, _ := runStub(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Error("invalid argument count reached the API")
+		}, testToken, args...)
+		requireCode(t, code, exitUsage, errOut)
+	}
+}
+
 func TestActivityTable(t *testing.T) {
 	code, out, errOut, log := runStub(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/activity" {
