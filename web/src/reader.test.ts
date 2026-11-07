@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import {describe, expect, it} from 'vitest'
-import {entryQuery, orderEntries, readerURL, shortcutsAllowed, type Entry, type Subscription, type View} from './reader'
+import {entryQuery, orderEntries, readerURL, shortcutsAllowed, viewScope, type Entry, type Subscription, type View} from './reader'
 describe('reader rules', () => {
   it.each(['input', 'textarea', 'select', 'div[contenteditable]', 'div[role=textbox]'])('protects typing in %s', selector => {
     const element = document.createElement(selector.split('[')[0])
@@ -29,5 +29,15 @@ describe('reader rules', () => {
     expect(url.searchParams.get('sig')).toBe('secret')
     expect(url.searchParams.get('theme')).toBe('dark')
     expect(url.searchParams.get('measure')).toBe('64')
+  })
+  it('maps views to sync range scopes', () => {
+    const subs = [{id:1, cadence:'today'}, {id:2, cadence:'week'}, {id:3, cadence:'now'}, {id:4, cadence:'today', deleted:true}] as unknown as Subscription[]
+    expect(viewScope({kind:'feed', id:7, title:'F'}, subs)).toEqual({kind:'subscriptions', ids:[7]})
+    expect(viewScope({kind:'folder', id:3, title:'G'}, subs)).toEqual({kind:'folder', ids:[3]})
+    // Today covers what it shows: not This week's feeds, not deleted ones.
+    expect(viewScope({kind:'today', title:'Today'}, subs)).toEqual({kind:'subscriptions', ids:[1, 3]})
+    expect(viewScope({kind:'today', title:'Today'}, [])).toBeNull()
+    expect(viewScope({kind:'label', id:2, title:'L'}, subs)).toBeNull()
+    expect(viewScope({kind:'later', title:'Later'}, subs)).toBeNull()
   })
 })

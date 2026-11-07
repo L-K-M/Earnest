@@ -36,6 +36,9 @@ placeholder until the web bundle has been copied into `internal/web/dist`.
    `j` and `k` select, `o` or Enter opens, `v` opens the original, `?` shows help,
    and Ctrl+K or Command+K opens view navigation. Single-key commands ignore text
    fields, editable regions and dialogs, and respect the account off switch.
+   In Today, a feed or a folder, the palette's "Mark the rest of ... read"
+   marks everything up to the newest loaded article after a confirmation;
+   articles that arrive later stay unread. There is no toolbar button for it.
 6. Read the written session end. Its numbers describe local reading choices;
    sync status separately reports pending actions and rejected/expired intent.
    Refresh articles explicitly to rebuild the current list. Marking an article
