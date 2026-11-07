@@ -1,6 +1,10 @@
 package ch.lkmc.earnest
 
+import android.app.Activity
+import android.app.Application
 import android.content.Context
+import android.content.ContextWrapper
+import android.content.Intent
 import android.net.Uri
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -10,6 +14,7 @@ import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
@@ -108,6 +113,43 @@ class ReaderTest {
         assertTrue("another content-origin page must not replace the article", client.shouldOverrideUrlLoading(view, request("https://content.test/other", gesture = true)))
         assertTrue("an external link must not load in the reader", client.shouldOverrideUrlLoading(view, request("https://example.com/article", gesture = true)))
         view.destroy()
+    }
+
+    @Test fun openOriginalReturnsFalseWhenNoAppHandlesTheLink() {
+        val application = ApplicationProvider.getApplicationContext<Application>()
+        shadowOf(application).checkActivities(true)
+        assertFalse(openOriginal(application, "https://example.com/article"))
+    }
+
+    @Test fun openOriginalReturnsFalseWhenLaunchIsDenied() {
+        val context = object : ContextWrapper(ApplicationProvider.getApplicationContext<Context>()) {
+            override fun startActivity(intent: Intent) {
+                throw SecurityException("Browser launch denied")
+            }
+        }
+        assertFalse(openOriginal(context, "https://example.com/article"))
+    }
+
+    @Test fun openOriginalLaunchesThePublisherUrl() {
+        val application = ApplicationProvider.getApplicationContext<Application>()
+        assertTrue(openOriginal(application, "https://example.com/article"))
+        val intent = shadowOf(application).nextStartedActivity
+        assertEquals(Intent.ACTION_VIEW, intent.action)
+        assertEquals("https://example.com/article", intent.dataString)
+        assertTrue(intent.flags and Intent.FLAG_ACTIVITY_NEW_TASK != 0)
+    }
+
+    @Test fun openOriginalPreservesTheActivityBackStack() {
+        val controller = Robolectric.buildActivity(Activity::class.java).setup()
+        try {
+            val activity = controller.get()
+            assertTrue(openOriginal(activity, "https://example.com/article"))
+            val intent = shadowOf(activity).nextStartedActivity
+            assertEquals("https://example.com/article", intent.dataString)
+            assertEquals(0, intent.flags and Intent.FLAG_ACTIVITY_NEW_TASK)
+        } finally {
+            controller.pause().stop().destroy()
+        }
     }
 
     @Test fun noCacheDoesNotLoadEmptyFallback() {

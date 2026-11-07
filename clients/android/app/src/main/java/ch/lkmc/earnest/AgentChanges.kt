@@ -22,11 +22,16 @@ import java.time.Instant
 internal fun agentChangedEntryId(activity: Activity): Long? = activityEntryId(activity)
 
 /** The article an activity touched, from its target or its change payload. */
-internal fun activityEntryId(activity: Activity): Long? {
+internal fun activityEntryId(activity: Activity): Long? = activityEntryIds(activity).firstOrNull()
+
+/** Every article an activity touched: its target, or the batch ids in its change payload. */
+private fun activityEntryIds(activity: Activity): List<Long> {
     val target = (activity.target as? JsonObject)?.get("entry_id") as? JsonPrimitive
-    if (target != null && (target.longOrNull ?: 0L) > 0) return target.longOrNull
+    val targetId = target?.longOrNull
+    if (targetId != null && targetId > 0) return listOf(targetId)
     val ids = (activity.after as? JsonObject)?.get("entry_ids") as? JsonArray
-    return (ids?.firstOrNull() as? JsonPrimitive)?.longOrNull?.takeIf { it > 0 }
+        ?: (activity.before as? JsonObject)?.get("entry_ids") as? JsonArray
+    return ids?.mapNotNull { (it as? JsonPrimitive)?.longOrNull }?.filter { it > 0 }.orEmpty()
 }
 
 internal fun activitySince(changes: List<Activity>, since: Instant): List<Activity> =
@@ -45,7 +50,8 @@ internal fun activityDetail(activity: Activity): String = when (activity.action)
             "shelf" -> when (value) {
                 "later" -> "moved to Later"
                 "done" -> "moved to Done"
-                else -> "cleared the shelf"
+                "none" -> "cleared the shelf"
+                else -> "changed the shelf"
             }
             "kept" -> if (value == "true") "kept" else "unkept"
             else -> "changed ${register ?: "state"}"
@@ -63,17 +69,32 @@ internal fun activityDetail(activity: Activity): String = when (activity.action)
 /** One activity row: the action plus the article title when one is known. */
 internal fun activityDescription(activity: Activity, titles: Map<Long, String>): String {
     val detail = activityDetail(activity)
-    val title = activityEntryId(activity)?.let(titles::get)?.takeIf { it.isNotBlank() }
-    val text = if (title != null) "$detail: $title" else detail
+    val ids = activityEntryIds(activity)
+    val title = ids.firstOrNull()?.let(titles::get)?.takeIf { it.isNotBlank() }
+    val text = when {
+        ids.isEmpty() -> detail
+        ids.size == 1 && title != null -> "$detail: $title"
+        ids.size == 1 -> detail
+        title != null -> "$detail: $title and ${ids.size - 1} more"
+        else -> "$detail: ${ids.size} articles"
+    }
     return text.replaceFirstChar { it.uppercase() }
 }
 
 /** Server provenance and register values are text, never publisher or agent HTML. */
 internal fun agentChangeText(activity: Activity, titles: Map<Long, String>): String {
-    val id = activityEntryId(activity)
-    val title = id?.let(titles::get)?.takeIf { it.isNotBlank() } ?: id?.let { "Entry #$it" } ?: "an entry"
     val name = activity.principalName.ifBlank { "Agent ${activity.principalId}" }
-    return "$name ${activityDetail(activity)}: $title"
+    val detail = activityDetail(activity)
+    val ids = activityEntryIds(activity)
+    val target = when {
+        ids.isEmpty() -> "an entry"
+        ids.size == 1 -> titles[ids.first()]?.takeIf { it.isNotBlank() } ?: "Entry #${ids.first()}"
+        else -> {
+            val title = titles[ids.first()]?.takeIf { it.isNotBlank() }
+            if (title != null) "$title and ${ids.size - 1} more" else "${ids.size} articles"
+        }
+    }
+    return "$name $detail: $target"
 }
 
 private fun annotationKind(vararg values: JsonElement?): String =

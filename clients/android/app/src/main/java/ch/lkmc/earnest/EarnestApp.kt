@@ -1,6 +1,5 @@
 package ch.lkmc.earnest
 
-import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -83,7 +82,6 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.core.net.toUri
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import ch.lkmc.earnest.core.CachedEntry
@@ -365,7 +363,9 @@ private fun MainScaffold(
                                         source = subscriptionTitles[entry.subscriptionId].orEmpty(),
                                         onOpenOriginal = {
                                             original?.let { url ->
-                                                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri())) }
+                                                if (!openOriginal(context, url)) {
+                                                    scope.launch { snackbar.showSnackbar("No app can open this link.") }
+                                                }
                                             }
                                         },
                                     )

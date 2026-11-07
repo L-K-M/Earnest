@@ -67,7 +67,7 @@ class NotificationsTest {
     @Test fun usesTheAppGlyphAsTheStatusBarIcon() {
         Notifications.ensureChannels(context)
         Notifications.show(context, 7L, "alert", "Title", "Body")
-        val notification = context.getSystemService(NotificationManager::class.java).activeNotifications[0].notification
+        val notification = context.getSystemService(NotificationManager::class.java).activeNotifications.single().notification
         assertEquals(R.drawable.ic_notification, notification.smallIcon.resId)
     }
 }
