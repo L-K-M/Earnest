@@ -32,3 +32,11 @@ These settle the [round 9 list](api.md#change-feed). Step 1's model tests them l
 - **Marking a Done item unread clears Done**, by a server rule on every surface, as vector 16 already requires through Google Reader.
 - **Lock order:** the `seq` counter first, then per-user counters in user ID order.
 - **`mark-all-as-read` without `ts`** means receipt time: through the highest `seq` at receipt.
+
+## Reading on the web and the Mac
+
+Taken by you on 2026-11-07, while triaging the review PRs.
+
+- **Bulk mark-read is a command, not a button.** "Mark the rest read" lives in the web command palette for Today, a feed or a folder. It marks through the newest entry loaded in that view, after a confirmation, so items that arrive later stay unread. The [anti-pattern](ux.md#anti-patterns) against "Mark all read" as a primary toolbar action stands.
+- **Tab moves focus.** The web reader's summary opens and closes only from its button. This drops the [ux.md](ux.md) binding "Tab hides the summary", so you can always tab through the page.
+- **Mac windows are independent.** Each window keeps its own selection and reader over the shared sync engine, so you can read two articles side by side. The app stays multi-window instead of becoming single-window.

@@ -1,9 +1,10 @@
 # Brand sources
 
-`icon.png` (the app icon art) and `wordmark.png` (the icon beside the
-lettering) are the masters for every icon and wordmark image the clients
-ship. After changing either, regenerate the derived images on macOS and
-commit them with the source:
+`icon.png` (the app icon art), `wordmark.png` (the icon beside the
+lettering) and `glyph.svg` (a single-colour donkey head drawn from the art)
+are the masters for every icon and wordmark image the clients ship. After
+changing one, regenerate the derived files on macOS and commit them with
+the source:
 
     swift scripts/brand-assets.swift
 
@@ -13,6 +14,8 @@ commit them with the source:
 | `clients/mac/App/Sources/Assets.xcassets/{BrandIcon,Wordmark}.imageset` | Mac sign-in view |
 | `clients/android/app/src/main/res/mipmap-*/ic_launcher_foreground.png` | Android adaptive launcher icon; the art spans 76 of the layer's 108 dp |
 | `clients/android/app/src/main/res/drawable-nodpi/brand_{icon,wordmark}.png` | Android login screen |
+| `clients/android/app/src/main/res/drawable/ic_launcher_monochrome.xml` | Android themed launcher icon, which the launcher tints; the glyph spans 54 of 108 dp |
+| `clients/android/app/src/main/res/drawable/ic_notification.xml` | Android notification icon in the status bar |
 | `web/public/{favicon-32,apple-touch-icon,icon-192,icon-512,icon-maskable-512}.png` | Browser tab, home screen, web app manifest and push notification icons |
 | `web/public/wordmark.png` | Web header and sign-in page |
 
@@ -25,5 +28,6 @@ light mode and `#367F9C` in dark mode. These values live in
 `clients/android/app/src/main/java/ch/lkmc/earnest/BrandLockup.kt` and the
 Mac asset catalog's colour sets.
 
-There is no single-colour version of the icon yet, so Android's themed
-launcher icon and its notification icon still use the system defaults.
+`glyph.svg` must stay one even-odd path in a `0 0 100 100` viewBox, with
+cut-outs rather than a second colour: Android draws both outputs from
+alpha alone.
