@@ -8,64 +8,105 @@ import EarnestKit
 
     var body: some Scene {
         WindowGroup {
-            ContentView().environmentObject(model)
+            WindowRootView(model: model)
                 .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
         }
             .handlesExternalEvents(matching: ["*"])
             .commands {
-                CommandMenu("Article") {
-                    // Unmodified-letter equivalents are suspended while the
-                    // palette is open so its filter field can type them.
-                    Button("Next Article") { model.move(1) }
-                        .keyboardShortcut("j", modifiers: [])
-                        .disabled(model.palette || !model.canBrowse)
-                    Button("Previous Article") { model.move(-1) }
-                        .keyboardShortcut("k", modifiers: [])
-                        .disabled(model.palette || !model.canBrowse)
-                    Divider()
-                    Button("Done") { model.command(.done) }
-                        .keyboardShortcut("e", modifiers: [])
-                        .disabled(!model.canActOnEntry || model.palette)
-                    Button("Later") { model.command(.later) }
-                        .keyboardShortcut("s", modifiers: [])
-                        .disabled(!model.canActOnEntry || model.palette)
-                    Button("Keep") { model.command(.keep) }
-                        .keyboardShortcut("f", modifiers: [])
-                        .disabled(!model.canActOnEntry || model.palette)
-                    Button("Mark Unread") { model.command(.unread) }
-                        .keyboardShortcut("m", modifiers: [])
-                        .disabled(!model.canActOnEntry || model.palette)
-                    Divider()
-                    Button("Open Original") { model.openOriginal() }
-                        .keyboardShortcut("o", modifiers: [])
-                        .disabled(model.selected == nil || model.palette || !model.canBrowse)
-                    Button("View Original") { model.openOriginal() }
-                        .keyboardShortcut("v", modifiers: [])
-                        .disabled(model.selected == nil || model.palette || !model.canBrowse)
-                    Divider()
-                    Button("Refresh") { model.scheduleSync() }
-                        .keyboardShortcut("r", modifiers: .command)
-                        .disabled(!model.loggedIn)
-                    Button("Command Palette") { model.palette = true }
-                        .keyboardShortcut("k", modifiers: .command)
-                }
-                CommandMenu("Go") {
-                    ForEach(Section.allCases) { target in
-                        Button("Go to \(target.rawValue)") { model.section = target }
-                            .keyboardShortcut(KeyEquivalent(Character(target.keyEquivalent)), modifiers: .command)
-                            .disabled(!model.loggedIn)
-                    }
-                    Divider()
-                    Button("Sign Out") { model.signOut() }
-                        .keyboardShortcut("q", modifiers: [.command, .shift])
-                        .disabled(!model.loggedIn)
-                }
+                ArticleCommands(model: model)
+                GoCommands(model: model)
             }
+    }
+}
+
+/// Article and palette commands act on the key window's WindowModel;
+/// app-wide actions use the shared AppModel.
+private struct ArticleCommands: Commands {
+    let model: AppModel
+    @FocusedObject private var window: WindowModel?
+
+    var body: some Commands {
+        CommandMenu("Article") {
+            // Unmodified-letter equivalents are suspended while the
+            // palette is open so its filter field can type them.
+            Button("Next Article") { window?.move(1) }
+                .keyboardShortcut("j", modifiers: [])
+                .disabled(window.map { $0.palette || !$0.canBrowse } ?? true)
+            Button("Previous Article") { window?.move(-1) }
+                .keyboardShortcut("k", modifiers: [])
+                .disabled(window.map { $0.palette || !$0.canBrowse } ?? true)
+            Divider()
+            Button("Done") { window?.command(.done) }
+                .keyboardShortcut("e", modifiers: [])
+                .disabled(window.map { !$0.canActOnEntry || $0.palette } ?? true)
+            Button("Later") { window?.command(.later) }
+                .keyboardShortcut("s", modifiers: [])
+                .disabled(window.map { !$0.canActOnEntry || $0.palette } ?? true)
+            Button("Keep") { window?.command(.keep) }
+                .keyboardShortcut("f", modifiers: [])
+                .disabled(window.map { !$0.canActOnEntry || $0.palette } ?? true)
+            Button("Mark Unread") { window?.command(.unread) }
+                .keyboardShortcut("m", modifiers: [])
+                .disabled(window.map { !$0.canActOnEntry || $0.palette } ?? true)
+            Divider()
+            Button("Open Original") { window?.openOriginal() }
+                .keyboardShortcut("o", modifiers: [])
+                .disabled(window.map { $0.selected == nil || $0.palette || !$0.canBrowse } ?? true)
+            Button("View Original") { window?.openOriginal() }
+                .keyboardShortcut("v", modifiers: [])
+                .disabled(window.map { $0.selected == nil || $0.palette || !$0.canBrowse } ?? true)
+            Divider()
+            Button("Refresh") { model.scheduleSync() }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(!model.loggedIn)
+            Button("Command Palette") { window?.palette = true }
+                .keyboardShortcut("k", modifiers: .command)
+                .disabled(window == nil)
+        }
+    }
+}
+
+private struct GoCommands: Commands {
+    let model: AppModel
+    @FocusedObject private var window: WindowModel?
+
+    var body: some Commands {
+        CommandMenu("Go") {
+            ForEach(Section.allCases) { target in
+                Button("Go to \(target.rawValue)") { window?.section = target }
+                    .keyboardShortcut(KeyEquivalent(Character(target.keyEquivalent)), modifiers: .command)
+                    .disabled(!model.loggedIn || window == nil)
+            }
+            Divider()
+            Button("Sign Out") { model.signOut() }
+                .keyboardShortcut("q", modifiers: [.command, .shift])
+                .disabled(!model.loggedIn)
+        }
+    }
+}
+
+/// Each window owns its WindowModel, so selection and reader are independent;
+/// the shared AppModel is injected alongside it.
+@MainActor private struct WindowRootView: View {
+    let model: AppModel
+    @StateObject private var window: WindowModel
+
+    init(model: AppModel) {
+        self.model = model
+        _window = StateObject(wrappedValue: WindowModel(app: model))
+    }
+
+    var body: some View {
+        ContentView()
+            .environmentObject(model)
+            .environmentObject(window)
+            .focusedSceneObject(window)
     }
 }
 
 @MainActor struct ContentView: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var window: WindowModel
 
     var body: some View {
         Group {
@@ -74,24 +115,25 @@ import EarnestKit
         .frame(minWidth: 880, minHeight: 520)
         .onAppear {
             if !model.server.isEmpty && !model.connected { model.connect() }
+            window.refreshSection()
         }
         .alert("Error", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
             Button("OK", role: .cancel) { model.error = nil }
         } message: {
             Text(model.error ?? "")
         }
-        .sheet(isPresented: $model.palette) {
+        .sheet(isPresented: $window.palette) {
             PaletteView()
-                .environmentObject(model)
+                .environmentObject(window)
         }
-        .onOpenURL { model.openDeepLink($0) }
+        .onOpenURL { window.openDeepLink($0) }
     }
 
     private var mainView: some View {
         NavigationSplitView {
             List(Section.allCases, selection: Binding(
-                get: { model.section },
-                set: { if let target = $0 { model.section = target } })) { target in
+                get: { window.section },
+                set: { if let target = $0 { window.section = target } })) { target in
                 Label(target.rawValue, systemImage: target.icon).tag(target)
             }
             .listStyle(.sidebar)
@@ -109,32 +151,32 @@ import EarnestKit
                 }
                 .frame(minWidth: 320)
         } detail: {
-            if model.selected != nil {
+            if window.selected != nil {
                 VStack(spacing: 0) {
-                    if let entry = model.readingEntry {
-                        ReaderHeader(entry: entry, feedTitle: model.readingFeedTitle, openOriginal: model.openOriginal)
+                    if let entry = window.readingEntry {
+                        ReaderHeader(entry: entry, feedTitle: window.readingFeedTitle, openOriginal: window.openOriginal)
                         Divider()
                     }
-                    if model.imageMode == .click {
+                    if window.imageMode == .click {
                         HStack {
                             Text("Images are blocked for externally opened articles.")
                                 .font(.caption)
-                            Button("Load Images") { model.loadImages() }
+                            Button("Load Images") { window.loadImages() }
                         }
                         .padding(8)
                     }
-                    if model.offlineCopy {
+                    if window.offlineCopy {
                         Text("Offline copy. Images are blocked.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .padding(8)
                     }
-                    if model.articleUnavailable {
+                    if window.articleUnavailable {
                         ContentUnavailableView("Not available offline", systemImage: "wifi.slash",
                                                description: Text("Earnest keeps articles you have opened. This one loads when you are back online."))
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
-                        Reader(html: model.html, imageOrigin: model.imageOrigin)
+                        Reader(html: window.html, imageOrigin: window.imageOrigin)
                     }
                 }
                 .background(Color(nsColor: .textBackgroundColor))
@@ -142,7 +184,7 @@ import EarnestKit
                 ContentUnavailableView("Select an article", systemImage: "doc.text")
             }
         }
-        .onChange(of: model.section) { model.refreshSection() }
+        .onChange(of: window.section) { window.refreshSection() }
         .toolbar {
             ToolbarItemGroup {
                 if model.pendingOps > 0 {
@@ -160,28 +202,28 @@ import EarnestKit
     }
 
     private var entrySelection: Binding<Int64?> {
-        Binding(get: { model.selected }, set: { model.selectFromList($0) })
+        Binding(get: { window.selected }, set: { window.selectFromList($0) })
     }
 
     @ViewBuilder private var contentColumn: some View {
-        switch model.section {
+        switch window.section {
         case .today:
             VStack(spacing: 0) {
                 if !model.briefs.isEmpty {
                     BriefsView(briefs: model.briefs, names: model.principalNames)
                     Divider()
                 }
-                if model.rows.isEmpty && model.briefs.isEmpty {
+                if window.rows.isEmpty && model.briefs.isEmpty {
                     Spacer()
                 } else {
-                    EntryTable(entries: model.rows, selection: entrySelection)
+                    EntryTable(entries: window.rows, selection: entrySelection)
                 }
-                if !model.endTitle.isEmpty {
+                if !window.endTitle.isEmpty {
                     Divider()
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(model.endTitle).font(.callout)
-                        if !model.endDetail.isEmpty {
-                            Text(model.endDetail)
+                        Text(window.endTitle).font(.callout)
+                        if !window.endDetail.isEmpty {
+                            Text(window.endDetail)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -192,12 +234,12 @@ import EarnestKit
                 }
             }
         case .edition:
-            EditionListView(groups: model.editionGroups, selection: entrySelection)
+            EditionListView(groups: window.editionGroups, selection: entrySelection)
         case .later, .kept, .done:
-            if model.rows.isEmpty {
+            if window.rows.isEmpty {
                 ContentUnavailableView("Nothing here", systemImage: "tray")
             } else {
-                EntryTable(entries: model.rows, selection: entrySelection)
+                EntryTable(entries: window.rows, selection: entrySelection)
             }
         case .feeds:
             FeedsView()
@@ -239,7 +281,7 @@ import EarnestKit
 }
 
 @MainActor struct PaletteView: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var window: WindowModel
     @Environment(\.dismiss) private var dismiss
     @SwiftUI.State private var filter = ""
 
@@ -247,7 +289,7 @@ import EarnestKit
         VStack(alignment: .leading, spacing: 8) {
             TextField("Type a command", text: $filter)
                 .textFieldStyle(.roundedBorder)
-            List(model.paletteCommands().filter {
+            List(window.paletteCommands().filter {
                 filter.isEmpty || $0.title.localizedCaseInsensitiveContains(filter)
             }) { command in
                 Button {

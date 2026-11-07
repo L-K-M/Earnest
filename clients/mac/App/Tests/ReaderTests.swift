@@ -46,7 +46,8 @@ import EarnestKit
 
     func testRevertAccessibilityNamesActionAndArticle() async throws {
         let model = AppModel()
-        model.entries = [try JSONDecoder().decode(APIEntry.self, from: Data(ContentLoadingTests.entryJSON.utf8))]
+        let windowModel = WindowModel(app: model)
+        windowModel.entries = [try JSONDecoder().decode(APIEntry.self, from: Data(ContentLoadingTests.entryJSON.utf8))]
         model.activityGroups = [ActivityGroup(principalID: 2, name: "Scout", items: [ActivityItem(.object([
             "id": .integer(8), "principal_id": .integer(2), "action": .string("state.updated"),
             "target": .object(["entry_id": .integer(42), "register": .string("shelf")]),
