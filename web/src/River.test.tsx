@@ -7,7 +7,8 @@ import type {Entry, ReaderActions} from './reader'
 import {request} from './request'
 vi.mock('./request', () => ({request:vi.fn()}))
 const virtualItems = vi.hoisted(() => ({items: [0, 1]}))
-vi.mock('@tanstack/react-virtual', () => ({useVirtualizer: ({count, scrollMargin = 0}: {count:number; scrollMargin?:number}) => ({getTotalSize:()=>count*100, getVirtualItems:()=>virtualItems.items.filter(index=>index<count).map(index=>({index,size:100,start:index*100 + scrollMargin})), scrollToIndex:vi.fn(), options:{scrollMargin}})}))
+const {measureElementMock} = vi.hoisted(() => ({measureElementMock: vi.fn()}))
+vi.mock('@tanstack/react-virtual', () => ({useVirtualizer: ({count, scrollMargin = 0}: {count:number; scrollMargin?:number}) => ({getTotalSize:()=>count*100, getVirtualItems:()=>virtualItems.items.filter(index=>index<count).map(index=>({index,size:100,start:index*100 + scrollMargin})), scrollToIndex:vi.fn(), options:{scrollMargin}, measureElement:measureElementMock})}))
 const observers: IntersectionObserverCallback[] = []
 const observed: Element[] = []
 class Observer {
@@ -135,6 +136,15 @@ describe('river interactions', () => {
     await screen.findByText('Article 1')
     fireEvent.keyDown(document.body,{key:'e'})
     expect(act).not.toHaveBeenCalled()
+  })
+  it('exposes each row to the virtualizer measurement hook', async () => {
+    measureElementMock.mockClear()
+    mount()
+    await screen.findByText('Article 1')
+    const rows = document.querySelectorAll('.virtual-row')
+    expect(rows.length).toBeGreaterThan(0)
+    expect(measureElementMock).toHaveBeenCalledTimes(rows.length)
+    for (const row of rows) expect(row.getAttribute('data-index')).toMatch(/^\d+$/)
   })
   it('shows one representative per story with its also-in count', async () => {
     vi.mocked(request).mockImplementation(async path => {

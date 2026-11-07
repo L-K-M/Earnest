@@ -54,6 +54,8 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   for (const page of list.data?.pages ?? []) {
     for (const group of page.groups ?? []) clusterInfo.set(group.entry.id, group.also_in)
   }
+  // Rows are measured (measureElement on each row) so long titles, blurbs and
+  // zoomed text are never clipped; estimateSize is only the pre-measure guess.
   // eslint-disable-next-line react-hooks/incompatible-library -- Virtual owns mutable scroll measurements; this app does not use React Compiler.
   const virtual = useVirtualizer({count: entries.length, getScrollElement: () => scroller.current, estimateSize: () => 100, overscan: 5, scrollMargin, getItemKey: index => entries[index].id})
   // The Today panel sits above the list inside the scroller, so the list's own
@@ -178,7 +180,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
           const source = subscriptions.find(sub => sub.id === entry.subscription_id)?.title || 'Feed'
           const group = view.kind === 'edition' && (row.index === 0 || entries[row.index - 1].subscription_id !== entry.subscription_id)
           const alsoIn = clusterInfo.get(entry.id) ?? 0
-          return <div className="virtual-row" key={entry.id} role="listitem" data-entry={entry.id} style={{height: row.size, transform: `translateY(${row.start - virtual.options.scrollMargin}px)`}}>
+          return <div className="virtual-row" key={entry.id} role="listitem" data-entry={entry.id} data-index={row.index} ref={virtual.measureElement} style={{transform: `translateY(${row.start - virtual.options.scrollMargin}px)`}}>
             {group && <h3 className="feed-group">{source}</h3>}
             <button className="entry" aria-current={selected?.id === entry.id ? 'true' : undefined} onFocus={() => onSelect(entry)} onClick={() => open(entry)}><strong>{entry.title || 'Untitled'}</strong>{pipeline.status.blurb === 'enabled' && entry.blurb && <span>{entry.blurb}</span>}<span>{source} · {statusLabel(state)}{state.kept.value === true ? ' · Kept' : ''}{cluster && alsoIn > 0 ? ` · also in ${alsoIn}` : ''}</span></button>
           </div>
