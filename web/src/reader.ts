@@ -10,6 +10,18 @@ export type ReaderActions = {
   act: (entry: Entry, register: Register, value: Value, kind?: 'explicit' | 'passive') => Promise<void>
 }
 export function viewKey(view: View): string { return `${view.kind}${view.id === undefined ? '' : `:${view.id}`}` }
+export type RangeScope = {kind: 'subscriptions' | 'folder'; ids: number[]}
+
+// The sync range "Mark the rest read" covers for a view. Today covers the
+// subscriptions it shows (every cadence except This week, which belongs to the
+// Edition); a feed or folder covers itself. Other views offer no such command.
+export function viewScope(view: View, subscriptions: Subscription[]): RangeScope | null {
+  if (view.kind === 'feed' && view.id !== undefined) return {kind: 'subscriptions', ids: [view.id]}
+  if (view.kind === 'folder' && view.id !== undefined) return {kind: 'folder', ids: [view.id]}
+  if (view.kind !== 'today') return null
+  const ids = subscriptions.filter(sub => !sub.deleted && sub.cadence !== 'week').map(sub => sub.id)
+  return ids.length ? {kind: 'subscriptions', ids} : null
+}
 export function entryQuery(view: View, group?: 'cluster'): URLSearchParams {
   const query = new URLSearchParams({view: view.kind === 'today' ? 'river' : ['later', 'kept', 'done'].includes(view.kind) ? view.kind : 'all', limit: '100', direction: 'forward'})
   if (view.kind === 'edition') {query.set('view', 'river');query.set('cadence', 'week')}
