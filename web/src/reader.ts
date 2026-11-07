@@ -17,12 +17,13 @@ export function viewScope(view: View): {kind: 'all' | 'subscriptions' | 'folder'
   if (view.kind === 'folder' && view.id !== undefined) return {kind: 'folder', ids: [view.id]}
   return {kind: 'all', ids: []}
 }
-export function entryQuery(view: View): URLSearchParams {
+export function entryQuery(view: View, group?: 'cluster'): URLSearchParams {
   const query = new URLSearchParams({view: view.kind === 'today' ? 'river' : ['later', 'kept', 'done'].includes(view.kind) ? view.kind : 'all', limit: '100', direction: 'forward'})
   if (view.kind === 'edition') {query.set('view', 'river');query.set('cadence', 'week')}
   if (view.kind === 'feed') query.set('subscription_id', String(view.id))
   if (view.kind === 'folder') query.set('folder_id', String(view.id))
   if (view.kind === 'label') query.set('label_id', String(view.id))
+  if (group) query.set('group', group)
   return query
 }
 export function orderEntries(entries: Entry[], view: View, subscriptions: Subscription[]): Entry[] {

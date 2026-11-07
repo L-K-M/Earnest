@@ -88,6 +88,8 @@ type entriesPage struct {
 	Status     string         `json:"status,omitempty"`
 	Groups     []clusterGroup `json:"groups,omitempty"`
 	NextCursor string         `json:"next_cursor,omitempty"`
+	// Total is the full match count for a dry run, which may exceed len(Entries).
+	Total int `json:"total,omitempty"`
 }
 
 // clusterGroup annotates one listed entry with its cluster identity and how
@@ -187,6 +189,9 @@ func (s *server) readerRoutes() {
 			page.NextCursor = strconv.FormatUint(entries[len(entries)-1].Seq, 10)
 		}
 		return page, err
+	})
+	route(s, http.MethodGet, "/v1/entries:counts", "entry-counts", func(ctx context.Context, in *empty) (service.UnreadCounts, error) {
+		return s.svc.UnreadCounts(ctx, actor(ctx))
 	})
 	route(s, http.MethodGet, "/v1/entries/{id}", "get-entry", func(ctx context.Context, in *idInput) (entry, error) {
 		result, err := s.svc.Entry(ctx, actor(ctx), in.ID)

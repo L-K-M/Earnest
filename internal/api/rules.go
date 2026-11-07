@@ -100,11 +100,11 @@ func (s *server) ruleRoutes() {
 		paths["/v1/rules/{id}:"+action] = &huma.PathItem{Post: &op}
 	}
 	route(s, http.MethodPost, "/v1/rules:dry-run", "dry-run-rule", func(ctx context.Context, in *bodyInput[ruleDryRun]) (entriesPage, error) {
-		ids, err := s.svc.DryRunRule(ctx, actor(ctx), in.Body.Predicate, in.Body.Actions)
+		ids, total, err := s.svc.DryRunRule(ctx, actor(ctx), in.Body.Predicate, in.Body.Actions)
 		if err != nil {
 			return entriesPage{}, err
 		}
-		result := entriesPage{Entries: []entry{}}
+		result := entriesPage{Entries: []entry{}, Total: total}
 		const batchSize = 200
 		for len(ids) > 0 {
 			n := min(len(ids), batchSize)

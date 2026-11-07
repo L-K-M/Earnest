@@ -37,7 +37,7 @@ it('rolls back the visible overlay if durable storage rejects a queued action',a
   const store={load:()=>memory.load(),save:async(snapshot:import('./client').ClientSnapshot)=>{
     if(full) throw new Error('Storage is full')
     await memory.save(snapshot)
-  }}
+  },loadVersion:()=>memory.loadVersion()}
   const request:RequestFn=async<T,>(path:string):Promise<T> => (path==='/v1/bootstrap' ? '{"generation":"g1","rev":0}' : '{"items":[],"has_more":false}') as T
   const runtime=new ReaderSync({request,principal:1n,store,locks:new LocalLocks(),channel:null,openEvents:()=>null})
   await runtime.stepOnce()
@@ -54,4 +54,18 @@ it('rejects entry metadata captured under an older generation before merging its
   const {initialState,emptyEntry}=await import('./types')
   await expect(runtime.observe({...emptyEntry(),id:1n,rev:99n},initialState(1n,1n),'g1')).rejects.toThrow('Reading state changed')
   expect(runtime.hasEntry(1n)).toBe(false)
+})
+
+it('skips the full snapshot read while the store version is unchanged',async()=>{
+  const memory=new MemorySyncStore()
+  let loads=0
+  const store={load:async()=>{loads++;return memory.load()},save:(snapshot:import('./client').ClientSnapshot)=>memory.save(snapshot),loadVersion:()=>memory.loadVersion()}
+  const request:RequestFn=async<T,>(path:string):Promise<T> => (path==='/v1/bootstrap' ? '{"generation":"g1","rev":0}' : path.startsWith('/v1/bootstrap/') ? '{"items":[],"has_more":false}' : '{"changes":[],"next":{"generation":"g1","rev":0}}') as T
+  const runtime=new ReaderSync({request,principal:1n,store,locks:new LocalLocks(),channel:null,openEvents:()=>null})
+  await runtime.stepOnce()
+  const afterBootstrap=loads
+  expect(runtime.status().bootstrapped).toBe(true)
+  await runtime.queue(1n,'seen','seen')
+  await runtime.queue(1n,'shelf','done')
+  expect(loads).toBe(afterBootstrap)
 })

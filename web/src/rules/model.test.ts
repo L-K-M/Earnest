@@ -1,5 +1,5 @@
 import {describe,expect,it} from 'vitest'
-import {actionRestriction, feedScoped, newPredicate, predicateError, type Predicate} from './model'
+import {actionRestriction, feedScoped, newPredicate, normalizeTerms, predicateError, type Predicate} from './model'
 
 const feed: Predicate = {type:'feed_in',ids:[42]}
 const word: Predicate = {type:'keyword',terms:['funding']}
@@ -48,5 +48,22 @@ describe('rule predicate table',() => {
   })
   it('bounds the complete tree',() => {
     expect(predicateError({type:'and',children:Array.from({length:256},() => word)},on)).toContain('256')
+  })
+})
+
+describe('keyword terms',() => {
+  it('trims terms and drops blank lines',() => {
+    expect(normalizeTerms(['funding','','  ','ai'])).toEqual(['funding','ai'])
+    expect(normalizeTerms([' spaced '])).toEqual(['spaced'])
+    expect(normalizeTerms([])).toEqual([])
+  })
+  it('accepts terms with trailing or blank lines',() => {
+    expect(predicateError({type:'keyword',terms:['funding','']},on)).toBe('')
+    expect(predicateError({type:'keyword',terms:['','funding','  ']},on)).toBe('')
+  })
+  it('still rejects terms that are all blank',() => {
+    expect(predicateError({type:'keyword',terms:['']},on)).toBe('Enter at least one term.')
+    expect(predicateError({type:'keyword',terms:[' ']},on)).toBe('Enter at least one term.')
+    expect(predicateError({type:'keyword',terms:[]},on)).toBe('Enter at least one term.')
   })
 })

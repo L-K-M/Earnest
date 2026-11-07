@@ -18,6 +18,8 @@ targets:
       - package: GRDB
     settings:
       base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         PRODUCT_BUNDLE_IDENTIFIER: ch.lkmc.Earnest
         PRODUCT_NAME: Earnest
         SWIFT_VERSION: '5.0'

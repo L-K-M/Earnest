@@ -207,13 +207,15 @@ class SyncRepositoryTest {
     }
 
     @Test
-    fun nativeReaderAlwaysRequestsClickToLoadImages() = runBlocking {
+    fun nativeReaderDefaultsToProxiedImages() = runBlocking {
+        val modes = java.util.concurrent.CopyOnWriteArrayList<String?>()
         val api = api { request ->
-            assertEquals("click", request.url.queryParameter("mode"))
+            modes += request.url.queryParameter("mode")
             200 to """{"url":"https://content.test/signed","expires_at":"2026-11-03T01:00:00Z"}"""
         }
         api.contentUrl(2)
-        Unit
+        api.contentUrl(2, mode = "click")
+        assertEquals(listOf(null, "click"), modes)
     }
 
     private val event = """{"id":2,"subscription_id":3,"seq":4,"first_seen_at":"2026-11-03T00:00:00Z","rev":1,"deleted":false}"""
@@ -356,6 +358,43 @@ class SyncRepositoryTest {
     }
 
     @Test
+    fun hydrationIsBoundedParallelAndPreservesRecordOrder() = runBlocking {
+        val ids = (1L..20L).toList()
+        val inFlight = java.util.concurrent.atomic.AtomicInteger()
+        val maxInFlight = java.util.concurrent.atomic.AtomicInteger()
+        fun event(id: Long) =
+            """{"id":$id,"subscription_id":3,"seq":4,"first_seen_at":"2026-11-03T00:00:00Z","rev":1,"deleted":false}"""
+        fun detail(id: Long) =
+            """{"id":$id,"subscription_id":3,"feed_id":5,"seq":4,"first_seen_at":"2026-11-03T00:00:00Z",""" +
+                """"title":"Headline $id","url":"https://news.test/article/$id","author":"Author","rev":1,"deleted":false}"""
+        val engine = engine()
+        val api = api { request ->
+            when {
+                request.url.encodedPath.startsWith("/v1/entries/") -> {
+                    val id = request.url.encodedPath.removePrefix("/v1/entries/").toLong()
+                    val now = inFlight.incrementAndGet()
+                    maxInFlight.accumulateAndGet(now) { seen, observed -> maxOf(seen, observed) }
+                    Thread.sleep(20)
+                    inFlight.decrementAndGet()
+                    200 to detail(id)
+                }
+                request.url.queryParameter("rev") == "0" -> {
+                    val records = ids.mapIndexed { index, id ->
+                        """{"rev":${index + 1},"type":"entry.updated","payload":{"entry":${event(id)}}}"""
+                    }.joinToString(",")
+                    200 to """{"changes":[$records],"next":{"generation":"g1","rev":20},"next_cursor":"g1:20"}"""
+                }
+                else -> 200 to """{"changes":[],"next":{"generation":"g1","rev":20},"next_cursor":"g1:20"}"""
+            }
+        }
+        SyncRepository(api, engine).pull()
+        assertEquals("entries must keep change record order", ids, engine.snapshot().entries.map { it.id })
+        assertEquals(20, engine.snapshot().entries.size)
+        assertTrue("hydration must overlap requests (max in flight ${maxInFlight.get()})", maxInFlight.get() > 1)
+        assertTrue("hydration must stay within the bound (max in flight ${maxInFlight.get()})", maxInFlight.get() <= 8)
+    }
+
+    @Test
     fun subscriptionChangeKeepsSiblingNativeProjection() = runBlocking {
         val engine = engine()
         val payload = """{"subscription":{"id":3,"title":"Weekly","cadence":"week","rev":1},"object":{"kind":"subscription","id":3,"name":"Weekly","rev":1}}"""
@@ -489,4 +528,47 @@ class SyncRepositoryTest {
         assertEquals(original, SyncEngine(store).snapshot())
     }
 
+    @Test
+    fun expiredOperationsPersistAfterReload() = runBlocking {
+        val stale = Pending(write = write("ancient").copy(occurredAt = "2020-01-01T00:00:00Z"))
+        val store = Store(SyncSnapshot(Revision("g1", 0), outbox = listOf(stale)))
+        val repository = SyncRepository(api { 200 to "[]" }, SyncEngine(store))
+        val dropped = repository.expire(java.time.Instant.parse("2026-01-01T00:00:00Z"))
+        assertEquals(listOf("ancient"), dropped.map { it.operation.opId })
+        // A fresh engine over the same store must not resurrect the dropped operation.
+        assertTrue(SyncEngine(store).snapshot().outbox.isEmpty())
+    }
+
+    @Test
+    fun httpHappensOutsideEngineSections() = runBlocking {
+        // Sections are short load-mutate-save critical sections; a user action
+        // queued mid-sync must not wait behind HTTP.
+        val store = Store(SyncSnapshot(Revision("g1", 0), outbox = listOf(Pending(write = write("queued")))))
+        var inSection = false
+        val sections = object : EngineSession {
+            override suspend fun <T> invoke(section: suspend (SyncEngine) -> T): T {
+                check(!inSection) { "engine sections must not nest" }
+                inSection = true
+                try {
+                    return section(SyncEngine(store))
+                } finally {
+                    inSection = false
+                }
+            }
+        }
+        val repository = SyncRepository(api { request ->
+            check(!inSection) { "HTTP ran inside an engine section: ${request.url.encodedPath}" }
+            when (request.url.encodedPath) {
+                "/v1/changes" -> 200 to """{"changes":[],"next":{"generation":"g1","rev":0},"next_cursor":"g1:0"}"""
+                "/v1/state:batch" -> 200 to json.encodeToString(
+                    kotlinx.serialization.builtins.ListSerializer(Result.serializer()),
+                    listOf(Result("queued", "applied", SyncEngine.initialState(1, 2), false)),
+                )
+                else -> error("unexpected request ${request.url.encodedPath}")
+            }
+        }, sections)
+        repository.pull()
+        repository.flush()
+        assertTrue(store.data.outbox.isEmpty())
+    }
 }

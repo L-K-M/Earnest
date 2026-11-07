@@ -170,8 +170,14 @@ import AppKit
                     return
                 } catch {
                     guard self.session == s, !Task.isCancelled else { return }
-                    self.report(error)
-                    if !ErrorPresentation.isConnection(error) { return }
+                    // Transient failures keep retrying as a note; permanent
+                    // ones surface and stop the loop.
+                    if ErrorPresentation.isTransient(error) {
+                        self.connectionNote = ErrorPresentation.message(error)
+                    } else {
+                        self.report(error)
+                        return
+                    }
                 }
                 try? await Task.sleep(for: .seconds(10))
             }
@@ -189,8 +195,9 @@ import AppKit
         try Task.checkCancellation()
         guard session == expectedSession, loggedIn else { return false }
         let remembered: AccountIdentity?
-        if case .failure(let error) = result, ErrorPresentation.isConnection(error) {
-            remembered = try identities.load(server: url)
+        if case .failure(let error) = result, ErrorPresentation.isTransient(error) {
+            // A record that cannot be decoded is simply absent: it re-verifies online.
+            remembered = try? identities.load(server: url)
         } else {
             remembered = nil
         }
@@ -204,14 +211,27 @@ import AppKit
             return false
         }
         if identity == nil {
-            let cache = try Cache(identity: resolved, directory: cacheDirectory)
+            let cache = try makeCache(for: resolved)
             let engine = SyncEngine(store: cache)
             self.cache = cache
             self.engine = engine
             self.identity = resolved
             principalID = resolved.principalID
             coordinator = SyncCoordinator(engine: engine, api: api)
-            try restoreCachedPresentation()
+            do {
+                try restoreCachedPresentation()
+            } catch {
+                // A cache that cannot be read or decoded is a cold cache, not
+                // a fatal error: clear it and let the next sync rebuild it.
+                cachedPresentation = false
+                entries = []
+                feeds = []
+                feedMap = [:]
+                principalNames = [:]
+                briefs = []
+                rebuildPresentation()
+                try? cache.clear()
+            }
         }
         if case .offline = resolution {
             connectionNote = "Offline. Showing what was last synced."
@@ -220,13 +240,27 @@ import AppKit
         return true
     }
 
+    /// A cache that cannot be opened is only unrecoverable when the database
+    /// file itself is corrupt or undecodable. Any other failure (permissions,
+    /// disk full, SQLITE_BUSY, directory creation) is rethrown so the retry and
+    /// offline paths handle it, and the shared cache file is left untouched.
+    private func makeCache(for identity: AccountIdentity) throws -> Cache {
+        do { return try Cache(identity: identity, directory: cacheDirectory) }
+        catch {
+            guard Cache.isUnrecoverableOpenFailure(error) else { throw error }
+            try Cache.quarantineCorruptCache(in: cacheDirectory)
+            return try Cache(identity: identity, directory: cacheDirectory)
+        }
+    }
+
     private func restoreCachedPresentation() throws {
         guard let engine, let cache else { return }
         let snapshot = try engine.snapshot()
         cachedPresentation = true
         // Oldest first, like the server river, so offline reading order matches online.
-        entries = try snapshot.entries.filter { !$0.deleted && $0.hasBody }.sorted { $0.seq < $1.seq }
-            .map { try cachedEntry($0, principal: principalID, engine: engine) }
+        let cached = snapshot.entries.filter { !$0.deleted && $0.hasBody }.sorted { $0.seq < $1.seq }
+        let prefetched = (try? engine.states(principal: principalID, entryIDs: cached.map(\.id))) ?? [:]
+        entries = try cached.map { try cachedEntry($0, principal: principalID, engine: engine, state: prefetched[$0.id]) }
         let generation = snapshot.cursor?.generation ?? ""
         feeds = try cache.resource("feeds", generation: generation).compactMap(FeedInfo.init).filter { !$0.deleted }
         let subscriptions = snapshot.objects.filter { $0.kind == .subscription && !$0.deleted }
@@ -596,7 +630,13 @@ import AppKit
 
     func rebuildPresentation() {
         let snapshot = try? engine?.snapshot()
-        let presented = entries.filter { !$0.deleted }.map { ($0, effectiveState(of: $0)) }
+        let visible = entries.filter { !$0.deleted }
+        // One snapshot load for the whole list: state() per row cost a full
+        // snapshot decode each and dominated rebuilds on large libraries.
+        let bulk: [Int64: EarnestKit.State]? = principalID > 0
+            ? (try? engine?.states(principal: principalID, entryIDs: visible.map(\.id))) ?? nil
+            : nil
+        let presented = visible.map { ($0, bulk?[$0.id] ?? $0.state.syncState) }
         let riverIDs: Set<Int64>
         if cachedPresentation, let snapshot {
             let subscriptions = Dictionary(snapshot.objects.filter { $0.kind == .subscription }.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
@@ -643,7 +683,7 @@ import AppKit
             rows = []
             editionGroups = []
         }
-        pendingOps = (try? engine?.snapshot().outbox.count) ?? 0
+        pendingOps = snapshot?.outbox.count ?? 0
         updateEndStatement(presented, riverIDs: riverIDs)
     }
 

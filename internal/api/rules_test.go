@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -109,6 +111,9 @@ func TestHTTPRules(t *testing.T) {
 	if len(matches.Entries) != 1 || matches.Entries[0].ID != f.entryID {
 		t.Fatalf("dry run matches=%+v", matches.Entries)
 	}
+	if matches.Total != 1 {
+		t.Fatalf("dry run total=%d want 1", matches.Total)
+	}
 	if after := snapshot(); before != after {
 		t.Fatalf("dry run changed persisted state: before=%s after=%s", before, after)
 	}
@@ -139,5 +144,40 @@ func TestHTTPRules(t *testing.T) {
 	requireStatus(t, rec, http.StatusOK)
 	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil || len(listed) != 0 {
 		t.Fatalf("rules after delete=%+v: %v", listed, err)
+	}
+}
+
+func TestHTTPRuleDryRunCap(t *testing.T) {
+	template := storetest.NewTemplate(t)
+	f := newAPIFixture(t, template)
+	sub, err := f.svc.Subscription(t.Context(), f.owner, f.subID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := make([]service.IngestItem, 505)
+	for i := range items {
+		idHash := sha256.Sum256([]byte(fmt.Sprintf("cap-id-%d", i)))
+		bodyHash := sha256.Sum256([]byte(fmt.Sprintf("cap-body-%d", i)))
+		items[i] = service.IngestItem{
+			IdentityHash: hex.EncodeToString(idHash[:]), ContentHash: hex.EncodeToString(bodyHash[:]),
+			Title: fmt.Sprintf("matching %d", i), ContentHTML: "<p>matching</p>", ContentText: "matching",
+			SanitizerVersion: 1, ContentSource: service.ContentFromFeed,
+		}
+	}
+	if _, err := f.svc.RecordFetch(t.Context(), service.FetchOutcome{FeedID: sub.FeedID, Status: service.FetchOK, Items: items}); err != nil {
+		t.Fatal(err)
+	}
+	predicate := service.RulePredicate{Type: service.RuleKeyword, Terms: []string{"matching"}}
+	rec := f.do(t, http.MethodPost, "/v1/rules:dry-run", ruleDryRun{Predicate: predicate, Actions: []service.RuleAction{{Type: service.RuleNotify, Budget: 1}}}, f.session())
+	requireStatus(t, rec, http.StatusOK)
+	var matches entriesPage
+	if err := json.Unmarshal(rec.Body.Bytes(), &matches); err != nil {
+		t.Fatal(err)
+	}
+	if matches.Total != 505 {
+		t.Fatalf("total=%d want 505", matches.Total)
+	}
+	if len(matches.Entries) != 500 {
+		t.Fatalf("entries=%d want 500 (maxDryRunMatches)", len(matches.Entries))
 	}
 }

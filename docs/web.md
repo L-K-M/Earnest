@@ -45,10 +45,10 @@ placeholder until the web bundle has been copied into `internal/web/dist`.
    or export OPML, and mute keywords/authors. Feed health explains failure classes
    and shows the service's last attempt/success and next scheduled fetch.
 
-Only unread-count mode requests and displays unread totals. Per-feed counts page
-all unread results behind a fixed upper sequence, rather than presenting a
-first-page count as the total. The list's separate count says explicitly that it
-covers loaded articles. Today excludes This week on the client because the
+Only unread-count mode requests and displays unread totals. Per-feed counts come
+from one grouped server query (`/v1/entries:counts`), so totals stay exact
+without paging unread entries through the entry list. The list's separate count
+says explicitly that it covers loaded articles. Today excludes This week on the client because the
 existing river API includes all three cadences.
 
 ## Settings contract
@@ -98,30 +98,8 @@ layer rejects integers outside the safe range before addressing an article.
 Run `pnpm typecheck`, `pnpm lint`, `pnpm test` and `pnpm build` from `web/`.
 The vector suite reads the repository JSON fixtures unchanged, uses a small
 in-memory server for server steps, and checks the manifest and step language so
-new fixtures/operations cannot disappear from the drift gate. This checkout has
-vectors 01–35; the task's referenced 36/37 are absent. Local tests cover stale
-request-generation acknowledgements and immutable retries as well.
-
-## Integration boundary for this task
-
-The assigned paths exclude `internal/api/api.go` and `internal/web/content.go`.
-`web/settings-registration.patch` contains the required one-line route mount for
-review by the router owner. Until that patch is applied, the production router
-returns 404 for settings; the settings handler tests mount those routes directly.
-The checked-in OpenAPI/types preview is generated with that proposed mount via
-a Go source overlay. After applying it, ordinary `go run ./cmd/earnest openapi`
-and `pnpm generate` reproduce the artifacts without an overlay.
-
-The existing content server understands serif/sans but not the stored dyslexic
-choice; that choice currently renders as its serif fallback. Adding the
-allowlisted face/spacing requires the content-server owner or an approved scope
-extension. `web/content-typography.patch` contains the small allowlisted font
-and spacing change for review. The web application cannot style the isolated
-iframe's document.
-
-The module-level exported types/functions and created-file manifest are listed
-in [web/API.md](../web/API.md). Runtime integration methods are documented in
-[the sync README](../web/src/sync/README.md).
+new fixtures/operations cannot disappear from the drift gate. Local tests cover
+stale request-generation acknowledgements and immutable retries as well.
 
 The isolated article frame keeps its own keyboard focus. App shortcuts resume
 when focus returns to the reader toolbar or article list; the frame does not run

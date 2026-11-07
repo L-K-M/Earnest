@@ -5,6 +5,7 @@ import android.net.Uri
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
+import androidx.core.net.toUri
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.*
 import org.junit.Test
@@ -17,11 +18,11 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35])
 class ReaderTest {
     private val url = "https://content.test/signed"
-    private fun request(url: String = this.url, main: Boolean = true) = object : WebResourceRequest {
+    private fun request(url: String = this.url, main: Boolean = true, gesture: Boolean = false) = object : WebResourceRequest {
         override fun getUrl() = Uri.parse(url)
         override fun isForMainFrame() = main
         override fun isRedirect() = false
-        override fun hasGesture() = false
+        override fun hasGesture() = gesture
         override fun getMethod() = "GET"
         override fun getRequestHeaders() = emptyMap<String, String>()
     }
@@ -81,6 +82,31 @@ class ReaderTest {
         assertEquals(url, shadowOf(view).lastLoadedUrl)
         view.webViewClient.onReceivedHttpError(view, request(), response)
         assertEquals("https://appassets.androidplatform.net/article/index.html", shadowOf(view).lastLoadedUrl)
+        view.destroy()
+    }
+
+    @Test fun readerUrlKeepsSignatureAndAddsTheme() {
+        val themed = readerUrl("https://content.test/content/7?sig=a.b%2Bc", "dark").toUri()
+        assertEquals("a.b+c", themed.getQueryParameter("sig"))
+        assertEquals("dark", themed.getQueryParameter("theme"))
+    }
+
+    @Test fun contentThemeMapsEverySetting() {
+        assertEquals("light", ThemeSetting.LIGHT.contentTheme(systemDark = true))
+        assertEquals("dark", ThemeSetting.DARK.contentTheme(systemDark = false))
+        assertEquals("black", ThemeSetting.BLACK.contentTheme(systemDark = false))
+        assertEquals("eink", ThemeSetting.E_INK.contentTheme(systemDark = false))
+        assertEquals("dark", ThemeSetting.SYSTEM.contentTheme(systemDark = true))
+        assertEquals("light", ThemeSetting.SYSTEM.contentTheme(systemDark = false))
+    }
+
+    @Test fun mainFrameNavigationStaysOnTheArticlePath() {
+        val view = createReaderWebView(ApplicationProvider.getApplicationContext<Context>(), url, null)
+        val client = view.webViewClient
+        assertFalse("the signed article URL must keep loading in place", client.shouldOverrideUrlLoading(view, request("$url?sig=token", gesture = true)))
+        assertTrue("a click-to-load /img/ link must not replace the article", client.shouldOverrideUrlLoading(view, request("https://content.test/img/sig/encoded", gesture = true)))
+        assertTrue("another content-origin page must not replace the article", client.shouldOverrideUrlLoading(view, request("https://content.test/other", gesture = true)))
+        assertTrue("an external link must not load in the reader", client.shouldOverrideUrlLoading(view, request("https://example.com/article", gesture = true)))
         view.destroy()
     }
 

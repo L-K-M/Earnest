@@ -37,6 +37,33 @@ const (
 	PageBackward PageDirection = "backward"
 )
 
+// EntryTagKind names one tag predicate a stream filter can require or reject.
+type EntryTagKind string
+
+const (
+	// TagAll matches every entry, the reading-list stream.
+	TagAll EntryTagKind = "all"
+	// TagRead matches read entries: seen, or shelved Done.
+	TagRead EntryTagKind = "read"
+	// TagKept matches kept entries, the starred stream.
+	TagKept EntryTagKind = "kept"
+	// TagUnread matches unseen entries not shelved Done.
+	TagUnread EntryTagKind = "unread"
+	// TagFeed matches entries of the feed whose canonical URL is Name.
+	TagFeed EntryTagKind = "feed"
+	// TagLabel matches the union of the folder stream and explicit label
+	// memberships sharing Name, the Google Reader label semantics.
+	TagLabel EntryTagKind = "label"
+)
+
+// EntryTag is one resolved tag predicate. Name carries the feed URL or the
+// shared label and folder name for the kinds that need one; an unknown feed
+// URL or label name simply matches nothing.
+type EntryTag struct {
+	Kind EntryTagKind
+	Name string
+}
+
 const (
 	defaultEntryLimit = 50
 	maxEntryLimit     = 200
@@ -83,12 +110,38 @@ type EntryFilter struct {
 	// agent reads the user's river unless it asks for its own state.
 	PrincipalID int64
 	UnreadOnly  bool
+	// RequireTags and ExcludeTags conjunctively tag-filter the page: an
+	// entry must satisfy every RequireTags predicate and no ExcludeTags
+	// predicate, alongside the other selectors.
+	RequireTags []EntryTag
+	ExcludeTags []EntryTag
 	// AfterSeq and BeforeSeq bound seq exclusively on either side; both may
 	// combine into a window. Direction picks the ordering, not the bound.
 	AfterSeq  uint64
 	BeforeSeq uint64
-	Limit     int
-	Direction PageDirection
+	// AfterTime and BeforeTime bound the entry's effective timestamp —
+	// published_at when set, else first_seen_at — at whole-second
+	// resolution: only floor(unix) values strictly above AfterTime and
+	// strictly below BeforeTime pass. Zero disables either bound.
+	AfterTime  int64
+	BeforeTime int64
+	Limit      int
+	Direction  PageDirection
+	// SuppressClusters excludes river rows hidden by read-time cluster
+	// suppression, so one page query returns visible rows directly instead of
+	// rescanning suppressed chunks. Only meaningful for the river view.
+	SuppressClusters bool
+}
+
+// UnreadCounts summarises the resolved principal's unread entries per
+// subscription, plus the Later and Kept totals, in one aggregate query.
+type UnreadCounts struct {
+	// BySubscription is keyed by subscription ID, not feed ID: the sidebar
+	// counts per subscription row.
+	BySubscription map[int64]int64 `json:"by_subscription"`
+	Later          int64           `json:"later"`
+	Kept           int64           `json:"kept"`
+	Total          int64           `json:"total"`
 }
 
 // EntryContent is the sanitised body at the entry's current content hash.
@@ -175,8 +228,21 @@ func (s *Service) Entry(ctx context.Context, a Actor, id int64) (Entry, error) {
 }
 
 // GetByIDs returns the visible entries among ids in request order, silently
-// omitting entries the user cannot see. Tombstones come back flagged.
+// omitting entries the user cannot see. Tombstones come back flagged. It does
+// not load bodies: list callers never render them, and loading them would cost
+// one query per entry.
 func (s *Service) GetByIDs(ctx context.Context, a Actor, ids []int64) ([]Entry, error) {
+	return s.getByIDs(ctx, a, ids, false)
+}
+
+// GetByIDsWithContent is GetByIDs plus the current sanitised body, loaded in
+// one query. Only callers that render bodies, such as Google Reader
+// compatibility, should ask for it.
+func (s *Service) GetByIDsWithContent(ctx context.Context, a Actor, ids []int64) ([]Entry, error) {
+	return s.getByIDs(ctx, a, ids, true)
+}
+
+func (s *Service) getByIDs(ctx context.Context, a Actor, ids []int64, withContent bool) ([]Entry, error) {
 	if err := s.checkActor(ctx, a, ScopeEntriesRead); err != nil {
 		return nil, err
 	}
@@ -206,6 +272,13 @@ func (s *Service) GetByIDs(ctx context.Context, a Actor, ids []int64) ([]Entry, 
 	if err != nil {
 		return nil, err
 	}
+	var content map[int64]store.ContentRow
+	if withContent {
+		content, err = store.LoadContentMap(ctx, s.store.Pool(), want)
+		if err != nil {
+			return nil, err
+		}
+	}
 	byID := make(map[int64]store.EntryRow, len(rows))
 	for _, r := range rows {
 		byID[r.ID] = r
@@ -218,19 +291,54 @@ func (s *Service) GetByIDs(ctx context.Context, a Actor, ids []int64) ([]Entry, 
 		}
 		e := entryFromRow(r)
 		e.State = states[id]
-		if !e.Deleted {
-			html, text, version, source, err := store.LoadContent(ctx, s.store.Pool(), id)
-			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-				return nil, err
-			}
-			if err == nil {
-				e.Content = &EntryContent{EntryID: id, HTML: html, Text: text, SanitizerVersion: version, Source: ContentSource(source)}
+		if withContent && !e.Deleted {
+			if c, ok := content[id]; ok {
+				e.Content = &EntryContent{EntryID: id, HTML: c.HTML, Text: c.Text, SanitizerVersion: c.Version, Source: ContentSource(c.Source)}
 			}
 		}
 		out = append(out, e)
 	}
 	if err := s.attachBlurbs(ctx, a.UserID, out); err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+// UnreadCounts returns counts for the same visibility rules as an
+// all/unread_only entry page (active subscription, not deleted, unseen, not
+// Done) without transferring one row per entry. A large backlog costs one
+// aggregate scan instead of a page per 200 entries.
+func (s *Service) UnreadCounts(ctx context.Context, a Actor) (UnreadCounts, error) {
+	if err := s.checkActor(ctx, a, ScopeEntriesRead); err != nil {
+		return UnreadCounts{}, err
+	}
+	principal, err := s.statePrincipal(ctx, a, 0)
+	if err != nil {
+		return UnreadCounts{}, err
+	}
+	rows, err := s.store.Pool().Query(ctx, `SELECT s.id, count(*), count(*) FILTER (WHERE st.shelf='later'), count(*) FILTER (WHERE st.kept)
+		FROM entries e
+		JOIN subscriptions s ON s.feed_id=e.feed_id AND s.user_id=$1 AND s.deleted_at IS NULL
+		LEFT JOIN entry_state st ON st.principal_id=$2 AND st.entry_id=e.id
+		WHERE e.deleted_at IS NULL AND COALESCE(st.seen,'unseen')='unseen' AND COALESCE(st.shelf,'none')<>'done'
+		GROUP BY s.id`, a.UserID, principal)
+	if err != nil {
+		return UnreadCounts{}, fmt.Errorf("count unread: %w", err)
+	}
+	defer rows.Close()
+	out := UnreadCounts{BySubscription: map[int64]int64{}}
+	for rows.Next() {
+		var id, total, later, kept int64
+		if err := rows.Scan(&id, &total, &later, &kept); err != nil {
+			return UnreadCounts{}, fmt.Errorf("scan unread count: %w", err)
+		}
+		out.BySubscription[id] = total
+		out.Later += later
+		out.Kept += kept
+		out.Total += total
+	}
+	if err := rows.Err(); err != nil {
+		return UnreadCounts{}, fmt.Errorf("count unread: %w", err)
 	}
 	return out, nil
 }
@@ -400,6 +508,9 @@ func (s *Service) entryPageQuery(ctx context.Context, a Actor, f EntryFilter, pr
 		return "", nil, nil
 	}
 	args := []any{a.UserID, principal}
+	// Named refs for the two fixed params, so clauses deep in the query cannot
+	// drift if the args initialization above ever changes order.
+	userArg, principalArg := "$1", "$2"
 	arg := func(v any) string {
 		args = append(args, v)
 		return fmt.Sprintf("$%d", len(args))
@@ -425,6 +536,20 @@ func (s *Service) entryPageQuery(ctx context.Context, a Actor, f EntryFilter, pr
 		conds = append(conds, "(s.cadence = 'now' OR e.first_seen_at >= CASE s.cadence "+
 			"WHEN 'week' THEN "+arg(s.now().UTC().Add(-weekDecay))+"::timestamptz ELSE "+
 			arg(s.now().UTC().Add(-decay))+"::timestamptz END)")
+		if f.SuppressClusters {
+			// Same predicate as store.SuppressedClusterEntries, expressed against
+			// the row so a page query returns only visible rows in one pass.
+			// st is the resolved principal's entry_state ($2), the same principal
+			// the cluster_dones join keys on, so actor and principal can differ.
+			conds = append(conds, `NOT EXISTS (SELECT 1 FROM entry_clusters ec
+				JOIN cluster_dones d ON d.user_id = ec.user_id AND d.cluster_id = ec.cluster_id AND d.principal_id = `+principalArg+`
+				JOIN clusters c ON c.user_id = ec.user_id AND c.id = ec.cluster_id AND c.deleted_at IS NULL
+				WHERE ec.user_id = `+userArg+` AND ec.entry_id = e.id AND ec.deleted_at IS NULL
+				AND ec.rev > d.rev
+				AND COALESCE(st.seen_rev, 0) <= d.rev
+				AND COALESCE(st.seen, 'unseen') = 'unseen'
+				AND COALESCE(st.shelf, 'none') <> 'done')`)
+		}
 	case ViewLater:
 		conds = append(conds, "st.shelf = 'later'")
 	case ViewDone:
@@ -451,6 +576,26 @@ func (s *Service) entryPageQuery(ctx context.Context, a Actor, f EntryFilter, pr
 	if f.Cadence != "" {
 		conds = append(conds, "s.cadence = "+arg(string(f.Cadence)))
 	}
+	for _, t := range f.RequireTags {
+		cond, err := entryTagCondition(t, a.UserID, arg)
+		if err != nil {
+			return "", nil, err
+		}
+		conds = append(conds, cond)
+	}
+	for _, t := range f.ExcludeTags {
+		cond, err := entryTagCondition(t, a.UserID, arg)
+		if err != nil {
+			return "", nil, err
+		}
+		conds = append(conds, "NOT ("+cond+")")
+	}
+	if f.AfterTime != 0 {
+		conds = append(conds, "floor(extract(epoch from coalesce(e.published_at, e.first_seen_at))) > "+arg(f.AfterTime))
+	}
+	if f.BeforeTime != 0 {
+		conds = append(conds, "floor(extract(epoch from coalesce(e.published_at, e.first_seen_at))) < "+arg(f.BeforeTime))
+	}
 	if f.AfterSeq != 0 {
 		conds = append(conds, "e.seq > "+arg(int64(f.AfterSeq)))
 	}
@@ -474,6 +619,32 @@ func (s *Service) entryPageQuery(ctx context.Context, a Actor, f EntryFilter, pr
 		WHERE ` + strings.Join(conds, " AND ") +
 		" ORDER BY e.seq " + order + " LIMIT " + arg(int64(limit))
 	return sql, args, nil
+}
+
+// entryTagCondition renders one tag predicate. Every form is NULL-safe over
+// the LEFT JOINed state row — a missing entry_state reads as the model's
+// unseen/none/false defaults — so ExcludeTags can negate them directly.
+// Compound forms are parenthesised: the filter list joins conditions with
+// AND, so an unparenthesised OR would bind to only part of the conjunction.
+func entryTagCondition(t EntryTag, user int64, arg func(any) string) (string, error) {
+	switch t.Kind {
+	case TagAll:
+		return "true", nil
+	case TagRead:
+		return "(COALESCE(st.seen, 'unseen') = 'seen' OR COALESCE(st.shelf, 'none') = 'done')", nil
+	case TagUnread:
+		return "(COALESCE(st.seen, 'unseen') = 'unseen' AND COALESCE(st.shelf, 'none') <> 'done')", nil
+	case TagKept:
+		return "COALESCE(st.kept, false)", nil
+	case TagFeed:
+		return "s.feed_id IN (SELECT f2.id FROM feeds f2 WHERE f2.url = " + arg(t.Name) + ")", nil
+	case TagLabel:
+		name, owner := arg(t.Name), arg(user)
+		return "(EXISTS (SELECT 1 FROM folders fo WHERE fo.user_id = " + owner + " AND fo.id = s.folder_id AND fo.deleted_at IS NULL AND fo.name = " + name + ")" +
+			" OR EXISTS (SELECT 1 FROM entry_labels el JOIN labels l ON l.id = el.label_id AND l.user_id = el.user_id" +
+			" WHERE el.user_id = " + owner + " AND el.entry_id = e.id AND el.deleted_at IS NULL AND l.deleted_at IS NULL AND l.name = " + name + "))", nil
+	}
+	return "", fmt.Errorf("entry tag kind %q: %w", t.Kind, ErrInvalid)
 }
 
 // changeRev allocates one revision for the user's change log ahead of the

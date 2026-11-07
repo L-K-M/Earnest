@@ -208,7 +208,7 @@ import EarnestKit
 
     private var loginView: some View {
         VStack(spacing: 16) {
-            Text("Earnest").font(.title)
+            BrandLockup()
             TextField("Server URL", text: $model.server)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 320)

@@ -175,7 +175,8 @@ function OPMLTools({busy, act}: {busy: boolean; act: Act}) {
       link.href = url
       link.download = 'earnest-subscriptions.opml'
       link.click()
-      URL.revokeObjectURL(url)
+      // Revoke after the download starts; revoking synchronously can abort it in Safari.
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
     } catch (cause) {
       setError(message(cause, 'Could not export OPML.'))
     } finally {
@@ -249,13 +250,22 @@ function when(iso: string): string {
 
 function SubscriptionRow({sub, folders, busy, act}: {sub: Subscription; folders: Folder[]; busy: boolean; act: Act}) {
   const [title, setTitle] = useState(sub.title)
+  // Adopt an external title change unless the user has an unsaved draft.
+  // Tracking a dirty flag rather than focus keeps the draft when a click
+  // elsewhere (such as Refresh now) moves focus away from the field.
+  const [dirty, setDirty] = useState(false)
+  const [seenTitle, setSeenTitle] = useState(sub.title)
+  if (sub.title !== seenTitle) {
+    setSeenTitle(sub.title)
+    if (!dirty) setTitle(sub.title)
+  }
   const explanation = explainHealth(sub.health)
   const patch = (body: Omit<SubscriptionPatch, 'op_id'>, note: string) => act(() => patchSubscription(sub.id, {...body, op_id: newOp()}), note)
   return <li>
     <strong>{sub.title || sub.url}</strong>{sub.private && ' · private'}{isFirehose(sub) && ' · firehose'}
     {' '}<a href={sub.site_url || sub.url} target="_blank" rel="noopener noreferrer">Site</a>
-    <form onSubmit={event => { event.preventDefault(); void patch({title: title.trim()}, 'Title saved.') }}>
-      <label>Title<input value={title} onChange={e => setTitle(e.target.value)} /></label>
+    <form onSubmit={event => { event.preventDefault(); void patch({title: title.trim()}, 'Title saved.').then(saved => { if (saved) setDirty(false) }) }}>
+      <label>Title<input value={title} onChange={e => { setTitle(e.target.value); setDirty(true) }} /></label>
       <button disabled={busy}>Save title</button>
     </form>
     <label>Cadence<select value={sub.cadence} disabled={busy} onChange={e => { void patch({cadence: e.target.value}, 'Cadence updated.') }}>{CADENCES.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>

@@ -21,7 +21,7 @@ it('shows only server title and body and opens an internal notification link', a
   let pending:Promise<unknown> = Promise.resolve()
   listeners.push({data:{json:()=>({title:'Earnest',body:'1 alert',text:'private',notification_id:'42',url:'https://evil.test'})},waitUntil:(p:Promise<unknown>)=>{pending=p}})
   await pending
-  expect(showNotification).toHaveBeenCalledWith('Earnest',{body:'1 alert',data:{id:'42'}})
+  expect(showNotification).toHaveBeenCalledWith('Earnest',{body:'1 alert',icon:'/icon-192.png',data:{id:'42'}})
   const close = vi.fn()
   listeners.notificationclick({notification:{close,data:{id:'42'}},waitUntil:(p:Promise<unknown>)=>{pending=p}})
   await pending

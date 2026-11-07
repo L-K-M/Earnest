@@ -27,6 +27,7 @@ type pipelineProvider struct {
 	received   []string
 	classifier string
 	invalidFor string
+	failFor    string
 }
 
 func (p *pipelineProvider) requests() []string {
@@ -46,7 +47,12 @@ func (p *pipelineProvider) serve(w http.ResponseWriter, r *http.Request) {
 	if p.invalidFor != "" && strings.Contains(string(body), p.invalidFor) {
 		classification = `{"labels":"refused"}`
 	}
+	fail := p.failFor != "" && strings.Contains(string(body), p.failFor)
 	p.mu.Unlock()
+	if fail {
+		http.Error(w, "transient", 500)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	if strings.HasSuffix(r.URL.Path, "/embeddings") {
 		var req struct {
@@ -144,7 +150,7 @@ func TestPipelinePrivacyVocabularyAndIdempotency(t *testing.T) {
 		t.Fatalf("labels %v found %v error %v", labels, found, err)
 	}
 	predicate := RulePredicate{Type: RuleClassifierIn, Terms: []string{"press_release"}}
-	ids, err := f.s.DryRunRule(ctx, f.a, predicate, []RuleAction{{Type: RuleNotify}})
+	ids, _, err := f.s.DryRunRule(ctx, f.a, predicate, []RuleAction{{Type: RuleNotify}})
 	if err != nil || len(ids) != 1 || ids[0] != id {
 		t.Fatalf("classifier rule %v %v", ids, err)
 	}

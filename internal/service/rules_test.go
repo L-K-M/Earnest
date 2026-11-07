@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -18,15 +19,15 @@ func TestRuleCreateAndDryRun(t *testing.T) {
 	id := f.ingest(t, "matching word")
 	p := RulePredicate{Type: RuleKeyword, Terms: []string{"matching"}}
 	actions := []RuleAction{{Type: RuleNotify, Budget: 1}}
-	got, err := f.s.DryRunRule(ctx, f.a, p, actions)
-	if err != nil || len(got) != 1 || got[0] != id {
-		t.Fatalf("dry run: %v %v", got, err)
+	got, total, err := f.s.DryRunRule(ctx, f.a, p, actions)
+	if err != nil || len(got) != 1 || got[0] != id || total != 1 {
+		t.Fatalf("dry run: %v total=%d %v", got, total, err)
 	}
 	var before, after int
 	if err := f.db.Pool().QueryRow(ctx, `SELECT (SELECT count(*) FROM activity) + (SELECT count(*) FROM changes) + (SELECT count(*) FROM entry_state) + (SELECT count(*) FROM op_ids) + (SELECT count(*) FROM entry_labels)`).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.s.DryRunRule(ctx, f.a, p, actions); err != nil {
+	if _, _, err := f.s.DryRunRule(ctx, f.a, p, actions); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.db.Pool().QueryRow(ctx, `SELECT (SELECT count(*) FROM activity) + (SELECT count(*) FROM changes) + (SELECT count(*) FROM entry_state) + (SELECT count(*) FROM op_ids) + (SELECT count(*) FROM entry_labels)`).Scan(&after); err != nil {
@@ -46,9 +47,32 @@ func TestRuleCreateAndDryRun(t *testing.T) {
 		t.Fatalf("agent: %v", err)
 	}
 	f.clock.Add(int64(8 * 24 * time.Hour))
-	got, err = f.s.DryRunRule(ctx, f.a, p, actions)
-	if err != nil || len(got) != 0 {
-		t.Fatalf("old entry: %v %v", got, err)
+	got, total, err = f.s.DryRunRule(ctx, f.a, p, actions)
+	if err != nil || len(got) != 0 || total != 0 {
+		t.Fatalf("old entry: %v total=%d %v", got, total, err)
+	}
+}
+
+func TestDryRunRuleCapsSample(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := context.Background()
+	items := make([]IngestItem, maxDryRunMatches+5)
+	for i := range items {
+		items[i] = coreItem(fmt.Sprintf("matching %d", i))
+	}
+	if _, err := f.s.RecordFetch(ctx, FetchOutcome{FeedID: f.feed, Status: FetchOK, Items: items}); err != nil {
+		t.Fatal(err)
+	}
+	p := RulePredicate{Type: RuleKeyword, Terms: []string{"matching"}}
+	ids, total, err := f.s.DryRunRule(ctx, f.a, p, []RuleAction{{Type: RuleNotify, Budget: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != maxDryRunMatches+5 {
+		t.Fatalf("total=%d want %d", total, maxDryRunMatches+5)
+	}
+	if len(ids) != maxDryRunMatches {
+		t.Fatalf("sample=%d want %d", len(ids), maxDryRunMatches)
 	}
 }
 

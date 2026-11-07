@@ -324,7 +324,7 @@ func sameOrigin(provided, base string) bool {
 	if err != nil {
 		return false
 	}
-	if a.User != nil || a.RawQuery != "" || a.Fragment != "" || (a.Path != "" && a.Path != "/") {
+	if a.User != nil || a.Opaque != "" || a.RawQuery != "" || a.Fragment != "" || (a.Path != "" && a.Path != "/") {
 		return false
 	}
 	port := func(u *url.URL) string {

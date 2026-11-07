@@ -10,9 +10,12 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/L-K-M/Earnest/internal/feed"
 	"github.com/L-K-M/Earnest/internal/outbound"
 	"github.com/L-K-M/Earnest/internal/service"
 )
@@ -289,4 +292,522 @@ func TestHostSpacing(t *testing.T) {
 	if len(hits) != 2 || hits[1].Sub(hits[0]) < 40*time.Millisecond {
 		t.Fatalf("spacing: %v", hits)
 	}
+}
+
+// The two article fetches must overlap: each handler only releases once both
+// requests have arrived, so a serial fetcher times out and the items fall back
+// to feed content. The articles use different hostnames because the outbound
+// client spaces requests per hostname.
+func TestFullTextExtractionOverlaps(t *testing.T) {
+	var mu sync.Mutex
+	arrived := 0
+	release := make(chan struct{})
+	articleHandler := func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		arrived++
+		if arrived == 2 {
+			close(release)
+		}
+		mu.Unlock()
+		select {
+		case <-release:
+		case <-time.After(5 * time.Second):
+			http.Error(w, "timeout", http.StatusInternalServerError)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `<html><body><article><p>%s</p></article></body></html>`, strings.Repeat("word ", 200))
+	}
+	articleA := httptest.NewServer(http.HandlerFunc(articleHandler))
+	defer articleA.Close()
+	articleB := httptest.NewServer(http.HandlerFunc(articleHandler))
+	defer articleB.Close()
+	articleAURL := strings.Replace(articleA.URL, "127.0.0.1", "localhost", 1)
+	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintf(w, `<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>`+
+			`<item><title>a</title><link>%s</link><description>short</description></item>`+
+			`<item><title>b</title><link>%s</link><description>short</description></item>`+
+			`</channel></rss>`, articleAURL, articleB.URL)
+	}))
+	defer feed.Close()
+
+	hosts := make([]string, 0, 3)
+	ports := make([]uint16, 0, 3)
+	for _, raw := range []string{feed.URL, articleAURL, articleB.URL} {
+		u, err := url.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hosts = append(hosts, u.Host)
+		_, p, _ := net.SplitHostPort(u.Host)
+		n, _ := strconv.Atoi(p)
+		ports = append(ports, uint16(n))
+	}
+	c, err := outbound.New(outbound.Config{AllowHosts: hosts, Spacing: time.Nanosecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &fakeService{}
+	f, err := New(s, c, Config{ExtraPorts: ports})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Fetch(context.Background(), service.FeedToFetch{FeedID: 1, URL: feed.URL, Extract: service.ExtractAlways}); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.outcomes) != 1 {
+		t.Fatalf("outcomes: %d", len(s.outcomes))
+	}
+	items := s.outcomes[0].Items
+	if len(items) != 2 {
+		t.Fatalf("items: %d", len(items))
+	}
+	for i, item := range items {
+		if item.ContentSource != service.ContentFromExtracted {
+			t.Fatalf("item %d source = %s, want extracted (title %q)", i, item.ContentSource, item.Title)
+		}
+	}
+}
+
+func TestFetchIsolatesUnsalvageableItems(t *testing.T) {
+	deep := strings.Repeat("<div>", 2000) + "deep" + strings.Repeat("</div>", 2000)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `<rss version="2.0"><channel><title>Feed</title>
+<item><guid>good</guid><link>https://example.org/ok</link><description>fine</description></item>
+<item><guid>deep</guid><link>https://example.org/deep</link><description><![CDATA[%s]]></description></item>
+</channel></rss>`, deep)
+	}))
+	defer server.Close()
+	f, s := testFetcher(t, server)
+	if err := f.Fetch(context.Background(), service.FeedToFetch{FeedID: 1, URL: server.URL}); err != nil {
+		t.Fatal(err)
+	}
+	if s.outcomes[0].Status != service.FetchOK {
+		t.Fatalf("one unsalvageable item must not fail the fetch, got %s", s.outcomes[0].Status)
+	}
+	if len(s.outcomes[0].Items) != 2 {
+		t.Fatalf("both items must reach ingest, got %d", len(s.outcomes[0].Items))
+	}
+	for _, item := range s.outcomes[0].Items {
+		switch item.GUID {
+		case "good":
+			if item.ContentHTML != "fine" {
+				t.Fatalf("good item lost its content: %q", item.ContentHTML)
+			}
+		case "deep":
+			if item.ContentHTML != "" || item.ContentText != "" {
+				t.Fatalf("unsalvageable item must store no content, got %q", item.ContentHTML)
+			}
+		default:
+			t.Fatalf("unexpected guid %q", item.GUID)
+		}
+	}
+}
+
+func TestFetchDropsActiveSchemeLinks(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<rss version="2.0"><channel><title>Feed</title><link>../blog</link>
+<item><guid>js</guid><link>javascript:alert(1)</link><description>body</description></item>
+<item><guid>data</guid><link>data:text/html,hi</link><description>body</description></item>
+<item><guid>relative</guid><link>relative/post</link><description>body</description></item>
+<item><guid>ok</guid><link>https://example.org/ok</link><description>body</description></item>
+</channel></rss>`)
+	}))
+	defer server.Close()
+	f, s := testFetcher(t, server)
+	if err := f.Fetch(context.Background(), service.FeedToFetch{FeedID: 1, URL: server.URL}); err != nil {
+		t.Fatal(err)
+	}
+	if s.outcomes[0].Status != service.FetchOK {
+		t.Fatalf("status %s", s.outcomes[0].Status)
+	}
+	for _, item := range s.outcomes[0].Items {
+		switch item.GUID {
+		case "js", "data":
+			if item.URL != "" {
+				t.Fatalf("active-scheme link must not be stored, got %q", item.URL)
+			}
+			if item.ContentHTML != "body" {
+				t.Fatalf("item should keep its content: %q", item.ContentHTML)
+			}
+		case "relative":
+			if item.URL != server.URL+"/relative/post" {
+				t.Fatalf("relative links must resolve against the fetch URL, got %q", item.URL)
+			}
+		case "ok":
+			if item.URL != "https://example.org/ok" {
+				t.Fatalf("http(s) links must be kept, got %q", item.URL)
+			}
+		default:
+			t.Fatalf("unexpected guid %q", item.GUID)
+		}
+	}
+}
+
+func TestIntervalLetsSlowFeedsBackOffToMaxInterval(t *testing.T) {
+	f, _ := testFetcher(t, httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
+	now := time.Now()
+	day := 24 * time.Hour
+	parsed := &feed.Feed{Items: []feed.Item{
+		{Published: func() *time.Time { v := now.Add(-14 * day); return &v }()},
+		{Published: func() *time.Time { v := now.Add(-7 * day); return &v }()},
+		{Published: func() *time.Time { v := now; return &v }()},
+	}}
+	got := f.interval(service.FeedToFetch{}, parsed, service.FetchOK, "")
+	if got != f.config.MaxInterval {
+		t.Fatalf("a weekly feed must poll at MaxInterval (%v), got %v", f.config.MaxInterval, got)
+	}
+}
+
+func TestFetchBoundsExtractionWork(t *testing.T) {
+	var pageHits atomic.Int32
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/page") {
+			pageHits.Add(1)
+			fmt.Fprint(w, "<html><body><article><h1>Story</h1><p>a readable article body with enough words</p></article></body></html>")
+			return
+		}
+		var b strings.Builder
+		b.WriteString(`<rss version="2.0"><channel><title>Feed</title>`)
+		for i := 0; i < 20; i++ {
+			fmt.Fprintf(&b, `<item><guid>g%d</guid><link>%s/page%d</link><description>body %d</description></item>`, i, server.URL, i, i)
+		}
+		b.WriteString(`</channel></rss>`)
+		fmt.Fprint(w, b.String())
+	}))
+	defer server.Close()
+	f, s := testFetcher(t, server)
+	claim := service.FeedToFetch{FeedID: 1, URL: server.URL, Extract: service.ExtractAlways, LeaseUntil: time.Now().Add(10 * time.Minute)}
+	if err := f.Fetch(context.Background(), claim); err != nil {
+		t.Fatal(err)
+	}
+	if s.outcomes[0].Status != service.FetchOK || len(s.outcomes[0].Items) != 20 {
+		t.Fatalf("all items must be ingested, got %s with %d items", s.outcomes[0].Status, len(s.outcomes[0].Items))
+	}
+	if got := pageHits.Load(); got != maxExtractsPerFetch {
+		t.Fatalf("one pass must extract at most %d pages, got %d", maxExtractsPerFetch, got)
+	}
+}
+
+func TestFetchStopsExtractingNearTheLeaseDeadline(t *testing.T) {
+	var pageHits atomic.Int32
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/page") {
+			pageHits.Add(1)
+			fmt.Fprint(w, "<html><body><article><h1>Story</h1><p>a readable article body with enough words</p></article></body></html>")
+			return
+		}
+		fmt.Fprintf(w, `<rss version="2.0"><channel><title>Feed</title><item><guid>g</guid><link>%s/page0</link><description>body</description></item></channel></rss>`, server.URL)
+	}))
+	defer server.Close()
+	f, _ := testFetcher(t, server)
+	claim := service.FeedToFetch{FeedID: 1, URL: server.URL, Extract: service.ExtractAlways, LeaseUntil: time.Now().Add(time.Second)}
+	if err := f.Fetch(context.Background(), claim); err != nil {
+		t.Fatal(err)
+	}
+	if got := pageHits.Load(); got != 0 {
+		t.Fatalf("a lease about to expire must defer extraction, got %d page fetches", got)
+	}
+}
+
+func TestIntervalFailureRetriesAtTwiceTheInterval(t *testing.T) {
+	f, _ := testFetcher(t, httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
+	// The cadence-derived cap applies to successful parses only; failures
+	// retry at twice the feed's interval, bounded by MaxInterval. Pinned
+	// intentionally: dropping the old 1h success-path cap changed the
+	// interval a slow feed carries into this branch.
+	if got := f.interval(service.FeedToFetch{Interval: 48 * time.Hour}, nil, service.FetchFailed, ""); got != f.config.MaxInterval {
+		t.Fatalf("a failed slow feed must retry at MaxInterval (%v), got %v", f.config.MaxInterval, got)
+	}
+	if got := f.interval(service.FeedToFetch{Interval: time.Hour}, nil, service.FetchFailed, ""); got < 108*time.Minute || got > 132*time.Minute {
+		t.Fatalf("a failed fast feed must retry near twice its interval, got %v", got)
+	}
+}
+
+func TestItemsResolveRelativeLinksAgainstTheFetchURL(t *testing.T) {
+	f, _ := testFetcher(t, httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
+	// The ingest boundary must never store a bare relative link (unusable in
+	// a client) nor an active scheme; a relative reference resolves against
+	// the fetch URL even though today's parsers pre-resolve most of them.
+	items, err := f.items(context.Background(), service.FeedToFetch{FeedID: 1, URL: "https://feed.example/rss.xml"}, []feed.Item{
+		{GUID: "relative", URL: "relative/post", ContentHTML: "body"},
+		{GUID: "rooted", URL: "/posts/2", ContentHTML: "body"},
+		{GUID: "active", URL: "javascript:alert(1)", ContentHTML: "body"},
+		{GUID: "blank", URL: "   ", ContentHTML: "body"},
+		{GUID: "fragment", URL: "#top", ContentHTML: "body"},
+		{GUID: "query", URL: "?page=2", ContentHTML: "body"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"relative": "https://feed.example/relative/post",
+		"rooted":   "https://feed.example/posts/2",
+		"active":   "",
+		"blank":    "",
+		"fragment": "",
+		"query":    "",
+	}
+	for _, item := range items {
+		if item.URL != want[item.GUID] {
+			t.Fatalf("%s link = %q, want %q", item.GUID, item.URL, want[item.GUID])
+		}
+	}
+}
+
+func TestItemsResolveRelativeLinksAgainstTheRedirectTarget(t *testing.T) {
+	f, _ := testFetcher(t, httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
+	// After a permanent redirect the bytes come from FetchURL, so a relative
+	// link names a resource on the new origin, not the stale canonical one.
+	items, err := f.items(context.Background(), service.FeedToFetch{FeedID: 1, URL: "https://old.example/rss.xml", FetchURL: "https://new.example/feed/rss.xml"}, []feed.Item{
+		{GUID: "relative", URL: "post", ContentHTML: "body"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].URL != "https://new.example/feed/post" {
+		t.Fatalf("items = %+v, want the link resolved against FetchURL", items)
+	}
+}
+
+func TestSameOriginScoping(t *testing.T) {
+	cases := []struct {
+		a, b string
+		same bool
+	}{
+		{"https://example.test/feed", "https://example.test/other", true},
+		{"https://example.test/feed", "https://example.test:443/other", true},
+		{"http://example.test/feed", "http://example.test:80/other", true},
+		{"http://[::1]:8080/a", "http://[::1]:8080/b", true},
+		{"https://example.test/feed", "https://other.test/feed", false},
+		{"https://example.test/feed", "http://example.test/feed", false},
+		{"https://example.test:8443/feed", "https://example.test/feed", false},
+		{"/feed", "/other", false},
+		{"https://example.test/feed", "not a url", false},
+	}
+	for _, c := range cases {
+		if sameOrigin(c.a, c.b) != c.same || sameOrigin(c.b, c.a) != c.same {
+			t.Fatalf("sameOrigin(%q,%q) != %v", c.a, c.b, c.same)
+		}
+	}
+}
+
+func testFetcherForServers(t *testing.T, servers ...*httptest.Server) (*Fetcher, *fakeService) {
+	t.Helper()
+	hosts := make([]string, 0, len(servers))
+	ports := make([]uint16, 0, len(servers))
+	for _, server := range servers {
+		u, err := url.Parse(server.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hosts = append(hosts, u.Host)
+		_, p, _ := net.SplitHostPort(u.Host)
+		n, _ := strconv.Atoi(p)
+		ports = append(ports, uint16(n))
+	}
+	c, err := outbound.New(outbound.Config{AllowHosts: hosts, Spacing: time.Nanosecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &fakeService{}
+	f, err := New(s, c, Config{ExtraPorts: ports})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f, s
+}
+
+// Cancelling the context must not leave the producer blocked on a job channel
+// whose workers have all exited.
+func TestFullTextExtractionCancellationDoesNotHang(t *testing.T) {
+	var once sync.Once
+	arrived := make(chan struct{})
+	release := make(chan struct{})
+	article := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		once.Do(func() { close(arrived) })
+		<-release
+	}))
+	defer article.Close()
+	defer close(release)
+	feedServed := make(chan struct{})
+	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(feedServed)
+		_, _ = fmt.Fprintf(w, `<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>%s</channel></rss>`,
+			strings.Repeat(`<item><title>a</title><link>`+article.URL+`</link><description>short</description></item>`, 5))
+	}))
+	defer feed.Close()
+	f, _ := testFetcherForServers(t, feed, article)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- f.Fetch(ctx, service.FeedToFetch{FeedID: 1, URL: feed.URL, Extract: service.ExtractAlways})
+	}()
+	<-feedServed
+	select {
+	case <-arrived:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("extraction never started")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Fetch deadlocked after cancellation")
+	}
+}
+
+// The worker pool must still respect the per-pass cap: 20 extractable items
+// whose pages overlap in flight yield at most maxExtractsPerFetch fetches,
+// and the items keep their feed order.
+func TestParallelExtractionHonoursCap(t *testing.T) {
+	var hits, inFlight, maxInFlight atomic.Int32
+	release := make(chan struct{})
+	var once sync.Once
+	defer once.Do(func() { close(release) })
+	pageHandler := func(w http.ResponseWriter, _ *http.Request) {
+		n := inFlight.Add(1)
+		defer inFlight.Add(-1)
+		for {
+			m := maxInFlight.Load()
+			if n <= m || maxInFlight.CompareAndSwap(m, n) {
+				break
+			}
+		}
+		// The first two requests block until both have arrived, so overlap is
+		// observed deterministically; release then stays closed.
+		if hits.Add(1) == 2 {
+			once.Do(func() { close(release) })
+		}
+		select {
+		case <-release:
+		case <-time.After(5 * time.Second):
+			http.Error(w, "timeout", http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprint(w, "<html><body><article><h1>Story</h1><p>a readable article body with enough words</p></article></body></html>")
+	}
+	pageA := httptest.NewServer(http.HandlerFunc(pageHandler))
+	defer pageA.Close()
+	pageB := httptest.NewServer(http.HandlerFunc(pageHandler))
+	defer pageB.Close()
+	// The outbound client serialises requests per hostname, so overlapping
+	// fetches need distinct hostnames, not just distinct ports.
+	pages := []string{strings.Replace(pageA.URL, "127.0.0.1", "localhost", 1), pageB.URL}
+	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		var b strings.Builder
+		b.WriteString(`<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>`)
+		for i := 0; i < 20; i++ {
+			fmt.Fprintf(&b, `<item><guid>g%d</guid><link>%s/page%d</link><description>short</description></item>`, i, pages[i%len(pages)], i)
+		}
+		b.WriteString(`</channel></rss>`)
+		fmt.Fprint(w, b.String())
+	}))
+	defer feed.Close()
+	hosts := make([]string, 0, 3)
+	ports := make([]uint16, 0, 3)
+	for _, raw := range []string{feed.URL, pages[0], pages[1]} {
+		u, err := url.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hosts = append(hosts, u.Host)
+		_, p, _ := net.SplitHostPort(u.Host)
+		n, _ := strconv.Atoi(p)
+		ports = append(ports, uint16(n))
+	}
+	c, err := outbound.New(outbound.Config{AllowHosts: hosts, Spacing: time.Nanosecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &fakeService{}
+	f, err := New(s, c, Config{ExtraPorts: ports})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := service.FeedToFetch{FeedID: 1, URL: feed.URL, Extract: service.ExtractAlways, LeaseUntil: time.Now().Add(10 * time.Minute)}
+	if err := f.Fetch(context.Background(), claim); err != nil {
+		t.Fatal(err)
+	}
+	items := s.outcomes[0].Items
+	if s.outcomes[0].Status != service.FetchOK || len(items) != 20 {
+		t.Fatalf("all items must be ingested, got %s with %d items", s.outcomes[0].Status, len(items))
+	}
+	for i, item := range items {
+		if item.GUID != fmt.Sprintf("g%d", i) {
+			t.Fatalf("item order changed at %d: %q", i, item.GUID)
+		}
+	}
+	if got := hits.Load(); got != maxExtractsPerFetch {
+		t.Fatalf("one pass must extract at most %d pages, got %d", maxExtractsPerFetch, got)
+	}
+	if got := maxInFlight.Load(); got < 2 {
+		t.Fatalf("extractions did not overlap: max in-flight %d", got)
+	}
+}
+
+func TestFetchScopesCredentialsToCanonicalOrigin(t *testing.T) {
+	body := `<rss version="2.0"><channel><title>Feed</title><item><guid>abc</guid><link>https://example.org/article</link><description>d</description></item></channel></rss>`
+	var movedAuth, homeAuth string
+	var movedHits, homeHits atomic.Int32
+	moved := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		movedHits.Add(1)
+		movedAuth = r.Header.Get("Authorization")
+		fmt.Fprint(w, body)
+	}))
+	defer moved.Close()
+	home := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		homeHits.Add(1)
+		homeAuth = r.Header.Get("Authorization")
+		fmt.Fprint(w, body)
+	}))
+	defer home.Close()
+	ports := make([]uint16, 0, 2)
+	for _, server := range []*httptest.Server{home, moved} {
+		u, _ := url.Parse(server.URL)
+		_, p, _ := net.SplitHostPort(u.Host)
+		port, _ := strconv.Atoi(p)
+		ports = append(ports, uint16(port))
+	}
+	c, err := outbound.New(outbound.Config{AllowHosts: []string{mustHost(t, home), mustHost(t, moved)}, Spacing: time.Nanosecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := New(&fakeService{}, c, Config{ExtraPorts: ports})
+	if err != nil {
+		t.Fatal(err)
+	}
+	creds := &service.FeedCredentials{Username: "u", Password: "p"}
+	ctx := context.Background()
+	// A recorded permanent redirect to another origin must not carry the
+	// feed's credentials to the new host.
+	if err := f.Fetch(ctx, service.FeedToFetch{FeedID: 1, URL: home.URL + "/feed", FetchURL: moved.URL + "/feed", Credentials: creds}); err != nil {
+		t.Fatal(err)
+	}
+	// The fetch must target the recorded redirect, or the leak check below
+	// would pass vacuously.
+	if movedHits.Load() != 1 || homeHits.Load() != 0 {
+		t.Fatalf("fetch hit moved=%d home=%d, want the redirect target only", movedHits.Load(), homeHits.Load())
+	}
+	if movedAuth != "" {
+		t.Fatalf("credentials leaked to the redirect target: %q", movedAuth)
+	}
+	// The feed's own origin still receives them, including on another path.
+	if err := f.Fetch(ctx, service.FeedToFetch{FeedID: 1, URL: home.URL + "/feed", FetchURL: home.URL + "/other", Credentials: creds}); err != nil {
+		t.Fatal(err)
+	}
+	if homeHits.Load() != 1 || homeAuth == "" {
+		t.Fatal("credentials missing on the feed's own origin")
+	}
+}
+
+func mustHost(t *testing.T, server *httptest.Server) string {
+	t.Helper()
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u.Host
 }
