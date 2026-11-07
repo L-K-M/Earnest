@@ -1,13 +1,19 @@
 package ch.lkmc.earnest
 
 import android.content.Context
+import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalView
 import androidx.core.content.edit
 
 /** The reading themes: system, light, dark, true black and e-ink. */
@@ -82,11 +88,15 @@ internal val DarkColors = darkColorScheme(
     onError = Color(0xFF4E1410),
 )
 
-@Composable
-fun EarnestTheme(setting: ThemeSetting, content: @Composable () -> Unit) {
-    val dark = isSystemInDarkTheme()
-    val scheme = when (setting) {
-        ThemeSetting.SYSTEM -> if (dark) DarkColors else LightColors
+/** The bar icon contrast: DARK icons on a light background, LIGHT on a dark one. */
+internal enum class BarIcons { DARK, LIGHT }
+
+private const val LIGHT_BACKGROUND_LUMINANCE = 0.5f
+
+/** The reading palette for a setting, falling back to the system when it is SYSTEM. */
+internal fun colorScheme(setting: ThemeSetting, systemDark: Boolean): ColorScheme =
+    when (setting) {
+        ThemeSetting.SYSTEM -> if (systemDark) DarkColors else LightColors
         ThemeSetting.LIGHT -> LightColors
         ThemeSetting.DARK -> DarkColors
         ThemeSetting.BLACK -> DarkColors.copy(
@@ -117,6 +127,31 @@ fun EarnestTheme(setting: ThemeSetting, content: @Composable () -> Unit) {
             outline = Color.Black,
             outlineVariant = Color(0xFFD0D0D0),
         )
+    }
+
+/** Bar icons must contrast with the background the app draws under the bars. */
+internal fun barIcons(scheme: ColorScheme): BarIcons =
+    if (scheme.background.luminance() >= LIGHT_BACKGROUND_LUMINANCE) BarIcons.DARK else BarIcons.LIGHT
+
+internal fun ComponentActivity.applyBarIcons(icons: BarIcons) {
+    // Before Android 15, the manifest theme leaves opaque bars. Use the same
+    // edge-to-edge policy on every supported API, then match the app's ink.
+    val style = SystemBarStyle.auto(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT) {
+        icons == BarIcons.LIGHT
+    }
+    enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
+}
+
+@Composable
+fun EarnestTheme(setting: ThemeSetting, content: @Composable () -> Unit) {
+    val scheme = colorScheme(setting, isSystemInDarkTheme())
+    val view = LocalView.current
+    // The app draws edge to edge, and the in-app theme can differ from the
+    // system's, so the bars must follow the effective scheme.
+    SideEffect {
+        if (view.isInEditMode) return@SideEffect
+        val activity = view.context as? ComponentActivity ?: return@SideEffect
+        activity.applyBarIcons(barIcons(scheme))
     }
     MaterialTheme(colorScheme = scheme, content = content)
 }
