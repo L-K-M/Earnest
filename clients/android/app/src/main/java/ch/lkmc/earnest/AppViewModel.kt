@@ -428,8 +428,13 @@ class AppViewModel internal constructor(
     /**
      * Fetches the signed content URL and caches the readable content. Returns
      * null when the server cannot be reached and nothing is cached.
+     *
+     * [agentSelected] marks an entry an agent surfaced (a notification, a deep
+     * link or an agent-change notice). Its images wait for a click so that
+     * automatic image loading cannot tell a publisher which entry an agent
+     * chose (docs/research/llm.md, "Agent selection stays unobservable").
      */
-    suspend fun openEntry(entryId: Long): ContentUrlResult? = withContext(Dispatchers.IO) {
+    suspend fun openEntry(entryId: Long, agentSelected: Boolean = false): ContentUrlResult? = withContext(Dispatchers.IO) {
         val (cache, session) = activeAccount("Still signing in; the entry was not loaded.") ?: return@withContext null
         val api = apiFactory(session)
         val cached = cache.db.content().get(entryId)
@@ -446,7 +451,7 @@ class AppViewModel internal constructor(
                 ),
             )
         }
-        val url = runCatching { api.contentUrl(entryId) }.getOrNull()
+        val url = runCatching { api.contentUrl(entryId, mode = if (agentSelected) "click" else null) }.getOrNull()
         val fallback = content?.html ?: cached?.html
         if (!currentOrExpired(session, cache)) return@withContext null
         when {
@@ -505,7 +510,7 @@ class AppViewModel internal constructor(
         val session = activeSession
         if (cache != null && session != null && isCurrent(session, cache)) return cache to session
         if (sessions.current() == null) sessionExpired()
-        else if (cache == null || session == null) _state.value = _state.value.copy(error = pendingError)
+        else if (cache == null || session == null) _state.update { it.copy(error = pendingError) }
         return null
     }
 

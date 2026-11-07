@@ -207,13 +207,15 @@ class SyncRepositoryTest {
     }
 
     @Test
-    fun nativeReaderAlwaysRequestsClickToLoadImages() = runBlocking {
+    fun nativeReaderDefaultsToProxiedImages() = runBlocking {
+        val modes = java.util.concurrent.CopyOnWriteArrayList<String?>()
         val api = api { request ->
-            assertEquals("click", request.url.queryParameter("mode"))
+            modes += request.url.queryParameter("mode")
             200 to """{"url":"https://content.test/signed","expires_at":"2026-11-03T01:00:00Z"}"""
         }
         api.contentUrl(2)
-        Unit
+        api.contentUrl(2, mode = "click")
+        assertEquals(listOf(null, "click"), modes)
     }
 
     private val event = """{"id":2,"subscription_id":3,"seq":4,"first_seen_at":"2026-11-03T00:00:00Z","rev":1,"deleted":false}"""

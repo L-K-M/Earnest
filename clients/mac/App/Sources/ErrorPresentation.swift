@@ -19,6 +19,24 @@ enum ErrorPresentation {
         return false
     }
 
+    /// Failures that can clear without user action: connection dropouts and
+    /// timeouts, rate limiting, server errors, and malformed responses (the
+    /// generated client surfaces undecodable bodies as DecodingError). Auth
+    /// and other client errors stay fatal so a bad credential is not retried
+    /// forever.
+    static func isTransient(_ error: Error) -> Bool {
+        if isConnection(error) { return true }
+        let urlError = error as NSError
+        if urlError.domain == NSURLErrorDomain {
+            return [.badServerResponse, .cannotParseResponse, .cannotDecodeContentData, .cannotDecodeRawData]
+                .contains(URLError.Code(rawValue: urlError.code))
+        }
+        if let problem = error as? APIProblem { return [408, 429].contains(problem.status) || problem.status >= 500 }
+        if case APIError.httpStatus(let status) = error { return [408, 429].contains(status) || status >= 500 }
+        if case APIError.invalidResponse = error { return true }
+        return error is DecodingError
+    }
+
     static func message(_ error: Error) -> String {
         if isUnauthorized(error) { return "Your sign-in expired or was revoked. Sign in again." }
         if isConnection(error) { return "Offline. Showing what was last synced." }

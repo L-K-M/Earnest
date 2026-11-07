@@ -170,8 +170,14 @@ import AppKit
                     return
                 } catch {
                     guard self.session == s, !Task.isCancelled else { return }
-                    self.report(error)
-                    if !ErrorPresentation.isConnection(error) { return }
+                    // Transient failures keep retrying as a note; permanent
+                    // ones surface and stop the loop.
+                    if ErrorPresentation.isTransient(error) {
+                        self.connectionNote = ErrorPresentation.message(error)
+                    } else {
+                        self.report(error)
+                        return
+                    }
                 }
                 try? await Task.sleep(for: .seconds(10))
             }
@@ -189,8 +195,9 @@ import AppKit
         try Task.checkCancellation()
         guard session == expectedSession, loggedIn else { return false }
         let remembered: AccountIdentity?
-        if case .failure(let error) = result, ErrorPresentation.isConnection(error) {
-            remembered = try identities.load(server: url)
+        if case .failure(let error) = result, ErrorPresentation.isTransient(error) {
+            // A record that cannot be decoded is simply absent: it re-verifies online.
+            remembered = try? identities.load(server: url)
         } else {
             remembered = nil
         }
@@ -204,20 +211,46 @@ import AppKit
             return false
         }
         if identity == nil {
-            let cache = try Cache(identity: resolved, directory: cacheDirectory)
+            let cache = try makeCache(for: resolved)
             let engine = SyncEngine(store: cache)
             self.cache = cache
             self.engine = engine
             self.identity = resolved
             principalID = resolved.principalID
             coordinator = SyncCoordinator(engine: engine, api: api)
-            try restoreCachedPresentation()
+            do {
+                try restoreCachedPresentation()
+            } catch {
+                // A cache that cannot be read or decoded is a cold cache, not
+                // a fatal error: clear it and let the next sync rebuild it.
+                cachedPresentation = false
+                entries = []
+                feeds = []
+                feedMap = [:]
+                principalNames = [:]
+                briefs = []
+                rebuildPresentation()
+                try? cache.clear()
+            }
         }
         if case .offline = resolution {
             connectionNote = "Offline. Showing what was last synced."
             return false
         }
         return true
+    }
+
+    /// A cache that cannot be opened is only unrecoverable when the database
+    /// file itself is corrupt or undecodable. Any other failure (permissions,
+    /// disk full, SQLITE_BUSY, directory creation) is rethrown so the retry and
+    /// offline paths handle it, and the shared cache file is left untouched.
+    private func makeCache(for identity: AccountIdentity) throws -> Cache {
+        do { return try Cache(identity: identity, directory: cacheDirectory) }
+        catch {
+            guard Cache.isUnrecoverableOpenFailure(error) else { throw error }
+            try Cache.quarantineCorruptCache(in: cacheDirectory)
+            return try Cache(identity: identity, directory: cacheDirectory)
+        }
     }
 
     private func restoreCachedPresentation() throws {

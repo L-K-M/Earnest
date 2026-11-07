@@ -1,13 +1,14 @@
 import {useState} from 'react'
 import {useInfiniteQuery, useQuery, useQueryClient} from '@tanstack/react-query'
 import type {components} from '../api.generated'
-import type {Entry} from '../reader'
+import type {Entry, Subscription} from '../reader'
 import {request} from '../request'
 import {usePipeline} from './pipeline'
 
 export type SavedSearch = components['schemas']['SavedSearch']
 type Match = components['schemas']['SearchMatch']
 type Page = components['schemas']['SearchPage']
+const LIMIT_PRESETS: readonly number[] = [20,50,100,200]
 
 export function useSavedSearches(enabled=true) {
   return useQuery({queryKey:['saved-searches'], enabled, queryFn:({signal}) => request<SavedSearch[] | null>('/v1/saved-searches',{signal})})
@@ -33,18 +34,28 @@ function Matches({matches, onOpen}: {matches: Match[]; onOpen: (entry: Entry) =>
   </li>)}</ul></section>)}{error && <p role="alert">{error}</p>}</>
 }
 
-export function Search({saved, onOpen}: {saved?: SavedSearch; onOpen: (entry: Entry) => void}) {
+export function Search({saved, onOpen, subscriptions = [], folders = []}: {saved?: SavedSearch; onOpen: (entry: Entry) => void; subscriptions?: Subscription[]; folders?: components['schemas']['Folder'][]}) {
   const cache = useQueryClient()
   const pipeline = usePipeline()
   const [input,setInput] = useState(saved?.query ?? '')
   const [query,setQuery] = useState(saved?.query ?? '')
   const [mode,setMode] = useState(saved?.filters.mode === 'hybrid' ? 'hybrid' : 'fulltext')
+  const [subscriptionID,setSubscriptionID] = useState(saved?.filters.subscription_id ?? 0)
+  const [folderID,setFolderID] = useState(saved?.filters.folder_id ?? 0)
+  const [limit,setLimit] = useState(saved?.filters.limit ?? 0)
   const [name,setName] = useState('')
   const [error,setError] = useState('')
   const [saving,setSaving] = useState(false)
   const [savedMessage,setSavedMessage] = useState('')
   const effectiveMode = pipeline.status.embed === 'enabled' ? mode : 'fulltext'
   const filters = {...saved?.filters,mode:effectiveMode}
+  if (subscriptionID) filters.subscription_id = subscriptionID
+  else delete filters.subscription_id
+  if (folderID) filters.folder_id = folderID
+  else delete filters.folder_id
+  if (limit) filters.limit = limit
+  else delete filters.limit
+  const limitChoices = limit > 0 && !LIMIT_PRESETS.includes(limit) ? [limit, ...LIMIT_PRESETS] : [...LIMIT_PRESETS]
   const results = useInfiniteQuery({queryKey:['search',query,filters], enabled:Boolean(query.trim()), initialPageParam:'', queryFn:({pageParam,signal}) => {
     const params = new URLSearchParams({q:query,mode:effectiveMode})
     if (filters.subscription_id) params.set('subscription_id',String(filters.subscription_id))
@@ -72,6 +83,9 @@ export function Search({saved, onOpen}: {saved?: SavedSearch; onOpen: (entry: En
     {saved && <p><button disabled={saving} onClick={() => {if (window.confirm(`Delete the saved search “${saved.name}”?`)) void remove()}}>Delete “{saved.name}”</button></p>}
     <form onSubmit={event => {event.preventDefault();setQuery(input.trim());setSavedMessage('')}}><label>Search your feeds<input type="search" required value={input} onChange={event => setInput(event.target.value)}/></label>
       {pipeline.status.embed === 'enabled' && <label>Search mode<select value={mode} onChange={event => setMode(event.target.value)}><option value="fulltext">Full text</option><option value="hybrid">Hybrid: full text and meaning</option></select></label>}
+      <label>Feed<select value={subscriptionID} onChange={event => setSubscriptionID(Number(event.target.value))}><option value={0}>All feeds</option>{subscriptions.filter(sub => !sub.deleted).map(sub => <option key={sub.id} value={sub.id}>{sub.title || sub.url}</option>)}</select></label>
+      <label>Folder<select value={folderID} onChange={event => setFolderID(Number(event.target.value))}><option value={0}>All folders</option>{folders.filter(folder => !folder.deleted).map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
+      <label>Results per page<select value={limit} onChange={event => setLimit(Number(event.target.value))}><option value={0}>Server default</option>{limitChoices.map(value => <option key={value} value={value}>{value}</option>)}</select></label>
       <button>Search</button>
     </form>
     {pipeline.status.embed === 'paused' && <p role="status">Hybrid search is paused. Full-text search is available.</p>}

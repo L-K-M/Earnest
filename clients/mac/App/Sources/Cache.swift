@@ -8,11 +8,57 @@ final class Cache: SyncStore {
     private let db: DatabaseQueue
     private let key: String
 
+    /// Location of the SQLite file shared by every identity.
+    static func databaseURL(in directory: URL?) throws -> URL {
+        let directory = try directory ?? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("Earnest", isDirectory: true)
+        return directory.appendingPathComponent("cache.sqlite")
+    }
+
+    /// Whether an error from opening the cache means the database file itself
+    /// is corrupt or undecodable, as opposed to a transient environment
+    /// failure (permissions, disk full, SQLITE_BUSY, directory creation).
+    static func isUnrecoverableOpenFailure(_ error: Error) -> Bool {
+        if let database = error as? DatabaseError {
+            return database.resultCode == .SQLITE_CORRUPT || database.resultCode == .SQLITE_NOTADB
+        }
+        return error is DecodingError
+    }
+
+    /// Move an unusable database and its journal siblings aside, keeping only
+    /// the newest quarantine copy, so the original bytes stay inspectable and
+    /// repeated corruption cannot fill the disk.
+    static func quarantineCorruptCache(in directory: URL?) throws {
+        let database = try databaseURL(in: directory)
+        let fileManager = FileManager.default
+        let folder = database.deletingLastPathComponent()
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        for suffix in ["", "-wal", "-shm"] {
+            let source = URL(fileURLWithPath: database.path + suffix)
+            guard fileManager.fileExists(atPath: source.path) else { continue }
+            let destination = URL(fileURLWithPath: source.path + ".corrupt-" + stamp)
+            if fileManager.fileExists(atPath: destination.path) { try fileManager.removeItem(at: destination) }
+            try fileManager.moveItem(at: source, to: destination)
+        }
+        let base = database.lastPathComponent
+        let names = try fileManager.contentsOfDirectory(atPath: folder.path)
+            .filter { $0.hasPrefix(base) && $0.contains(".corrupt-") }
+        let stamps = Set(names.compactMap { name -> String? in
+            name.range(of: ".corrupt-").map { String(name[$0.upperBound...]) }
+        })
+        guard let newest = stamps.max() else { return }
+        for name in names {
+            guard let range = name.range(of: ".corrupt-") else { continue }
+            if String(name[range.upperBound...]) != newest {
+                try fileManager.removeItem(at: folder.appendingPathComponent(name))
+            }
+        }
+    }
+
     init(identity: AccountIdentity, directory: URL? = nil) throws {
         key = identity.cacheKey
-        let directory = try directory ?? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("Earnest", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        db = try DatabaseQueue(path: directory.appendingPathComponent("cache.sqlite").path)
+        let database = try Self.databaseURL(in: directory)
+        try FileManager.default.createDirectory(at: database.deletingLastPathComponent(), withIntermediateDirectories: true)
+        db = try DatabaseQueue(path: database.path)
         try db.write { db in
             try db.execute(sql: "CREATE TABLE IF NOT EXISTS snapshots (key TEXT PRIMARY KEY, value BLOB NOT NULL)")
             try db.execute(sql: """
@@ -28,6 +74,15 @@ final class Cache: SyncStore {
                     PRIMARY KEY (identity, entry_id)
                 )
                 """)
+        }
+    }
+
+    /// Forget everything persisted for this identity, as if it never synced.
+    func clear() throws {
+        try db.write { db in
+            try db.execute(sql: "DELETE FROM snapshots WHERE key = ?", arguments: [key])
+            try db.execute(sql: "DELETE FROM cached_resources WHERE identity = ?", arguments: [key])
+            try db.execute(sql: "DELETE FROM article_copies WHERE identity = ?", arguments: [key])
         }
     }
 
