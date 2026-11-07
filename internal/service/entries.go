@@ -37,6 +37,33 @@ const (
 	PageBackward PageDirection = "backward"
 )
 
+// EntryTagKind names one tag predicate a stream filter can require or reject.
+type EntryTagKind string
+
+const (
+	// TagAll matches every entry, the reading-list stream.
+	TagAll EntryTagKind = "all"
+	// TagRead matches read entries: seen, or shelved Done.
+	TagRead EntryTagKind = "read"
+	// TagKept matches kept entries, the starred stream.
+	TagKept EntryTagKind = "kept"
+	// TagUnread matches unseen entries not shelved Done.
+	TagUnread EntryTagKind = "unread"
+	// TagFeed matches entries of the feed whose canonical URL is Name.
+	TagFeed EntryTagKind = "feed"
+	// TagLabel matches the union of the folder stream and explicit label
+	// memberships sharing Name, the Google Reader label semantics.
+	TagLabel EntryTagKind = "label"
+)
+
+// EntryTag is one resolved tag predicate. Name carries the feed URL or the
+// shared label and folder name for the kinds that need one; an unknown feed
+// URL or label name simply matches nothing.
+type EntryTag struct {
+	Kind EntryTagKind
+	Name string
+}
+
 const (
 	defaultEntryLimit = 50
 	maxEntryLimit     = 200
@@ -83,12 +110,23 @@ type EntryFilter struct {
 	// agent reads the user's river unless it asks for its own state.
 	PrincipalID int64
 	UnreadOnly  bool
+	// RequireTags and ExcludeTags conjunctively tag-filter the page: an
+	// entry must satisfy every RequireTags predicate and no ExcludeTags
+	// predicate, alongside the other selectors.
+	RequireTags []EntryTag
+	ExcludeTags []EntryTag
 	// AfterSeq and BeforeSeq bound seq exclusively on either side; both may
 	// combine into a window. Direction picks the ordering, not the bound.
 	AfterSeq  uint64
 	BeforeSeq uint64
-	Limit     int
-	Direction PageDirection
+	// AfterTime and BeforeTime bound the entry's effective timestamp —
+	// published_at when set, else first_seen_at — at whole-second
+	// resolution: only floor(unix) values strictly above AfterTime and
+	// strictly below BeforeTime pass. Zero disables either bound.
+	AfterTime  int64
+	BeforeTime int64
+	Limit      int
+	Direction  PageDirection
 	// SuppressClusters excludes river rows hidden by read-time cluster
 	// suppression, so one page query returns visible rows directly instead of
 	// rescanning suppressed chunks. Only meaningful for the river view.
@@ -538,6 +576,26 @@ func (s *Service) entryPageQuery(ctx context.Context, a Actor, f EntryFilter, pr
 	if f.Cadence != "" {
 		conds = append(conds, "s.cadence = "+arg(string(f.Cadence)))
 	}
+	for _, t := range f.RequireTags {
+		cond, err := entryTagCondition(t, a.UserID, arg)
+		if err != nil {
+			return "", nil, err
+		}
+		conds = append(conds, cond)
+	}
+	for _, t := range f.ExcludeTags {
+		cond, err := entryTagCondition(t, a.UserID, arg)
+		if err != nil {
+			return "", nil, err
+		}
+		conds = append(conds, "NOT ("+cond+")")
+	}
+	if f.AfterTime != 0 {
+		conds = append(conds, "floor(extract(epoch from coalesce(e.published_at, e.first_seen_at))) > "+arg(f.AfterTime))
+	}
+	if f.BeforeTime != 0 {
+		conds = append(conds, "floor(extract(epoch from coalesce(e.published_at, e.first_seen_at))) < "+arg(f.BeforeTime))
+	}
 	if f.AfterSeq != 0 {
 		conds = append(conds, "e.seq > "+arg(int64(f.AfterSeq)))
 	}
@@ -561,6 +619,32 @@ func (s *Service) entryPageQuery(ctx context.Context, a Actor, f EntryFilter, pr
 		WHERE ` + strings.Join(conds, " AND ") +
 		" ORDER BY e.seq " + order + " LIMIT " + arg(int64(limit))
 	return sql, args, nil
+}
+
+// entryTagCondition renders one tag predicate. Every form is NULL-safe over
+// the LEFT JOINed state row — a missing entry_state reads as the model's
+// unseen/none/false defaults — so ExcludeTags can negate them directly.
+// Compound forms are parenthesised: the filter list joins conditions with
+// AND, so an unparenthesised OR would bind to only part of the conjunction.
+func entryTagCondition(t EntryTag, user int64, arg func(any) string) (string, error) {
+	switch t.Kind {
+	case TagAll:
+		return "true", nil
+	case TagRead:
+		return "(COALESCE(st.seen, 'unseen') = 'seen' OR COALESCE(st.shelf, 'none') = 'done')", nil
+	case TagUnread:
+		return "(COALESCE(st.seen, 'unseen') = 'unseen' AND COALESCE(st.shelf, 'none') <> 'done')", nil
+	case TagKept:
+		return "COALESCE(st.kept, false)", nil
+	case TagFeed:
+		return "s.feed_id IN (SELECT f2.id FROM feeds f2 WHERE f2.url = " + arg(t.Name) + ")", nil
+	case TagLabel:
+		name, owner := arg(t.Name), arg(user)
+		return "(EXISTS (SELECT 1 FROM folders fo WHERE fo.user_id = " + owner + " AND fo.id = s.folder_id AND fo.deleted_at IS NULL AND fo.name = " + name + ")" +
+			" OR EXISTS (SELECT 1 FROM entry_labels el JOIN labels l ON l.id = el.label_id AND l.user_id = el.user_id" +
+			" WHERE el.user_id = " + owner + " AND el.entry_id = e.id AND el.deleted_at IS NULL AND l.deleted_at IS NULL AND l.name = " + name + "))", nil
+	}
+	return "", fmt.Errorf("entry tag kind %q: %w", t.Kind, ErrInvalid)
 }
 
 // changeRev allocates one revision for the user's change log ahead of the
