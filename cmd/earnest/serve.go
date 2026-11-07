@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/L-K-M/Earnest/internal/api"
+	"github.com/L-K-M/Earnest/internal/clientip"
 	"github.com/L-K-M/Earnest/internal/compat/greader"
 	"github.com/L-K-M/Earnest/internal/config"
 	"github.com/L-K-M/Earnest/internal/fetcher"
@@ -146,7 +147,7 @@ func serve() error {
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           api.SecurityHeaders(buildMuxWithWeb(cfg.BaseURL, cfg.ContentOrigin, svc, auth, logger, registry, content, publicKey)),
+		Handler:           api.SecurityHeaders(clientip.Middleware(clientip.WithProxies(cfg.TrustedProxies), buildMuxWithWeb(cfg.BaseURL, cfg.ContentOrigin, svc, auth, logger, registry, content, publicKey))),
 		ReadHeaderTimeout: 5 * time.Second,
 		BaseContext:       func(net.Listener) context.Context { return ctx },
 	}

@@ -72,7 +72,7 @@ enum SessionResolution: Equatable {
             }
             return .verified(try AccountIdentity(server: server, userID: user, principalID: principal))
         case .failure(let error):
-            guard ErrorPresentation.isConnection(error), let remembered,
+            guard ErrorPresentation.isTransient(error), let remembered,
                   remembered.server == (try AccountIdentity.origin(server)) else { throw error }
             return .offline(remembered)
         }
