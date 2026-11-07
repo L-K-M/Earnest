@@ -34,6 +34,11 @@ function scrollPast(id: number) {
   scroller().scrollTop = id * 100 + 50
   fireEvent.scroll(scroller())
 }
+function positionWrites(): number[] {
+  return vi.mocked(request).mock.calls
+    .filter(([path, options]) => typeof path === 'string' && path.startsWith('/v1/positions') && (options as RequestInit | undefined)?.method === 'PUT')
+    .map(([, options]) => JSON.parse(String((options as RequestInit).body)).seq as number)
+}
 describe('river interactions', () => {
   it('does not mark rows seen merely because they render', async () => {
     vi.stubGlobal('IntersectionObserver', Observer)
@@ -98,6 +103,33 @@ describe('river interactions', () => {
     fireEvent.keyDown(document.body,{key:'k'})
     expect(onSelect).toHaveBeenCalledWith(entries[0])
     await waitFor(()=>expect(act).toHaveBeenCalledWith(entries[1],'seen','seen','passive'),{timeout:1500})
+  })
+  it('never regresses the resume position when an earlier row becomes due later', async () => {
+    const {act}=mount()
+    await screen.findByText('Article 2')
+    fireEvent.click(screen.getByText('Article 2'))
+    await waitFor(()=>expect(positionWrites()).toEqual([2]),{timeout:1500})
+    // The earlier row becomes due only now, after seq 2 was already saved.
+    fireEvent.keyDown(document.body,{key:'j'})
+    await waitFor(()=>expect(act).toHaveBeenCalledWith(entries[0],'seen','seen','passive'),{timeout:1500})
+    expect(positionWrites()).toEqual([2])
+  })
+  it('backs off before retrying a failed position write', async () => {
+    mount()
+    await screen.findByText('Article 2')
+    let failed=false
+    vi.mocked(request).mockImplementation(async (path, options) => {
+      if (typeof path === 'string' && path.startsWith('/v1/positions') && (options as RequestInit | undefined)?.method === 'PUT' && !failed) {
+        failed=true
+        throw new Error('offline')
+      }
+      return path === '/v1/pipeline' ? {blurb:'disabled'} : path.startsWith('/v1/positions') ? {seq:0} : {entries}
+    })
+    scrollPast(2)
+    await waitFor(()=>expect(positionWrites()).toEqual([2]),{timeout:1500})
+    await new Promise(resolve => window.setTimeout(resolve, 700))
+    expect(positionWrites()).toEqual([2])
+    await waitFor(()=>expect(positionWrites()).toEqual([2,2]),{timeout:3000})
   })
   it('keeps rows skipped by a jump unseen', async () => {
     virtualItems.items=[1,2]

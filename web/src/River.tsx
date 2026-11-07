@@ -14,6 +14,12 @@ type PageParam = {direction: 'forward' | 'backward'; cursor?: string; after?: nu
 export type SessionSummary = {done: number; later: number; kept: number; seen: number}
 const seenWriteInterval = 600
 
+// Passive position writes retry after a failure with this backoff, so a long
+// outage cannot cost a write per tick. The floor sits above one interval so a
+// failure skips at least a tick before the next attempt.
+const POSITION_RETRY_MIN_MS = seenWriteInterval * 2
+const POSITION_RETRY_MAX_MS = 30_000
+
 // Shelf values are stored lowercase; row copy is title case.
 function statusLabel(state: EntryState): string {
   if (state.shelf.value === 'done') return 'Done'
@@ -84,6 +90,24 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   useEffect(() => { actionsRef.current = actions }, [actions])
   const entriesRef = useRef(entries)
   useEffect(() => { entriesRef.current = entries }, [entries])
+  // Passive progress only ever advances the resume position: a row that
+  // becomes due after a further row was already saved must not drag "where
+  // you left off" backwards, and a failed write retries with backoff instead
+  // of being lost or hammered out. The high-water state is per view: it
+  // resets when the view key changes, then the fetched position reseeds it.
+  const targetSeq = useRef(0)
+  const resumeSeq = useRef(0)
+  const pendingSeq = useRef<number | null>(null)
+  const retryDelay = useRef(0)
+  const retryAfter = useRef(0)
+  useEffect(() => {
+    targetSeq.current = 0
+    resumeSeq.current = 0
+    pendingSeq.current = null
+    retryDelay.current = 0
+    retryAfter.current = 0
+  }, [key])
+  useEffect(() => { if (position.data) resumeSeq.current = Math.max(resumeSeq.current, position.data.seq) }, [position.data])
   useEffect(() => { heading.current?.focus() }, [key])
 
   // Remember which rendered rows have been inside the viewport. A row that
@@ -120,8 +144,20 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
           })
         }
       }
-      const last = due.at(-1)
-      if (last) void request(`/v1/positions/${encodeURIComponent(key)}`, {method: 'PUT', body: JSON.stringify({seq: last.seq, op_id: crypto.randomUUID()})}).catch(error => setError(error instanceof Error ? error.message : 'Could not save position.'))
+      const reached = due.reduce((max, entry) => Math.max(max, entry.seq), targetSeq.current)
+      targetSeq.current = reached
+      if (reached > resumeSeq.current && pendingSeq.current === null && Date.now() >= retryAfter.current) {
+        pendingSeq.current = reached
+        void request(`/v1/positions/${encodeURIComponent(key)}`, {method: 'PUT', body: JSON.stringify({seq: reached, op_id: crypto.randomUUID()})})
+          .then(() => { resumeSeq.current = Math.max(resumeSeq.current, reached); retryDelay.current = 0 })
+          .catch(error => {
+            // Back off instead of retrying every tick through a long outage.
+            retryDelay.current = Math.min(Math.max(retryDelay.current * 2, POSITION_RETRY_MIN_MS), POSITION_RETRY_MAX_MS)
+            retryAfter.current = Date.now() + retryDelay.current
+            setError(error instanceof Error ? error.message : 'Could not save position.')
+          })
+          .finally(() => { pendingSeq.current = null })
+      }
     }, seenWriteInterval)
     return () => window.clearInterval(timer)
   }, [key])
