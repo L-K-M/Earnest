@@ -10,6 +10,8 @@ import kotlinx.serialization.json.Json
 import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.core.SyncRepository
 import ch.lkmc.earnest.db.AppDatabase
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.net.URI
@@ -42,6 +44,13 @@ internal interface SessionStore {
 internal object SyncAccess {
     /** Serializes read-through-commit sections on the persisted snapshot and session save. */
     val mutex = Mutex()
+
+    /**
+     * Cache key of an account whose Room store a background writer just
+     * committed, so a running app reloads instead of waiting for a manual
+     * refresh. One buffered slot is enough: only the latest commit matters.
+     */
+    val committed = MutableSharedFlow<String>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
     /** Serializes a pull/flush cycle; only its snapshot sections take [mutex]. */
     val sync = Mutex()
