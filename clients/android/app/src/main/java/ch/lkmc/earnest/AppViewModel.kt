@@ -15,7 +15,6 @@ import ch.lkmc.earnest.core.StateWrite
 import ch.lkmc.earnest.core.SubscriptionBody
 import ch.lkmc.earnest.core.SubscriptionPatch
 import ch.lkmc.earnest.core.SyncEngine
-import ch.lkmc.earnest.core.SyncRepository
 import ch.lkmc.earnest.core.SyncSnapshot
 import ch.lkmc.earnest.db.BriefEntity
 import ch.lkmc.earnest.db.ContentEntity
@@ -144,24 +143,28 @@ class AppViewModel internal constructor(
             _state.update { current -> current.copy(loading = true, error = null) }
             try {
                 val api = apiFactory(session)
-                cache.withEngine { syncEngine ->
-                    if (!isCurrent(session, cache)) return@withEngine
-                    val repository = SyncRepository(api, syncEngine)
+                val synced = cache.withSync(api) { repository ->
+                    if (!isCurrent(session, cache)) return@withSync null
                     cache.markAgentChangesStale()
                     val rejected = repository.pull() + repository.flush()
-                    val expired = syncEngine.expire(Instant.now()).map { it.operation.opId }
-                    syncEngine.flush()
-                    val briefs = runCatching { api.todaysBriefs() }.getOrNull()
-                    if (briefs != null) cacheBriefs(cache, briefs)
-                    val cached = briefs?.map { BriefEntity(it.principalId, it.value, it.rev) } ?: cache.db.briefs().get()
-                    val names = principalNames(api)
-                    savePrincipalNames(cache, names)
-                    val changesResult = runCatching { cache.refreshAgentChanges(api, changesSince) }
-                    changesResult.getOrNull()?.let {
+                    val expired = repository.expire(Instant.now()).map { it.operation.opId }
+                    // The agent-changes cursor must advance under the sync lock:
+                    // a concurrent worker cycle outside it could write an older one.
+                    val changes = runCatching { cache.refreshAgentChanges(api, changesSince) }
+                    changes.getOrNull()?.let {
                         cache.preferences.edit {
                             putString(SessionCache.KEY_CHANGES_SINCE, sessionStartedAt.toString())
                         }
                     }
+                    Triple(rejected, expired, changes)
+                } ?: return@launch
+                val (rejected, expired, changesResult) = synced
+                val briefs = runCatching { api.todaysBriefs() }.getOrNull()
+                if (briefs != null) cacheBriefs(cache, briefs)
+                val cached = briefs?.map { BriefEntity(it.principalId, it.value, it.rev) } ?: cache.db.briefs().get()
+                val names = principalNames(api)
+                savePrincipalNames(cache, names)
+                cache.withEngine { syncEngine ->
                     if (!isCurrent(session, cache)) return@withEngine
                     val restored = restoredState(syncEngine, cache.identity.principalId)
                     val changes = changesResult.getOrNull() ?: _state.value.agentChanges
@@ -288,12 +291,17 @@ class AppViewModel internal constructor(
             val session = activeSession ?: return@withContext
             if (!isCurrent(session, cache)) return@withContext
             try {
-                cache.withEngine { syncEngine ->
-                    if (!isCurrent(session, cache)) return@withEngine
-                    val repository = SyncRepository(apiFactory(session), syncEngine)
+                // withSync serialises the flush against pull cycles; its engine
+                // sections take SyncAccess.mutex only around load-mutate-save,
+                // so the batch request never blocks a queued action.
+                val synced = cache.withSync(apiFactory(session)) { repository ->
+                    if (!isCurrent(session, cache)) return@withSync null
                     val rejected = repository.flush()
-                    syncEngine.expire(Instant.now())
-                    syncEngine.flush()
+                    val expired = repository.expire(Instant.now()).map { it.operation.opId }
+                    rejected to expired
+                } ?: return@withContext
+                val (rejected, expired) = synced
+                cache.withEngine { syncEngine ->
                     if (!isCurrent(session, cache)) return@withEngine
                     // The session's river membership is left alone: only a refresh
                     // starts a new one, so passive seen marks do not drop rows.
@@ -312,7 +320,7 @@ class AppViewModel internal constructor(
                             agentChanges = agentChanges,
                             sessionAgentChanges = activitySince(agentChanges, sessionStartedAt),
                             rejected = rejected,
-                            error = if (rejected.isEmpty()) current.error else "Some reading actions could not be synced because they expired or their articles were removed.",
+                            error = droppedOperationMessage(rejected, expired) ?: current.error,
                         )
                     }
                 }
@@ -419,9 +427,9 @@ class AppViewModel internal constructor(
     internal suspend fun loadEntry(entryId: Long): ch.lkmc.earnest.core.CachedEntry? = withContext(Dispatchers.IO) {
         val cache = account ?: return@withContext null
         val session = activeSession ?: return@withContext null
+        if (!isCurrent(session, cache)) return@withContext null
+        val entry = cache.repository(apiFactory(session)).loadEntry(entryId)
         cache.withEngine { engine ->
-            if (!isCurrent(session, cache)) return@withEngine null
-            val entry = SyncRepository(apiFactory(session), engine).loadEntry(entryId)
             if (!isCurrent(session, cache)) return@withEngine null
             val snapshot = engine.snapshot()
             val states = effectiveStates(engine, cache.identity.principalId)
