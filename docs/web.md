@@ -54,6 +54,12 @@ without paging unread entries through the entry list. The list's separate count
 says explicitly that it covers loaded articles. Today excludes This week on the client because the
 existing river API includes all three cadences.
 
+## Native labels
+
+In Settings, create, rename or delete native label definitions. Deleting a
+label removes its memberships, not the articles themselves. The sidebar's label
+views and the rule editor's label choices refresh after a successful change.
+
 ## Settings contract
 
 `GET /v1/settings` returns the validated reader document and its last change
