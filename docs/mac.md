@@ -129,7 +129,11 @@ Agent briefs, notes and notification notes render with plain SwiftUI `Text`,
 without HTML or Markdown interpretation. Deep links accept only positive
 internal 64-bit entry IDs in `earnest://entry/<id>`. External URLs route to an
 existing reader window, creating one only when none exists. File > New Window
-still creates additional windows.
+creates an independent reader: each window keeps its own section, selection,
+article and command palette. Article and Go menu commands act on the focused
+window, and a deep link changes only the window that receives it. Windows share
+one account and sync engine, so reading actions update every window's lists,
+including while offline. Refresh and Sign Out apply to the whole app.
 
 ## Article content
 
@@ -185,7 +189,12 @@ supplies an empty server preference for that launch so tests do not use your sav
 
 For scene routing, launch the app, run `open earnest://entry/3` twice and confirm
 that the same window receives both URLs. Use File > New Window to create another
-window, then close every window and open the URL again to confirm one is created.
+window. Open different articles in the two windows, switch their sections and
+confirm their readers stay independent. Focus each window in turn and use the
+Article and Go menus; only that window's selection or section should change.
+Keep a Done window open while marking an article Done in the other window,
+including offline, and confirm its list updates. Close every window and open the
+URL again to confirm one is created.
 At the 880 × 520 minimum window size, check Feeds: titles wrap above the cadence
 picker and the unsubscribe icon, whose help and accessibility label name the
 feed. Briefs grow with their text up to 180 points, then scroll.

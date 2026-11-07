@@ -50,21 +50,22 @@ struct EditionListView: View {
 
 struct FeedsView: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var window: WindowModel
     @SwiftUI.State private var removing: FeedInfo?
 
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    TextField("Feed URL", text: $model.subscribeURL)
+                    TextField("Feed URL", text: $window.subscribeURL)
                         .textFieldStyle(.roundedBorder)
-                        .onSubmit { model.subscribe() }
-                    Button("Subscribe", systemImage: "plus") { model.subscribe() }
+                        .onSubmit { window.subscribe() }
+                    Button("Subscribe", systemImage: "plus") { window.subscribe() }
                         .labelStyle(.iconOnly)
                         .help("Subscribe to the feed URL")
-                        .disabled(model.subscribeURL.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .disabled(window.subscribeURL.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
-                Picker("Cadence", selection: $model.subscribeCadence) {
+                Picker("Cadence", selection: $window.subscribeCadence) {
                     Text("Now").tag("now")
                     Text("Today").tag("today")
                     Text("This week").tag("week")

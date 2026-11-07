@@ -28,7 +28,7 @@ import Network
         relaunched.loggedIn = true
         let online = try await relaunched.establishSession()
         XCTAssertFalse(online)
-        XCTAssertEqual(relaunched.entries.map(\.id), [42])
+        XCTAssertEqual(try relaunched.currentEntries().map(\.id), [42])
         XCTAssertEqual(relaunched.briefs.map(\.text), ["Cached brief"])
         ContentHTTP.assertFinished()
     }
@@ -50,7 +50,7 @@ import Network
         XCTAssertTrue(model.loggedIn)
         XCTAssertNil(model.error)
         XCTAssertNotNil(model.connectionNote)
-        XCTAssertTrue(model.entries.isEmpty)
+        XCTAssertTrue(try model.currentEntries().isEmpty)
         XCTAssertTrue(model.briefs.isEmpty)
         XCTAssertNil(try store.load(server: identity.server))
         ContentHTTP.assertFinished()
@@ -81,14 +81,15 @@ import Network
             ] + replies)
             let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
             let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+            let window = WindowModel(app: model)
             defer { model.signOut(); session.invalidateAndCancel() }
             model.loggedIn = true
             _ = try await model.establishSession()
-            model.selectFromList(42)
-            try await waitForArticle(model)
-            XCTAssertEqual(model.html, expected)
-            XCTAssertEqual(model.offlineCopy, offline)
-            XCTAssertEqual(model.imageOrigin?.absoluteString, replies.first?.mode == "proxied" ? "https://content.test:8081" : nil)
+            window.selectFromList(42)
+            try await waitForArticle(window, model)
+            XCTAssertEqual(window.html, expected)
+            XCTAssertEqual(window.offlineCopy, offline)
+            XCTAssertEqual(window.imageOrigin?.absoluteString, replies.first?.mode == "proxied" ? "https://content.test:8081" : nil)
             XCTAssertEqual(try cache.article(entryID: 42, generation: "g"), "<p>Saved article</p><img src='https://publisher.test/tracker'>")
             ContentHTTP.assertFinished()
         }
@@ -124,8 +125,9 @@ import Network
             ])
             let api = try EarnestAPI(baseURL: server.origin, tokenStore: ContentTokens(), session: session)
             let model = AppModel(api: api, serverURL: server.origin, tokens: ContentTokens(), identities: store, cacheDirectory: directory)
+            let window = WindowModel(app: model)
             defer { model.signOut(); session.invalidateAndCancel() }
-            model.section = .later
+            window.section = .later
             model.login()
             await fulfillment(of: [requested], timeout: 5)
             let syncDeadline = Date().addingTimeInterval(5)
@@ -158,12 +160,13 @@ import Network
         ])
         let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+        let window = WindowModel(app: model)
         defer { model.signOut(); session.invalidateAndCancel() }
         model.loggedIn = true
         let offline = try await model.establishSession()
         XCTAssertFalse(offline)
         XCTAssertNil(model.error)
-        XCTAssertEqual(model.rows.map(\.id), [42])
+        XCTAssertEqual(window.rows.map(\.id), [42])
         XCTAssertEqual(model.connectionNote, "Offline. Showing what was last synced.")
         let recovered = try await model.establishSession()
         XCTAssertTrue(recovered)
@@ -202,12 +205,13 @@ import Network
         ])
         let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+        let window = WindowModel(app: model)
         defer { model.signOut(); session.invalidateAndCancel() }
         model.loggedIn = true
         let online = try await model.establishSession()
         XCTAssertTrue(online)
         XCTAssertNil(model.error)
-        XCTAssertTrue(model.rows.isEmpty)
+        XCTAssertTrue(window.rows.isEmpty)
         XCTAssertEqual(try cache.load(), SyncSnapshot())
         XCTAssertNil(try cache.article(entryID: 42, generation: "g"))
         XCTAssertTrue(try cache.resource("briefs", generation: "g").isEmpty)
@@ -222,13 +226,14 @@ import Network
         let session = ContentHTTP.install([.init(path: "/v1/me", body: "", failure: .cannotConnectToHost)])
         let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+        let window = WindowModel(app: model)
         defer { model.signOut(); session.invalidateAndCancel() }
         model.loggedIn = true
         let online = try await model.establishSession()
         XCTAssertFalse(online)
         XCTAssertNil(model.error)
         XCTAssertEqual(model.connectionNote, "Offline. Showing what was last synced.")
-        XCTAssertTrue(model.rows.isEmpty)
+        XCTAssertTrue(window.rows.isEmpty)
         XCTAssertEqual(try cache.load(), SyncSnapshot())
         ContentHTTP.assertFinished()
     }
@@ -314,70 +319,70 @@ import Network
     }
 
     func testListAndKeyboardSelectionsUseProxiedImages() async throws {
-        let (model, session) = try makeModel([
+        let (model, window, session) = try makeModel([
             .signed(mode: "proxied"), .article,
             .signed(mode: "proxied"), .article,
         ])
         defer { model.signOut(); session.invalidateAndCancel() }
-        model.selectFromList(42)
-        try await waitForArticle(model)
-        XCTAssertEqual(model.imageOrigin?.absoluteString, "https://content.test:8081")
-        XCTAssertEqual(model.readingEntry?.title, "Article title")
-        model.rows = [EntryRow(id: 42, title: "Article title", subtitle: "", unread: true)]
-        model.move(1)
-        try await waitForArticle(model)
-        XCTAssertEqual(model.imageMode, .proxied)
+        window.selectFromList(42)
+        try await waitForArticle(window, model)
+        XCTAssertEqual(window.imageOrigin?.absoluteString, "https://content.test:8081")
+        XCTAssertEqual(window.readingEntry?.title, "Article title")
+        window.rows = [EntryRow(id: 42, title: "Article title", subtitle: "", unread: true)]
+        window.move(1)
+        try await waitForArticle(window, model)
+        XCTAssertEqual(window.imageMode, .proxied)
         ContentHTTP.assertFinished()
     }
 
     func testDeepLinkBlocksImagesUntilExplicitLoadIncludingSameEntry() async throws {
-        let (model, session) = try makeModel([
+        let (model, window, session) = try makeModel([
             .signed(mode: "proxied"), .article,
             .signed(mode: "click"), .article,
             .signed(mode: "proxied"), .article,
             .signed(mode: "click"), .article,
         ])
         defer { model.signOut(); session.invalidateAndCancel() }
-        model.selectFromList(42)
-        try await waitForArticle(model)
-        model.openDeepLink(URL(string: "earnest://entry/42")!)
-        XCTAssertNil(model.imageOrigin)
-        try await waitForArticle(model)
-        XCTAssertEqual(model.imageMode, .click)
-        XCTAssertNil(model.imageOrigin)
-        model.loadImages()
-        try await waitForArticle(model)
-        XCTAssertEqual(model.imageOrigin?.absoluteString, "https://content.test:8081")
-        model.openDeepLink(URL(string: "earnest://entry/42")!)
-        try await waitForArticle(model)
-        XCTAssertNil(model.imageOrigin)
+        window.selectFromList(42)
+        try await waitForArticle(window, model)
+        window.openDeepLink(URL(string: "earnest://entry/42")!)
+        XCTAssertNil(window.imageOrigin)
+        try await waitForArticle(window, model)
+        XCTAssertEqual(window.imageMode, .click)
+        XCTAssertNil(window.imageOrigin)
+        window.loadImages()
+        try await waitForArticle(window, model)
+        XCTAssertEqual(window.imageOrigin?.absoluteString, "https://content.test:8081")
+        window.openDeepLink(URL(string: "earnest://entry/42")!)
+        try await waitForArticle(window, model)
+        XCTAssertNil(window.imageOrigin)
         ContentHTTP.assertFinished()
     }
 
     func testFallbackBlocksOriginalImageURLs() async throws {
-        let (model, session) = try makeModel([
+        let (model, window, session) = try makeModel([
             .init(path: "/v1/entries/42/content-url", status: 503, body: "{}", mode: "proxied"),
             .init(path: "/v1/entries/42/content", body: #"{"entry_id":42,"html":"<img src='https://publisher.test/tracker'>","text":"","sanitizer_version":1,"source":"feed"}"#),
         ])
         defer { model.signOut(); session.invalidateAndCancel() }
-        model.selectFromList(42)
-        try await waitForArticle(model)
-        XCTAssertTrue(model.html.contains("publisher.test"))
-        XCTAssertNil(model.imageOrigin)
+        window.selectFromList(42)
+        try await waitForArticle(window, model)
+        XCTAssertTrue(window.html.contains("publisher.test"))
+        XCTAssertNil(window.imageOrigin)
         let scheme = ArticleScheme()
-        scheme.html = model.html
-        scheme.imageOrigin = model.imageOrigin
+        scheme.html = window.html
+        scheme.imageOrigin = window.imageOrigin
         XCTAssertTrue(scheme.page.contains("img-src 'none';"))
         ContentHTTP.assertFinished()
     }
 
     func testConnectionFailuresUseNoteInsteadOfModal() async throws {
-        let (model, session) = try makeModel([
+        let (model, window, session) = try makeModel([
             .init(path: "/v1/entries/42/content-url", body: "", failure: .cannotConnectToHost),
             .init(path: "/v1/entries/42/content", body: "", failure: .cannotConnectToHost),
         ])
         defer { model.signOut(); session.invalidateAndCancel() }
-        model.selectFromList(42)
+        window.selectFromList(42)
         let deadline = Date().addingTimeInterval(5)
         while model.error == nil && model.connectionNote == nil && Date() < deadline {
             try await Task.sleep(for: .milliseconds(10))
@@ -399,26 +404,27 @@ import Network
         ])
         let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+        let window = WindowModel(app: model)
         defer { model.signOut(); session.invalidateAndCancel() }
         model.loggedIn = true
         let online = try await model.establishSession()
         XCTAssertFalse(online)
         XCTAssertNil(model.error)
-        XCTAssertEqual(model.rows.map(\.id), [42])
+        XCTAssertEqual(window.rows.map(\.id), [42])
         XCTAssertEqual(model.briefs.map(\.text), ["Cached brief"])
         XCTAssertEqual(model.feeds.map(\.title), ["Cached feed"])
         XCTAssertNotNil(model.connectionNote)
-        model.selectFromList(42)
-        try await waitForArticle(model)
-        XCTAssertEqual(model.html, "<p>Saved article</p><img src='https://publisher.test/tracker'>")
-        XCTAssertTrue(model.offlineCopy)
-        XCTAssertNil(model.imageOrigin)
-        XCTAssertEqual(model.readingEntry?.title, "Article title")
+        window.selectFromList(42)
+        try await waitForArticle(window, model)
+        XCTAssertEqual(window.html, "<p>Saved article</p><img src='https://publisher.test/tracker'>")
+        XCTAssertTrue(window.offlineCopy)
+        XCTAssertNil(window.imageOrigin)
+        XCTAssertEqual(window.readingEntry?.title, "Article title")
         let scheme = ArticleScheme()
-        scheme.html = model.html
-        scheme.imageOrigin = model.imageOrigin
+        scheme.html = window.html
+        scheme.imageOrigin = window.imageOrigin
         XCTAssertTrue(scheme.page.contains("img-src 'none';"))
-        model.command(.keep)
+        window.command(.keep)
         let deadline = Date().addingTimeInterval(5)
         while !ContentHTTP.finished && Date() < deadline {
             try await Task.sleep(for: .milliseconds(10))
@@ -450,26 +456,27 @@ import Network
         ])
         let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+        let window = WindowModel(app: model)
         defer { model.signOut(); session.invalidateAndCancel() }
         model.loggedIn = true
         let online = try await model.establishSession()
         XCTAssertTrue(online)
         XCTAssertNotNil(try cache.article(entryID: 42, generation: "g"))
         try cache.saveArticle(entryID: 43, html: "Other article", generation: "g")
-        model.selectFromList(42)
+        window.selectFromList(42)
         let deadline = Date().addingTimeInterval(5)
-        while model.error == nil && model.html.isEmpty && Date() < deadline {
+        while model.error == nil && window.html.isEmpty && Date() < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTAssertNotNil(model.error)
-        XCTAssertTrue(model.html.isEmpty)
-        XCTAssertFalse(model.offlineCopy)
-        XCTAssertFalse(model.articleUnavailable)
+        XCTAssertTrue(window.html.isEmpty)
+        XCTAssertFalse(window.offlineCopy)
+        XCTAssertFalse(window.articleUnavailable)
         let entry = try XCTUnwrap(cache.load().entries.first { $0.id == 42 })
         XCTAssertEqual(entry.deleted, status == 404)
         if status == 404 {
             XCTAssertNil(try cache.article(entryID: 42, generation: "g"))
-            XCTAssertFalse(model.rows.contains { $0.id == 42 })
+            XCTAssertFalse(window.rows.contains { $0.id == 42 })
         } else {
             XCTAssertNotNil(try cache.article(entryID: 42, generation: "g"))
         }
@@ -493,10 +500,11 @@ import Network
         let session = ContentHTTP.install([.init(path: "/v1/me", body: "", failure: .cannotConnectToHost)])
         let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+        let window = WindowModel(app: model)
         defer { model.signOut(); session.invalidateAndCancel() }
         model.loggedIn = true
         _ = try await model.establishSession()
-        XCTAssertEqual(model.rows.map(\.id), [42])
+        XCTAssertEqual(window.rows.map(\.id), [42])
         let brief = try XCTUnwrap(model.briefs.first)
         XCTAssertEqual(model.principalNames[brief.principalID], "Morning Agent")
         ContentHTTP.assertFinished()
@@ -512,10 +520,42 @@ import Network
         let session = ContentHTTP.install([.init(path: "/v1/me", body: "", failure: .cannotConnectToHost)])
         let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+        let window = WindowModel(app: model)
         defer { model.signOut(); session.invalidateAndCancel() }
         model.loggedIn = true
         _ = try await model.establishSession()
-        XCTAssertEqual(model.rows.map(\.id), [42, 44])
+        XCTAssertEqual(window.rows.map(\.id), [42, 44])
+        ContentHTTP.assertFinished()
+    }
+
+    func testOnlineRefreshDoesNotRelaxAnotherWindowsCachedRiver() async throws {
+        let (directory, defaults, store, identity, cache) = try offlineFixture()
+        defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+        let engine = SyncEngine(store: cache)
+        try engine.mergeBootstrap(kind: "subscriptions", items: [.object([
+            "id": .integer(1), "rev": .integer(2), "title": .string("Cached feed"), "cadence": .string("now"),
+            "initial_since": .string("2026-01-01T00:00:00Z"), "initial_through_seq": .integer(100),
+        ])])
+        try engine.mergeEntry(SyncEntry(id: 43, subscriptionID: 1, seq: 4, title: "Imported backlog",
+                                       publishedAt: DateFormatting.parse("2006-01-01T00:00:00Z"), firstSeenAt: Date()))
+        let session = ContentHTTP.install([
+            .init(path: "/v1/me", body: "", failure: .cannotConnectToHost),
+            .init(path: "/v1/entries", body: #"{"entries":[]}"#),
+        ])
+        let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
+        let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+        let today = WindowModel(app: model)
+        let later = WindowModel(app: model)
+        later.section = .later
+        defer { model.signOut(); session.invalidateAndCancel() }
+        model.loggedIn = true
+        _ = try await model.establishSession()
+        XCTAssertEqual(today.rows.map(\.id), [42])
+
+        await later.refreshEntries()
+        model.rebuildPresentation()
+
+        XCTAssertEqual(today.rows.map(\.id), [42], "Another window's online fetch must not admit imported backlog")
         ContentHTTP.assertFinished()
     }
 
@@ -534,16 +574,17 @@ import Network
         ])
         let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+        let window = WindowModel(app: model)
         defer { model.signOut(); session.invalidateAndCancel() }
         model.loggedIn = true
         _ = try await model.establishSession()
-        model.selectFromList(44)
+        window.selectFromList(44)
         let deadline = Date().addingTimeInterval(5)
-        while !model.articleUnavailable && Date() < deadline {
+        while !window.articleUnavailable && Date() < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
-        XCTAssertTrue(model.articleUnavailable)
-        XCTAssertTrue(model.html.isEmpty)
+        XCTAssertTrue(window.articleUnavailable)
+        XCTAssertTrue(window.html.isEmpty)
         XCTAssertNil(model.error)
         ContentHTTP.assertFinished()
     }
@@ -569,7 +610,7 @@ import Network
         model.loggedIn = true
         let online = try await model.establishSession()
         XCTAssertTrue(online)
-        XCTAssertTrue(model.entries.isEmpty)
+        XCTAssertTrue(try model.currentEntries().isEmpty)
         XCTAssertTrue(model.briefs.isEmpty)
         XCTAssertTrue(model.feeds.isEmpty)
         XCTAssertEqual(try store.load(server: identity.server)?.principalID, 8)
@@ -593,7 +634,7 @@ import Network
         defer { model.signOut(); session.invalidateAndCancel() }
         model.loggedIn = true
         _ = try await model.establishSession()
-        XCTAssertEqual(model.entries.map(\.id), [42])
+        XCTAssertEqual(try model.currentEntries().map(\.id), [42])
         XCTAssertEqual(model.pendingOps, 1)
         _ = try await model.establishSession()
         let deadline = Date().addingTimeInterval(5)
@@ -602,7 +643,7 @@ import Network
         }
         XCTAssertTrue(model.loggedIn)
         XCTAssertNil(model.error)
-        XCTAssertTrue(model.entries.isEmpty)
+        XCTAssertTrue(try model.currentEntries().isEmpty)
         XCTAssertTrue(model.briefs.isEmpty)
         XCTAssertEqual(model.pendingOps, 0)
         XCTAssertEqual(try store.load(server: identity.server)?.principalID, 8)
@@ -619,6 +660,7 @@ import Network
         ])
         let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+        let window = WindowModel(app: model)
         defer { model.signOut(); session.invalidateAndCancel() }
         model.loggedIn = true
         _ = try await model.establishSession()
@@ -626,7 +668,7 @@ import Network
         let deadline = Date().addingTimeInterval(5)
         while model.loggedIn && Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertFalse(model.loggedIn)
-        XCTAssertTrue(model.rows.isEmpty)
+        XCTAssertTrue(window.rows.isEmpty)
         XCTAssertTrue(model.briefs.isEmpty)
         XCTAssertNil(try store.load(server: identity.server))
         XCTAssertEqual(model.error, "Your sign-in expired or was revoked. Sign in again.")
@@ -650,13 +692,14 @@ import Network
             ] + replies)
             let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
             let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+            let window = WindowModel(app: model)
             defer { model.signOut(); session.invalidateAndCancel() }
             model.loggedIn = true
             _ = try await model.establishSession()
-            model.selectFromList(42)
-            try await waitForArticle(model)
-            XCTAssertEqual(model.html, expected)
-            XCTAssertFalse(model.offlineCopy)
+            window.selectFromList(42)
+            try await waitForArticle(window, model)
+            XCTAssertEqual(window.html, expected)
+            XCTAssertFalse(window.offlineCopy)
             let reopened = try Cache(identity: identity, directory: directory)
             XCTAssertEqual(try reopened.article(entryID: 42, generation: "g"), expected)
             ContentHTTP.assertFinished()
@@ -688,11 +731,12 @@ import Network
         ])
         let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
+        let window = WindowModel(app: model)
         defer { model.signOut(); session.invalidateAndCancel() }
         model.loggedIn = true
         _ = try await model.establishSession()
         XCTAssertNotNil(model.connectionNote)
-        model.section = .later
+        window.section = .later
         model.scheduleSync()
         let deadline = Date().addingTimeInterval(5)
         while (!ContentHTTP.finished || model.syncing || model.connectionNote != nil || model.principalNames[2] == nil) && Date() < deadline {
@@ -742,7 +786,7 @@ import Network
     }
 
     func testNotificationCancellationUsesNotificationTargetAndRefreshesActivity() async throws {
-        let (model, session) = try makeModel([
+        let (model, window, session) = try makeModel([
             .init(path: "/v1/notifications/19:cancel", body: "{}", method: "POST"),
             .init(path: "/v1/activity", body: #"{"activities":[]}"#),
         ])
@@ -751,7 +795,7 @@ import Network
             "id": .integer(8), "action": .string("notification.created"),
             "target": .object(["id": .integer(19)]), "next_action": .string("cancel")
         ]))
-        model.section = .activity
+        window.section = .activity
         model.activityGroups = [ActivityGroup(principalID: 2, name: "Scout", items: [item])]
         model.cancelNotification(item)
         XCTAssertTrue(model.activityActionPending)
@@ -765,39 +809,44 @@ import Network
         ContentHTTP.assertFinished()
     }
 
-    private func waitForArticle(_ model: AppModel) async throws {
+    private func waitForArticle(_ window: WindowModel, _ model: AppModel) async throws {
         let deadline = Date().addingTimeInterval(5)
-        while model.html.isEmpty && model.error == nil && Date() < deadline {
+        while window.html.isEmpty && model.error == nil && Date() < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTAssertNil(model.error)
-        XCTAssertFalse(model.html.isEmpty, "Article did not finish loading")
+        XCTAssertFalse(window.html.isEmpty, "Article did not finish loading")
     }
 
-    private func makeModel(_ replies: [ContentHTTP.Reply]) throws -> (AppModel, URLSession) {
+    private func makeModel(_ replies: [ContentHTTP.Reply]) throws -> (AppModel, WindowModel, URLSession) {
         let entry = try JSONDecoder().decode(APIEntry.self, from: Data(Self.entryJSON.utf8))
         let engine = SyncEngine(store: MemorySyncStore())
         try engine.bootstrap(Cursor(generation: "g", rev: 1))
         try engine.mergeEntries([entry], generation: "g")
+        try engine.mergeBootstrap(kind: "subscriptions", items: [.object([
+            "id": .integer(1), "cadence": .string("now"),
+            "initial_since": .null, "initial_through_seq": .integer(0),
+        ])])
         try engine.finishBootstrap()
         let session = ContentHTTP.install(replies)
         let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, engine: engine, principalID: 7)
+        let window = WindowModel(app: model)
         model.loggedIn = true
-        model.entries = [entry]
-        return (model, session)
+        window.entries = [entry]
+        return (model, window, session)
     }
 
     static let entryJSON = #"{"id":42,"subscription_id":1,"feed_id":2,"seq":3,"title":"Article title","url":"https://publisher.test/article","author":"Ada","first_seen_at":"2026-11-04T08:00:00Z","rev":1,"deleted":false,"state":{"principal":7,"entry_id":42,"state_rev":0,"seen":{"value":"unseen","rev":0,"occurred_at":"","actor":0,"source":""},"shelf":{"value":"none","rev":0,"occurred_at":"","actor":0,"source":""},"kept":{"value":false,"rev":0,"occurred_at":"","actor":0,"source":""}}}"#
 }
 
-private struct ContentTokens: TokenStore {
+struct ContentTokens: TokenStore {
     func load() throws -> String? { "test-token" }
     func save(_ token: String) throws {}
     func delete() throws {}
 }
 
-private final class ContentHTTP: URLProtocol {
+final class ContentHTTP: URLProtocol {
     struct Reply {
         let path: String
         var status = 200
@@ -805,6 +854,7 @@ private final class ContentHTTP: URLProtocol {
         var mode: String?
         var method = "GET"
         var failure: URLError.Code?
+        var beforeResponse: (@Sendable () -> Void)?
 
         static func signed(mode: String) -> Self {
             .init(path: "/v1/entries/42/content-url", body: #"{"url":"https://content.test:8081/article/42?signature=abc","expires_at":"2099-01-01T00:00:00Z"}"#, mode: mode)
@@ -840,6 +890,7 @@ private final class ContentHTTP: URLProtocol {
         }
         let isContent = request.url?.host == "content.test"
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), isContent || reply.path.hasPrefix("/v1/devices/") ? nil : "Bearer test-token")
+        reply.beforeResponse?()
         let response = HTTPURLResponse(url: request.url!, statusCode: reply.status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(reply.body.utf8))
