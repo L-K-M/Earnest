@@ -20,7 +20,7 @@ private fun sessionEntries(state: UiState): List<CachedEntry> = state.snapshot.e
 
 internal fun restoredState(engine: SyncEngine, principal: Long, now: Instant = Instant.now()): UiState {
     val snapshot = engine.snapshot()
-    val states = snapshot.entries.filterNot { it.deleted }.associate { it.id to engine.state(principal, it.id) }
+    val states = engine.states(principal)
     val cadences = snapshot.objects.filter { it.kind == SyncEngine.OBJECT_SUBSCRIPTION && !it.deleted }
         .associate { it.id to River.cadence(it) }
     val members = initialRiverIds(snapshot, states, now)

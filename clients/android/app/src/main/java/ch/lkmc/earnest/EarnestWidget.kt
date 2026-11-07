@@ -14,6 +14,7 @@ import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.provideContent
+import androidx.glance.appwidget.updateAll
 import androidx.glance.background
 import androidx.glance.layout.Column
 import androidx.glance.layout.fillMaxSize
@@ -29,6 +30,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.CancellationException
 
 /**
  * The home-screen widget: the newest headlines and nothing else. It shows no
@@ -104,4 +106,19 @@ internal object WidgetData {
             .reversed()
 
     private const val HEADLINES = 5
+}
+
+/**
+ * Redraws every placed widget after a sync. Best effort: a widget failure must
+ * not fail the sync, but cancellation still propagates so the caller's
+ * coroutine or worker stops instead of reporting success.
+ */
+internal suspend fun refreshWidgets(context: Context) {
+    try {
+        EarnestWidget().updateAll(context)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        // The next sync redraws the widget.
+    }
 }

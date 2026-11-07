@@ -165,12 +165,10 @@ class AppViewModel internal constructor(
                     if (!isCurrent(session, cache)) return@withEngine
                     val restored = restoredState(syncEngine, cache.identity.principalId)
                     val changes = changesResult.getOrNull() ?: _state.value.agentChanges
-                    val snapshot = syncEngine.snapshot()
-                    val states = effectiveStates(syncEngine, cache.identity.principalId)
                     _state.update { current -> current.copy(
-                        snapshot = snapshot,
-                        principalId = cache.identity.principalId,
-                        states = states,
+                        snapshot = restored.snapshot,
+                        principalId = restored.principalId,
+                        states = restored.states,
                         cadences = restored.cadences,
                         riverEntryIds = restored.riverEntryIds,
                         agentChanges = changes,
@@ -183,6 +181,7 @@ class AppViewModel internal constructor(
                         expired = expired,
                     ) }
                 }
+                refreshWidgets(getApplication())
             } catch (error: ApiException) {
                 if (!isCurrent(session, cache)) return@launch
                 if (error.isUnauthorized) {
@@ -255,14 +254,12 @@ class AppViewModel internal constructor(
                     )
                     syncEngine.queue(write)
                     syncEngine.flush()
-                    val snapshot = syncEngine.snapshot()
-                    val states = effectiveStates(syncEngine, principal)
-                    val cadences = restoredState(syncEngine, principal).cadences
+                    val restored = restoredState(syncEngine, principal)
                     val agentChanges = cache.agentChanges()
                     _state.update { current -> current.copy(
-                        snapshot = snapshot,
-                        states = states,
-                        cadences = cadences,
+                        snapshot = restored.snapshot,
+                        states = restored.states,
+                        cadences = restored.cadences,
                         agentChanges = agentChanges,
                         sessionAgentChanges = activitySince(agentChanges, sessionStartedAt),
                     ) }
@@ -370,8 +367,13 @@ class AppViewModel internal constructor(
     /**
      * Fetches the signed content URL and caches the readable content. Returns
      * null when the server cannot be reached and nothing is cached.
+     *
+     * [agentSelected] marks an entry an agent surfaced (a notification, a deep
+     * link or an agent-change notice). Its images wait for a click so that
+     * automatic image loading cannot tell a publisher which entry an agent
+     * chose (docs/research/llm.md, "Agent selection stays unobservable").
      */
-    suspend fun openEntry(entryId: Long): ContentUrlResult? = withContext(Dispatchers.IO) {
+    suspend fun openEntry(entryId: Long, agentSelected: Boolean = false): ContentUrlResult? = withContext(Dispatchers.IO) {
         val cache = account ?: return@withContext null
         val session = activeSession ?: return@withContext null
         if (!isCurrent(session, cache)) return@withContext null
@@ -390,7 +392,7 @@ class AppViewModel internal constructor(
                 ),
             )
         }
-        val url = runCatching { api.contentUrl(entryId) }.getOrNull()
+        val url = runCatching { api.contentUrl(entryId, mode = if (agentSelected) "click" else null) }.getOrNull()
         val fallback = content?.html ?: cached?.html
         if (!isCurrent(session, cache)) return@withContext null
         when {
@@ -468,9 +470,7 @@ class AppViewModel internal constructor(
 
     private fun effectiveStates(syncEngine: SyncEngine, principal: Long): Map<Long, State> {
         if (principal == 0L) return emptyMap()
-        return syncEngine.snapshot().entries
-            .filterNot { it.deleted }
-            .associate { it.id to syncEngine.state(principal, it.id) }
+        return syncEngine.states(principal)
     }
 
     private fun opId(action: String) = "$action-${java.util.UUID.randomUUID()}"

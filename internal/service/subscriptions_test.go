@@ -51,6 +51,57 @@ func TestSubscribeDeduplicatesDefaultPorts(t *testing.T) {
 	}
 }
 
+// Resubscribing with credentials must not stack a second subscription on a
+// parallel feed row: the existing subscription rebinds to the user's own
+// credential-bearing feed, the same conversion UpdateSubscription performs.
+func TestSubscribeSameURLWithCredentials(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	f.s.prober = &subscriptionsProber{}
+	ctx := context.Background()
+	first, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/dup", SubscribeOptions{OpID: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	creds := &FeedCredentials{Username: "reader", Password: "very-secret"}
+	second, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/dup", SubscribeOptions{OpID: "second", Credentials: creds})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID != first.ID || !second.Private || second.FeedID == first.FeedID {
+		t.Fatalf("credentials did not rebind the existing subscription: %+v -> %+v", first, second)
+	}
+	var subs int
+	if err := f.db.Pool().QueryRow(ctx, `SELECT count(*) FROM subscriptions s JOIN feeds f ON f.id=s.feed_id WHERE s.user_id=$1 AND s.deleted_at IS NULL AND f.url='https://feeds.test/dup'`, f.a.UserID).Scan(&subs); err != nil || subs != 1 {
+		t.Fatalf("subscriptions for URL: %d %v", subs, err)
+	}
+	var feeds int
+	if err := f.db.Pool().QueryRow(ctx, "SELECT count(*) FROM feeds WHERE url='https://feeds.test/dup'").Scan(&feeds); err != nil || feeds != 2 {
+		t.Fatalf("feed rows for URL: %d %v", feeds, err)
+	}
+	var envelope []byte
+	if err := f.db.Pool().QueryRow(ctx, "SELECT credentials_encrypted FROM feeds WHERE id=$1", second.FeedID).Scan(&envelope); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := f.s.openCredentials(envelope)
+	if err != nil || decoded.Password != creds.Password {
+		t.Fatal("credentials not bound to private feed", err)
+	}
+	// Rotated credentials on the bound feed keep the same subscription.
+	rotated := &FeedCredentials{Username: "reader", Password: "rotated"}
+	third, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/dup", SubscribeOptions{OpID: "third", Credentials: rotated})
+	if err != nil || third.ID != first.ID || third.FeedID != second.FeedID {
+		t.Fatalf("rotated credentials changed binding: %+v %v", third, err)
+	}
+	if err := f.db.Pool().QueryRow(ctx, "SELECT credentials_encrypted FROM feeds WHERE id=$1", second.FeedID).Scan(&envelope); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err = f.s.openCredentials(envelope)
+	if err != nil || decoded.Password != rotated.Password {
+		t.Fatal("credentials not rotated", err)
+	}
+	coreCheckGapless(t, f.db, f.a.UserID)
+}
+
 func TestRebindPreservesCanonicalFeedMetadata(t *testing.T) {
 	template := storetest.NewTemplate(t)
 	for _, private := range []bool{false, true} {
@@ -165,7 +216,7 @@ func TestSubscriptions(t *testing.T) {
 			t.Fatal("get subscription", got, err)
 		}
 		listed, err := f.s.Subscriptions(ctx, f.a)
-		if err != nil || len(listed) != 3 {
+		if err != nil || len(listed) != 2 {
 			t.Fatal("list subscriptions", listed, err)
 		}
 		if _, err := f.s.Subscription(ctx, other, sub.ID); !errors.Is(err, ErrNotFound) {
@@ -351,6 +402,72 @@ func TestSubscriptions(t *testing.T) {
 		}
 		if _, err := f.s.ImportOPML(context.Background(), f.a, input); err != nil {
 			t.Fatal("import after folder deletion", err)
+		}
+		coreCheckGapless(t, f.db, f.a.UserID)
+	})
+	t.Run("opml_chunked_import_keeps_siblings_after_a_failure", func(t *testing.T) {
+		f := newCoreFixture(t, template)
+		input := make([]OPMLOutline, opmlChunkSize*2+10)
+		for i := range input {
+			input[i] = OPMLOutline{Title: fmt.Sprintf("Chunk feed %d", i), XMLURL: fmt.Sprintf("https://chunk.test/%d", i)}
+		}
+		input[opmlChunkSize].XMLURL = "file:///secret"
+		results, err := f.s.ImportOPML(context.Background(), f.a, input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(results) != len(input) {
+			t.Fatalf("results=%d want %d", len(results), len(input))
+		}
+		if results[opmlChunkSize].Error == "" {
+			t.Fatal("bad outline did not report an error")
+		}
+		for i, result := range results {
+			if i == opmlChunkSize {
+				continue
+			}
+			if result.Subscription == nil || !result.Deferred {
+				t.Fatalf("outline %d not subscribed: %+v", i, result)
+			}
+		}
+		subs, err := f.s.Subscriptions(context.Background(), f.a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		imported := 0
+		for _, sub := range subs {
+			if sub.ID != f.subscription {
+				imported++
+			}
+		}
+		if imported != len(input)-1 {
+			t.Fatalf("imported=%d want %d", imported, len(input)-1)
+		}
+		coreCheckGapless(t, f.db, f.a.UserID)
+	})
+	t.Run("opml_folder_at_chunk_boundary_parents_next_chunk_children", func(t *testing.T) {
+		f := newCoreFixture(t, template)
+		input := make([]OPMLOutline, opmlChunkSize-1)
+		for i := range input {
+			input[i] = OPMLOutline{Title: fmt.Sprintf("Boundary feed %d", i), XMLURL: fmt.Sprintf("https://boundary.test/%d", i)}
+		}
+		folder := OPMLOutline{Title: "Boundary folder"}
+		for i := 0; i < 3; i++ {
+			folder.Outlines = append(folder.Outlines, OPMLOutline{Title: fmt.Sprintf("Child %d", i), XMLURL: fmt.Sprintf("https://boundary.test/child/%d", i)})
+		}
+		input = append(input, folder)
+		results, err := f.s.ImportOPML(context.Background(), f.a, input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		folderIdx := opmlChunkSize - 1
+		if results[folderIdx].Folder == nil {
+			t.Fatal("boundary folder not created")
+		}
+		for i := folderIdx + 1; i < folderIdx+4; i++ {
+			if results[i].Subscription == nil || results[i].Subscription.FolderID != results[folderIdx].Folder.ID {
+				t.Fatalf("child %d not placed in boundary folder: %+v", i, results[i])
+			}
 		}
 		coreCheckGapless(t, f.db, f.a.UserID)
 	})

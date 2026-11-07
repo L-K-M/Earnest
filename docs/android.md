@@ -99,9 +99,10 @@ The reader shows the feed title and the published date (falling back to
 first seen) under the article title, with an Open original action that opens
 the entry URL in the browser. It loads the signed content URL in a WebView
 with JavaScript, file access and content access disabled, and allows only
-that origin; other links open in the browser. All signed content URLs request
-`mode=click`, including notification-selected articles, so automatic image
-loading cannot reveal an agent's article selection. On a main-frame network or
+that origin; other links open in the browser. Articles you open from your lists
+load images through the image proxy. Articles an agent surfaced (a
+notification, a deep link or an agent-change notice) request `mode=click`, so
+automatic image loading cannot reveal an agent's article selection. On a main-frame network or
 HTTP failure, the reader loads the cached HTML once through the local asset
 origin. Subresource failures do not replace the article, and local fallback
 content cannot load network resources. Agent text is shown as plain text,

@@ -52,13 +52,13 @@ it('uses the precached shell for an offline notification navigation only',async 
   await metadata.done()
 })
 
-it('preloads the production shell and its fingerprinted assets',async () => {
+it('preloads the production shell, its fingerprinted assets and the brand images',async () => {
   vi.mocked(fetch).mockImplementation(async input => String(input) === '/' ? new Response('<script src="/assets/app-1.js"></script><link href="/assets/app-1.css">',{headers:{'Content-Type':'text/html'}}) : new Response('asset'))
   let done: Promise<unknown> = Promise.resolve()
   handlers.get('install')!({waitUntil:(value: Promise<unknown>) => {done=value}})
   await done
   const shell = await cache(shellCache)
-  expect([...shell.rows.keys()]).toEqual([`${origin}/`,`${origin}/assets/app-1.js`,`${origin}/assets/app-1.css`])
+  expect([...shell.rows.keys()]).toEqual([`${origin}/`,`${origin}/assets/app-1.js`,`${origin}/assets/app-1.css`,`${origin}/icon-192.png`,`${origin}/wordmark.png`])
 })
 it('warms visited stored content and falls back to it only when the network fails',async () => {
   vi.mocked(fetch).mockImplementation(async input => href(input as Key).includes('/content') ? json({entry_id:7,text:'Cached article'}) : json({entries:[{id:7},{id:8}]}))
