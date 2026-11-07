@@ -854,6 +854,7 @@ final class ContentHTTP: URLProtocol {
         var mode: String?
         var method = "GET"
         var failure: URLError.Code?
+        var beforeResponse: (@Sendable () -> Void)?
 
         static func signed(mode: String) -> Self {
             .init(path: "/v1/entries/42/content-url", body: #"{"url":"https://content.test:8081/article/42?signature=abc","expires_at":"2099-01-01T00:00:00Z"}"#, mode: mode)
@@ -889,6 +890,7 @@ final class ContentHTTP: URLProtocol {
         }
         let isContent = request.url?.host == "content.test"
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), isContent || reply.path.hasPrefix("/v1/devices/") ? nil : "Bearer test-token")
+        reply.beforeResponse?()
         let response = HTTPURLResponse(url: request.url!, statusCode: reply.status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(reply.body.utf8))

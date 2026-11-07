@@ -83,8 +83,11 @@ import EarnestKit
         first.entries = [try entry(42), try entry(43)]
         // A real Done window has no copy of the entry before the action.
         second.entries = []
+        var later = State(principal: 7, entryID: 42)
+        later.shelf = Stamp(value: .text("later"), rev: 2)
+        try model.engine?.mergeBootstrap([later])
         model.rebuildPresentation()
-        XCTAssertTrue(first.rows.isEmpty)
+        XCTAssertEqual(first.rows.map(\.id), [42])
         XCTAssertTrue(second.rows.isEmpty)
 
         first.selected = 42
@@ -98,11 +101,6 @@ import EarnestKit
     func testNewWindowUsesCurrentSharedSnapshotWithoutASibling() throws {
         let model = try makeModel()
         defer { model.signOut() }
-        let engine = try XCTUnwrap(model.engine)
-        try engine.mergeBootstrap(kind: "subscriptions", items: [.object([
-            "id": .integer(1), "title": .string("Feed"), "cadence": .string("now"),
-            "initial_since": .null, "initial_through_seq": .integer(0),
-        ])])
         let existing = WindowModel(app: model)
         existing.section = .done
         existing.entries = []
@@ -140,6 +138,42 @@ import EarnestKit
             XCTAssertEqual(today.rows.map(\.id), muted ? [] : [42])
             ContentHTTP.assertFinished()
         }
+    }
+
+    func testOpenDoesNotDuplicateEntryAddedBySharedRebuild() async throws {
+        let requested = expectation(description: "Entry request suspended")
+        let resume = DispatchSemaphore(value: 0)
+        // The generated HTTP client validates date-time fields, unlike the
+        // tolerant APIEntry decoder used by the in-memory fixtures.
+        let body = ContentLoadingTests.entryJSON.replacingOccurrences(of: "\"occurred_at\":\"\"", with: "\"occurred_at\":\"2026-11-04T08:00:00Z\"")
+        let session = ContentHTTP.install([
+            .init(path: "/v1/entries/42", body: body, beforeResponse: {
+                requested.fulfill()
+                XCTAssertEqual(resume.wait(timeout: .now() + 10), .success)
+            }),
+            .signed(mode: "proxied"), .article,
+        ])
+        let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: ContentTokens(), session: session)
+        let model = try makeModel(api: api)
+        defer { resume.signal(); model.signOut(); session.invalidateAndCancel() }
+        let window = WindowModel(app: model)
+        window.entries = []
+        window.selectFromList(42)
+        await fulfillment(of: [requested], timeout: 5)
+
+        // A shared reading write and rebuild can supply the entry while the
+        // individual entry request is still suspended.
+        let engine = try XCTUnwrap(model.engine)
+        try engine.queue(Write(opID: "other-window", principal: 7, entryID: 42,
+                               register: .kept, value: .flag(true),
+                               base: Cursor(generation: "g", rev: 0), occurredAt: Date()))
+        model.rebuildPresentation()
+        XCTAssertEqual(window.entries.filter { $0.id == 42 }.count, 1)
+        resume.signal()
+        try await waitForArticle(window, model)
+
+        XCTAssertEqual(window.entries.filter { $0.id == 42 }.count, 1)
+        ContentHTTP.assertFinished()
     }
 
     func testGoneEntryDisappearsFromBothWindows() throws {

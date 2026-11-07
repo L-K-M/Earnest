@@ -429,7 +429,8 @@ import AppKit
                     guard app.loggedIn, app.session == expectedSession,
                           (try? engine.snapshot().cursor?.generation) == generation else { return }
                     try engine.mergeEntries([entry], generation: generation)
-                    self.entries.append(entry)
+                    // A shared rebuild may have supplied it while the request waited.
+                    if !self.entries.contains(where: { $0.id == id }) { self.entries.append(entry) }
                 }
                 let entry = self.entries.first(where: { $0.id == id })
                 self.readingEntry = entry
