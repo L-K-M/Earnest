@@ -30,6 +30,7 @@ private fun activityEntryIds(activity: Activity): List<Long> {
     val targetId = target?.longOrNull
     if (targetId != null && targetId > 0) return listOf(targetId)
     val ids = (activity.after as? JsonObject)?.get("entry_ids") as? JsonArray
+        ?: (activity.before as? JsonObject)?.get("entry_ids") as? JsonArray
     return ids?.mapNotNull { (it as? JsonPrimitive)?.longOrNull }?.filter { it > 0 }.orEmpty()
 }
 

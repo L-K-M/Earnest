@@ -1,5 +1,6 @@
 package ch.lkmc.earnest
 
+import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -49,8 +50,10 @@ private fun parseInstant(value: String): Instant? = runCatching { Instant.parse(
 
 /** Opens the publisher's page, reporting false when the browser cannot launch. */
 internal fun openOriginal(context: Context, url: String): Boolean = try {
-    // The helper accepts any context, so the browser may need its own task.
-    context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    val intent = Intent(Intent.ACTION_VIEW, url.toUri())
+    // Non-activity callers need a task; preserve the reader's back stack otherwise.
+    if (context !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    context.startActivity(intent)
     true
 } catch (_: ActivityNotFoundException) {
     false

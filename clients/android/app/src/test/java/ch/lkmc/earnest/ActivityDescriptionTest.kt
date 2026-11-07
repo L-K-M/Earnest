@@ -55,7 +55,7 @@ class ActivityDescriptionTest {
     }
 
     @Test fun activityWithoutAnEntryIdDoesNotRenderNull() {
-        val deleted = activity("annotation.deleted", before = """{"kind":"note","entry_ids":[2]}""")
+        val deleted = activity("annotation.deleted", before = """{"kind":"note"}""")
         assertEquals("Morning Agent deleted a note: an entry", agentChangeText(deleted, emptyMap()))
     }
 
@@ -95,6 +95,15 @@ class ActivityDescriptionTest {
         val none = activity("notification.created", """{"id":7}""")
         assertEquals("Sent a notification", activityDescription(none, emptyMap()))
         assertEquals("Morning Agent sent a notification: an entry", agentChangeText(none, emptyMap()))
+    }
+
+    @Test fun deletedAndCancelledBatchesKeepTheirArticleCounts() {
+        for ((action, detail) in listOf("annotation.deleted" to "deleted a note", "notification.cancelled" to "cancelled a notification")) {
+            val batch = activity(action, before = """{"kind":"note","entry_ids":[2,3]}""")
+            assertEquals("$detail: 2 articles".replaceFirstChar { it.uppercase() }, activityDescription(batch, emptyMap()))
+            assertEquals("Morning Agent $detail: 2 articles", agentChangeText(batch, emptyMap()))
+            assertEquals("Morning Agent $detail: Headline and 1 more", agentChangeText(batch, mapOf(2L to "Headline")))
+        }
     }
 
     @Test fun unknownActionsReplaceDotsWithSpaces() {

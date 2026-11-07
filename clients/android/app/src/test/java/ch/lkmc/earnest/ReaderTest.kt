@@ -1,5 +1,6 @@
 package ch.lkmc.earnest
 
+import android.app.Activity
 import android.app.Application
 import android.content.Context
 import android.content.ContextWrapper
@@ -13,6 +14,7 @@ import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
@@ -135,6 +137,19 @@ class ReaderTest {
         assertEquals(Intent.ACTION_VIEW, intent.action)
         assertEquals("https://example.com/article", intent.dataString)
         assertTrue(intent.flags and Intent.FLAG_ACTIVITY_NEW_TASK != 0)
+    }
+
+    @Test fun openOriginalPreservesTheActivityBackStack() {
+        val controller = Robolectric.buildActivity(Activity::class.java).setup()
+        try {
+            val activity = controller.get()
+            assertTrue(openOriginal(activity, "https://example.com/article"))
+            val intent = shadowOf(activity).nextStartedActivity
+            assertEquals("https://example.com/article", intent.dataString)
+            assertEquals(0, intent.flags and Intent.FLAG_ACTIVITY_NEW_TASK)
+        } finally {
+            controller.pause().stop().destroy()
+        }
     }
 
     @Test fun noCacheDoesNotLoadEmptyFallback() {
