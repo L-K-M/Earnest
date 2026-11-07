@@ -1,5 +1,10 @@
 package ch.lkmc.earnest.core
 
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -97,7 +102,7 @@ class SyncRepository(
                 rejected += flush()
                 continue
             }
-            val changes = page.changes.orEmpty().map { change(it) }
+            val changes = hydratePage(page.changes.orEmpty())
             session { it.applyPage(changes, page.next); it.flush() }
             if (changes.isEmpty()) return rejected
         }
@@ -216,6 +221,24 @@ class SyncRepository(
                 ),
             )
             else -> error("unknown bootstrap resource: $kind")
+        }
+    }
+
+    /**
+     * Hydrates a change page with bounded concurrency so a burst of N new
+     * entries does not cost N serial round trips before the page can commit.
+     * Results keep the page's record order so [SyncEngine.applyPage] sees the
+     * changes in order. Failures stay fail-fast: a hydrate failure other than
+     * 404 aborts the pull because the change cursor must not advance past an
+     * entry the client could not fetch.
+     */
+    private suspend fun hydratePage(changes: List<ChangeRecord>): List<SyncChange> {
+        if (changes.isEmpty()) return emptyList()
+        val permits = Semaphore(MAX_HYDRATION_CONCURRENCY)
+        return coroutineScope {
+            changes.map { record ->
+                async { permits.withPermit { change(record) } }
+            }.awaitAll()
         }
     }
 
@@ -339,6 +362,7 @@ class SyncRepository(
             "state",
         )
         private const val OBJECT_LABEL_DEFINITION = "label_definition"
+        private const val MAX_HYDRATION_CONCURRENCY = 8
         private const val BATCH_LIMIT = 100
     }
 }

@@ -358,6 +358,43 @@ class SyncRepositoryTest {
     }
 
     @Test
+    fun hydrationIsBoundedParallelAndPreservesRecordOrder() = runBlocking {
+        val ids = (1L..20L).toList()
+        val inFlight = java.util.concurrent.atomic.AtomicInteger()
+        val maxInFlight = java.util.concurrent.atomic.AtomicInteger()
+        fun event(id: Long) =
+            """{"id":$id,"subscription_id":3,"seq":4,"first_seen_at":"2026-11-03T00:00:00Z","rev":1,"deleted":false}"""
+        fun detail(id: Long) =
+            """{"id":$id,"subscription_id":3,"feed_id":5,"seq":4,"first_seen_at":"2026-11-03T00:00:00Z",""" +
+                """"title":"Headline $id","url":"https://news.test/article/$id","author":"Author","rev":1,"deleted":false}"""
+        val engine = engine()
+        val api = api { request ->
+            when {
+                request.url.encodedPath.startsWith("/v1/entries/") -> {
+                    val id = request.url.encodedPath.removePrefix("/v1/entries/").toLong()
+                    val now = inFlight.incrementAndGet()
+                    maxInFlight.accumulateAndGet(now) { seen, observed -> maxOf(seen, observed) }
+                    Thread.sleep(20)
+                    inFlight.decrementAndGet()
+                    200 to detail(id)
+                }
+                request.url.queryParameter("rev") == "0" -> {
+                    val records = ids.mapIndexed { index, id ->
+                        """{"rev":${index + 1},"type":"entry.updated","payload":{"entry":${event(id)}}}"""
+                    }.joinToString(",")
+                    200 to """{"changes":[$records],"next":{"generation":"g1","rev":20},"next_cursor":"g1:20"}"""
+                }
+                else -> 200 to """{"changes":[],"next":{"generation":"g1","rev":20},"next_cursor":"g1:20"}"""
+            }
+        }
+        SyncRepository(api, engine).pull()
+        assertEquals("entries must keep change record order", ids, engine.snapshot().entries.map { it.id })
+        assertEquals(20, engine.snapshot().entries.size)
+        assertTrue("hydration must overlap requests (max in flight ${maxInFlight.get()})", maxInFlight.get() > 1)
+        assertTrue("hydration must stay within the bound (max in flight ${maxInFlight.get()})", maxInFlight.get() <= 8)
+    }
+
+    @Test
     fun subscriptionChangeKeepsSiblingNativeProjection() = runBlocking {
         val engine = engine()
         val payload = """{"subscription":{"id":3,"title":"Weekly","cadence":"week","rev":1},"object":{"kind":"subscription","id":3,"name":"Weekly","rev":1}}"""
