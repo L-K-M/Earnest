@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/L-K-M/Earnest/internal/api"
+	"github.com/L-K-M/Earnest/internal/clientip"
 	"github.com/L-K-M/Earnest/internal/compat/greader"
 	"github.com/L-K-M/Earnest/internal/config"
 	"github.com/L-K-M/Earnest/internal/fetcher"
@@ -38,6 +39,10 @@ const (
 	retentionInterval = 24 * time.Hour
 	deliveryInterval  = time.Second
 	deliveryBatchSize = 100
+	// pipelineIdleMax bounds how rarely the pipeline worker rescans for
+	// pending work once a pass finds none. Its pending query probes the whole
+	// entries table, so idle passes must not run every second.
+	pipelineIdleMax = 30 * time.Second
 )
 
 // feedProber forwards Probe to the fetcher. service.New requires a prober
@@ -142,7 +147,7 @@ func serve() error {
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           api.SecurityHeaders(buildMuxWithWeb(cfg.BaseURL, cfg.ContentOrigin, svc, auth, logger, registry, content, publicKey)),
+		Handler:           api.SecurityHeaders(clientip.Middleware(clientip.WithProxies(cfg.TrustedProxies), buildMuxWithWeb(cfg.BaseURL, cfg.ContentOrigin, svc, auth, logger, registry, content, publicKey))),
 		ReadHeaderTimeout: 5 * time.Second,
 		BaseContext:       func(net.Listener) context.Context { return ctx },
 	}
@@ -161,18 +166,19 @@ func serve() error {
 
 	var workers sync.WaitGroup
 	for _, job := range []struct {
-		name string
-		run  func(context.Context, int) (int, error)
+		name    string
+		idleMax time.Duration
+		run     func(context.Context, int) (int, error)
 	}{
-		{"notification delivery", svc.DeliverNotifications},
-		{"webhook delivery", svc.RunWebhookJobs},
-		{"rule jobs", svc.RunRuleJobs},
-		{"edition jobs", svc.RunEditionJobs},
+		{"notification delivery", deliveryInterval, svc.DeliverNotifications},
+		{"webhook delivery", deliveryInterval, svc.RunWebhookJobs},
+		{"rule jobs", deliveryInterval, svc.RunRuleJobs},
+		{"edition jobs", deliveryInterval, svc.RunEditionJobs},
 	} {
-		workers.Go(func() { runDelivery(ctx, logger, job.name, job.run) })
+		workers.Go(func() { runDelivery(ctx, logger, job.name, job.run, job.idleMax) })
 	}
 	if router.Enabled(llm.TaskEmbed) || router.Enabled(llm.TaskClassify) {
-		workers.Go(func() { runDelivery(ctx, logger, "internal pipeline", svc.RunPipeline) })
+		workers.Go(func() { runDelivery(ctx, logger, "internal pipeline", svc.RunPipeline, pipelineIdleMax) })
 	}
 	// Stop and join delivery before the deferred database close.
 	defer workers.Wait()
@@ -306,21 +312,51 @@ func pruneRetention(ctx context.Context, svc *service.Service, retention time.Du
 	}
 }
 
+// nextIdle paces delivery passes: a pass that did work polls again eagerly,
+// and an idle pass backs off up to idleMax so a "nothing pending" pass cannot
+// rescan every second.
+func nextIdle(current time.Duration, worked bool, idleMax time.Duration) time.Duration {
+	if worked {
+		return deliveryInterval
+	}
+	if idleMax <= deliveryInterval {
+		return deliveryInterval
+	}
+	if current < deliveryInterval {
+		return deliveryInterval
+	}
+	next := current * 2
+	if next > idleMax || next < current {
+		return idleMax
+	}
+	return next
+}
+
 // runDelivery bounds each pass and never overlaps attempts within a worker.
-func runDelivery(ctx context.Context, logger *slog.Logger, name string, run func(context.Context, int) (int, error)) {
-	ticker := time.NewTicker(deliveryInterval)
-	defer ticker.Stop()
+func runDelivery(ctx context.Context, logger *slog.Logger, name string, run func(context.Context, int) (int, error), idleMax time.Duration) {
+	idle := deliveryInterval
+	timer := time.NewTimer(idle)
+	defer timer.Stop()
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		if _, err := run(ctx, deliveryBatchSize); err != nil && ctx.Err() == nil {
+		n, err := run(ctx, deliveryBatchSize)
+		if err != nil && ctx.Err() == nil {
 			logger.Error(name+" failed", "error", err)
 		}
+		idle = nextIdle(idle, n > 0, idleMax)
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(idle)
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
 		}
 	}
 }

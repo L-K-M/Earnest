@@ -51,6 +51,57 @@ func TestSubscribeDeduplicatesDefaultPorts(t *testing.T) {
 	}
 }
 
+// Resubscribing with credentials must not stack a second subscription on a
+// parallel feed row: the existing subscription rebinds to the user's own
+// credential-bearing feed, the same conversion UpdateSubscription performs.
+func TestSubscribeSameURLWithCredentials(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	f.s.prober = &subscriptionsProber{}
+	ctx := context.Background()
+	first, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/dup", SubscribeOptions{OpID: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	creds := &FeedCredentials{Username: "reader", Password: "very-secret"}
+	second, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/dup", SubscribeOptions{OpID: "second", Credentials: creds})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID != first.ID || !second.Private || second.FeedID == first.FeedID {
+		t.Fatalf("credentials did not rebind the existing subscription: %+v -> %+v", first, second)
+	}
+	var subs int
+	if err := f.db.Pool().QueryRow(ctx, `SELECT count(*) FROM subscriptions s JOIN feeds f ON f.id=s.feed_id WHERE s.user_id=$1 AND s.deleted_at IS NULL AND f.url='https://feeds.test/dup'`, f.a.UserID).Scan(&subs); err != nil || subs != 1 {
+		t.Fatalf("subscriptions for URL: %d %v", subs, err)
+	}
+	var feeds int
+	if err := f.db.Pool().QueryRow(ctx, "SELECT count(*) FROM feeds WHERE url='https://feeds.test/dup'").Scan(&feeds); err != nil || feeds != 2 {
+		t.Fatalf("feed rows for URL: %d %v", feeds, err)
+	}
+	var envelope []byte
+	if err := f.db.Pool().QueryRow(ctx, "SELECT credentials_encrypted FROM feeds WHERE id=$1", second.FeedID).Scan(&envelope); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := f.s.openCredentials(envelope)
+	if err != nil || decoded.Password != creds.Password {
+		t.Fatal("credentials not bound to private feed", err)
+	}
+	// Rotated credentials on the bound feed keep the same subscription.
+	rotated := &FeedCredentials{Username: "reader", Password: "rotated"}
+	third, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/dup", SubscribeOptions{OpID: "third", Credentials: rotated})
+	if err != nil || third.ID != first.ID || third.FeedID != second.FeedID {
+		t.Fatalf("rotated credentials changed binding: %+v %v", third, err)
+	}
+	if err := f.db.Pool().QueryRow(ctx, "SELECT credentials_encrypted FROM feeds WHERE id=$1", second.FeedID).Scan(&envelope); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err = f.s.openCredentials(envelope)
+	if err != nil || decoded.Password != rotated.Password {
+		t.Fatal("credentials not rotated", err)
+	}
+	coreCheckGapless(t, f.db, f.a.UserID)
+}
+
 func TestRebindPreservesCanonicalFeedMetadata(t *testing.T) {
 	template := storetest.NewTemplate(t)
 	for _, private := range []bool{false, true} {
@@ -165,7 +216,7 @@ func TestSubscriptions(t *testing.T) {
 			t.Fatal("get subscription", got, err)
 		}
 		listed, err := f.s.Subscriptions(ctx, f.a)
-		if err != nil || len(listed) != 3 {
+		if err != nil || len(listed) != 2 {
 			t.Fatal("list subscriptions", listed, err)
 		}
 		if _, err := f.s.Subscription(ctx, other, sub.ID); !errors.Is(err, ErrNotFound) {
@@ -324,8 +375,17 @@ func TestSubscriptions(t *testing.T) {
 		if err != nil || len(first) != 3 {
 			t.Fatal("export", first, err)
 		}
-		if _, err := f.s.ImportOPML(context.Background(), f.a, input); err != nil {
+		repeat, err := f.s.ImportOPML(context.Background(), f.a, input)
+		if err != nil {
 			t.Fatal(err)
+		}
+		for _, result := range repeat {
+			if result.Subscription != nil && result.Error != "" {
+				t.Fatal("repeat import errored:", result.Error)
+			}
+			if result.Subscription != nil && result.Deferred {
+				t.Fatal("repeat import marked an existing feed deferred")
+			}
 		}
 		second, err := f.s.ExportOPML(context.Background(), f.a)
 		b1, _ := json.Marshal(first)
@@ -345,6 +405,167 @@ func TestSubscriptions(t *testing.T) {
 		}
 		coreCheckGapless(t, f.db, f.a.UserID)
 	})
+	t.Run("opml_chunked_import_keeps_siblings_after_a_failure", func(t *testing.T) {
+		f := newCoreFixture(t, template)
+		input := make([]OPMLOutline, opmlChunkSize*2+10)
+		for i := range input {
+			input[i] = OPMLOutline{Title: fmt.Sprintf("Chunk feed %d", i), XMLURL: fmt.Sprintf("https://chunk.test/%d", i)}
+		}
+		input[opmlChunkSize].XMLURL = "file:///secret"
+		results, err := f.s.ImportOPML(context.Background(), f.a, input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(results) != len(input) {
+			t.Fatalf("results=%d want %d", len(results), len(input))
+		}
+		if results[opmlChunkSize].Error == "" {
+			t.Fatal("bad outline did not report an error")
+		}
+		for i, result := range results {
+			if i == opmlChunkSize {
+				continue
+			}
+			if result.Subscription == nil || !result.Deferred {
+				t.Fatalf("outline %d not subscribed: %+v", i, result)
+			}
+		}
+		subs, err := f.s.Subscriptions(context.Background(), f.a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		imported := 0
+		for _, sub := range subs {
+			if sub.ID != f.subscription {
+				imported++
+			}
+		}
+		if imported != len(input)-1 {
+			t.Fatalf("imported=%d want %d", imported, len(input)-1)
+		}
+		coreCheckGapless(t, f.db, f.a.UserID)
+	})
+	t.Run("opml_folder_at_chunk_boundary_parents_next_chunk_children", func(t *testing.T) {
+		f := newCoreFixture(t, template)
+		input := make([]OPMLOutline, opmlChunkSize-1)
+		for i := range input {
+			input[i] = OPMLOutline{Title: fmt.Sprintf("Boundary feed %d", i), XMLURL: fmt.Sprintf("https://boundary.test/%d", i)}
+		}
+		folder := OPMLOutline{Title: "Boundary folder"}
+		for i := 0; i < 3; i++ {
+			folder.Outlines = append(folder.Outlines, OPMLOutline{Title: fmt.Sprintf("Child %d", i), XMLURL: fmt.Sprintf("https://boundary.test/child/%d", i)})
+		}
+		input = append(input, folder)
+		results, err := f.s.ImportOPML(context.Background(), f.a, input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		folderIdx := opmlChunkSize - 1
+		if results[folderIdx].Folder == nil {
+			t.Fatal("boundary folder not created")
+		}
+		for i := folderIdx + 1; i < folderIdx+4; i++ {
+			if results[i].Subscription == nil || results[i].Subscription.FolderID != results[folderIdx].Folder.ID {
+				t.Fatalf("child %d not placed in boundary folder: %+v", i, results[i])
+			}
+		}
+		coreCheckGapless(t, f.db, f.a.UserID)
+	})
+}
+
+func TestSubscribeBackfillBoundsLargeFeed(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	f.s.prober = &subscriptionsProber{}
+	ctx := context.Background()
+	feed := entriesTestFeed(t, f.db, "https://feeds.test/large", 0)
+	recent := f.s.now().Add(-time.Hour)
+	old := f.s.now().Add(-(bootstrapWindow + 24*time.Hour))
+	// Five entries older than the bootstrap window, then more in-window
+	// entries than the backfill bound: the covered set must be the newest
+	// in-window seqs, with the oldest seqs of each group left unstamped.
+	const total = subscriptionBackfillLimit + 10
+	if _, err := f.db.Pool().Exec(ctx, `INSERT INTO entries(feed_id,seq,identity_hash,first_seen_at,published_at,title)
+SELECT $1,base+g,decode(md5('bf-'||g)||md5(g||'-bf'),'hex'),CASE WHEN g<=5 THEN $3::timestamptz ELSE $2::timestamptz END,CASE WHEN g>$4-3 THEN $2::timestamptz END,'entry-'||g
+FROM (SELECT coalesce(max(seq),0) AS base FROM entries) b,generate_series(1,$4) g`, feed, recent, old, total); err != nil {
+		t.Fatal(err)
+	}
+	sub, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/large", SubscribeOptions{OpID: "large-feed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stamped, events, minSeq, maxSeq int64
+	if err := f.db.Pool().QueryRow(ctx, `SELECT count(*),coalesce(min(e.seq),0),coalesce(max(e.seq),0) FROM entry_revisions er JOIN entries e ON e.id=er.entry_id WHERE er.user_id=$1`, f.a.UserID).Scan(&stamped, &minSeq, &maxSeq); err != nil {
+		t.Fatal(err)
+	}
+	var base int64
+	if err := f.db.Pool().QueryRow(ctx, "SELECT min(seq) FROM entries WHERE feed_id=$1", feed).Scan(&base); err != nil {
+		t.Fatal(err)
+	}
+	if stamped != subscriptionBackfillLimit || minSeq != base+10 || maxSeq != base+total-1 {
+		t.Fatalf("backfill stamps %d over seq %d..%d, want %d over %d..%d", stamped, minSeq, maxSeq, subscriptionBackfillLimit, base+10, base+total-1)
+	}
+	if err := f.db.Pool().QueryRow(ctx, "SELECT count(*) FROM changes WHERE user_id=$1 AND type='entry.created'", f.a.UserID).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if events != subscriptionBackfillLimit {
+		t.Fatalf("entry.created events = %d, want %d", events, subscriptionBackfillLimit)
+	}
+	// The river still surfaces the whole in-window backlog; the five the
+	// bound skipped appear among the stamped ones at rev 0.
+	river, err := f.s.Entries(ctx, f.a, EntryFilter{View: ViewRiver, SubscriptionID: sub.ID, Limit: 100})
+	if err != nil || len(river) != 100 {
+		t.Fatalf("river: %d entries %v", len(river), err)
+	}
+	var unstamped, stampedRiver int
+	for _, e := range river {
+		if e.Rev == 0 {
+			unstamped++
+		} else {
+			stampedRiver++
+		}
+	}
+	if unstamped != 5 || stampedRiver != 95 {
+		t.Fatalf("river revs: %d unstamped %d stamped, want 5 and 95", unstamped, stampedRiver)
+	}
+	// Entries the bound skipped still list through the history view at rev 0.
+	history, err := f.s.Entries(ctx, f.a, EntryFilter{View: ViewAll, SubscriptionID: sub.ID, BeforeSeq: uint64(base + 10)})
+	if err != nil || len(history) != 10 {
+		t.Fatalf("history: %+v %v", history, err)
+	}
+	for _, e := range history {
+		if e.Rev != 0 {
+			t.Fatalf("unstamped entry %d rev = %d", e.ID, e.Rev)
+		}
+	}
+	// Bootstrap still pages every in-window entry, unstamped ones at rev 0.
+	var items, zeroRev int
+	cursor := BootstrapRequest{Kind: BootstrapEntries, Limit: 1000}
+	for {
+		page, err := f.s.Bootstrap(ctx, f.a, cursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, body := range page.Items {
+			var entry struct {
+				Rev uint64 `json:"rev"`
+			}
+			if err := json.Unmarshal(body, &entry); err != nil {
+				t.Fatal(err)
+			}
+			items++
+			if entry.Rev == 0 {
+				zeroRev++
+			}
+		}
+		if !page.HasMore {
+			break
+		}
+		cursor.AfterID = page.NextID
+	}
+	if items != total-5 || zeroRev != 5 {
+		t.Fatalf("bootstrap: %d items %d unstamped, want %d items 5 unstamped", items, zeroRev, total-5)
+	}
+	coreCheckGapless(t, f.db, f.a.UserID)
 }
 
 func TestSubscriptionValidation(t *testing.T) {

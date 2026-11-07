@@ -27,13 +27,14 @@ clients live in `clients/mac` and `clients/android`.
 | Run the stack | `docker compose up -d --build` → `localhost:8080/healthz` |
 | Update a deployment | `./update.sh [branch]` |
 | Tag a release | `scripts/release.sh X.Y.Z [--push]` (see `CICD.md`) |
+| Regenerate icons and wordmark images | `swift scripts/brand-assets.swift` on macOS (see `media-sources/README.md`) |
 
 ## Layout and stack
 
 - Go 1.27, one binary at `cmd/earnest`. `CGO_ENABLED=0`, `log/slog` only.
   Packages live under `internal/`; the map and layering rules are in
   `docs/architecture.md`.
-- `Dockerfile`: `golang:1.27-alpine` → `alpine:3.22`, version/revision stamped
+- `Dockerfile`: `golang:1.27-alpine` → `alpine:3.24`, version/revision stamped
   by `-ldflags` at build time.
 - `compose.yaml`: `earnest` (`image:` + `build:` + `pull_policy: build`) and
   `postgres` (`pgvector/pgvector:pg18`).

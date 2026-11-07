@@ -258,4 +258,101 @@ class SyncEngineTest {
         }
         assertNull(engine.snapshot().outbox.firstOrNull())
     }
+
+    @Test
+    fun indexedLookupsMatchLinearScan() {
+        // entry(), state() and states() read per-snapshot indexes instead of
+        // rescanning the entry and state lists on every call. The reference
+        // below keeps the old linear scans to prove the results agree across
+        // hundreds of entries, including deleted and unknown ids.
+        val entries = (1L..600L).map {
+            CachedEntry(it, subscriptionId = it % 5 + 1, seq = it, rev = it, deleted = it % 97 == 0L)
+        }
+        val states = entries.filter { it.id % 3L == 0L }.flatMap {
+            listOf(
+                State(1, it.id, register(JsonPrimitive("seen"), 2), register(JsonPrimitive("done"), 3), register(JsonPrimitive(true), 4), 5),
+                State(9, it.id, register(JsonPrimitive("unseen"), 1), register(JsonPrimitive("later"), 1), register(JsonPrimitive(false), 1), 2),
+            )
+        }
+        val objects = (1L..5L).map { SyncObject("subscription", it, folderId = it % 2 + 1, rev = 1) }
+        val outbox = listOf(
+            Pending(write = write("w-seen", "unseen").copy(entryId = 6)),
+            Pending(write = write("w-shelf", "later").copy(entryId = 8, register = "shelf")),
+            Pending(write = write("w-kept", "false").copy(entryId = 10, register = "kept", value = JsonPrimitive(false))),
+            Pending(write = write("w-gone", "unseen").copy(entryId = 97)),
+            Pending(write = write("w-missing", "seen").copy(entryId = 9999)),
+            Pending(range = RangeWrite(write("r-all", "seen"), Scope("all"), 250)),
+            Pending(range = RangeWrite(write("r-subs", "seen"), Scope("subscriptions", listOf(2, 4)), 400)),
+            Pending(range = RangeWrite(write("r-folder", "seen"), Scope("folder", listOf(2)), 500)),
+        )
+        val store = Store(SyncSnapshot(Revision("g1", 9), entries = entries, states = states, objects = objects, outbox = outbox))
+        val snapshot = store.data
+        val engine = SyncEngine(store)
+
+        fun scannedState(principal: Long, entryId: Long): State {
+            var result = snapshot.states.find { it.principal == principal && it.entryId == entryId }
+                ?: SyncEngine.initialState(principal, entryId)
+            val entry = snapshot.entries.find { it.id == entryId && !it.deleted } ?: return result
+            fun inRange(range: RangeWrite): Boolean {
+                if (entry.seq > range.throughSeq) return false
+                return when (range.scope.kind) {
+                    "all" -> true
+                    "subscriptions" -> range.scope.ids.orEmpty().contains(entry.subscriptionId)
+                    "folder" -> snapshot.objects.any {
+                        it.kind == "subscription" && !it.deleted && it.id == entry.subscriptionId &&
+                            range.scope.ids.orEmpty().contains(it.folderId)
+                    }
+                    else -> false
+                }
+            }
+            for (item in snapshot.outbox) {
+                val pending = item.range
+                if (pending != null) {
+                    val operation = pending.write
+                    if (operation.principal == principal && inRange(pending)) {
+                        result = result.copy(seen = result.seen.copy(value = JsonPrimitive("seen")))
+                    }
+                    continue
+                }
+                val operation = item.write ?: continue
+                if (operation.principal != principal || operation.entryId != entryId) continue
+                result = when (operation.register) {
+                    "seen" -> result.copy(
+                        seen = result.seen.copy(value = operation.value),
+                        shelf = if (operation.value == JsonPrimitive("unseen") && result.shelf.value == JsonPrimitive("done")) {
+                            result.shelf.copy(value = JsonPrimitive("none"))
+                        } else {
+                            result.shelf
+                        },
+                    )
+                    "shelf" -> result.copy(shelf = result.shelf.copy(value = operation.value))
+                    "kept" -> result.copy(kept = result.kept.copy(value = operation.value))
+                    else -> result
+                }
+            }
+            return result
+        }
+
+        val principals = listOf(1L, 9L, 42L)
+        for (id in 0L..entries.size + 2L) {
+            assertEquals(snapshot.entries.find { it.id == id }, engine.entry(id))
+            for (principal in principals) {
+                assertEquals("state($principal, $id)", scannedState(principal, id), engine.state(principal, id))
+            }
+        }
+
+        val live = entries.filterNot { it.deleted }
+        for (principal in principals) {
+            val bulk = engine.states(principal)
+            assertEquals(live.map { it.id }.toSet(), bulk.keys)
+            for (entry in live) {
+                assertEquals("states($principal)[${entry.id}]", scannedState(principal, entry.id), bulk.getValue(entry.id))
+            }
+        }
+
+        // The index follows committed snapshots rather than the initial one.
+        engine.mergeEntry(CachedEntry(700, subscriptionId = 1, seq = 700, rev = 1))
+        assertEquals(700L, engine.entry(700)?.id)
+        assertTrue(engine.states(1).containsKey(700))
+    }
 }

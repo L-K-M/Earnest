@@ -14,6 +14,8 @@ tailscale serve status
 
 Set `EARNEST_BASE_URL=https://<nas>.<tailnet>.ts.net` and `EARNEST_CONTENT_ORIGIN=https://<nas>.<tailnet>.ts.net:8443` in `.env`, substituting the actual name shown by Tailscale, then run `docker compose up -d`. Both URLs must be reachable from your browser. A different port makes a different browser origin: article HTML and images run on the content origin so untrusted publisher content is isolated from the app. Do not proxy both listeners onto the same origin. See [Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/serve) and [web](web.md).
 
+Login rate limits key on the client address. Under Compose, connections from `tailscale serve` reach the container from the Docker network gateway rather than loopback, so every browser would share one rate-limit bucket and a few failed logins would lock everyone out. Set `EARNEST_TRUSTED_PROXIES` to that gateway, which `docker network inspect earnest_default --format '{{(index .IPAM.Config 0).Gateway}}'` prints (adjust the network name if your Compose project is not called `earnest`). Earnest then reads the client from the `X-Forwarded-For` header the proxy appends; connections from any other address keep their own socket address and their forwarding headers are ignored.
+
 Web Push and UnifiedPush need stable VAPID keys. Compose does not mount the generated key file persistently by default, so supply a persistent mounted key file through a Compose override, or provide the explicit key pair in `.env`; back it up securely. See [configuration](configuration.md).
 
 ## Users and clients

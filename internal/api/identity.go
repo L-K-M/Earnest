@@ -3,10 +3,10 @@ package api
 import (
 	"context"
 	"errors"
-	"net"
 	"net/http"
 	"time"
 
+	"github.com/L-K-M/Earnest/internal/clientip"
 	"github.com/L-K-M/Earnest/internal/service"
 )
 
@@ -59,9 +59,11 @@ func (s *server) cookie(value string, expires time.Time) *http.Cookie {
 
 func (s *server) identityRoutes() {
 	register(s, http.MethodPost, "/v1/session/login", "session-login", publicAccess, func(ctx context.Context, in *bodyInput[loginBody]) (loginResult, error) {
-		client, _, err := net.SplitHostPort(request(ctx).RemoteAddr)
-		if err != nil {
-			client = request(ctx).RemoteAddr
+		// Behind a same-host proxy the socket address is the proxy's; use the
+		// forwarded client or a per-credential bucket, never one shared bucket.
+		client, ok := clientip.Key(request(ctx))
+		if !ok {
+			client = "user:" + in.Body.Username
 		}
 		a, err := s.auth.Authenticate(ctx, in.Body.Username, in.Body.Password, client)
 		if err != nil {
