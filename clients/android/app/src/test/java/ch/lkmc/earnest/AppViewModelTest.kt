@@ -34,6 +34,7 @@ class AppViewModelTest {
     private val app get() = ApplicationProvider.getApplicationContext<Application>()
     private val identity = AccountIdentity("https://nas.test", 1, 1)
     private val calls = CopyOnWriteArrayList<String>()
+    private val contentUrlQueries = CopyOnWriteArrayList<String?>()
     private class Sessions(@Volatile var value: AuthenticatedSession?) : SessionStore {
         @Volatile var onRead: (() -> Unit)? = null
         override fun current(): AuthenticatedSession? {
@@ -52,7 +53,9 @@ class AppViewModelTest {
     private fun api() = EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { chain ->
         val path = chain.request().url.encodedPath
         calls += path
+        if (path.endsWith("/content-url")) contentUrlQueries += chain.request().url.query
         val body = when (path) {
+            "/v1/entries/2/content-url" -> """{"url":"https://content.test/signed","expires_at":"2026-11-03T01:00:00Z"}"""
             "/v1/settings" -> """{"today_decay_days":2,"rev":0}"""
             "/v1/changes" -> """{"changes":[],"next":{"generation":"g1","rev":0},"next_cursor":"g1:0"}"""
             "/v1/activity/agent-changes" -> """[{"id":7,"principal_id":9,"principal_name":"Morning Agent","action":"state.updated","target":{"entry_id":2,"register":"shelf"},"before":null,"after":{"shelf":{"value":"done"}},"generation":"g1","created_at":"${java.time.Instant.now()}","next_action":"revert"}]"""
@@ -68,6 +71,15 @@ class AppViewModelTest {
         val model = AppViewModel(app, Sessions(AuthenticatedSession(identity, "token"))) { api() }
         withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
         return model
+    }
+
+    @Test fun agentSelectedEntriesOpenWithClickToLoadImages() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        assertEquals("https://content.test/signed", model.openEntry(2)?.url)
+        assertEquals("https://content.test/signed", model.openEntry(2, agentSelected = true)?.url)
+        // Your own browsing gets proxied images (the server default); an
+        // agent-surfaced entry must not load remote images automatically.
+        assertEquals(listOf<String?>(null, "mode=click"), contentUrlQueries.toList())
     }
 
     @Test fun retentionRecoveryRejectionsReachTheUi() = runBlocking(Dispatchers.IO) {

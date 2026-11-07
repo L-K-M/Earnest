@@ -413,8 +413,13 @@ class AppViewModel internal constructor(
     /**
      * Fetches the signed content URL and caches the readable content. Returns
      * null when the server cannot be reached and nothing is cached.
+     *
+     * [agentSelected] marks an entry an agent surfaced (a notification, a deep
+     * link or an agent-change notice). Its images wait for a click so that
+     * automatic image loading cannot tell a publisher which entry an agent
+     * chose (docs/research/llm.md, "Agent selection stays unobservable").
      */
-    suspend fun openEntry(entryId: Long): ContentUrlResult? = withContext(Dispatchers.IO) {
+    suspend fun openEntry(entryId: Long, agentSelected: Boolean = false): ContentUrlResult? = withContext(Dispatchers.IO) {
         val cache = account ?: return@withContext null
         val session = activeSession ?: return@withContext null
         if (!isCurrent(session, cache)) return@withContext null
@@ -433,7 +438,7 @@ class AppViewModel internal constructor(
                 ),
             )
         }
-        val url = runCatching { api.contentUrl(entryId) }.getOrNull()
+        val url = runCatching { api.contentUrl(entryId, mode = if (agentSelected) "click" else null) }.getOrNull()
         val fallback = content?.html ?: cached?.html
         if (!isCurrent(session, cache)) return@withContext null
         when {

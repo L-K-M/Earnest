@@ -85,6 +85,9 @@ services:
       EARNEST_BASE_URL: "${EARNEST_BASE_URL:-http://localhost:8080}"
       EARNEST_CONTENT_ORIGIN: "${EARNEST_CONTENT_ORIGIN:-http://localhost:8081}"
       EARNEST_OUTBOUND_ALLOW_PRIVATE: "${EARNEST_OUTBOUND_ALLOW_PRIVATE:-}"
+      # Proxies (beyond loopback) whose X-Forwarded-For names the client for
+      # login rate limits; behind tailscale serve, the Docker network gateway.
+      EARNEST_TRUSTED_PROXIES: "${EARNEST_TRUSTED_PROXIES:-}"
       EARNEST_FETCH_MIN_INTERVAL: "${EARNEST_FETCH_MIN_INTERVAL:-15m}"
       EARNEST_FETCH_MAX_INTERVAL: "${EARNEST_FETCH_MAX_INTERVAL:-24h}"
       EARNEST_RETENTION_DAYS: "${EARNEST_RETENTION_DAYS:-90}"

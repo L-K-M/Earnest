@@ -31,6 +31,7 @@ Copy `.env.example` to `.env` for Compose. Compose reads it for interpolation an
 | `EARNEST_BASE_URL` | `http://localhost:8080` | Canonical app origin, with no path. | Set the browser-facing HTTPS origin. |
 | `EARNEST_CONTENT_ORIGIN` | `http://localhost:8081` | Separate origin for sandboxed content. | Set the browser-facing content HTTPS origin; it must differ from the app origin. |
 | `EARNEST_OUTBOUND_ALLOW_PRIVATE` | Empty | Comma-separated exact `host:port` private destinations allowed for outbound requests. | Reach a private model server, ntfy or other approved destination. |
+| `EARNEST_TRUSTED_PROXIES` | Empty (loopback only) | Comma-separated IP addresses and CIDR prefixes of reverse proxies, in addition to loopback, whose `X-Forwarded-For` identifies the client for login rate limits. | Set the Docker network gateway when `tailscale serve` or another proxy on the Compose host fronts Earnest, so failed logins lock out one client instead of everyone. |
 
 ## Fetching and retention
 

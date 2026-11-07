@@ -26,11 +26,14 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -43,6 +46,7 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -134,7 +138,8 @@ internal fun EarnestApp(initialEntry: Long?, notificationId: Long?) {
     }
     EarnestTheme(theme) {
         if (!loggedIn) {
-            LoginScreen(onLoggedIn = model::onLoggedIn)
+            // The login has no scaffold, so a surface gives it the theme's background and text colours.
+            Surface(Modifier.fillMaxSize()) { LoginScreen(onLoggedIn = model::onLoggedIn) }
             return@EarnestTheme
         }
         val state by model.state.collectAsState()
@@ -178,6 +183,10 @@ private fun MainScaffold(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val selected = navigator.currentDestination?.contentKey
+    // Entries reached through an agent's output (a notification, a deep link
+    // of unknown origin, an agent-change notice) open with click-to-load
+    // images; see AppViewModel.openEntry.
+    val agentSelected = remember { mutableSetOf<Long>() }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(lifecycleOwner) {
@@ -189,18 +198,24 @@ private fun MainScaffold(
         }
     }
     LaunchedEffect(initialEntry) {
-        initialEntry?.let { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, it) }
+        initialEntry?.let {
+            agentSelected += it
+            navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, it)
+        }
     }
     LaunchedEffect(notificationId, state.accountKey) {
         if (state.accountKey == null) return@LaunchedEffect
         val id = notificationId ?: return@LaunchedEffect
-        model.notificationEntry(id)?.let { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, it) }
+        model.notificationEntry(id)?.let {
+            agentSelected += it
+            navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, it)
+        }
     }
     LaunchedEffect(selected, state.accountKey) {
         reader.load(selected, state.accountKey) { id ->
             if (model.loadEntry(id) == null) throw java.io.IOException("This entry is no longer available.")
             model.markSeen(id)
-            model.openEntry(id)
+            model.openEntry(id, agentSelected = id in agentSelected)
         }
     }
     LaunchedEffect(view, state.accountKey) {
@@ -312,6 +327,10 @@ private fun MainScaffold(
                                     onOpen = { entryId ->
                                         scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
                                     },
+                                    onOpenAgentSelected = { entryId ->
+                                        agentSelected += entryId
+                                        scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
+                                    },
                                     onLater = { id -> model.later(id) { undo(id, SwipeTarget.LATER) } },
                                     onDone = { id -> model.done(id) { undo(id, SwipeTarget.DONE) } },
                                     onSeen = model::markSeen,
@@ -355,6 +374,7 @@ private fun MainScaffold(
                                         else -> Reader(
                                             url = content.url,
                                             cachedHtml = content.cachedHtml,
+                                            theme = theme,
                                             modifier = Modifier.fillMaxSize(),
                                         )
                                     }
@@ -390,6 +410,7 @@ private fun EarnestTopBar(
     onRequestNotifications: () -> Unit,
 ) {
     var themeOpen by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
     TopAppBar(
         title = { Text(title) },
         actions = {
@@ -408,6 +429,22 @@ private fun EarnestTopBar(
                 }
             }
             TextButton(onClick = { themeOpen = true }) { Text("Theme") }
+            // The menu anchors to this Box, beside the button rather than
+            // inside the button's content slot.
+            Box {
+                IconButton(onClick = { menuOpen = true }) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = "More options")
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Sign out") },
+                        onClick = {
+                            menuOpen = false
+                            model.logout()
+                        },
+                    )
+                }
+            }
         },
     )
     if (themeOpen) {
@@ -492,6 +529,7 @@ private fun EntryListScreen(
     agentChangesError: String?,
     onRevert: (Long) -> Unit,
     onOpen: (Long) -> Unit,
+    onOpenAgentSelected: (Long) -> Unit,
     onLater: (Long) -> Unit,
     onDone: (Long) -> Unit,
     onSeen: (Long) -> Unit,
@@ -522,7 +560,7 @@ private fun EntryListScreen(
         }
         if (agentChanges.isNotEmpty() || agentChangesError != null) {
             item(key = "agent-changes") {
-                AgentChangesNotice("While you were out", agentChanges, entryTitles, agentChangesError, onOpen, onRevert)
+                AgentChangesNotice("While you were out", agentChanges, entryTitles, agentChangesError, onOpenAgentSelected, onRevert)
             }
         }
         items(entries, key = { it.id }) { entry ->
@@ -539,6 +577,10 @@ private fun EntryListScreen(
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
                     TextButton(onClick = { onUnkeep(entry.id) }) { Text("Unkeep") }
                 }
+            } else {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                    TextButton(onClick = { onKeep(entry.id) }) { Text("Keep") }
+                }
             }
         }
         item(key = "end") {
@@ -553,7 +595,7 @@ private fun EntryListScreen(
                 modifier = Modifier.fillMaxWidth().padding(24.dp),
             )
             if (sessionChanges.isNotEmpty() || agentChangesError != null) {
-                AgentChangesNotice("Agent changes this session", sessionChanges, entryTitles, agentChangesError, onOpen, onRevert)
+                AgentChangesNotice("Agent changes this session", sessionChanges, entryTitles, agentChangesError, onOpenAgentSelected, onRevert)
             }
         }
     }

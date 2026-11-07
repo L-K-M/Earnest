@@ -29,6 +29,7 @@ const (
 	envContentOrigin        = "EARNEST_CONTENT_ORIGIN"
 	envSecretKey            = "EARNEST_SECRET_KEY"
 	envOutboundAllowPrivate = "EARNEST_OUTBOUND_ALLOW_PRIVATE"
+	envTrustedProxies       = "EARNEST_TRUSTED_PROXIES"
 	envLogLevel             = "EARNEST_LOG_LEVEL"
 	envFetchMinInterval     = "EARNEST_FETCH_MIN_INTERVAL"
 	envFetchMaxInterval     = "EARNEST_FETCH_MAX_INTERVAL"
@@ -82,6 +83,10 @@ type Config struct {
 	// webhooks). Everything else private is denied at dial time.
 	OutboundAllowPrivate []string
 
+	// TrustedProxies lists reverse proxies, beyond loopback, whose
+	// X-Forwarded-For entries identify the client for login rate limits.
+	TrustedProxies []netip.Prefix
+
 	LogLevel         slog.Level
 	FetchMinInterval time.Duration
 	FetchMaxInterval time.Duration
@@ -112,10 +117,10 @@ func (c Config) LogValue() slog.Value { return slog.StringValue(c.String()) }
 func (c Config) String() string {
 	return fmt.Sprintf(
 		"http_addr=%s content_addr=%s database_url=%s base_url=%s content_origin=%s secret_key=%s "+
-			"outbound_allow_private=%s log_level=%s fetch_min_interval=%s "+
+			"outbound_allow_private=%s trusted_proxies=%s log_level=%s fetch_min_interval=%s "+
 			"fetch_max_interval=%s retention_days=%d",
 		c.HTTPAddr, c.ContentAddr, redactedValue, c.BaseURL, c.ContentOrigin, redactedValue,
-		strings.Join(c.OutboundAllowPrivate, ","), c.LogLevel,
+		strings.Join(c.OutboundAllowPrivate, ","), prefixList(c.TrustedProxies), c.LogLevel,
 		c.FetchMinInterval, c.FetchMaxInterval, c.RetentionDays)
 }
 
@@ -150,6 +155,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.OutboundAllowPrivate, err = loadAllowPrivate(); err != nil {
+		return Config{}, err
+	}
+	if cfg.TrustedProxies, err = loadTrustedProxies(); err != nil {
 		return Config{}, err
 	}
 	if cfg.LogLevel, err = loadLogLevel(); err != nil {
@@ -320,6 +328,45 @@ func loadAllowPrivate() ([]string, error) {
 		out = append(out, e)
 	}
 	return out, nil
+}
+
+// loadTrustedProxies parses a comma-separated list of IP addresses and CIDR
+// prefixes. An address is a single-host prefix.
+func loadTrustedProxies() ([]netip.Prefix, error) {
+	raw := envOr(envTrustedProxies, "")
+	if raw == "" {
+		return nil, nil
+	}
+	var out []netip.Prefix
+	for _, entry := range strings.Split(raw, ",") {
+		e := strings.TrimSpace(entry)
+		if e == "" {
+			return nil, fmt.Errorf("%s: empty entry in address list", envTrustedProxies)
+		}
+		if strings.Contains(e, "/") {
+			prefix, err := netip.ParsePrefix(e)
+			if err != nil {
+				return nil, fmt.Errorf("%s: invalid CIDR prefix %q", envTrustedProxies, e)
+			}
+			out = append(out, prefix.Masked())
+			continue
+		}
+		addr, err := netip.ParseAddr(e)
+		if err != nil || addr.Zone() != "" {
+			return nil, fmt.Errorf("%s: invalid IP address %q", envTrustedProxies, e)
+		}
+		addr = addr.Unmap()
+		out = append(out, netip.PrefixFrom(addr, addr.BitLen()))
+	}
+	return out, nil
+}
+
+func prefixList(prefixes []netip.Prefix) string {
+	parts := make([]string, len(prefixes))
+	for i, prefix := range prefixes {
+		parts[i] = prefix.String()
+	}
+	return strings.Join(parts, ",")
 }
 
 func loadLogLevel() (slog.Level, error) {

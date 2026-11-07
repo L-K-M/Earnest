@@ -38,6 +38,17 @@ type Config struct {
 	Metrics                  *metrics.Registry
 }
 
+const (
+	// maxExtractsPerFetch bounds full-text extraction within one pass. Each
+	// attempt is a bounded outbound GET, but a fresh subscription has one per
+	// item; without a cap the item loop can outlive the claim lease and a
+	// second worker claims the same feed. Skipped items stay unknown to
+	// KnownIdentities and are extracted on later passes.
+	maxExtractsPerFetch = 12
+	// leaseMargin keeps the item loop clear of the claim lease deadline.
+	leaseMargin = 30 * time.Second
+)
+
 // Fetcher coordinates retrieval and reporting.
 type Fetcher struct {
 	service Service
@@ -327,9 +338,6 @@ func (f *Fetcher) interval(item service.FeedToFetch, parsed *feed.Feed, status s
 		sort.Slice(dates, func(i, j int) bool { return dates[i].Before(dates[j]) })
 		if len(dates) > 1 {
 			d = dates[len(dates)-1].Sub(dates[0]) / time.Duration(len(dates)-1)
-			if d > time.Hour {
-				d = time.Hour
-			}
 		}
 	}
 	if status != service.FetchFailed && d >= time.Hour {
@@ -348,6 +356,19 @@ func (f *Fetcher) interval(item service.FeedToFetch, parsed *feed.Feed, status s
 func metadata(p *feed.Feed) *service.FeedMeta {
 	return &service.FeedMeta{Title: p.Title, SiteURL: p.SiteURL, IconURL: p.IconURL, Language: p.Language}
 }
+
+// itemBase returns the item link as a base URL for resolving relative content
+// URLs. Item links are publisher-controlled and can carry active schemes
+// (javascript:, data:), so only absolute http(s) links qualify; everything
+// else yields nil and relative content URLs are dropped.
+func itemBase(raw string) *url.URL {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil
+	}
+	return u
+}
+
 func (f *Fetcher) items(ctx context.Context, claim service.FeedToFetch, list []feed.Item) ([]service.IngestItem, error) {
 	known := map[string]bool{}
 	if claim.Extract == service.ExtractAlways && len(list) > 0 {
@@ -362,22 +383,59 @@ func (f *Fetcher) items(ctx context.Context, claim service.FeedToFetch, list []f
 		}
 	}
 	result := make([]service.IngestItem, 0, len(list))
+	// Extraction work stops at the smaller of a count budget and the claim
+	// lease deadline, so one pass can never run past its lease.
+	extractDeadline := time.Time{}
+	if !claim.LeaseUntil.IsZero() {
+		extractDeadline = claim.LeaseUntil.Add(-leaseMargin)
+	}
+	extractions := 0
 	for _, it := range list {
-		base, _ := url.Parse(it.URL)
+		base := itemBase(it.URL)
+		link := ""
+		if base != nil {
+			// Only absolute http(s) links reach a client that renders them as
+			// anchors; a stored active-scheme link is a stored attack.
+			link = strings.TrimSpace(it.URL)
+		} else if ref, err := url.Parse(strings.TrimSpace(it.URL)); err == nil && ref.Scheme == "" && (ref.Host != "" || ref.Path != "") {
+			// Relative item links are valid RSS/Atom. The parser resolves them
+			// against the feed base, but a feed with a broken base URI can still
+			// hand one over; resolve it against the fetch URL so the item keeps
+			// a usable link. Active-scheme values have a scheme and stay dropped;
+			// a blank, fragment-only or query-only reference names no resource
+			// and would otherwise resolve to the feed URL itself.
+			// Resolve against the URL actually fetched: after a permanent
+			// redirect that is FetchURL, not the canonical feed URL.
+			fetched := claim.FetchURL
+			if fetched == "" {
+				fetched = claim.URL
+			}
+			if feedBase := itemBase(fetched); feedBase != nil {
+				base = itemBase(feedBase.ResolveReference(ref).String())
+				if base != nil {
+					link = base.String()
+				}
+			}
+		}
 		content := it.ContentHTML
 		if content == "" {
 			content = it.SummaryHTML
 		}
 		doc, err := sanitize.Sanitize(base, content)
 		if err != nil {
-			return nil, fmt.Errorf("sanitize item: %w", err)
+			// One unsalvageable item must not silence the whole feed: keep the
+			// item without a body rather than failing the fetch. ErrUnstable
+			// callers must store nothing instead of the raw input.
+			doc = sanitize.Document{Version: sanitize.Version}
 		}
 		source := service.ContentFromFeed
 		if it.ContentHTML == "" {
 			source = service.ContentFromFeedExcerpt
 		}
-		if claim.Extract == service.ExtractAlways && !known[feed.IdentityHash(it)] && it.URL != "" {
-			r, e := f.client.Get(ctx, it.URL, outbound.Policy{Purpose: outbound.Extract, ExtraPorts: f.config.ExtraPorts})
+		if claim.Extract == service.ExtractAlways && base != nil && !known[feed.IdentityHash(it)] &&
+			extractions < maxExtractsPerFetch && (extractDeadline.IsZero() || time.Now().Before(extractDeadline)) {
+			extractions++
+			r, e := f.client.Get(ctx, link, outbound.Policy{Purpose: outbound.Extract, ExtraPorts: f.config.ExtraPorts})
 			if e == nil && r != nil {
 				body, readErr := io.ReadAll(r.Response.Body)
 				r.Response.Body.Close()
@@ -392,7 +450,7 @@ func (f *Fetcher) items(ctx context.Context, claim service.FeedToFetch, list []f
 				r.Response.Body.Close()
 			}
 		}
-		entry := service.IngestItem{IdentityHash: feed.IdentityHash(it), GUID: it.GUID, URL: it.URL, Title: it.Title, Author: it.Author, PublishedAt: it.Published, UpdatedAt: it.Updated, ContentHash: feed.ContentHash(it), Language: it.Language, ContentHTML: doc.HTML, ContentText: sanitize.Text(doc.HTML), SanitizerVersion: int(doc.Version), ContentSource: source}
+		entry := service.IngestItem{IdentityHash: feed.IdentityHash(it), GUID: it.GUID, URL: link, Title: it.Title, Author: it.Author, PublishedAt: it.Published, UpdatedAt: it.Updated, ContentHash: feed.ContentHash(it), Language: it.Language, ContentHTML: doc.HTML, ContentText: sanitize.Text(doc.HTML), SanitizerVersion: int(doc.Version), ContentSource: source}
 		for _, enc := range it.Enclosures {
 			entry.Enclosures = append(entry.Enclosures, service.Enclosure{URL: enc.URL, Type: enc.Type, Length: enc.Length})
 		}
