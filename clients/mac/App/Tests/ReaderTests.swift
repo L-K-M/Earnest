@@ -182,7 +182,9 @@ extension ReaderTests {
         let delegate = PageLoaded { loaded.fulfill() }
         web.navigationDelegate = delegate
         web.load(URLRequest(url: URL(string: "earnest-content://article/")!))
-        await fulfillment(of: [loaded, allowed, blocked], timeout: 2)
+        // WebKit startup can outlast the image deadline, so wait for success first, then poll the inverted expectation alone.
+        await fulfillment(of: [loaded, allowed], timeout: 30)
+        await fulfillment(of: [blocked], timeout: 1)
         let snapshot = try await web.takeSnapshot(configuration: nil)
         let bitmap = try XCTUnwrap(NSBitmapImageRep(data: XCTUnwrap(snapshot.tiffRepresentation)))
         let color = try XCTUnwrap(bitmap.colorAt(x: 30, y: 60)?.usingColorSpace(.deviceRGB))
@@ -204,7 +206,9 @@ extension ReaderTests {
         let delegate = PageLoaded { loaded.fulfill() }
         web.navigationDelegate = delegate
         web.load(URLRequest(url: URL(string: "earnest-content://article/")!))
-        await fulfillment(of: [loaded, blocked], timeout: 1)
+        // WebKit startup can outlast the page-load deadline, so wait for load success first, then poll the inverted expectation alone.
+        await fulfillment(of: [loaded], timeout: 30)
+        await fulfillment(of: [blocked], timeout: 1)
     }
 
     private func makeWebView(_ scheme: ArticleScheme) -> (WKWebView, NSWindow) {
