@@ -27,7 +27,7 @@ function statusLabel(state: EntryState): string {
   return state.seen.value === 'seen' ? 'Seen' : 'Unread'
 }
 
-export function River({view, subscriptions, actions, selected, onSelect, onOpen, shortcuts, counts, summary, since = '1970-01-01T00:00:00Z', sessionStart = '1970-01-01T00:00:00Z'}: {since?:string; sessionStart?:string; view: View; subscriptions: Subscription[]; actions: ReaderActions; selected: Entry | null; onSelect: (entry: Entry) => void; onOpen: (entry: Entry) => void; shortcuts: boolean; counts: boolean; summary: SessionSummary}) {
+export function River({view, subscriptions, actions, selected, onSelect, onOpen, shortcuts, counts, summary, onNewestLoaded, since = '1970-01-01T00:00:00Z', sessionStart = '1970-01-01T00:00:00Z'}: {since?:string; sessionStart?:string; onNewestLoaded?: (seq: number) => void; view: View; subscriptions: Subscription[]; actions: ReaderActions; selected: Entry | null; onSelect: (entry: Entry) => void; onOpen: (entry: Entry) => void; shortcuts: boolean; counts: boolean; summary: SessionSummary}) {
   const pipeline = usePipeline()
   const key = viewKey(view)
   const scroller = useRef<HTMLDivElement>(null)
@@ -90,6 +90,13 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   useEffect(() => { actionsRef.current = actions }, [actions])
   const entriesRef = useRef(entries)
   useEffect(() => { entriesRef.current = entries }, [entries])
+  // Report the newest loaded entry so the palette's "Mark the rest read" never
+  // marks past what this view has shown. A ref keeps the parent's inline
+  // callback from re-running the effect on every render.
+  const newestLoaded = entries.reduce((max, entry) => Math.max(max, entry.seq), 0)
+  const onNewestLoadedRef = useRef(onNewestLoaded)
+  useEffect(() => { onNewestLoadedRef.current = onNewestLoaded }, [onNewestLoaded])
+  useEffect(() => { onNewestLoadedRef.current?.(newestLoaded) }, [newestLoaded])
   // Passive progress only ever advances the resume position: a row that
   // becomes due after a further row was already saved must not drag "where
   // you left off" backwards, and a failed write retries with backoff instead

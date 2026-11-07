@@ -207,3 +207,10 @@ it.each(['enabled','disabled'])('shows cached blurbs only when the task is %s',a
   if (status === 'enabled') await waitFor(() => expect(screen.getAllByText('A cached line')).toHaveLength(2))
   else expect(screen.queryByText('A cached line')).toBeNull()
 })
+
+it('reports the newest loaded entry for the mark-rest command', async () => {
+  vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {blurb:'disabled'} : path.startsWith('/v1/positions') ? {seq:0} : {entries})
+  const onNewestLoaded = vi.fn()
+  render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'today',title:'Today'}} subscriptions={[]} actions={{act:vi.fn(),state:entry=>entry.state}} selected={null} onSelect={vi.fn()} onOpen={vi.fn()} shortcuts counts={false} summary={{seen:0,done:0,later:0,kept:0}} onNewestLoaded={onNewestLoaded} /></QueryClientProvider>)
+  await waitFor(() => expect(onNewestLoaded).toHaveBeenLastCalledWith(Math.max(...entries.map(entry => entry.seq))))
+})

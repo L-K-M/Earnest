@@ -16,6 +16,7 @@ import {type Entry, type ReaderActions, type Subscription, type View, viewKey} f
 import {Rules} from './rules/Rules'
 import {Search, useSavedSearches, type SavedSearch} from './search/Search'
 import {Brand} from './Brand'
+import {markRestCommand} from './markRest'
 import {Palette, type Command} from './palette/Palette'
 import {OfflineStatus, clearOffline, registerOffline} from './offline/Offline'
 import {Ask} from './pipeline/Pipeline'
@@ -152,6 +153,7 @@ function Session({onLogout}: {onLogout: () => void}) {
   },[retrySync])
   function showSearch(saved?: SavedSearch) {setSavedSearch(saved);setPanel('search');setOpened(false)}
   function openEntry(entry: Entry) {choose(standardViews[0]);setSelected(entry);setOpened(true)}
+  const [newestLoaded, setNewestLoaded] = useState({key: '', seq: 0})
   const commands: Command[] = [
     ...standardViews.map(item => ({id:`view-${item.kind}`,title:item.title,key:'Ctrl+K, Enter',run:() => choose(item)})),
     ...(subscriptions.data ?? []).filter(sub => !sub.deleted).map(sub => ({id:`feed-${sub.id}`,title:`Feed: ${sub.title || sub.url}`,key:'Ctrl+K, Enter',run:() => choose({kind:'feed',id:sub.id,title:sub.title || sub.url})})),
@@ -162,6 +164,7 @@ function Session({onLogout}: {onLogout: () => void}) {
     {id:'later',title:'Toggle Later',key:'s',disabled:!selected,run:async () => {if(selected) await actions.act(selected,'shelf',actions.state(selected).shelf.value === 'later' ? 'none' : 'later')}},
     {id:'keep',title:'Toggle Keep',key:'f',disabled:!selected,run:async () => {if(selected) await actions.act(selected,'kept',actions.state(selected).kept.value !== true)}},
     {id:'unread',title:'Mark unread',key:'m',disabled:!selected,run:async () => {if(selected) await actions.act(selected,'seen','unseen')}},
+    markRestCommand(view, subscriptions.data ?? [], newestLoaded.key === viewKey(view) ? newestLoaded.seq : 0, (scope, throughSeq) => sync.actRange(scope, throughSeq)),
     {id:'subscribe',title:'Subscribe to a feed',key:'Ctrl+K, Enter',run:() => {setPanel('feeds');setOpened(false)}},
     {id:'search',title:'Search',key:'/',run:() => showSearch()},
     ...(pipeline.data?.ask === 'enabled' ? [{id:'ask',title:'Ask my feeds',key:'Ctrl+K, Enter',run:() => {setPanel('ask');setOpened(false)}}] : []),
@@ -218,7 +221,7 @@ function Session({onLogout}: {onLogout: () => void}) {
       {sync.error && <p role="alert">{sync.error} <button onClick={sync.retry}>Retry sync</button></p>}
       </div>
       {firstRun ? <main onChangeCapture={() => setOnboardingStarted(true)} onClickCapture={() => setOnboardingStarted(true)}><Onboarding onComplete={() => {setOnboarded(true);refreshResources();void queryClient.invalidateQueries({queryKey:['position']});choose(standardViews[0])}} /></main> : panel === 'ask' && pipeline.data?.ask === 'enabled' ? <Ask onOpen={openEntry}/> : panel === 'rules' ? <Rules feeds={subscriptions.data ?? []} folders={folders.data ?? []} labels={labels.data ?? []}/> : panel === 'search' ? <Search key={savedSearch?.id ?? 'search'} saved={savedSearch} onOpen={openEntry} subscriptions={subscriptions.data ?? []} folders={folders.data ?? []}/> : panel === 'feeds' ? <main key="feeds" tabIndex={-1} ref={focusPanel}><h2>Feeds</h2><Feeds onChanged={refreshResources} /></main> : panel === 'activity' ? <ActivityScreen /> : panel === 'notifications' ? <Notifications onOpen={entry => {choose(standardViews[0]);setSelected(entry);setOpened(true)}} onOpenSettings={() => {setPanel('settings');setOpened(false)}} /> : panel === 'settings' ? <main key="settings" tabIndex={-1} ref={focusPanel}><Settings key={settings.rev} settings={settings} onSaved={savedSettings} /><Tokens /><Push /><Webhooks /></main> : <>
-        <River since={since} sessionStart={sessionStart} key={viewKey(view)} view={view} subscriptions={subscriptions.data ?? []} actions={actions} selected={selected} onSelect={setSelected} onOpen={entry => {setSelected(entry);setOpened(true)}} shortcuts={settings.single_key_shortcuts && preferences.isSuccess} counts={settings.reading_mode === 'unread_counts'} summary={summary} />
+        <River since={since} sessionStart={sessionStart} key={viewKey(view)} onNewestLoaded={seq => setNewestLoaded({key: viewKey(view), seq})} view={view} subscriptions={subscriptions.data ?? []} actions={actions} selected={selected} onSelect={setSelected} onOpen={entry => {setSelected(entry);setOpened(true)}} shortcuts={settings.single_key_shortcuts && preferences.isSuccess} counts={settings.reading_mode === 'unread_counts'} summary={summary} />
         {selected && opened ? <Reader key={selected.id} onOpen={openEntry} entry={selected} subscription={subscriptions.data?.find(sub => sub.id === selected.subscription_id)} settings={settings} actions={actions} onSettings={savedSettings} renderBody={url => <iframe title="Article body" src={url} sandbox="allow-popups allow-popups-to-escape-sandbox" />} onClose={() => {setOpened(false);window.requestAnimationFrame(() => document.querySelector<HTMLElement>('.river h2')?.focus())}} /> : <article className="reader-placeholder" aria-label="Reader"><p>Choose an article. It has been waiting patiently.</p></article>}
       </>}
     </div>
