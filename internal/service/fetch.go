@@ -40,20 +40,31 @@ func (s *Service) ClaimDueFeeds(ctx context.Context, now time.Time, limit int, l
    AND EXISTS(SELECT 1 FROM subscriptions s WHERE s.feed_id=f.id AND s.deleted_at IS NULL)
    ORDER BY f.next_fetch_at,f.id FOR UPDATE SKIP LOCKED LIMIT $2
   ) UPDATE feeds f SET lease_until=$3 FROM due WHERE f.id=due.id
-  RETURNING f.id,f.url,coalesce(f.etag,''),coalesce(f.last_modified,''),f.credentials_encrypted,
-  extract(epoch FROM f.fetch_interval)::double precision,f.lease_until,
+  RETURNING f.id,f.url,coalesce(nullif(f.permanent_redirect_url,''),f.url),coalesce(f.etag,''),coalesce(f.last_modified,''),f.credentials_encrypted,
+  extract(epoch FROM f.fetch_interval)::double precision,f.lease_until,f.consecutive_failures,f.owner_user_id IS NOT NULL,
   EXISTS(SELECT 1 FROM subscriptions s WHERE s.feed_id=f.id AND s.deleted_at IS NULL
   AND (s.full_text_mode='always' OR (s.full_text_mode='inherit' AND f.extraction_mode='always')))`, now.UTC(), limit, now.UTC().Add(lease))
 		if err != nil {
 			return fmt.Errorf("claim due feeds: %w", err)
 		}
 		defer rows.Close()
+		// Undecryptable credentials are queued and recorded once the claim
+		// cursor releases the connection, so the feeds back off and surface
+		// in feed health instead of re-claiming on every lease expiry.
+		type undecryptable struct {
+			feedID   int64
+			interval time.Duration
+			failures int
+			private  bool
+		}
+		var skipped []undecryptable
 		for rows.Next() {
 			var f FeedToFetch
 			var encrypted []byte
 			var seconds float64
-			var extract bool
-			if err := rows.Scan(&f.FeedID, &f.URL, &f.ETag, &f.LastModified, &encrypted, &seconds, &f.LeaseUntil, &extract); err != nil {
+			var failures int
+			var private, extract bool
+			if err := rows.Scan(&f.FeedID, &f.URL, &f.FetchURL, &f.ETag, &f.LastModified, &encrypted, &seconds, &f.LeaseUntil, &failures, &private, &extract); err != nil {
 				return fmt.Errorf("scan feed lease: %w", err)
 			}
 			f.Extract = ExtractNone
@@ -63,13 +74,22 @@ func (s *Service) ClaimDueFeeds(ctx context.Context, now time.Time, limit int, l
 			f.Interval = time.Duration(seconds * float64(time.Second))
 			f.Credentials, err = s.openCredentials(encrypted)
 			if err != nil {
-				// Keep its lease so bad credentials cannot starve other feeds or spin.
 				slog.Error("skip feed with unreadable credentials", "feed_id", f.FeedID)
+				skipped = append(skipped, undecryptable{f.FeedID, f.Interval, failures, private})
 				continue
 			}
 			feeds = append(feeds, f)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, bad := range skipped {
+			outcome := FetchOutcome{FeedID: bad.feedID, AttemptedAt: now, Status: FetchFailed, ErrorClass: "policy", ErrorMessage: "feed credentials cannot be decrypted"}
+			if err := s.fetchHealth(ctx, tx, outcome, now.UTC(), bad.interval, bad.failures, bad.private, IngestSummary{}); err != nil {
+				return fmt.Errorf("record credential failure: %w", err)
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err

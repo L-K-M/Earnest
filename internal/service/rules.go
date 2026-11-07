@@ -223,22 +223,27 @@ func (s *Service) ruleEntries(ctx context.Context, user int64, since time.Time, 
 	return result, nil
 }
 
-// DryRunRule returns matching entry IDs from the past seven days without writing.
-func (s *Service) DryRunRule(ctx context.Context, a Actor, p RulePredicate, actions []RuleAction) ([]int64, error) {
+// DryRunRule returns a bounded sample of matching entry IDs and the total
+// number of matches in the past seven days. The sample is capped so a broad
+// rule cannot produce a multi-megabyte response or a frozen renderer; the total
+// lets the caller say how much was omitted. An exact total scans the whole
+// window, so cost scales with window size rather than with maxDryRunMatches.
+func (s *Service) DryRunRule(ctx context.Context, a Actor, p RulePredicate, actions []RuleAction) ([]int64, int, error) {
 	if err := s.ruleHuman(ctx, a); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if err := ValidateRule(p, actions); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if err := s.checkRuleReferences(ctx, a.UserID, p, actions); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	entries, err := s.ruleEntries(ctx, a.UserID, s.now().UTC().Add(-7*24*time.Hour), nil)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	ids := []int64{}
+	total := 0
 	for _, e := range entries {
 		var ready bool
 		e, ready, err = s.prepareModelPredicates(ctx, a.UserID, p, e)
@@ -246,16 +251,19 @@ func (s *Service) DryRunRule(ctx context.Context, a Actor, p RulePredicate, acti
 			if pipelineWaiting(err) {
 				continue
 			}
-			return nil, err
+			return nil, 0, err
 		}
 		if !ready {
 			continue
 		}
 		if matchesRule(p, e) {
-			ids = append(ids, e.ID)
+			total++
+			if len(ids) < maxDryRunMatches {
+				ids = append(ids, e.ID)
+			}
 		}
 	}
-	return ids, nil
+	return ids, total, nil
 }
 
 // Rules lists the user's rules in creation order.

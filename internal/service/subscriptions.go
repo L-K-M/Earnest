@@ -23,6 +23,14 @@ const (
 	CadenceWeek  Cadence = "week"
 )
 
+// defaultProbeTimeout bounds the synchronous discovery probe in Subscribe.
+// Discovery may follow redirects and HTML hints across many URLs, each with
+// its own outbound timeout, so without a cap a single subscribe request could
+// hang for many minutes; the scheduler picks the feed up within a minute
+// instead. Service.probeTimeout carries it so tests can shrink the value
+// without a package-level mutable global.
+const defaultProbeTimeout = 2 * time.Minute
+
 // FeedHealth reports the last attempt, schedule and posting rate.
 type FeedHealth struct {
 	LastSuccessAt       *time.Time `json:"last_success_at,omitempty"`
@@ -212,6 +220,8 @@ func ensureFolder(ctx context.Context, tx pgx.Tx, user, folder int64) error {
 
 // Subscribe probes outside the commit lock, shares public feeds and encrypts
 // private credentials. A replay never initiates another outbound request.
+// Subscribing to a URL the user already follows reuses their subscription;
+// supplied credentials rebind it to their own feed, as UpdateSubscription does.
 func (s *Service) Subscribe(ctx context.Context, a Actor, rawURL string, options SubscribeOptions) (Subscription, error) {
 	if err := s.checkActor(ctx, a, ScopeFeedsWrite); err != nil {
 		return Subscription{}, err
@@ -245,12 +255,19 @@ func (s *Service) Subscribe(ctx context.Context, a Actor, rawURL string, options
 	if s.prober == nil {
 		return Subscription{}, ErrUnavailable
 	}
-	resolved, meta, items, err := s.prober.Probe(ctx, rawURL, options.Credentials)
+	probeCtx, cancel := context.WithTimeout(ctx, s.probeTimeout)
+	defer cancel()
+	resolved, meta, items, err := s.prober.Probe(probeCtx, rawURL, options.Credentials)
 	if err != nil {
 		class := "network"
 		var classified ProbeError
 		if errors.As(err, &classified) && validFetchError(classified.Class()) {
 			class = classified.Class()
+		}
+		// Only promote a bare network failure to timeout; a ProbeError with a
+		// specific class keeps it even if its chain wraps DeadlineExceeded.
+		if errors.Is(err, context.DeadlineExceeded) && class == "network" {
+			class = "timeout"
 		}
 		return Subscription{}, fmt.Errorf("probe failed (%s): %w", class, ErrUnavailable)
 	}
@@ -277,7 +294,7 @@ func (s *Service) Subscribe(ctx context.Context, a Actor, rawURL string, options
 		if replay != nil {
 			return json.Unmarshal(replay, &sub)
 		}
-		sub, err = s.subscribeTx(ctx, tx, a, resolved, meta, options, encrypted)
+		sub, _, err = s.subscribeTx(ctx, tx, a, resolved, meta, options, encrypted)
 		if err != nil {
 			return err
 		}
@@ -294,21 +311,27 @@ func (s *Service) Subscribe(ctx context.Context, a Actor, rawURL string, options
 	return sub, nil
 }
 
-func (s *Service) subscribeTx(ctx context.Context, tx pgx.Tx, a Actor, rawURL string, meta FeedMeta, options SubscribeOptions, encrypted []byte) (Subscription, error) {
+func (s *Service) subscribeTx(ctx context.Context, tx pgx.Tx, a Actor, rawURL string, meta FeedMeta, options SubscribeOptions, encrypted []byte) (Subscription, bool, error) {
 	if err := ensureFolder(ctx, tx, a.UserID, options.FolderID); err != nil {
-		return Subscription{}, err
+		return Subscription{}, false, err
+	}
+	// One URL can back two feed rows: the shared public row and the user's
+	// own credential-bearing row. Deduplicate subscriptions by URL so a second
+	// subscribe cannot stack a parallel feed showing every item twice.
+	var existing int64
+	err := tx.QueryRow(ctx, `SELECT s.id FROM subscriptions s JOIN feeds f ON f.id=s.feed_id
+  WHERE s.user_id=$1 AND s.deleted_at IS NULL AND f.url=$2
+  AND (f.owner_user_id IS NULL OR f.owner_user_id=$1) ORDER BY f.owner_user_id NULLS LAST,s.id`, a.UserID, rawURL).Scan(&existing)
+	if err == nil {
+		sub, err := s.resubscribeTx(ctx, tx, a, rawURL, meta, encrypted, existing)
+		return sub, false, err
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return Subscription{}, false, err
 	}
 	var feedID int64
 	if err := ensureFeed(ctx, tx, a.UserID, rawURL, meta, encrypted, s.now().UTC(), &feedID); err != nil {
-		return Subscription{}, err
-	}
-	var existing int64
-	err := tx.QueryRow(ctx, "SELECT id FROM subscriptions WHERE user_id=$1 AND feed_id=$2 AND deleted_at IS NULL", a.UserID, feedID).Scan(&existing)
-	if err == nil {
-		return subscriptionTx(ctx, tx, a.UserID, existing)
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return Subscription{}, err
+		return Subscription{}, false, err
 	}
 	cadence := options.Cadence
 	if cadence == "" {
@@ -316,7 +339,7 @@ func (s *Service) subscribeTx(ctx context.Context, tx pgx.Tx, a Actor, rawURL st
 	}
 	mode, err := subscriptionExtract(options.Extract)
 	if err != nil {
-		return Subscription{}, err
+		return Subscription{}, false, err
 	}
 	var folder any
 	if options.FolderID != 0 {
@@ -328,53 +351,117 @@ func (s *Service) subscribeTx(ctx context.Context, tx pgx.Tx, a Actor, rawURL st
 	}
 	rev, err := changeRev(ctx, tx, a.UserID)
 	if err != nil {
-		return Subscription{}, err
+		return Subscription{}, false, err
 	}
 	var id int64
+	var initialFetchPending bool
 	if err := tx.QueryRow(ctx, `INSERT INTO subscriptions(user_id,feed_id,title_override,folder_id,cadence,full_text_mode,rev,created_at,initial_since,initial_through_seq,initial_fetch_pending)
- VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,(SELECT coalesce(max(seq),0) FROM entries WHERE feed_id=$2),NOT EXISTS(SELECT 1 FROM entries WHERE feed_id=$2)) RETURNING id`, a.UserID, feedID, title, folder, string(cadence), mode, rev, s.now().UTC(), s.now().UTC().Add(-24*time.Hour)).Scan(&id); err != nil {
-		return Subscription{}, err
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,(SELECT coalesce(max(seq),0) FROM entries WHERE feed_id=$2),NOT EXISTS(SELECT 1 FROM entries WHERE feed_id=$2)) RETURNING id, initial_fetch_pending`, a.UserID, feedID, title, folder, string(cadence), mode, rev, s.now().UTC(), s.now().UTC().Add(-24*time.Hour)).Scan(&id, &initialFetchPending); err != nil {
+		return Subscription{}, false, err
 	}
 	sub, err := subscriptionTx(ctx, tx, a.UserID, id)
 	if err != nil {
-		return sub, err
+		return sub, false, err
 	}
 	if err := s.emitChange(ctx, tx, a.UserID, rev, syncmodel.SubscriptionCreated, "subscription", sub); err != nil {
+		return sub, false, err
+	}
+	if err := s.backfillSubscription(ctx, tx, a.UserID, sub); err != nil {
+		return sub, false, err
+	}
+	seq, err := store.CurrentSeq(ctx, tx)
+	if err != nil {
+		return sub, false, err
+	}
+	view := "river:" + string(cadence)
+	var exists bool
+	if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM positions WHERE principal_id=$1 AND view=$2)", a.PrincipalID, view).Scan(&exists); err != nil {
+		return sub, false, err
+	}
+	if !exists {
+		positionRev, err := changeRev(ctx, tx, a.UserID)
+		if err != nil {
+			return sub, false, err
+		}
+		if err := store.UpsertPosition(ctx, tx, a.PrincipalID, view, uint64(seq), positionRev); err != nil {
+			return sub, false, err
+		}
+		position := syncmodel.Position{Principal: syncmodel.ID(a.PrincipalID), View: view, Seq: uint64(seq), Rev: uint64(positionRev)}
+		if err := s.emitChange(ctx, tx, a.UserID, positionRev, syncmodel.PositionUpdated, "position", position); err != nil {
+			return sub, false, err
+		}
+	}
+	// The bool means "this subscription scheduled an initial fetch", which is
+	// false when the feed already had entries and backfilled synchronously.
+	return sub, initialFetchPending, nil
+}
+
+// resubscribeTx returns the existing subscription for a followed URL.
+// Credentials cannot sit on a shared feed, so a resubscribe carrying them
+// rebinds to the user's own feed row, the conversion UpdateSubscription
+// performs for a credential change. Other subscribe options never patch an
+// existing subscription.
+func (s *Service) resubscribeTx(ctx context.Context, tx pgx.Tx, a Actor, rawURL string, meta FeedMeta, encrypted []byte, id int64) (Subscription, error) {
+	sub, err := subscriptionTx(ctx, tx, a.UserID, id)
+	if err != nil || encrypted == nil {
+		return sub, err
+	}
+	var feedID int64
+	if err := ensureFeed(ctx, tx, a.UserID, rawURL, meta, encrypted, s.now().UTC(), &feedID); err != nil {
+		return Subscription{}, err
+	}
+	if feedID == sub.FeedID {
+		return sub, nil
+	}
+	rev, err := changeRev(ctx, tx, a.UserID)
+	if err != nil {
+		return Subscription{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE subscriptions SET feed_id=$2,rev=$3,initial_since=$4,initial_through_seq=(SELECT coalesce(max(seq),0) FROM entries WHERE feed_id=$2),initial_fetch_pending=NOT EXISTS(SELECT 1 FROM entries WHERE feed_id=$2) WHERE id=$1`, id, feedID, rev, s.now().UTC().Add(-24*time.Hour)); err != nil {
+		return Subscription{}, domainError(err)
+	}
+	sub, err = subscriptionTx(ctx, tx, a.UserID, id)
+	if err != nil {
+		return sub, err
+	}
+	if err := s.emitChange(ctx, tx, a.UserID, rev, syncmodel.SubscriptionUpdated, "subscription", sub); err != nil {
 		return sub, err
 	}
 	if err := s.backfillSubscription(ctx, tx, a.UserID, sub); err != nil {
 		return sub, err
 	}
-	seq, err := store.CurrentSeq(ctx, tx)
-	if err != nil {
-		return sub, err
-	}
-	view := "river:" + string(cadence)
-	var exists bool
-	if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM positions WHERE principal_id=$1 AND view=$2)", a.PrincipalID, view).Scan(&exists); err != nil {
-		return sub, err
-	}
-	if !exists {
-		positionRev, err := changeRev(ctx, tx, a.UserID)
-		if err != nil {
-			return sub, err
-		}
-		if err := store.UpsertPosition(ctx, tx, a.PrincipalID, view, uint64(seq), positionRev); err != nil {
-			return sub, err
-		}
-		position := syncmodel.Position{Principal: syncmodel.ID(a.PrincipalID), View: view, Seq: uint64(seq), Rev: uint64(positionRev)}
-		if err := s.emitChange(ctx, tx, a.UserID, positionRev, syncmodel.PositionUpdated, "position", position); err != nil {
-			return sub, err
-		}
-	}
 	return sub, nil
 }
 
-const subscriptionStateBatchSize = 500
+const (
+	subscriptionStateBatchSize = 500
+	// subscriptionBackfillLimit caps how many entries of the bootstrap window
+	// a subscribe revisions inside LockCore.
+	subscriptionBackfillLimit = 1000
+)
 
-// Backfill events cover entries whose IDs a concurrent bootstrap already passed.
+// Backfill events cover entries whose IDs a concurrent bootstrap already
+// passed. The selection is bounded twice: only the bootstrap window
+// qualifies, because older entries are never bootstrap-deliverable, so
+// events for them would only bloat the change log while LockCore is held;
+// and at most subscriptionBackfillLimit of the newest by seq, so a feed
+// with a large in-window backlog cannot hold the lock for long either.
+//
+// Entries outside the bound get no entry_revisions stamp and no event.
+// That is safe because no read requires the stamp: entry listing, single
+// reads and bootstrap pages all left-join entry_revisions and coalesce a
+// missing row to rev 0; the river derives its contents from the
+// subscription's initial_since and initial_through_seq over live tables;
+// and /v1/entries history views list every entry through the shared feed
+// join regardless. The only loss is that a bootstrap racing the subscribe
+// can miss create events for the excluded tail: a later bootstrap still
+// delivers every in-window entry, and older entries were never
+// bootstrap-deliverable anyway.
 func (s *Service) backfillSubscription(ctx context.Context, tx pgx.Tx, user int64, sub Subscription) error {
-	rows, err := tx.Query(ctx, `SELECT id,seq,first_seen_at,published_at,deleted_at IS NOT NULL FROM entries WHERE feed_id=$1 ORDER BY id`, sub.FeedID)
+	rows, err := tx.Query(ctx, `SELECT id,seq,first_seen_at,published_at,deleted_at IS NOT NULL FROM (
+  SELECT id,seq,first_seen_at,published_at,deleted_at FROM entries
+  WHERE feed_id=$1 AND first_seen_at>=$2 ORDER BY seq DESC LIMIT $3) bounded ORDER BY seq`,
+		sub.FeedID, s.now().UTC().Add(-bootstrapWindow), subscriptionBackfillLimit)
 	if err != nil {
 		return fmt.Errorf("subscription backfill: %w", err)
 	}
@@ -395,21 +482,25 @@ func (s *Service) backfillSubscription(ctx context.Context, tx pgx.Tx, user int6
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("read subscription backfill: %w", err)
 	}
-	for _, e := range entries {
-		rev, err := changeRev(ctx, tx, user)
+	if len(entries) > 0 {
+		allocation, err := store.AllocateCounters(ctx, tx, 0, map[int64]int64{user: int64(len(entries))})
 		if err != nil {
 			return err
 		}
-		e.Rev = uint64(rev)
-		if _, err := tx.Exec(ctx, `INSERT INTO entry_revisions(user_id,entry_id,rev) VALUES($1,$2,$3) ON CONFLICT(user_id,entry_id) DO UPDATE SET rev=EXCLUDED.rev`, user, int64(e.ID), rev); err != nil {
-			return fmt.Errorf("stamp subscription backfill: %w", err)
-		}
-		kind := syncmodel.EntryCreated
-		if e.Deleted {
-			kind = syncmodel.EntryDeleted
-		}
-		if err := s.emitChange(ctx, tx, user, rev, kind, "entry", e); err != nil {
-			return err
+		rev := allocation.Revs[user].First
+		for _, e := range entries {
+			e.Rev = uint64(rev)
+			if _, err := tx.Exec(ctx, `INSERT INTO entry_revisions(user_id,entry_id,rev) VALUES($1,$2,$3) ON CONFLICT(user_id,entry_id) DO UPDATE SET rev=EXCLUDED.rev`, user, int64(e.ID), rev); err != nil {
+				return fmt.Errorf("stamp subscription backfill: %w", err)
+			}
+			kind := syncmodel.EntryCreated
+			if e.Deleted {
+				kind = syncmodel.EntryDeleted
+			}
+			if err := s.emitChange(ctx, tx, user, rev, kind, "entry", e); err != nil {
+				return err
+			}
+			rev++
 		}
 	}
 

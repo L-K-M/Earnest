@@ -9,6 +9,8 @@ import androidx.room.PrimaryKey
 data class SyncSnapshotEntity(
     @PrimaryKey val id: Int = 1,
     val json: String,
+    /** Monotonic write counter, bumped by the writer on every flush; a change token for readers. */
+    val version: Long = 0,
 )
 
 /** Cached reader content, written when a view opens an entry. */

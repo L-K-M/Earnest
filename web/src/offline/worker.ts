@@ -1,5 +1,5 @@
 /// <reference lib="webworker" />
-import {cacheKind, contentLimit, evictionKeys, maxResponseBytes, readingCache, responseLimit, shellCache, visitedContentPaths} from './policy'
+import {brandImages, cacheKind, contentLimit, evictionKeys, maxResponseBytes, readingCache, responseLimit, shellCache, warmContentPaths} from './policy'
 
 const worker = self as unknown as ServiceWorkerGlobalScope
 const generationKey = new URL('/__earnest_offline_generation',worker.location.origin).href
@@ -51,7 +51,7 @@ async function precache() {
   const assets = [...new Set(Array.from(html.matchAll(/(?:src|href)=["'](\/assets\/[^"']+)["']/g),match => match[1]))]
   const cache = await caches.open(shellCache)
   await cache.put('/',response)
-  await cache.addAll(assets)
+  await cache.addAll([...assets,...brandImages])
 }
 worker.addEventListener('install',event => {event.waitUntil(precache())})
 worker.addEventListener('activate',event => {event.waitUntil(worker.clients.claim())})
@@ -60,7 +60,7 @@ worker.addEventListener('message',event => {
 })
 
 async function warmEntries(response: Response, version: number) {
-  const paths = visitedContentPaths(await response.json())
+  const paths = warmContentPaths(await response.json())
   // Read only stored content. Never fetch publisher URLs or start extraction.
   for (const path of paths) {
     if (version !== epoch) return

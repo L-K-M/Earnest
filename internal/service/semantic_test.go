@@ -68,12 +68,12 @@ func TestHybridSimilarAndSemanticRules(t *testing.T) {
 	}
 	// Query descriptions are embedded once and kept separate from article bodies.
 	predicate := RulePredicate{Type: RuleSemantic, Value: "beacon topic"}
-	ids, err := f.s.DryRunRule(ctx, f.a, predicate, []RuleAction{{Type: RuleNotify}})
+	ids, _, err := f.s.DryRunRule(ctx, f.a, predicate, []RuleAction{{Type: RuleNotify}})
 	if err != nil || len(ids) != 2 {
 		t.Fatalf("semantic rule %v %v", ids, err)
 	}
 	calls = len(p.requests())
-	if _, err := f.s.DryRunRule(ctx, f.a, predicate, []RuleAction{{Type: RuleNotify}}); err != nil {
+	if _, _, err := f.s.DryRunRule(ctx, f.a, predicate, []RuleAction{{Type: RuleNotify}}); err != nil {
 		t.Fatal(err)
 	}
 	if len(p.requests()) != calls {
@@ -93,7 +93,7 @@ func TestHybridSimilarAndSemanticRules(t *testing.T) {
 			t.Fatal("annotation entered provider request")
 		}
 	}
-	disabled, err := f.s.DryRunRule(context.Background(), f.a, RulePredicate{Type: RuleNot, Children: []RulePredicate{{Type: RuleSemantic, Value: "beacon"}}}, []RuleAction{{Type: RuleNotify}})
+	disabled, _, err := f.s.DryRunRule(context.Background(), f.a, RulePredicate{Type: RuleNot, Children: []RulePredicate{{Type: RuleSemantic, Value: "beacon"}}}, []RuleAction{{Type: RuleNotify}})
 	if err != nil || len(disabled) != 0 {
 		t.Fatalf("negated disabled model matched: %v %v", disabled, err)
 	}

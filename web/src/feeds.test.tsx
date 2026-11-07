@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import {beforeEach, describe, expect, it, vi, type Mock} from 'vitest'
-import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react'
+import {act, cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {request} from './request'
 import {Feeds} from './FeedSettings'
 import {
@@ -192,5 +192,55 @@ describe('Feeds', () => {
     const post = calls('/v1/opml:import', 'POST')[0]
     expect(post[0]).toBe('/v1/opml:import')
     expect(new Headers(post[1]?.headers).get('Content-Type')).toBe('text/x-opml')
+  })
+
+  it('updates the title input when the feed title changes externally', async () => {
+    const routes: Routes = {'/v1/subscriptions': [sub()], '/v1/folders': [], '/v1/mutes': []}
+    api(routes)
+    render(<Feeds onChanged={() => {}} />)
+    expect((await screen.findByLabelText('Title') as HTMLInputElement).value).toBe('Feed One')
+    routes['/v1/subscriptions'] = [sub({title: 'Renamed', rev: 2})]
+    fireEvent.click(screen.getByRole('button', {name: 'Refresh now'}))
+    await waitFor(() => expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('Renamed'))
+  })
+
+  it('keeps an unsaved draft title when the feed title changes externally', async () => {
+    const routes: Routes = {'/v1/subscriptions': [sub()], '/v1/folders': [], '/v1/mutes': []}
+    api(routes)
+    render(<Feeds onChanged={() => {}} />)
+    const input = await screen.findByLabelText('Title') as HTMLInputElement
+    input.focus()
+    fireEvent.change(input, {target: {value: 'My draft'}})
+    // Clicking a button moves focus in a real browser; the draft must survive.
+    input.blur()
+    routes['/v1/subscriptions'] = [sub({title: 'Renamed', rev: 2})]
+    fireEvent.click(screen.getByRole('button', {name: 'Refresh now'}))
+    await waitFor(() => expect((screen.getByRole('button', {name: 'Refresh now'}) as HTMLButtonElement).disabled).toBe(false))
+    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('My draft')
+  })
+
+  it('revokes the OPML download URL only after the download starts', async () => {
+    api({'/v1/subscriptions': [sub()], '/v1/folders': [], '/v1/mutes': [], '/v1/opml': '<opml/>'})
+    render(<Feeds onChanged={() => {}} />)
+    const button = await screen.findByRole('button', {name: 'Export subscriptions'})
+    const createObjectURL = vi.fn(() => 'blob:opml')
+    const revokeObjectURL = vi.fn()
+    const originalCreate = URL.createObjectURL
+    const originalRevoke = URL.revokeObjectURL
+    URL.createObjectURL = createObjectURL
+    URL.revokeObjectURL = revokeObjectURL
+    vi.useFakeTimers()
+    try {
+      fireEvent.click(button)
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(createObjectURL).toHaveBeenCalled()
+      expect(revokeObjectURL).not.toHaveBeenCalled()
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+      expect(revokeObjectURL).toHaveBeenCalledWith('blob:opml')
+    } finally {
+      vi.useRealTimers()
+      URL.createObjectURL = originalCreate
+      URL.revokeObjectURL = originalRevoke
+    }
   })
 })

@@ -1,4 +1,4 @@
-import {useState} from 'react'
+import {useEffect, useRef, useState} from 'react'
 import {Typography, type ReadingSettings} from './Settings'
 import {
   defaultReadingSettings, healthPending, importOPML, isFirehose, latestSeq, listSubscriptions, newOp, readFileText,
@@ -17,6 +17,8 @@ function message(error: unknown, fallback: string): string {
 }
 
 export function Onboarding({onComplete}: {onComplete: () => void}) {
+  const alive = useRef(true)
+  useEffect(() => () => { alive.current = false }, [])
   const [step, setStep] = useState<'import' | 'report' | 'mode'>('import')
   const [file, setFile] = useState<File | null>(null)
   const [results, setResults] = useState<OPMLResult[] | null>(null)
@@ -31,14 +33,15 @@ export function Onboarding({onComplete}: {onComplete: () => void}) {
     try {
       for (let poll = 0; poll < HEALTH_POLLS; poll++) {
         const fresh = await listSubscriptions()
+        if (!alive.current) return
         setSubs(fresh ?? [])
         if (!(fresh ?? []).some(healthPending)) break
         await sleep(HEALTH_POLL_MS)
       }
     } catch (cause) {
-      setError(message(cause, 'Could not check posting volume. You can review cadence in Feeds.'))
+      if (alive.current) setError(message(cause, 'Could not check posting volume. You can review cadence in Feeds.'))
     } finally {
-      setChecking(false)
+      if (alive.current) setChecking(false)
     }
   }
 
@@ -125,7 +128,10 @@ export function Onboarding({onComplete}: {onComplete: () => void}) {
         <label><input type="radio" name="reading_mode" checked={settings.reading_mode === 'river'} onChange={() => setSettings({...settings, reading_mode: 'river'})} /> A river that ends: resume where you left off; what you skip stays searchable.</label>
         <label><input type="radio" name="reading_mode" checked={settings.reading_mode === 'unread_counts'} onChange={() => setSettings({...settings, reading_mode: 'unread_counts'})} /> Unread counts: every feed keeps a count until you clear it.</label>
       </fieldset>
-      {settings.reading_mode === 'river' && <label>Today items stay for this many days<input type="number" min={1} max={365} value={settings.today_decay_days} onChange={e => setSettings({...settings, today_decay_days: e.target.valueAsNumber})} required /></label>}
+      {settings.reading_mode === 'river' && <label>Today items stay for this many days<input type="number" min={1} max={365} value={settings.today_decay_days} onChange={e => {
+        const today_decay_days = e.target.valueAsNumber
+        setSettings({...settings, today_decay_days: Number.isFinite(today_decay_days) ? today_decay_days : defaultReadingSettings().today_decay_days})
+      }} required /></label>}
       <Typography value={settings} onChange={value => setSettings({...settings, ...value})} />
       <label><input type="checkbox" checked={settings.single_key_shortcuts} onChange={e => setSettings({...settings, single_key_shortcuts: e.target.checked})} /> Single-key shortcuts</label>
       <button disabled={busy}>Start reading</button>

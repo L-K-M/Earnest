@@ -38,6 +38,17 @@ type Config struct {
 	Metrics                  *metrics.Registry
 }
 
+const (
+	// maxExtractsPerFetch bounds full-text extraction within one pass. Each
+	// attempt is a bounded outbound GET, but a fresh subscription has one per
+	// item; without a cap the item loop can outlive the claim lease and a
+	// second worker claims the same feed. Skipped items stay unknown to
+	// KnownIdentities and are extracted on later passes.
+	maxExtractsPerFetch = 12
+	// leaseMargin keeps the item loop clear of the claim lease deadline.
+	leaseMargin = 30 * time.Second
+)
+
 // Fetcher coordinates retrieval and reporting.
 type Fetcher struct {
 	service Service
@@ -210,7 +221,17 @@ func credentials(c *service.FeedCredentials) outbound.Credentials {
 func (f *Fetcher) Fetch(ctx context.Context, item service.FeedToFetch) error {
 	now := time.Now().UTC()
 	out := service.FetchOutcome{FeedID: item.FeedID, AttemptedAt: now, Status: service.FetchFailed}
-	result, err := f.client.Get(ctx, item.URL, outbound.Policy{Purpose: outbound.Feed, Credentials: credentials(item.Credentials), ETag: item.ETag, LastModified: item.LastModified, ExtraPorts: f.config.ExtraPorts})
+	target := item.FetchURL
+	if target == "" {
+		target = item.URL
+	}
+	// Credentials belong to the feed's own origin: a recorded permanent
+	// redirect must not send them to another host (mirrors Probe scoping).
+	var scoped *service.FeedCredentials
+	if sameOrigin(item.URL, target) {
+		scoped = item.Credentials
+	}
+	result, err := f.client.Get(ctx, target, outbound.Policy{Purpose: outbound.Feed, Credentials: credentials(scoped), ETag: item.ETag, LastModified: item.LastModified, ExtraPorts: f.config.ExtraPorts})
 	var parsed *feed.Feed
 	if result != nil {
 		resp := result.Response
@@ -317,9 +338,6 @@ func (f *Fetcher) interval(item service.FeedToFetch, parsed *feed.Feed, status s
 		sort.Slice(dates, func(i, j int) bool { return dates[i].Before(dates[j]) })
 		if len(dates) > 1 {
 			d = dates[len(dates)-1].Sub(dates[0]) / time.Duration(len(dates)-1)
-			if d > time.Hour {
-				d = time.Hour
-			}
 		}
 	}
 	if status != service.FetchFailed && d >= time.Hour {
@@ -338,6 +356,19 @@ func (f *Fetcher) interval(item service.FeedToFetch, parsed *feed.Feed, status s
 func metadata(p *feed.Feed) *service.FeedMeta {
 	return &service.FeedMeta{Title: p.Title, SiteURL: p.SiteURL, IconURL: p.IconURL, Language: p.Language}
 }
+
+// itemBase returns the item link as a base URL for resolving relative content
+// URLs. Item links are publisher-controlled and can carry active schemes
+// (javascript:, data:), so only absolute http(s) links qualify; everything
+// else yields nil and relative content URLs are dropped.
+func itemBase(raw string) *url.URL {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil
+	}
+	return u
+}
+
 func (f *Fetcher) items(ctx context.Context, claim service.FeedToFetch, list []feed.Item) ([]service.IngestItem, error) {
 	known := map[string]bool{}
 	if claim.Extract == service.ExtractAlways && len(list) > 0 {
@@ -352,43 +383,144 @@ func (f *Fetcher) items(ctx context.Context, claim service.FeedToFetch, list []f
 		}
 	}
 	result := make([]service.IngestItem, 0, len(list))
-	for _, it := range list {
-		base, _ := url.Parse(it.URL)
+	// Extraction work stops at the smaller of a count budget and the claim
+	// lease deadline, so one pass can never run past its lease.
+	extractDeadline := time.Time{}
+	if !claim.LeaseUntil.IsZero() {
+		extractDeadline = claim.LeaseUntil.Add(-leaseMargin)
+	}
+	var jobs []extractJob
+	for i, it := range list {
+		base := itemBase(it.URL)
+		link := ""
+		if base != nil {
+			// Only absolute http(s) links reach a client that renders them as
+			// anchors; a stored active-scheme link is a stored attack.
+			link = strings.TrimSpace(it.URL)
+		} else if ref, err := url.Parse(strings.TrimSpace(it.URL)); err == nil && ref.Scheme == "" && (ref.Host != "" || ref.Path != "") {
+			// Relative item links are valid RSS/Atom. The parser resolves them
+			// against the feed base, but a feed with a broken base URI can still
+			// hand one over; resolve it against the fetch URL so the item keeps
+			// a usable link. Active-scheme values have a scheme and stay dropped;
+			// a blank, fragment-only or query-only reference names no resource
+			// and would otherwise resolve to the feed URL itself.
+			// Resolve against the URL actually fetched: after a permanent
+			// redirect that is FetchURL, not the canonical feed URL.
+			fetched := claim.FetchURL
+			if fetched == "" {
+				fetched = claim.URL
+			}
+			if feedBase := itemBase(fetched); feedBase != nil {
+				base = itemBase(feedBase.ResolveReference(ref).String())
+				if base != nil {
+					link = base.String()
+				}
+			}
+		}
 		content := it.ContentHTML
 		if content == "" {
 			content = it.SummaryHTML
 		}
 		doc, err := sanitize.Sanitize(base, content)
 		if err != nil {
-			return nil, fmt.Errorf("sanitize item: %w", err)
+			// One unsalvageable item must not silence the whole feed: keep the
+			// item without a body rather than failing the fetch. ErrUnstable
+			// callers must store nothing instead of the raw input.
+			doc = sanitize.Document{Version: sanitize.Version}
 		}
 		source := service.ContentFromFeed
 		if it.ContentHTML == "" {
 			source = service.ContentFromFeedExcerpt
 		}
-		if claim.Extract == service.ExtractAlways && !known[feed.IdentityHash(it)] && it.URL != "" {
-			r, e := f.client.Get(ctx, it.URL, outbound.Policy{Purpose: outbound.Extract, ExtraPorts: f.config.ExtraPorts})
-			if e == nil && r != nil {
-				body, readErr := io.ReadAll(r.Response.Body)
-				r.Response.Body.Close()
-				if readErr == nil && r.Response.StatusCode >= 200 && r.Response.StatusCode < 300 {
-					extracted, extractErr := extract.Extract(r.FinalURL, body)
-					if extractErr == nil && extracted.Status == extract.StatusOK {
-						doc = extracted.Document
-						source = service.ContentFromExtracted
-					}
-				}
-			} else if r != nil {
-				r.Response.Body.Close()
-			}
+		if claim.Extract == service.ExtractAlways && base != nil && !known[feed.IdentityHash(it)] &&
+			len(jobs) < maxExtractsPerFetch && (extractDeadline.IsZero() || time.Now().Before(extractDeadline)) {
+			jobs = append(jobs, extractJob{index: i, link: link})
 		}
-		entry := service.IngestItem{IdentityHash: feed.IdentityHash(it), GUID: it.GUID, URL: it.URL, Title: it.Title, Author: it.Author, PublishedAt: it.Published, UpdatedAt: it.Updated, ContentHash: feed.ContentHash(it), Language: it.Language, ContentHTML: doc.HTML, ContentText: sanitize.Text(doc.HTML), SanitizerVersion: int(doc.Version), ContentSource: source}
+		entry := service.IngestItem{IdentityHash: feed.IdentityHash(it), GUID: it.GUID, URL: link, Title: it.Title, Author: it.Author, PublishedAt: it.Published, UpdatedAt: it.Updated, ContentHash: feed.ContentHash(it), Language: it.Language, ContentHTML: doc.HTML, ContentText: sanitize.Text(doc.HTML), SanitizerVersion: int(doc.Version), ContentSource: source}
 		for _, enc := range it.Enclosures {
 			entry.Enclosures = append(entry.Enclosures, service.Enclosure{URL: enc.URL, Type: enc.Type, Length: enc.Length})
 		}
 		result = append(result, entry)
 	}
+	// Results land back on items by index, so overlapping fetches cannot
+	// reorder the list.
+	for i, extracted := range f.extractItems(ctx, jobs, extractDeadline) {
+		result[i].ContentHTML = extracted.document.HTML
+		result[i].ContentText = sanitize.Text(extracted.document.HTML)
+		result[i].SanitizerVersion = int(extracted.document.Version)
+		result[i].ContentSource = extracted.source
+	}
 	return result, nil
+}
+
+// extractWorkers bounds concurrent full-text extraction. The outbound client
+// still spaces requests per host, so this mainly overlaps different hosts and
+// hides readability CPU time instead of serialising the whole item list.
+const extractWorkers = 4
+
+// extractJob is one full-text extraction selected in items(): the item index
+// the result applies to and the resolved http(s) link to fetch.
+type extractJob struct {
+	index int
+	link  string
+}
+
+type extractionResult struct {
+	document sanitize.Document
+	source   service.ContentSource
+}
+
+// extractItems runs the selected jobs through a pool of extractWorkers. A
+// worker starts no new fetch once ctx is done or the lease deadline has
+// passed; an in-flight GET still ends with ctx. Failures leave no result, so
+// the item keeps its feed body: an extraction error is not a feed error.
+func (f *Fetcher) extractItems(ctx context.Context, jobs []extractJob, deadline time.Time) map[int]extractionResult {
+	if len(jobs) == 0 {
+		return nil
+	}
+	results := make(map[int]extractionResult, len(jobs))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	// Buffered so the producer never blocks if every worker stops early on a
+	// cancelled context or an expired lease.
+	jobsCh := make(chan extractJob, len(jobs))
+	workers := min(extractWorkers, len(jobs))
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobsCh {
+				if ctx.Err() != nil || (!deadline.IsZero() && !time.Now().Before(deadline)) {
+					return
+				}
+				r, e := f.client.Get(ctx, j.link, outbound.Policy{Purpose: outbound.Extract, ExtraPorts: f.config.ExtraPorts})
+				if e != nil || r == nil {
+					if r != nil {
+						r.Response.Body.Close()
+					}
+					continue
+				}
+				body, readErr := io.ReadAll(r.Response.Body)
+				r.Response.Body.Close()
+				if readErr != nil || r.Response.StatusCode < 200 || r.Response.StatusCode >= 300 {
+					continue
+				}
+				extracted, extractErr := extract.Extract(r.FinalURL, body)
+				if extractErr != nil || extracted.Status != extract.StatusOK {
+					continue
+				}
+				mu.Lock()
+				results[j.index] = extractionResult{document: extracted.Document, source: service.ContentFromExtracted}
+				mu.Unlock()
+			}
+		}()
+	}
+	for _, j := range jobs {
+		jobsCh <- j
+	}
+	close(jobsCh)
+	wg.Wait()
+	return results
 }
 
 // ProbeError classifies a discovery failure.
@@ -399,6 +531,36 @@ type ProbeError struct {
 
 func (e *ProbeError) Error() string { return e.Class + ": " + e.Err.Error() }
 func (e *ProbeError) Unwrap() error { return e.Err }
+
+// parseOrigin returns the lowercase scheme://host:port of an absolute URL.
+// Default ports are made explicit so https://host and https://host:443 are
+// one origin; relative or malformed URLs report ok=false and compare unequal
+// to anything, so scoping fails closed.
+func parseOrigin(raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", false
+	}
+	port := u.Port()
+	if port == "" {
+		switch strings.ToLower(u.Scheme) {
+		case "https":
+			port = "443"
+		case "http":
+			port = "80"
+		}
+	}
+	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Hostname()) + ":" + port, true
+}
+
+func sameOrigin(a, b string) bool {
+	left, ok := parseOrigin(a)
+	if !ok {
+		return false
+	}
+	right, ok := parseOrigin(b)
+	return ok && left == right
+}
 
 // Probe discovers a feed and returns its parsed, sanitised contents.
 func (f *Fetcher) Probe(ctx context.Context, rawURL string, creds *service.FeedCredentials) (string, service.FeedMeta, []service.IngestItem, error) {

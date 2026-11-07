@@ -74,6 +74,12 @@ interface SyncStore {
     fun load(): SyncSnapshot
     fun save(snapshot: SyncSnapshot)
 
+    /**
+     * A cheap change token for the persisted snapshot, or -1 when the store
+     * cannot tell. Callers compare it before paying for a full [load] decode.
+     */
+    fun version(): Long = -1
+
     /** Completes any coalesced write; the default is a no-op for synchronous stores. */
     fun flush() {}
 }
@@ -96,6 +102,8 @@ class SyncException(val error: SyncError, message: String) : IllegalArgumentExce
 /** Operations are serialized by the caller, including across store instances. */
 class SyncEngine(private val store: SyncStore) {
     private var snapshot = store.load()
+    private var entriesById = snapshot.entries.associateBy { it.id }
+    private var statesByKey = snapshot.states.associateBy { it.principal to it.entryId }
 
     fun snapshot(): SyncSnapshot = snapshot
 
@@ -109,12 +117,19 @@ class SyncEngine(private val store: SyncStore) {
 
     /** Replaces the in-memory snapshot from the store; pending intent is durable. */
     fun reload() {
-        snapshot = store.load()
+        install(store.load())
     }
 
     private fun commit(next: SyncSnapshot) {
         store.save(next)
+        install(next)
+    }
+
+    /** Swaps the snapshot and rebuilds its lookup indexes in the same step. */
+    private fun install(next: SyncSnapshot) {
         snapshot = next
+        entriesById = next.entries.associateBy { it.id }
+        statesByKey = next.states.associateBy { it.principal to it.entryId }
     }
 
     /**
@@ -132,9 +147,18 @@ class SyncEngine(private val store: SyncStore) {
         commit(SyncSnapshot(cursor = cursor, outbox = pending))
     }
 
-    /** Installs a fully paged bootstrap; incomplete pages never replace the live cache. */
+    /**
+     * Installs a fully paged bootstrap; incomplete pages never replace the live
+     * cache. Live intent survives like [beginBootstrap], so operations queued
+     * while the replacement was fetched are not lost.
+     */
     internal fun installBootstrap(completed: SyncSnapshot) {
-        commit(completed)
+        val pending = if (completed.cursor.generation == snapshot.cursor.generation) {
+            snapshot.outbox
+        } else {
+            snapshot.outbox.map { stale(it, completed.cursor.generation) }
+        }
+        commit(completed.copy(outbox = pending))
     }
 
     private fun stale(item: Pending, generation: String): Pending {
@@ -293,9 +317,8 @@ class SyncEngine(private val store: SyncStore) {
 
     /** Effective state: server registers plus the pending overlay. */
     fun state(principal: Long, entryId: Long): State {
-        var result = snapshot.states.find { it.principal == principal && it.entryId == entryId }
-            ?: initialState(principal, entryId)
-        val entry = snapshot.entries.find { it.id == entryId && !it.deleted } ?: return result
+        var result = statesByKey[principal to entryId] ?: initialState(principal, entryId)
+        val entry = entriesById[entryId]?.takeUnless { it.deleted } ?: return result
         for (item in snapshot.outbox) {
             val pending = item.range
             if (pending != null) {
@@ -307,21 +330,56 @@ class SyncEngine(private val store: SyncStore) {
             }
             val operation = item.write ?: continue
             if (operation.principal != principal || operation.entryId != entryId) continue
-            result = when (operation.register) {
-                REGISTER_SEEN -> result.copy(
-                    seen = result.seen.copy(value = operation.value),
-                    shelf = if (operation.value == JsonPrimitive(VALUE_UNSEEN) && result.shelf.value == JsonPrimitive(VALUE_DONE)) {
-                        result.shelf.copy(value = JsonPrimitive(VALUE_NONE))
-                    } else {
-                        result.shelf
-                    },
-                )
-                REGISTER_SHELF -> result.copy(shelf = result.shelf.copy(value = operation.value))
-                REGISTER_KEPT -> result.copy(kept = result.kept.copy(value = operation.value))
-                else -> result
-            }
+            result = applyWrite(result, operation)
         }
         return result
+    }
+
+    /**
+     * Effective states for all live entries, matching [state] per entry but
+     * in a single pass: pending writes fold in by target and each pending
+     * range is evaluated once per entry rather than per lookup.
+     */
+    fun states(principal: Long): Map<Long, State> {
+        val live = snapshot.entries.filter { !it.deleted }
+        val result = LinkedHashMap<Long, State>(live.size)
+        for (entry in live) {
+            result[entry.id] = statesByKey[principal to entry.id] ?: initialState(principal, entry.id)
+        }
+        for (item in snapshot.outbox) {
+            val pending = item.range
+            if (pending != null) {
+                val operation = pending.write
+                if (operation.principal == principal) {
+                    for (entry in live) {
+                        if (rangeContains(pending, entry)) {
+                            val current = result.getValue(entry.id)
+                            result[entry.id] = current.copy(seen = current.seen.copy(value = JsonPrimitive(VALUE_SEEN)))
+                        }
+                    }
+                }
+                continue
+            }
+            val operation = item.write ?: continue
+            if (operation.principal != principal) continue
+            val current = result[operation.entryId] ?: continue
+            result[operation.entryId] = applyWrite(current, operation)
+        }
+        return result
+    }
+
+    private fun applyWrite(result: State, operation: StateWrite): State = when (operation.register) {
+        REGISTER_SEEN -> result.copy(
+            seen = result.seen.copy(value = operation.value),
+            shelf = if (operation.value == JsonPrimitive(VALUE_UNSEEN) && result.shelf.value == JsonPrimitive(VALUE_DONE)) {
+                result.shelf.copy(value = JsonPrimitive(VALUE_NONE))
+            } else {
+                result.shelf
+            },
+        )
+        REGISTER_SHELF -> result.copy(shelf = result.shelf.copy(value = operation.value))
+        REGISTER_KEPT -> result.copy(kept = result.kept.copy(value = operation.value))
+        else -> result
     }
 
     private fun rangeContains(range: RangeWrite, entry: CachedEntry): Boolean {
@@ -401,7 +459,7 @@ class SyncEngine(private val store: SyncStore) {
         return expired
     }
 
-    fun entry(id: Long): CachedEntry? = snapshot.entries.find { it.id == id }
+    fun entry(id: Long): CachedEntry? = entriesById[id]
 
     fun findObject(kind: String, id: Long): SyncObject? = snapshot.objects.find { it.kind == kind && it.id == id }
 

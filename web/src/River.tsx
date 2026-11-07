@@ -8,10 +8,17 @@ import {TodayAgents, SessionChanges} from './agents/Surfaces'
 import {Edition} from './pipeline/Pipeline'
 import {usePipeline} from './search/pipeline'
 
-type Page = {entries: Entry[]; next_cursor?: string}
+type ClusterGroup = {entry: Entry; also_in: number}
+type Page = {entries: Entry[]; next_cursor?: string; groups?: ClusterGroup[]}
 type PageParam = {direction: 'forward' | 'backward'; cursor?: string; after?: number}
 export type SessionSummary = {done: number; later: number; kept: number; seen: number}
 const seenWriteInterval = 600
+
+// Passive position writes retry after a failure with this backoff, so a long
+// outage cannot cost a write per tick. The floor sits above one interval so a
+// failure skips at least a tick before the next attempt.
+const POSITION_RETRY_MIN_MS = seenWriteInterval * 2
+const POSITION_RETRY_MAX_MS = 30_000
 
 // Shelf values are stored lowercase; row copy is title case.
 function statusLabel(state: EntryState): string {
@@ -20,22 +27,25 @@ function statusLabel(state: EntryState): string {
   return state.seen.value === 'seen' ? 'Seen' : 'Unread'
 }
 
-export function River({view, subscriptions, actions, selected, onSelect, onOpen, shortcuts, counts, summary, onHelp, since = '1970-01-01T00:00:00Z', sessionStart = '1970-01-01T00:00:00Z'}: {since?:string; sessionStart?:string; view: View; subscriptions: Subscription[]; actions: ReaderActions; selected: Entry | null; onSelect: (entry: Entry) => void; onOpen: (entry: Entry) => void; shortcuts: boolean; counts: boolean; summary: SessionSummary; onHelp: () => void}) {
+export function River({view, subscriptions, actions, selected, onSelect, onOpen, shortcuts, counts, summary, since = '1970-01-01T00:00:00Z', sessionStart = '1970-01-01T00:00:00Z'}: {since?:string; sessionStart?:string; view: View; subscriptions: Subscription[]; actions: ReaderActions; selected: Entry | null; onSelect: (entry: Entry) => void; onOpen: (entry: Entry) => void; shortcuts: boolean; counts: boolean; summary: SessionSummary}) {
   const pipeline = usePipeline()
   const key = viewKey(view)
   const scroller = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  const [scrollMargin, setScrollMargin] = useState(0)
   const heading = useRef<HTMLHeadingElement>(null)
   const seen = useRef(new Set<number>())
   const pending = useRef(new Set<number>())
   const rendered = useRef(new Map<number, {start: number; size: number}>())
   const passed = useRef(new Set<number>())
   const [error, setError] = useState('')
+  const [cluster, setCluster] = useState(false)
   const position = useQuery({queryKey: ['position', key], queryFn: ({signal}) => request<{seq: number}>(`/v1/positions/${encodeURIComponent(key)}`, {signal})})
   const list = useInfiniteQuery({
-    queryKey: ['river', key, position.data?.seq], enabled: position.isSuccess,
+    queryKey: ['river', key, position.data?.seq, cluster], enabled: position.isSuccess,
     initialPageParam: {direction: 'forward', after: position.data?.seq ?? 0} as PageParam,
     queryFn: ({pageParam, signal}) => {
-      const query = entryQuery(view)
+      const query = entryQuery(view, cluster ? 'cluster' : undefined)
       query.set('direction', pageParam.direction)
       if (pageParam.cursor) query.set('cursor', pageParam.cursor)
       if (pageParam.after) query.set('after_seq', String(pageParam.after))
@@ -46,13 +56,58 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     refetchOnWindowFocus: false, staleTime: Infinity,
   })
   const entries = orderEntries(list.data?.pages.flatMap(page => page.entries) ?? [], view, subscriptions)
+  const clusterInfo = new Map<number, number>()
+  for (const page of list.data?.pages ?? []) {
+    for (const group of page.groups ?? []) clusterInfo.set(group.entry.id, group.also_in)
+  }
+  // Rows are measured (measureElement on each row) so long titles, blurbs and
+  // zoomed text are never clipped; estimateSize is only the pre-measure guess.
   // eslint-disable-next-line react-hooks/incompatible-library -- Virtual owns mutable scroll measurements; this app does not use React Compiler.
-  const virtual = useVirtualizer({count: entries.length, getScrollElement: () => scroller.current, estimateSize: () => 100, overscan: 5, getItemKey: index => entries[index].id})
+  const virtual = useVirtualizer({count: entries.length, getScrollElement: () => scroller.current, estimateSize: () => 100, overscan: 5, scrollMargin, getItemKey: index => entries[index].id})
+  // The Today panel sits above the list inside the scroller, so the list's own
+  // top is offset from the scroller's content origin. The virtualizer needs
+  // that offset as scrollMargin to report row positions in scroller
+  // coordinates; the seen logic and row transforms then line up.
+  const measureScrollMargin = useCallback(() => {
+    const root = scroller.current
+    const element = listRef.current
+    if (!root || !element) return
+    setScrollMargin(element.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop)
+  }, [])
+  useEffect(() => {
+    measureScrollMargin()
+    const root = scroller.current
+    const element = listRef.current
+    if (typeof ResizeObserver === 'undefined' || !root || !element) return
+    const observer = new ResizeObserver(measureScrollMargin)
+    observer.observe(element)
+    const panel = root.firstElementChild
+    if (panel && panel !== element) observer.observe(panel)
+    return () => observer.disconnect()
+  }, [measureScrollMargin])
   const visible = virtual.getVirtualItems()
   const actionsRef = useRef(actions)
   useEffect(() => { actionsRef.current = actions }, [actions])
   const entriesRef = useRef(entries)
   useEffect(() => { entriesRef.current = entries }, [entries])
+  // Passive progress only ever advances the resume position: a row that
+  // becomes due after a further row was already saved must not drag "where
+  // you left off" backwards, and a failed write retries with backoff instead
+  // of being lost or hammered out. The high-water state is per view: it
+  // resets when the view key changes, then the fetched position reseeds it.
+  const targetSeq = useRef(0)
+  const resumeSeq = useRef(0)
+  const pendingSeq = useRef<number | null>(null)
+  const retryDelay = useRef(0)
+  const retryAfter = useRef(0)
+  useEffect(() => {
+    targetSeq.current = 0
+    resumeSeq.current = 0
+    pendingSeq.current = null
+    retryDelay.current = 0
+    retryAfter.current = 0
+  }, [key])
+  useEffect(() => { if (position.data) resumeSeq.current = Math.max(resumeSeq.current, position.data.seq) }, [position.data])
   useEffect(() => { heading.current?.focus() }, [key])
 
   // Remember which rendered rows have been inside the viewport. A row that
@@ -89,8 +144,20 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
           })
         }
       }
-      const last = due.at(-1)
-      if (last) void request(`/v1/positions/${encodeURIComponent(key)}`, {method: 'PUT', body: JSON.stringify({seq: last.seq, op_id: crypto.randomUUID()})}).catch(error => setError(error instanceof Error ? error.message : 'Could not save position.'))
+      const reached = due.reduce((max, entry) => Math.max(max, entry.seq), targetSeq.current)
+      targetSeq.current = reached
+      if (reached > resumeSeq.current && pendingSeq.current === null && Date.now() >= retryAfter.current) {
+        pendingSeq.current = reached
+        void request(`/v1/positions/${encodeURIComponent(key)}`, {method: 'PUT', body: JSON.stringify({seq: reached, op_id: crypto.randomUUID()})})
+          .then(() => { resumeSeq.current = Math.max(resumeSeq.current, reached); retryDelay.current = 0 })
+          .catch(error => {
+            // Back off instead of retrying every tick through a long outage.
+            retryDelay.current = Math.min(Math.max(retryDelay.current * 2, POSITION_RETRY_MIN_MS), POSITION_RETRY_MAX_MS)
+            retryAfter.current = Date.now() + retryDelay.current
+            setError(error instanceof Error ? error.message : 'Could not save position.')
+          })
+          .finally(() => { pendingSeq.current = null })
+      }
     }, seenWriteInterval)
     return () => window.clearInterval(timer)
   }, [key])
@@ -116,7 +183,6 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
       if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || !shortcutsAllowed(event.target, shortcuts)) return
       const index = entries.findIndex(entry => entry.id === selected?.id)
       const entry = entries[Math.max(0, index)]
-      if (event.key === '?') { event.preventDefault(); onHelp(); return }
       if (!entry) return
       if (event.key === 'j' || event.key === 'k') {
         event.preventDefault()
@@ -133,25 +199,26 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     }
     window.addEventListener('keydown', keyboard)
     return () => window.removeEventListener('keydown', keyboard)
-  }, [entries, selected, shortcuts, onSelect, open, onHelp, virtual, actions])
+  }, [entries, selected, shortcuts, onSelect, open, virtual, actions])
 
   const unread = entries.filter(entry => { const state = actions.state(entry); return state.seen.value === 'unseen' && state.shelf.value !== 'done' }).length
   return <main className="river" aria-label="Articles">
-    <header><h2 ref={heading} tabIndex={-1}>{view.title}</h2><button disabled={!list.isSuccess || list.isRefetching} onClick={() => {void list.refetch()}}>Refresh articles</button><button disabled={!list.isSuccess || list.isFetchingPreviousPage} onClick={() => { void list.fetchPreviousPage() }}>Earlier articles</button>{counts && <p>{unread} unread in loaded articles</p>}</header>
+    <header><h2 ref={heading} tabIndex={-1}>{view.title}</h2><button disabled={!list.isSuccess || list.isRefetching} onClick={() => {void list.refetch()}}>Refresh articles</button><button disabled={!list.isSuccess || list.isFetchingPreviousPage} onClick={() => { void list.fetchPreviousPage() }}>Earlier articles</button><button aria-pressed={cluster} disabled={!list.isSuccess || list.isFetching} onClick={() => setCluster(value => !value)}>One per story</button>{counts && <p>{unread} unread in loaded {cluster ? 'stories' : 'articles'}</p>}</header>
     {(error || position.error || list.error) && <p role="alert">{error || position.error?.message || list.error?.message} <button onClick={() => { void (position.isError ? position.refetch() : list.refetch()) }}>Try again</button></p>}
     {(position.isPending || list.isPending) && <p role="status">Finding your place…</p>}
     {view.kind === 'edition' && <Edition onOpen={onOpen}/>}
     <div className="river-scroll" ref={scroller} onScroll={markScrolledPast} tabIndex={0} aria-label="Article list">
       {view.kind === 'today' && <TodayAgents since={since} onOpen={onOpen}/>}
-      <div className="virtual-list" style={{height: virtual.getTotalSize()}} role="list">
+      <div ref={listRef} className="virtual-list" style={{height: virtual.getTotalSize()}} role="list">
         {visible.map(row => {
           const entry = entries[row.index]
           const state = actions.state(entry)
           const source = subscriptions.find(sub => sub.id === entry.subscription_id)?.title || 'Feed'
           const group = view.kind === 'edition' && (row.index === 0 || entries[row.index - 1].subscription_id !== entry.subscription_id)
-          return <div className="virtual-row" key={entry.id} role="listitem" data-entry={entry.id} style={{height: row.size, transform: `translateY(${row.start}px)`}}>
+          const alsoIn = clusterInfo.get(entry.id) ?? 0
+          return <div className="virtual-row" key={entry.id} role="listitem" data-entry={entry.id} data-index={row.index} ref={virtual.measureElement} style={{transform: `translateY(${row.start - virtual.options.scrollMargin}px)`}}>
             {group && <h3 className="feed-group">{source}</h3>}
-            <button className="entry" aria-current={selected?.id === entry.id ? 'true' : undefined} onFocus={() => onSelect(entry)} onClick={() => open(entry)}><strong>{entry.title || 'Untitled'}</strong>{pipeline.status.blurb === 'enabled' && entry.blurb && <span>{entry.blurb}</span>}<span>{source} · {statusLabel(state)}{state.kept.value === true ? ' · Kept' : ''}</span></button>
+            <button className="entry" aria-current={selected?.id === entry.id ? 'true' : undefined} onFocus={() => onSelect(entry)} onClick={() => open(entry)}><strong>{entry.title || 'Untitled'}</strong>{pipeline.status.blurb === 'enabled' && entry.blurb && <span>{entry.blurb}</span>}<span>{source} · {statusLabel(state)}{state.kept.value === true ? ' · Kept' : ''}{cluster && alsoIn > 0 ? ` · also in ${alsoIn}` : ''}</span></button>
           </div>
         })}
       </div>

@@ -11,7 +11,6 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import ch.lkmc.earnest.core.ApiException
 import ch.lkmc.earnest.core.EarnestApi
-import ch.lkmc.earnest.core.SyncRepository
 import java.time.Instant
 import java.util.concurrent.TimeUnit
 
@@ -22,17 +21,17 @@ internal class SyncWorker(context: Context, params: WorkerParameters) : Coroutin
         val session = secrets.current() ?: return Result.failure()
         val cache = SessionCache(applicationContext, session.identity)
         return try {
-            cache.withEngine { engine ->
-                if (secrets.current() != session) return@withEngine
-                val api = EarnestApi(session.identity.server, session.token)
-                val repository = SyncRepository(api, engine)
+            val api = EarnestApi(session.identity.server, session.token)
+            cache.withSync(api) { repository ->
+                if (secrets.current() != session) return@withSync
                 cache.markAgentChangesStale()
                 val rejected = repository.pull() + repository.flush()
                 rejected.forEach { Log.i(TAG, "server rejected ${it.opId}: ${it.status}") }
-                engine.expire(Instant.now()).forEach { Log.i(TAG, "expired ${it.operation.opId}") }
-                engine.flush()
+                repository.expire(Instant.now()).forEach { Log.i(TAG, "expired ${it.operation.opId}") }
                 cache.refreshAgentChanges(api)
             }
+            SyncAccess.committed.tryEmit(session.identity.cacheKey)
+            refreshWidgets(applicationContext)
             Result.success()
         } catch (error: ApiException) {
             if (error.isUnauthorized && secrets.current() == session) secrets.clearToken()

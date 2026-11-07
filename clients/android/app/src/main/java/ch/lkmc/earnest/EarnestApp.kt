@@ -1,5 +1,6 @@
 package ch.lkmc.earnest
 
+import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -21,19 +22,31 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -44,25 +57,40 @@ import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaf
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import ch.lkmc.earnest.core.CachedEntry
+import ch.lkmc.earnest.core.River
 import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.core.SyncSnapshot
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
@@ -74,25 +102,48 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 
-private enum class View(val label: String) {
-    TODAY("Today"),
-    EDITION("Edition"),
-    LATER("Later"),
-    KEPT("Kept"),
-    DONE("Done"),
-    FEEDS("Feeds"),
-    ACTIVITY("Activity"),
+/**
+ * Poll cadence while the app is visible, a gentler version of the Mac
+ * client's two-minute poll. Queued marks flush and new entries arrive
+ * without waiting for the fifteen-minute WorkManager sync.
+ */
+private const val FOREGROUND_REFRESH_MS = 3L * 60 * 1000
+
+private enum class View(val label: String, val icon: ImageVector) {
+    TODAY("Today", Icons.Filled.DateRange),
+    EDITION("Edition", Icons.AutoMirrored.Filled.List),
+    LATER("Later", Icons.Filled.Notifications),
+    KEPT("Kept", Icons.Filled.Star),
+    DONE("Done", Icons.Filled.CheckCircle),
+    FEEDS("Feeds", Icons.Filled.Home),
+    ACTIVITY("Activity", Icons.Filled.Info),
 }
 
 @Composable
 internal fun EarnestApp(initialEntry: Long?, notificationId: Long?) {
     val model: AppViewModel = viewModel()
     val loggedIn by model.loggedIn.collectAsState()
+    val sessionNotice by model.sessionNotice.collectAsState()
     val context = LocalContext.current
+    val activity = context as? MainActivity
     var theme by remember { mutableStateOf(context.themeSetting()) }
+    var notificationsDenied by remember { mutableStateOf(activity != null && Notifications.permissionNeeded(activity)) }
+    // The post-sign-in prompt and system settings change the permission
+    // outside this screen, so re-check whenever the activity resumes.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, activity) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                notificationsDenied = activity != null && Notifications.permissionNeeded(activity)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     EarnestTheme(theme) {
         if (!loggedIn) {
-            LoginScreen(onLoggedIn = model::onLoggedIn)
+            // The login has no scaffold, so a surface gives it the theme's background and text colours.
+            Surface(Modifier.fillMaxSize()) { LoginScreen(onLoggedIn = model::onLoggedIn, notice = sessionNotice) }
             return@EarnestTheme
         }
         val state by model.state.collectAsState()
@@ -106,6 +157,10 @@ internal fun EarnestApp(initialEntry: Long?, notificationId: Long?) {
             },
             initialEntry = initialEntry,
             notificationId = notificationId,
+            notificationsDenied = notificationsDenied,
+            onRequestNotifications = {
+                activity?.requestNotificationPermission { granted -> notificationsDenied = !granted }
+            },
         )
     }
 }
@@ -119,6 +174,8 @@ private fun MainScaffold(
     onThemeChange: (ThemeSetting) -> Unit,
     initialEntry: Long?,
     notificationId: Long?,
+    notificationsDenied: Boolean,
+    onRequestNotifications: () -> Unit,
 ) {
     val navigator = rememberListDetailPaneScaffoldNavigator<Long>()
     var view by remember { mutableStateOf(View.TODAY) }
@@ -128,20 +185,43 @@ private fun MainScaffold(
     var showSubscribe by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val selected = navigator.currentDestination?.contentKey
+    // Entries reached through an agent's output (a notification, a deep link
+    // of unknown origin, an agent-change notice) open with click-to-load
+    // images; see AppViewModel.openEntry. The set is saved with the navigator's
+    // destination: after a rotation or process death the reader reopens the
+    // same entry, and a plain remember would reload it with automatic images.
+    var agentSelected by rememberSaveable(saver = AgentSelectedSaver) { mutableStateOf(emptySet<Long>()) }
 
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                delay(FOREGROUND_REFRESH_MS)
+                model.refresh()
+            }
+        }
+    }
     LaunchedEffect(initialEntry) {
-        initialEntry?.let { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, it) }
+        initialEntry?.let {
+            agentSelected = agentSelected + it
+            navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, it)
+        }
     }
     LaunchedEffect(notificationId, state.accountKey) {
         if (state.accountKey == null) return@LaunchedEffect
         val id = notificationId ?: return@LaunchedEffect
-        model.notificationEntry(id)?.let { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, it) }
+        model.notificationEntry(id)?.let {
+            agentSelected = agentSelected + it
+            navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, it)
+        }
     }
     LaunchedEffect(selected, state.accountKey) {
         reader.load(selected, state.accountKey) { id ->
             if (model.loadEntry(id) == null) throw java.io.IOException("This entry is no longer available.")
-            model.openEntry(id)
+            model.markSeen(id)
+            model.openEntry(id, agentSelected = id in agentSelected)
         }
     }
     LaunchedEffect(view, state.accountKey) {
@@ -176,9 +256,13 @@ private fun MainScaffold(
         )
     }
 
-    fun undo(entryId: Long) {
+    fun undo(entryId: Long, target: SwipeTarget) {
         scope.launch {
-            val result = snackbar.showSnackbar("Entry updated", actionLabel = "Undo")
+            val result = snackbar.showSnackbar(
+                message = target.message,
+                actionLabel = "Undo",
+                duration = SnackbarDuration.Short,
+            )
             if (result == SnackbarResult.ActionPerformed) model.undoShelf(entryId)
         }
     }
@@ -192,7 +276,7 @@ private fun MainScaffold(
                         view = destination
                         scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.List) }
                     },
-                    icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = null) },
+                    icon = { Icon(destination.icon, contentDescription = null) },
                     label = { Text(destination.label) },
                 )
             }
@@ -200,7 +284,15 @@ private fun MainScaffold(
     ) {
         Scaffold(
             topBar = {
-                EarnestTopBar(view.label, state.loading, model, theme, onThemeChange)
+                EarnestTopBar(
+                    view.label,
+                    state.loading,
+                    model,
+                    theme,
+                    onThemeChange,
+                    notificationsDenied,
+                    onRequestNotifications,
+                )
             },
             snackbarHost = { SnackbarHost(snackbar) },
         ) { padding ->
@@ -222,6 +314,7 @@ private fun MainScaffold(
                                 )
                                 View.ACTIVITY -> ActivityScreen(
                                     groups = activityGroups,
+                                    entryTitles = state.snapshot.entries.associate { it.id to it.title },
                                     onRevert = { model.revert(it) },
                                 )
                                 else -> EntryListScreen(
@@ -240,8 +333,12 @@ private fun MainScaffold(
                                     onOpen = { entryId ->
                                         scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
                                     },
-                                    onLater = { id -> model.later(id) { undo(id) } },
-                                    onDone = { id -> model.done(id) { undo(id) } },
+                                    onOpenAgentSelected = { entryId ->
+                                        agentSelected = agentSelected + entryId
+                                        scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
+                                    },
+                                    onLater = { id -> model.later(id) { undo(id, SwipeTarget.LATER) } },
+                                    onDone = { id -> model.done(id) { undo(id, SwipeTarget.DONE) } },
                                     onSeen = model::markSeen,
                                     onKeep = { model.keep(it) },
                                     onUnkeep = { model.unkeep(it) },
@@ -262,17 +359,16 @@ private fun MainScaffold(
                                 }
                             } else {
                                 Column(Modifier.fillMaxSize()) {
-                                    Row(
-                                        Modifier.fillMaxWidth().padding(16.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Text(
-                                            entry.title,
-                                            style = MaterialTheme.typography.titleMedium,
-                                            maxLines = 2,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    }
+                                    val original = originalUrl(entry)
+                                    ReaderHeader(
+                                        entry = entry,
+                                        source = subscriptionTitles[entry.subscriptionId].orEmpty(),
+                                        onOpenOriginal = {
+                                            original?.let { url ->
+                                                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri())) }
+                                            }
+                                        },
+                                    )
                                     val content = reader.content
                                     when {
                                         reader.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -284,6 +380,7 @@ private fun MainScaffold(
                                         else -> Reader(
                                             url = content.url,
                                             cachedHtml = content.cachedHtml,
+                                            theme = theme,
                                             modifier = Modifier.fillMaxSize(),
                                         )
                                     }
@@ -315,11 +412,17 @@ private fun EarnestTopBar(
     model: AppViewModel,
     theme: ThemeSetting,
     onThemeChange: (ThemeSetting) -> Unit,
+    notificationsDenied: Boolean,
+    onRequestNotifications: () -> Unit,
 ) {
     var themeOpen by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
     TopAppBar(
         title = { Text(title) },
         actions = {
+            if (notificationsDenied) {
+                TextButton(onClick = onRequestNotifications) { Text("Notifications") }
+            }
             if (loading) {
                 CircularProgressIndicator(
                     Modifier.size(20.dp),
@@ -332,6 +435,22 @@ private fun EarnestTopBar(
                 }
             }
             TextButton(onClick = { themeOpen = true }) { Text("Theme") }
+            // The menu anchors to this Box, beside the button rather than
+            // inside the button's content slot.
+            Box {
+                IconButton(onClick = { menuOpen = true }) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = "More options")
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Sign out") },
+                        onClick = {
+                            menuOpen = false
+                            model.logout()
+                        },
+                    )
+                }
+            }
         },
     )
     if (themeOpen) {
@@ -373,6 +492,35 @@ private fun ThemeDialog(
 }
 
 @Composable
+private fun ReaderHeader(entry: CachedEntry, source: String, onOpenOriginal: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 16.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                entry.title,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+            val date = entryDateLabel(entry)
+            val meta = listOfNotNull(source.takeIf { it.isNotBlank() }, date.takeIf { it.isNotBlank() })
+            if (meta.isNotEmpty()) {
+                Text(
+                    meta.joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (originalUrl(entry) != null) {
+            TextButton(onClick = onOpenOriginal) { Text("Open original") }
+        }
+    }
+}
+
+@Composable
 private fun EntryListScreen(
     title: String,
     entries: List<CachedEntry>,
@@ -387,6 +535,7 @@ private fun EntryListScreen(
     agentChangesError: String?,
     onRevert: (Long) -> Unit,
     onOpen: (Long) -> Unit,
+    onOpenAgentSelected: (Long) -> Unit,
     onLater: (Long) -> Unit,
     onDone: (Long) -> Unit,
     onSeen: (Long) -> Unit,
@@ -394,7 +543,14 @@ private fun EntryListScreen(
     onUnkeep: (Long) -> Unit,
 ) {
     val listState = rememberLazyListState()
-    MarkSeenOnRender(entries, principalId, listState, onSeen)
+    MarkSeenOnScroll(entries, principalId, listState, onSeen)
+    val headerCount = (if (briefs.isNotEmpty()) 1 else 0) +
+        (if (agentChanges.isNotEmpty() || agentChangesError != null) 1 else 0)
+    LaunchedEffect(headerCount) {
+        if (shouldRevealHeaders(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, headerCount)) {
+            listState.scrollToItem(0)
+        }
+    }
     LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
         if (briefs.isNotEmpty()) {
             item(key = "briefs") {
@@ -410,7 +566,7 @@ private fun EntryListScreen(
         }
         if (agentChanges.isNotEmpty() || agentChangesError != null) {
             item(key = "agent-changes") {
-                AgentChangesNotice("While you were out", agentChanges, entryTitles, agentChangesError, onOpen, onRevert)
+                AgentChangesNotice("While you were out", agentChanges, entryTitles, agentChangesError, onOpenAgentSelected, onRevert)
             }
         }
         items(entries, key = { it.id }) { entry ->
@@ -427,6 +583,10 @@ private fun EntryListScreen(
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
                     TextButton(onClick = { onUnkeep(entry.id) }) { Text("Unkeep") }
                 }
+            } else {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                    TextButton(onClick = { onKeep(entry.id) }) { Text("Keep") }
+                }
             }
         }
         item(key = "end") {
@@ -441,14 +601,14 @@ private fun EntryListScreen(
                 modifier = Modifier.fillMaxWidth().padding(24.dp),
             )
             if (sessionChanges.isNotEmpty() || agentChangesError != null) {
-                AgentChangesNotice("Agent changes this session", sessionChanges, entryTitles, agentChangesError, onOpen, onRevert)
+                AgentChangesNotice("Agent changes this session", sessionChanges, entryTitles, agentChangesError, onOpenAgentSelected, onRevert)
             }
         }
     }
 }
 
 @Composable
-private fun MarkSeenOnRender(
+private fun MarkSeenOnScroll(
     entries: List<CachedEntry>,
     principalId: Long,
     listState: androidx.compose.foundation.lazy.LazyListState,
@@ -456,16 +616,19 @@ private fun MarkSeenOnRender(
 ) {
     // Resetting with the principal keeps offline launches from losing marks:
     // rows are marked again once the principal is known.
-    val marked = remember(principalId) { mutableSetOf<Long>() }
+    val tracker = remember(principalId) { PassiveSeenTracker() }
     LaunchedEffect(listState, entries, principalId) {
         if (principalId == 0L) return@LaunchedEffect
-        snapshotFlow { listState.layoutInfo.visibleItemsInfo.map { it.key } }
+        snapshotFlow {
+            SeenViewport(
+                firstVisibleIndex = listState.firstVisibleItemIndex,
+                visible = listState.layoutInfo.visibleItemsInfo.mapNotNull { item ->
+                    (item.key as? Long)?.let { key -> key to item.index }
+                }.toMap(),
+            )
+        }
             .distinctUntilChanged()
-            .collect { keys ->
-                keys.filterIsInstance<Long>().forEach { key ->
-                    if (marked.add(key)) onSeen(key)
-                }
-            }
+            .collect { viewport -> tracker.observe(viewport).forEach(onSeen) }
     }
 }
 
@@ -525,16 +688,18 @@ private fun SwipeActionRow(
                 .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.CenterEnd,
         ) {
-            val label = if (-offset >= doneThreshold) "Done" else "Later"
+            val target = swipeTargetFor(-offset, laterThreshold, doneThreshold)
             Text(
-                label,
+                target?.label ?: SwipeTarget.LATER.label,
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.padding(end = 24.dp),
             )
         }
+        // The opaque foreground keeps the reveal hidden until the row moves.
         Box(
             Modifier
                 .offset { IntOffset(offset.roundToInt(), 0) }
+                .background(MaterialTheme.colorScheme.surface)
                 .pointerInput(Unit) {
                     detectHorizontalDragGestures(
                         onHorizontalDrag = { change, dragAmount ->
@@ -542,12 +707,13 @@ private fun SwipeActionRow(
                             offset = (offset + dragAmount).coerceIn(-doneThreshold * 1.2f, 0f)
                         },
                         onDragEnd = {
-                            val dragged = -offset
+                            val target = swipeTargetFor(-offset, laterThreshold, doneThreshold)
                             scope.launch {
                                 offset = 0f
-                                when {
-                                    dragged >= doneThreshold -> onDone()
-                                    dragged >= laterThreshold -> onLater()
+                                when (target) {
+                                    SwipeTarget.DONE -> onDone()
+                                    SwipeTarget.LATER -> onLater()
+                                    null -> Unit
                                 }
                             }
                         },
@@ -582,9 +748,17 @@ private fun FeedsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("now" to "Now", "today" to "Today", "week" to "This week").forEach { (value, label) ->
-                        TextButton(onClick = { onCadence(subscription.id, value) }) { Text(label) }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    val selection = cadenceSelection(River.cadence(subscription))
+                    Cadence.entries.forEach { cadence ->
+                        CadenceChip(
+                            cadence = cadence,
+                            selected = selection[cadence] == true,
+                            onSelect = { onCadence(subscription.id, cadence.value) },
+                        )
                     }
                     TextButton(onClick = { onUnsubscribe(subscription.id) }) { Text("Unsubscribe") }
                 }
@@ -594,8 +768,22 @@ private fun FeedsScreen(
 }
 
 @Composable
+private fun CadenceChip(cadence: Cadence, selected: Boolean, onSelect: () -> Unit) {
+    FilterChip(
+        selected = selected,
+        onClick = onSelect,
+        label = { Text(cadence.label) },
+        modifier = Modifier.semantics {
+            this.selected = selected
+            stateDescription = if (selected) "Selected" else "Not selected"
+        },
+    )
+}
+
+@Composable
 private fun ActivityScreen(
     groups: List<ch.lkmc.earnest.core.ActivityGroup>,
+    entryTitles: Map<Long, String>,
     onRevert: (Long) -> Unit,
 ) {
     LazyColumn(Modifier.fillMaxSize()) {
@@ -610,14 +798,21 @@ private fun ActivityScreen(
             val activities = group.activities.orEmpty()
             items(activities, key = { it.id }) { activity ->
                 Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    Text(activity.action, style = MaterialTheme.typography.bodyLarge)
+                    Text(activityDescription(activity, entryTitles), style = MaterialTheme.typography.bodyLarge)
                     Text(
-                        "${activity.createdAt.relativeTime()} · ${activity.nextAction}",
+                        activity.createdAt.relativeTime(),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    val reason = activity.reason
                     if (activity.nextAction == "revert") {
                         TextButton(onClick = { onRevert(activity.id) }) { Text("Revert") }
+                    } else if (!reason.isNullOrBlank()) {
+                        Text(
+                            reason,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }
@@ -631,7 +826,7 @@ private fun SubscribeDialog(
     onSubscribe: (String, String) -> Unit,
 ) {
     var url by remember { mutableStateOf("") }
-    var cadence by remember { mutableStateOf("today") }
+    var selectedCadence by remember { mutableStateOf(Cadence.TODAY.value) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Subscribe by URL") },
@@ -639,16 +834,18 @@ private fun SubscribeDialog(
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(url, { url = it }, label = { Text("Feed URL") }, singleLine = true)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("now" to "Now", "today" to "Today", "week" to "This week").forEach { (value, label) ->
-                        TextButton(onClick = { cadence = value }) {
-                            Text(if (cadence == value) "• $label" else label)
-                        }
+                    Cadence.entries.forEach { cadence ->
+                        CadenceChip(
+                            cadence = cadence,
+                            selected = cadence.value == selectedCadence,
+                            onSelect = { selectedCadence = cadence.value },
+                        )
                     }
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = { onSubscribe(url, cadence) }, enabled = url.isNotBlank()) { Text("Subscribe") }
+            TextButton(onClick = { onSubscribe(url, selectedCadence) }, enabled = url.isNotBlank()) { Text("Subscribe") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
@@ -674,3 +871,12 @@ private fun String.relativeTime(): String = runCatching {
         else -> "${minutes / (60 * 24)}d ago"
     }
 }.getOrDefault("")
+
+/**
+ * Saves the ids of entries an agent surfaced across configuration changes and
+ * process death. A LongArray fits the saved-state bundle directly.
+ */
+internal val AgentSelectedSaver: Saver<MutableState<Set<Long>>, LongArray> = Saver(
+    save = { it.value.toLongArray() },
+    restore = { mutableStateOf(it.toSet()) },
+)

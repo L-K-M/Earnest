@@ -1,11 +1,14 @@
 package ch.lkmc.earnest
 
 import android.app.Application
+import androidx.core.content.edit
 import androidx.test.core.app.ApplicationProvider
 import ch.lkmc.earnest.core.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -31,15 +34,17 @@ class AppViewModelTest {
     private val app get() = ApplicationProvider.getApplicationContext<Application>()
     private val identity = AccountIdentity("https://nas.test", 1, 1)
     private val calls = CopyOnWriteArrayList<String>()
+    private val contentUrlQueries = CopyOnWriteArrayList<String?>()
     private class Sessions(@Volatile var value: AuthenticatedSession?) : SessionStore {
         @Volatile var onRead: (() -> Unit)? = null
+        @Volatile var onClear: (() -> Unit)? = null
         override fun current(): AuthenticatedSession? {
             val callback = onRead
             onRead = null
             callback?.invoke()
             return value
         }
-        override fun clearToken() { value = null }
+        override fun clearToken() { value = null; onClear?.invoke() }
     }
     @Before fun setup() {
         Dispatchers.setMain(UnconfinedTestDispatcher())
@@ -49,7 +54,9 @@ class AppViewModelTest {
     private fun api() = EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { chain ->
         val path = chain.request().url.encodedPath
         calls += path
+        if (path.endsWith("/content-url")) contentUrlQueries += chain.request().url.query
         val body = when (path) {
+            "/v1/entries/2/content-url" -> """{"url":"https://content.test/signed","expires_at":"2026-11-03T01:00:00Z"}"""
             "/v1/settings" -> """{"today_decay_days":2,"rev":0}"""
             "/v1/changes" -> """{"changes":[],"next":{"generation":"g1","rev":0},"next_cursor":"g1:0"}"""
             "/v1/activity/agent-changes" -> """[{"id":7,"principal_id":9,"principal_name":"Morning Agent","action":"state.updated","target":{"entry_id":2,"register":"shelf"},"before":null,"after":{"shelf":{"value":"done"}},"generation":"g1","created_at":"${java.time.Instant.now()}","next_action":"revert"}]"""
@@ -65,6 +72,15 @@ class AppViewModelTest {
         val model = AppViewModel(app, Sessions(AuthenticatedSession(identity, "token"))) { api() }
         withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
         return model
+    }
+
+    @Test fun agentSelectedEntriesOpenWithClickToLoadImages() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        assertEquals("https://content.test/signed", model.openEntry(2)?.url)
+        assertEquals("https://content.test/signed", model.openEntry(2, agentSelected = true)?.url)
+        // Your own browsing gets proxied images (the server default); an
+        // agent-surfaced entry must not load remote images automatically.
+        assertEquals(listOf<String?>(null, "mode=click"), contentUrlQueries.toList())
     }
 
     @Test fun retentionRecoveryRejectionsReachTheUi() = runBlocking(Dispatchers.IO) {
@@ -142,6 +158,39 @@ class AppViewModelTest {
         assertEquals("Notification headline", model.state.value.snapshot.entries.single().title)
     }
 
+    @Test fun backgroundSyncCommitReloadsUiState() = runBlocking(Dispatchers.IO) {
+        val signals = MutableSharedFlow<String>(extraBufferCapacity = 1)
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val model = AppViewModel(app, Sessions(AuthenticatedSession(identity, "token")), signals) { api() }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        assertTrue(model.state.value.snapshot.entries.isEmpty())
+
+        // A background writer commits to the same account cache, then publishes.
+        SessionCache(app, identity).withEngine { engine ->
+            engine.applyPage(
+                listOf(SyncChange(1, entry = CachedEntry(5, title = "Pulled by background sync"))),
+                Revision("g1", 1),
+            )
+            engine.flush()
+        }
+        signals.emit(identity.cacheKey)
+        withTimeout(15000) {
+            model.state.first { state ->
+                state.snapshot.entries.any { it.id == 5L && it.title == "Pulled by background sync" }
+            }
+        }
+        assertEquals(setOf(5L), model.state.value.states.keys)
+
+        // A commit signalled for a different account leaves this account alone.
+        SessionCache(app, identity).withEngine { engine ->
+            engine.mergeEntry(CachedEntry(6, title = "Not signalled"))
+            engine.flush()
+        }
+        signals.emit("other-account")
+        delay(300)
+        assertNull(model.state.value.snapshot.entries.firstOrNull { it.id == 6L })
+    }
+
     @Test fun refreshFetchesAgentChangesForTodayAndSessionEnd() = runBlocking(Dispatchers.IO) {
         val model = model()
         assertTrue("refresh never requested agent changes", calls.contains("/v1/activity/agent-changes"))
@@ -208,5 +257,216 @@ class AppViewModelTest {
         val cached = model.openEntry(2)
         assertEquals("<p>account-a</p>", cached?.cachedHtml)
         assertNull(cached?.url)
+    }
+
+    @Test fun clearedTokenSignsOutOnRefresh() = runBlocking(Dispatchers.IO) {
+        val sessions = Sessions(AuthenticatedSession(identity, "token"))
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val model = AppViewModel(app, sessions) { api() }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        sessions.clearToken()
+        model.refresh()
+        withTimeout(15000) { model.loggedIn.first { !it } }
+        assertFalse(model.loggedIn.value)
+        assertEquals("Your session expired. Sign in again.", model.sessionNotice.value)
+    }
+
+    @Test fun reLoginDuringExpiryIsNotSignedOut() = runBlocking(Dispatchers.IO) {
+        val sessions = Sessions(AuthenticatedSession(identity, "token"))
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val unauthorized = EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { chain ->
+            calls += chain.request().url.encodedPath
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(401).message("unauthorized")
+                .body("""{"detail":"expired"}""".toResponseBody()).build()
+        }.build())
+        var factory: () -> EarnestApi = { api() }
+        val model = AppViewModel(app, sessions) { factory() }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        val fresh = AuthenticatedSession(identity, "fresh-token")
+        // The session fails with a 401 while the login flow stores a new one.
+        factory = { unauthorized }
+        sessions.onClear = { sessions.value = fresh }
+        model.refresh()
+        withTimeout(15000) { model.state.first { it.error != null } }
+        assertTrue(model.loggedIn.value)
+        assertEquals(fresh, sessions.current())
+        assertNull(model.sessionNotice.value)
+    }
+
+    @Test fun unauthorizedFlushSignsOutTheExpiredSession() = runBlocking(Dispatchers.IO) {
+        val scheduler = TestCoroutineScheduler()
+        Dispatchers.setMain(UnconfinedTestDispatcher(scheduler))
+        val sessions = Sessions(AuthenticatedSession(identity, "token"))
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val unauthorized = EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { chain ->
+            calls += chain.request().url.encodedPath
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(401).message("unauthorized")
+                .body("""{"detail":"expired"}""".toResponseBody()).build()
+        }.build())
+        var factory: () -> EarnestApi = { api() }
+        val model = AppViewModel(app, sessions) { factory() }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        factory = { unauthorized }
+        val saved = java.util.concurrent.atomic.AtomicInteger()
+        model.later(2) { saved.incrementAndGet() }
+        withTimeout(15000) { while (saved.get() == 0) delay(10) }
+        withTimeout(15000) {
+            while (!calls.contains("/v1/state:batch")) {
+                scheduler.advanceUntilIdle()
+                delay(10)
+            }
+        }
+        withTimeout(15000) { model.loggedIn.first { !it } }
+        assertNull(sessions.current())
+        assertEquals("Your session expired. Sign in again.", model.sessionNotice.value)
+    }
+
+    @Test fun reLoginDuringFlushExpiryIsNotSignedOut() = runBlocking(Dispatchers.IO) {
+        val scheduler = TestCoroutineScheduler()
+        Dispatchers.setMain(UnconfinedTestDispatcher(scheduler))
+        val sessions = Sessions(AuthenticatedSession(identity, "token"))
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val unauthorized = EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { chain ->
+            calls += chain.request().url.encodedPath
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(401).message("unauthorized")
+                .body("""{"detail":"expired"}""".toResponseBody()).build()
+        }.build())
+        var factory: () -> EarnestApi = { api() }
+        val model = AppViewModel(app, sessions) { factory() }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        val fresh = AuthenticatedSession(identity, "fresh-token")
+        // The flush fails with a 401 while the login flow stores a new session.
+        factory = { unauthorized }
+        sessions.onClear = { sessions.value = fresh }
+        val saved = java.util.concurrent.atomic.AtomicInteger()
+        model.later(2) { saved.incrementAndGet() }
+        withTimeout(15000) { while (saved.get() == 0) delay(10) }
+        withTimeout(15000) {
+            while (sessions.value != fresh) {
+                scheduler.advanceUntilIdle()
+                delay(10)
+            }
+        }
+        assertTrue(model.loggedIn.value)
+        assertEquals(fresh, sessions.current())
+        assertNull(model.sessionNotice.value)
+    }
+
+    @Test fun clearedTokenSignsOutOnQueuedAction() = runBlocking(Dispatchers.IO) {
+        val sessions = Sessions(AuthenticatedSession(identity, "token"))
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val model = AppViewModel(app, sessions) { api() }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        sessions.clearToken()
+        val saved = java.util.concurrent.atomic.AtomicInteger()
+        model.later(2) { saved.incrementAndGet() }
+        withTimeout(15000) { model.loggedIn.first { !it } }
+        assertEquals("Your session expired. Sign in again.", model.sessionNotice.value)
+        assertEquals("dropped swipe still reported success", 0, saved.get())
+        assertTrue(SessionCache(app, identity).withEngine { it.snapshot().outbox.isEmpty() })
+    }
+
+    @Test fun clearedTokenSignsOutOnEntryLoad() = runBlocking(Dispatchers.IO) {
+        val sessions = Sessions(AuthenticatedSession(identity, "token"))
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val model = AppViewModel(app, sessions) { api() }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        sessions.clearToken()
+        assertNull(model.loadEntry(2))
+        withTimeout(15000) { model.loggedIn.first { !it } }
+        assertFalse(model.loggedIn.value)
+        assertEquals("Your session expired. Sign in again.", model.sessionNotice.value)
+    }
+
+    @Test fun queuedActionsFlushShortlyAfterTheLastAction() = runBlocking(Dispatchers.IO) {
+        val scheduler = TestCoroutineScheduler()
+        Dispatchers.setMain(UnconfinedTestDispatcher(scheduler))
+        val model = model()
+        val saved = java.util.concurrent.atomic.AtomicInteger()
+        model.later(2) { saved.incrementAndGet() }
+        withTimeout(15000) { while (saved.get() == 0) delay(10) }
+        assertFalse("the outbox flushed before the debounce", calls.contains("/v1/state:batch"))
+        // queue() reports the save before it schedules the debounced flush on
+        // another thread, so keep advancing the clock until the flush runs
+        // instead of advancing once and racing the scheduling.
+        withTimeout(15000) {
+            while (!calls.contains("/v1/state:batch")) {
+                scheduler.advanceUntilIdle()
+                delay(10)
+            }
+        }
+    }
+
+    @Test fun flushDoesNotClobberAConcurrentRefreshLoadingFlag() = runBlocking(Dispatchers.IO) {
+        val scheduler = TestCoroutineScheduler()
+        Dispatchers.setMain(UnconfinedTestDispatcher(scheduler))
+
+        withContext(Dispatchers.IO) { SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) } }
+
+        val batchEntered = CompletableDeferred<Unit>()
+        val refreshChangesEntered = CompletableDeferred<Unit>()
+        val releaseRefresh = CompletableDeferred<Unit>()
+        val blockRefresh = java.util.concurrent.atomic.AtomicBoolean(false)
+        val api = EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { chain ->
+            val path = chain.request().url.encodedPath
+            calls += path
+            val body = when (path) {
+                "/v1/settings" -> """{"today_decay_days":2,"rev":0}"""
+                "/v1/changes" -> {
+                    if (blockRefresh.get()) {
+                        refreshChangesEntered.complete(Unit)
+                        runBlocking { releaseRefresh.await() }
+                    }
+                    """{"changes":[],"next":{"generation":"g1","rev":0},"next_cursor":"g1:0"}"""
+                }
+                "/v1/state:batch" -> {
+                    batchEntered.complete(Unit)
+                    val requestBody = chain.request().body?.let { body ->
+                        val buffer = okio.Buffer()
+                        body.writeTo(buffer)
+                        buffer.readUtf8()
+                    }.orEmpty()
+                    val opId = Regex("\"op_id\":\"([^\"]+)\"").find(requestBody)?.groupValues?.get(1).orEmpty()
+                    """[{"op_id":"$opId","status":"applied","state":{"principal":1,"entry_id":2,"seen":{"value":"unseen","rev":0,"occurred_at":"2026-11-03T00:00:00Z","actor":1,"source":"agent"},"shelf":{"value":"none","rev":0,"occurred_at":"2026-11-03T00:00:00Z","actor":1,"source":"agent"},"kept":{"value":false,"rev":0,"occurred_at":"2026-11-03T00:00:00Z","actor":1,"source":"agent"},"state_rev":0},"replay":false}]"""
+                }
+                else -> "[]"
+            }
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("test")
+                .body(body.toResponseBody()).build()
+        }.build())
+
+        val model = AppViewModel(app, Sessions(AuthenticatedSession(identity, "token"))) { api }
+        try {
+            withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+
+            // A large agent-changes payload makes the flush's state rebuild slow enough to interleave.
+            val activity = """{"id":1,"principal_id":9,"principal_name":"Morning Agent","action":"state.updated","target":{"entry_id":2,"register":"shelf"},"before":null,"after":{"shelf":{"value":"done"}},"generation":"g1","created_at":"2026-11-03T00:00:00Z","next_action":"revert"}"""
+            val changes = (1..50000).joinToString(prefix = "[", postfix = "]", separator = ",") { activity }
+            SessionCache(app, identity).preferences.edit { putString("agent_changes", changes) }
+
+            val saved = java.util.concurrent.atomic.AtomicInteger()
+            model.later(2) { saved.incrementAndGet() }
+            withTimeout(15000) { while (saved.get() == 0) delay(10) }
+
+            // Wait for the debounce to fire and the flush to reach its batch request.
+            withTimeout(15000) {
+                while (!batchEntered.isCompleted) {
+                    scheduler.advanceUntilIdle()
+                    delay(10)
+                }
+            }
+
+            // Let the flush read the state and start its slow rebuild, then refresh.
+            delay(50)
+            blockRefresh.set(true)
+            model.refresh()
+            withTimeout(15000) { refreshChangesEntered.await() }
+            assertTrue("the flush clobbered refresh's loading flag", model.state.value.loading)
+        } finally {
+            releaseRefresh.complete(Unit)
+        }
+
+        withTimeout(15000) { model.state.first { !it.loading } }
+        Unit
     }
 }

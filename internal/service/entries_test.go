@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -569,6 +570,33 @@ func TestEntriesGetAndContent(t *testing.T) {
 			t.Fatal("negative id accepted", err)
 		}
 	})
+	t.Run("get_by_ids_content_is_opt_in", func(t *testing.T) {
+		plain, err := f.s.GetByIDs(ctx, f.a, []int64{e1, e2})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range plain {
+			if e.Content != nil {
+				t.Fatalf("GetByIDs loaded content for %d", e.ID)
+			}
+		}
+		withContent, err := f.s.GetByIDsWithContent(ctx, f.a, []int64{e1, e2})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range withContent {
+			if e.Content == nil || e.Content.HTML == "" {
+				t.Fatalf("GetByIDsWithContent missing body for %d", e.ID)
+			}
+		}
+		tomb, err := f.s.GetByIDsWithContent(ctx, f.a, []int64{e3})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(tomb) != 1 || !tomb[0].Deleted || tomb[0].Content != nil {
+			t.Fatalf("tombstone content: %+v", tomb)
+		}
+	})
 	t.Run("content_prefers_extracted_then_version", func(t *testing.T) {
 		hash := entriesTestHashB("body:first")
 		stmt := "INSERT INTO contents(entry_id,content_hash,sanitizer_version,source,html,text) VALUES($1,$2,$3,$4,$5,$6)"
@@ -610,4 +638,234 @@ func TestEntriesGetAndContent(t *testing.T) {
 			t.Fatal("deleted body served", err)
 		}
 	})
+}
+
+// TestEntryTagConditionsCompose pins SQL precedence: filter conditions join
+// with AND, so a tag condition with a top-level OR must parenthesise it or
+// entries bypass the rest of the filter (a Done entry of one subscription
+// leaked into another subscription's read stream).
+func TestEntryTagConditionsCompose(t *testing.T) {
+	template := storetest.NewTemplate(t)
+	f := entriesTestNew(t, template)
+	ctx := context.Background()
+	user, human := f.a.UserID, f.a.PrincipalID
+	base := f.now()
+	feedA := entriesTestFeed(t, f.db, "https://entriesTag-a.test/rss", 0)
+	feedB := entriesTestFeed(t, f.db, "https://entriesTag-b.test/rss", 0)
+	subA := entriesTestSub(t, f.db, user, feedA, "today")
+	entriesTestSub(t, f.db, user, feedB, "today")
+	eA := f.ingest(t, feedA, "read here", base.Add(-1*time.Hour))
+	eB := f.ingest(t, feedB, "done there", base.Add(-2*time.Hour))
+	f.setClock(base)
+	entriesTestState(t, f.db, human, eA, "seen", "seen")
+	entriesTestState(t, f.db, human, eB, "shelf", "done")
+	got, err := f.s.Entries(ctx, f.a, EntryFilter{View: ViewAll, SubscriptionID: subA, RequireTags: []EntryTag{{Kind: TagRead}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entriesTestEqual(t, got, []int64{eA})
+}
+
+// TestEntryLabelNamesSkipsDeletedRows pins the categories projection: a
+// tombstoned membership and a membership under a deleted label must not
+// resurface in stream results.
+func TestEntryLabelNamesSkipsDeletedRows(t *testing.T) {
+	template := storetest.NewTemplate(t)
+	f := entriesTestNew(t, template)
+	ctx := context.Background()
+	user := f.a.UserID
+	base := f.now()
+	feed := entriesTestFeed(t, f.db, "https://entriesLabel.test/rss", 0)
+	entriesTestSub(t, f.db, user, feed, "today")
+	e1 := f.ingest(t, feed, "live label", base.Add(-1*time.Hour))
+	e2 := f.ingest(t, feed, "tombstoned", base.Add(-2*time.Hour))
+	e3 := f.ingest(t, feed, "deleted label", base.Add(-3*time.Hour))
+	live, err := f.s.CreateLabel(ctx, f.a, "live", "op-live")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone, err := f.s.CreateLabel(ctx, f.a, "gone", "op-gone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []struct {
+		sql  string
+		args []any
+	}{
+		{"INSERT INTO entry_labels(user_id,entry_id,label_id,rev) VALUES($1,$2,$3,1)", []any{user, e1, live.ID}},
+		{"INSERT INTO entry_labels(user_id,entry_id,label_id,rev,deleted_at) VALUES($1,$2,$3,1,now())", []any{user, e2, live.ID}},
+		{"INSERT INTO entry_labels(user_id,entry_id,label_id,rev) VALUES($1,$2,$3,1)", []any{user, e3, gone.ID}},
+		{"UPDATE labels SET deleted_at=now() WHERE id=$1", []any{gone.ID}},
+	} {
+		if _, err := f.db.Pool().Exec(ctx, q.sql, q.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := f.s.EntryLabelNames(ctx, f.a, []int64{e1, e2, e3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || len(got[e1]) != 1 || got[e1][0] != "live" {
+		t.Fatalf("labels leaked deleted rows: %v", got)
+	}
+}
+
+func TestUnreadCounts(t *testing.T) {
+	template := storetest.NewTemplate(t)
+	f := entriesTestNew(t, template)
+	ctx := context.Background()
+	user, human := f.a.UserID, f.a.PrincipalID
+	base := f.now()
+
+	feedA := entriesTestFeed(t, f.db, "https://counts-a.test/rss", 0)
+	feedB := entriesTestFeed(t, f.db, "https://counts-b.test/rss", 0)
+	subA := entriesTestSub(t, f.db, user, feedA, "today")
+	subB := entriesTestSub(t, f.db, user, feedB, "today")
+
+	f.ingest(t, feedA, "unread one", base.Add(-time.Hour))
+	e2 := f.ingest(t, feedA, "later", base.Add(-2*time.Hour))
+	e3 := f.ingest(t, feedA, "done", base.Add(-3*time.Hour))
+	e4 := f.ingest(t, feedA, "kept", base.Add(-4*time.Hour))
+	e5 := f.ingest(t, feedA, "seen", base.Add(-5*time.Hour))
+	f.ingest(t, feedB, "unread two", base.Add(-time.Hour))
+	e7 := f.ingest(t, feedA, "gone", base.Add(-6*time.Hour))
+
+	entriesTestState(t, f.db, human, e2, "shelf", "later")
+	entriesTestState(t, f.db, human, e3, "shelf", "done")
+	entriesTestState(t, f.db, human, e4, "kept", "")
+	entriesTestState(t, f.db, human, e5, "seen", "seen")
+	if _, err := f.db.Pool().Exec(ctx, "UPDATE entries SET deleted_at=now() WHERE id=$1", e7); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := f.s.UnreadCounts(ctx, f.a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BySubscription[subA] != 3 || got.BySubscription[subB] != 1 {
+		t.Fatalf("by subscription: %+v", got.BySubscription)
+	}
+	if got.Later != 1 || got.Kept != 1 || got.Total != 4 {
+		t.Fatalf("totals: %+v", got)
+	}
+
+	// A soft-deleted subscription's entries no longer count.
+	if _, err := f.db.Pool().Exec(ctx, "UPDATE subscriptions SET deleted_at=now() WHERE id=$1", subB); err != nil {
+		t.Fatal(err)
+	}
+	got, err = f.s.UnreadCounts(ctx, f.a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got.BySubscription[subB]; ok {
+		t.Fatalf("deleted subscription still counted: %+v", got.BySubscription)
+	}
+	if got.BySubscription[subA] != 3 || got.Total != 3 || got.Later != 1 || got.Kept != 1 {
+		t.Fatalf("totals after unsubscribe: %+v", got)
+	}
+
+	// The aggregate must agree with the unread-only list it summarises.
+	var listed []Entry
+	var afterSeq uint64
+	for {
+		page, err := f.s.Entries(ctx, f.a, EntryFilter{View: ViewAll, UnreadOnly: true, Limit: 200, AfterSeq: afterSeq})
+		if err != nil {
+			t.Fatal(err)
+		}
+		listed = append(listed, page...)
+		if len(page) < 200 {
+			break
+		}
+		afterSeq = page[len(page)-1].Seq
+	}
+	bySub := map[int64]int64{}
+	var later, kept, total int64
+	for _, entry := range listed {
+		bySub[entry.SubscriptionID]++
+		if entry.State.Shelf.Value == syncmodel.Later {
+			later++
+		}
+		if entry.State.Kept.Value == syncmodel.True {
+			kept++
+		}
+		total++
+	}
+	if !reflect.DeepEqual(bySub, got.BySubscription) {
+		t.Fatalf("per subscription: list=%v counts=%v", bySub, got.BySubscription)
+	}
+	if later != got.Later || kept != got.Kept || total != got.Total {
+		t.Fatalf("totals: list later=%d kept=%d total=%d counts=%+v", later, kept, total, got)
+	}
+}
+
+// TestUnreadCountsMatchWalkForAgents pins the Google Reader total against the
+// paging loop it replaced, for the human and for an agent actor (both resolve
+// the human's registers), and checks the read scope is required.
+func TestUnreadCountsMatchWalkForAgents(t *testing.T) {
+	template := storetest.NewTemplate(t)
+	f := entriesTestNew(t, template)
+	ctx := context.Background()
+	user, human := f.a.UserID, f.a.PrincipalID
+
+	feedA := entriesTestFeed(t, f.db, "https://unreadwalk-a.test/rss", 0)
+	feedB := entriesTestFeed(t, f.db, "https://unreadwalk-b.test/rss", 0)
+	entriesTestSub(t, f.db, user, feedA, "today")
+	subB := entriesTestSub(t, f.db, user, feedB, "now")
+
+	ids := f.ingestMany(t, feedA, "uc", 8, f.now())
+	f.ingestMany(t, feedB, "ucB", 4, f.now())
+	f.setClock(entriesTestBase)
+
+	// Later and kept stay unread; seen, done, tombstones and dead
+	// subscriptions drop out.
+	entriesTestState(t, f.db, human, ids[0], "seen", "seen")
+	entriesTestState(t, f.db, human, ids[1], "shelf", "done")
+	entriesTestState(t, f.db, human, ids[2], "shelf", "later")
+	entriesTestState(t, f.db, human, ids[3], "kept", "")
+	if _, err := f.db.Pool().Exec(ctx, "UPDATE entries SET deleted_at=now() WHERE id=$1", ids[4]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.Pool().Exec(ctx, "UPDATE subscriptions SET deleted_at=now() WHERE id=$1", subB); err != nil {
+		t.Fatal(err)
+	}
+	// Other principals' registers never feed the human's count.
+	other := entriesTestOtherUser(t, f.db, "unreadWalkOther")
+	entriesTestState(t, f.db, other.PrincipalID, ids[5], "seen", "seen")
+	agent := entriesTestAgent(t, f.db, user, "ucbot", ScopeEntriesRead)
+	entriesTestState(t, f.db, agent.PrincipalID, ids[6], "seen", "seen")
+
+	// walk replicates the greader unread-count loop it replaced.
+	walk := func() int64 {
+		var total int64
+		filter := EntryFilter{View: ViewAll, UnreadOnly: true, Limit: 5}
+		for {
+			page, err := f.s.Entries(ctx, f.a, filter)
+			if err != nil {
+				t.Fatal(err)
+			}
+			total += int64(len(page))
+			if len(page) < 5 {
+				return total
+			}
+			filter.AfterSeq = page[len(page)-1].Seq
+		}
+	}
+	want := walk()
+	if want != 5 {
+		t.Fatalf("walk counted %d, want 5", want)
+	}
+	for _, a := range []Actor{f.a, agent} {
+		got, err := f.s.UnreadCounts(ctx, a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Total != want {
+			t.Fatalf("UnreadCounts total %d, walk %d", got.Total, want)
+		}
+	}
+	noScope := f.a
+	noScope.Scopes = []Scope{ScopePositionOwn}
+	if _, err := f.s.UnreadCounts(ctx, noScope); !errors.Is(err, ErrForbidden) {
+		t.Fatal("missing scope accepted", err)
+	}
 }

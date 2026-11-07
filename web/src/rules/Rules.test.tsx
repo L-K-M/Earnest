@@ -8,13 +8,13 @@ import {Rules} from './Rules'
 vi.mock('../request',() => ({request:vi.fn()}))
 afterEach(() => {cleanup();vi.resetAllMocks()})
 const rule = {id:1,name:'Noise',predicate:{type:'feed_in',ids:[42]},actions:[{type:'notify',budget:3}],enabled:true,match_count:14,last_match_at:'2026-11-01T12:00:00Z'}
-function mount(pipeline='enabled', watch=false) {
+function mount(pipeline='enabled', watch=false, dryRun: {entries: Entry[]; total?: number} = {entries:[{id:9,title:'Matching story'} as Entry]}) {
   vi.mocked(request).mockImplementation(async (path,options) => {
     if (path === '/v1/pipeline') return {embed:pipeline,classify:pipeline,semantic:pipeline,watch:pipeline,compile_rule:pipeline}
     if (path === '/v1/rules' && !options?.method) return watch ? [rule,{...rule,id:2,name:'Security watch',predicate:{type:'semantic',value:'advisories'}}] : [rule]
     if (path === '/v1/watch-rules') return watch ? [{...rule,id:2,name:'Security watch',predicate:{type:'semantic',value:'advisories'},check_llm:false,check_budget:3,status:pipeline}] : []
     if (path === '/v1/webhooks') return []
-    if (path === '/v1/rules:dry-run') return {entries:[{id:9,title:'Matching story'} as Entry]}
+    if (path === '/v1/rules:dry-run') return dryRun
     return {}
   })
   render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><Rules feeds={[{id:8,feed_id:42,title:'Publisher'} as Subscription]} folders={[{id:7,name:'Work',rev:1,deleted:false}]} labels={[{id:3,name:'Reading',rev:1,deleted:false}]}/></QueryClientProvider>)
@@ -58,6 +58,12 @@ it('uses feed IDs, explains restrictions inline and hides model conditions and w
   expect((screen.getByRole('button',{name:/Dry run/}) as HTMLButtonElement).disabled).toBe(true)
   fireEvent.change(screen.getByLabelText('Action 1 type'),{target:{value:'webhook'}})
   expect(screen.getByText(/Webhooks allow only feeds/)).toBeTruthy()
+})
+it('reports the full dry-run total when the sample is capped',async () => {
+  mount('enabled',false,{entries:[{id:9,title:'Matching story'} as Entry],total:500})
+  const editor = await edit()
+  fireEvent.click(within(editor).getByRole('button',{name:/Dry run/}))
+  expect(await screen.findByText('Would have matched 500 items. Showing the first 1.')).toBeTruthy()
 })
 it('shows server validation errors and never offers Save after failed dry run',async () => {
   mount()

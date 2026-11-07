@@ -132,6 +132,8 @@ data class Entry(
 data class EntriesPage(
     val entries: List<Entry>?,
     @SerialName("next_cursor") val nextCursor: String? = null,
+    /** Full match count for a dry run; may exceed `entries.size` when the sample is capped. */
+    @SerialName("total") val total: Long? = null,
 )
 
 @Serializable

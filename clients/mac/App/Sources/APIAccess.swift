@@ -124,11 +124,11 @@ func presentedState(fetched: APIState, engine: SyncEngine) throws -> State {
 }
 
 /// Reconstruct transport rows from the durable snapshot for offline lists.
-func cachedEntry(_ entry: SyncEntry, principal: Int64, engine: SyncEngine) throws -> APIEntry {
+func cachedEntry(_ entry: SyncEntry, principal: Int64, engine: SyncEngine, state prefetched: EarnestKit.State? = nil) throws -> APIEntry {
     let encoder = JSONEncoder()
     let decoder = JSONDecoder()
     var fields = try decoder.decode(APIValue.self, from: encoder.encode(entry)).objectValue ?? [:]
-    let state = try engine.state(principal: principal, entryID: entry.id)
+    let state = try prefetched ?? engine.state(principal: principal, entryID: entry.id)
     fields["state"] = try decoder.decode(APIValue.self, from: encoder.encode(state))
     fields["published_at"] = entry.publishedAt.map { .string(ISO8601DateFormatter().string(from: $0)) } ?? .null
     fields["first_seen_at"] = .string(entry.firstSeenAt.map { ISO8601DateFormatter().string(from: $0) } ?? "")

@@ -7,7 +7,8 @@ import type {Entry, ReaderActions} from './reader'
 import {request} from './request'
 vi.mock('./request', () => ({request:vi.fn()}))
 const virtualItems = vi.hoisted(() => ({items: [0, 1]}))
-vi.mock('@tanstack/react-virtual', () => ({useVirtualizer: ({count}: {count:number}) => ({getTotalSize:()=>count*100, getVirtualItems:()=>virtualItems.items.filter(index=>index<count).map(index=>({index,size:100,start:index*100})), scrollToIndex:vi.fn()})}))
+const {measureElementMock} = vi.hoisted(() => ({measureElementMock: vi.fn()}))
+vi.mock('@tanstack/react-virtual', () => ({useVirtualizer: ({count, scrollMargin = 0}: {count:number; scrollMargin?:number}) => ({getTotalSize:()=>count*100, getVirtualItems:()=>virtualItems.items.filter(index=>index<count).map(index=>({index,size:100,start:index*100 + scrollMargin})), scrollToIndex:vi.fn(), options:{scrollMargin}, measureElement:measureElementMock})}))
 const observers: IntersectionObserverCallback[] = []
 const observed: Element[] = []
 class Observer {
@@ -19,19 +20,24 @@ const entries = [1,2,3].map(id => ({id,seq:id,title:`Article ${id}`,blurb:'A cac
 function withShelf(entry: Entry, value: 'none' | 'later' | 'done'): Entry {
   return {...entry, state: {...entry.state, shelf: {...entry.state.shelf, value}}}
 }
-afterEach(() => {cleanup();vi.clearAllMocks();vi.unstubAllGlobals();virtualItems.items=[0,1];observers.length=0;observed.length=0})
+afterEach(() => {cleanup();vi.clearAllMocks();vi.restoreAllMocks();vi.unstubAllGlobals();virtualItems.items=[0,1];observers.length=0;observed.length=0})
 function mount(shortcuts=true, blurbStatus="disabled", selected=entries[0], rows=entries) {
   vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {blurb:blurbStatus} : path.startsWith('/v1/positions') ? {seq:0} : {entries:rows})
   const act = vi.fn().mockResolvedValue(undefined)
   const actions: ReaderActions = {act,state:entry=>entry.state}
   const onSelect=vi.fn()
-  const view=render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'today',title:'Today'}} subscriptions={[]} actions={actions} selected={selected} onSelect={onSelect} onOpen={vi.fn()} shortcuts={shortcuts} counts={false} summary={{seen:0,done:0,later:0,kept:0}} onHelp={vi.fn()} /></QueryClientProvider>)
+  const view=render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'today',title:'Today'}} subscriptions={[]} actions={actions} selected={selected} onSelect={onSelect} onOpen={vi.fn()} shortcuts={shortcuts} counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>)
   return {act,onSelect,container:view.container}
 }
 function scroller() { return screen.getByLabelText('Article list') }
 function scrollPast(id: number) {
   scroller().scrollTop = id * 100 + 50
   fireEvent.scroll(scroller())
+}
+function positionWrites(): number[] {
+  return vi.mocked(request).mock.calls
+    .filter(([path, options]) => typeof path === 'string' && path.startsWith('/v1/positions') && (options as RequestInit | undefined)?.method === 'PUT')
+    .map(([, options]) => JSON.parse(String((options as RequestInit).body)).seq as number)
 }
 describe('river interactions', () => {
   it('does not mark rows seen merely because they render', async () => {
@@ -52,6 +58,22 @@ describe('river interactions', () => {
     await waitFor(()=>expect(act).toHaveBeenCalledWith(entries[0],'seen','seen','passive'),{timeout:1500})
     expect(act).toHaveBeenCalledTimes(1)
     expect(screen.queryByText('Article 3')).toBeNull()
+  })
+  it('does not mark a row seen while it is still visible below the Today panel', async () => {
+    // The agent panel pushes the list down, so the list starts 40px into the
+    // scroller. The virtualizer must report rows in scroller coordinates.
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return {top: this.classList.contains('virtual-list') ? 40 : 0} as DOMRect
+    })
+    const {act}=mount()
+    await screen.findByText('Article 1')
+    // Row 0 ends at 100px in list coordinates but 140px in the scroller.
+    scroller().scrollTop = 100
+    fireEvent.scroll(scroller())
+    await new Promise(resolve => window.setTimeout(resolve, 700))
+    expect(act).not.toHaveBeenCalled()
+    scrollPast(2)
+    await waitFor(()=>expect(act).toHaveBeenCalledWith(entries[0],'seen','seen','passive'),{timeout:1500})
   })
   it('drops a queued passive seen when the reader marks the row unread', async () => {
     const {act}=mount()
@@ -81,6 +103,33 @@ describe('river interactions', () => {
     fireEvent.keyDown(document.body,{key:'k'})
     expect(onSelect).toHaveBeenCalledWith(entries[0])
     await waitFor(()=>expect(act).toHaveBeenCalledWith(entries[1],'seen','seen','passive'),{timeout:1500})
+  })
+  it('never regresses the resume position when an earlier row becomes due later', async () => {
+    const {act}=mount()
+    await screen.findByText('Article 2')
+    fireEvent.click(screen.getByText('Article 2'))
+    await waitFor(()=>expect(positionWrites()).toEqual([2]),{timeout:1500})
+    // The earlier row becomes due only now, after seq 2 was already saved.
+    fireEvent.keyDown(document.body,{key:'j'})
+    await waitFor(()=>expect(act).toHaveBeenCalledWith(entries[0],'seen','seen','passive'),{timeout:1500})
+    expect(positionWrites()).toEqual([2])
+  })
+  it('backs off before retrying a failed position write', async () => {
+    mount()
+    await screen.findByText('Article 2')
+    let failed=false
+    vi.mocked(request).mockImplementation(async (path, options) => {
+      if (typeof path === 'string' && path.startsWith('/v1/positions') && (options as RequestInit | undefined)?.method === 'PUT' && !failed) {
+        failed=true
+        throw new Error('offline')
+      }
+      return path === '/v1/pipeline' ? {blurb:'disabled'} : path.startsWith('/v1/positions') ? {seq:0} : {entries}
+    })
+    scrollPast(2)
+    await waitFor(()=>expect(positionWrites()).toEqual([2]),{timeout:1500})
+    await new Promise(resolve => window.setTimeout(resolve, 700))
+    expect(positionWrites()).toEqual([2])
+    await waitFor(()=>expect(positionWrites()).toEqual([2,2]),{timeout:3000})
   })
   it('keeps rows skipped by a jump unseen', async () => {
     virtualItems.items=[1,2]
@@ -119,6 +168,29 @@ describe('river interactions', () => {
     await screen.findByText('Article 1')
     fireEvent.keyDown(document.body,{key:'e'})
     expect(act).not.toHaveBeenCalled()
+  })
+  it('exposes each row to the virtualizer measurement hook', async () => {
+    measureElementMock.mockClear()
+    mount()
+    await screen.findByText('Article 1')
+    const rows = document.querySelectorAll('.virtual-row')
+    expect(rows.length).toBeGreaterThan(0)
+    expect(measureElementMock).toHaveBeenCalledTimes(rows.length)
+    for (const row of rows) expect(row.getAttribute('data-index')).toMatch(/^\d+$/)
+  })
+  it('shows one representative per story with its also-in count', async () => {
+    vi.mocked(request).mockImplementation(async path => {
+      if (path === '/v1/pipeline') return {blurb:'disabled'}
+      if (path.startsWith('/v1/positions')) return {seq:0}
+      return path.includes('group=cluster') ? {entries, groups:[{entry:entries[0],also_in:2}]} : {entries}
+    })
+    vi.stubGlobal('IntersectionObserver', Observer)
+    const actions: ReaderActions = {act:vi.fn().mockResolvedValue(undefined),state:entry=>entry.state}
+    render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'today',title:'Today'}} subscriptions={[]} actions={actions} selected={entries[0]} onSelect={vi.fn()} onOpen={vi.fn()} shortcuts={false} counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>)
+    await screen.findByText('Article 1')
+    fireEvent.click(screen.getByText('One per story'))
+    await waitFor(()=>expect(screen.getByText(/also in 2/)).toBeTruthy())
+    expect(vi.mocked(request).mock.calls.some(([path]) => path.includes('group=cluster'))).toBe(true)
   })
 })
 it('retries a scrolled-past row after sync finishes restoring',async()=>{

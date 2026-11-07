@@ -15,14 +15,15 @@ import ch.lkmc.earnest.core.StateWrite
 import ch.lkmc.earnest.core.SubscriptionBody
 import ch.lkmc.earnest.core.SubscriptionPatch
 import ch.lkmc.earnest.core.SyncEngine
-import ch.lkmc.earnest.core.SyncRepository
 import ch.lkmc.earnest.core.SyncSnapshot
 import ch.lkmc.earnest.db.BriefEntity
 import ch.lkmc.earnest.db.ContentEntity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.MapSerializer
@@ -58,9 +59,10 @@ data class UiState(
 class AppViewModel internal constructor(
     application: Application,
     private val sessions: SessionStore,
+    private val syncSignals: Flow<String> = SyncAccess.committed,
     private val apiFactory: (AuthenticatedSession) -> EarnestApi,
 ) : AndroidViewModel(application) {
-    constructor(application: Application) : this(application, Secrets(application), {
+    constructor(application: Application) : this(application, Secrets(application), apiFactory = {
         EarnestApi(it.identity.server, it.token)
     })
 
@@ -69,6 +71,9 @@ class AppViewModel internal constructor(
     private var sessionStartedAt = Instant.now()
     private var changesSince = Instant.EPOCH.toString()
     private val json = Json { ignoreUnknownKeys = true }
+    private val flushScheduler by lazy {
+        DebouncedFlush(viewModelScope, FLUSH_DEBOUNCE_MILLIS) { flushOutbox() }
+    }
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -76,17 +81,35 @@ class AppViewModel internal constructor(
     private val _loggedIn = MutableStateFlow(sessions.current() != null)
     val loggedIn: StateFlow<Boolean> = _loggedIn.asStateFlow()
 
+    private val _sessionNotice = MutableStateFlow<String?>(null)
+    val sessionNotice: StateFlow<String?> = _sessionNotice.asStateFlow()
+
     init {
+        viewModelScope.launch {
+            syncSignals.collect { key ->
+                if (key == activeSession?.identity?.cacheKey) reloadFromCache()
+            }
+        }
         if (_loggedIn.value) onLoggedIn()
+    }
+
+    override fun onCleared() {
+        flushScheduler.cancel()
+        super.onCleared()
     }
 
     /** Called only after /v1/me established the authenticated account. */
     fun onLoggedIn() {
         account = null
         activeSession = null
+        _sessionNotice.value = null
         _state.value = UiState()
         viewModelScope.launch(Dispatchers.IO) {
-            val session = sessions.current() ?: return@launch
+            val session = sessions.current()
+            if (session == null) {
+                sessionExpired()
+                return@launch
+            }
             val cache = SessionCache(getApplication(), session.identity)
             try {
                 cache.withEngine { syncEngine ->
@@ -103,7 +126,7 @@ class AppViewModel internal constructor(
                         briefs = cache.db.briefs().get(),
                         principals = cachedPrincipalNames(cache),
                         agentChanges = changes,
-                        agentChangesError = if (cache.agentChangesStale) "Agent changes could not be refreshed. Reconnect to check automated actions." else null,
+                        agentChangesError = if (cache.agentChangesStale) AGENT_CHANGES_STALE_MESSAGE else null,
                     )
                     _loggedIn.value = true
                 }
@@ -111,10 +134,43 @@ class AppViewModel internal constructor(
                 if (sessions.current() == session) {
                     _state.value = UiState(error = "Could not restore the account cache: ${error.message}")
                     _loggedIn.value = true
+                } else if (sessions.current() == null) {
+                    sessionExpired()
                 }
                 return@launch
             }
             refresh()
+        }
+    }
+
+    /**
+     * Rebuilds the UI from the account cache after a background writer (the
+     * periodic WorkManager sync) committed. Makes no network requests, so
+     * signalling an unchanged cache only recomputes the same state.
+     */
+    private fun reloadFromCache() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val cache = account ?: return@launch
+            val session = activeSession ?: return@launch
+            if (!isCurrent(session, cache)) return@launch
+            cache.withEngine { engine ->
+                if (!isCurrent(session, cache)) return@withEngine
+                val restored = restoredState(engine, cache.identity.principalId)
+                val changes = cache.agentChanges()
+                // update{} keeps the reload from clobbering a concurrent
+                // foreground write to the state flow.
+                _state.update { previous -> previous.copy(
+                    snapshot = restored.snapshot,
+                    principalId = restored.principalId,
+                    states = restored.states,
+                    cadences = restored.cadences,
+                    riverEntryIds = restored.riverEntryIds,
+                    agentChanges = changes,
+                    sessionAgentChanges = activitySince(changes, sessionStartedAt),
+                    agentChangesError = if (cache.agentChangesStale) AGENT_CHANGES_STALE_MESSAGE else null,
+                    briefs = cache.db.briefs().get(),
+                ) }
+            }
         }
     }
 
@@ -129,37 +185,39 @@ class AppViewModel internal constructor(
     /** Pulls change pages, flushes the outbox and refreshes the cached briefs. */
     fun refresh() {
         viewModelScope.launch(Dispatchers.IO) {
-            val cache = account ?: return@launch
-            val session = activeSession ?: return@launch
-            if (!isCurrent(session, cache)) return@launch
-            _state.value = _state.value.copy(loading = true, error = null)
+            val (cache, session) = activeAccount("Still signing in; the refresh did not run.") ?: return@launch
+            _state.update { current -> current.copy(loading = true, error = null) }
             try {
                 val api = apiFactory(session)
-                cache.withEngine { syncEngine ->
-                    if (!isCurrent(session, cache)) return@withEngine
-                    val repository = SyncRepository(api, syncEngine)
+                val synced = cache.withSync(api) { repository ->
+                    if (!currentOrExpired(session, cache)) return@withSync null
                     cache.markAgentChangesStale()
                     val rejected = repository.pull() + repository.flush()
-                    val expired = syncEngine.expire(Instant.now()).map { it.operation.opId }
-                    syncEngine.flush()
-                    val briefs = runCatching { api.todaysBriefs() }.getOrNull()
-                    if (briefs != null) cacheBriefs(cache, briefs)
-                    val cached = briefs?.map { BriefEntity(it.principalId, it.value, it.rev) } ?: cache.db.briefs().get()
-                    val names = principalNames(api)
-                    savePrincipalNames(cache, names)
-                    val changesResult = runCatching { cache.refreshAgentChanges(api, changesSince) }
-                    changesResult.getOrNull()?.let {
+                    val expired = repository.expire(Instant.now()).map { it.operation.opId }
+                    // The agent-changes cursor must advance under the sync lock:
+                    // a concurrent worker cycle outside it could write an older one.
+                    val changes = runCatching { cache.refreshAgentChanges(api, changesSince) }
+                    changes.getOrNull()?.let {
                         cache.preferences.edit {
                             putString(SessionCache.KEY_CHANGES_SINCE, sessionStartedAt.toString())
                         }
                     }
-                    if (!isCurrent(session, cache)) return@withEngine
+                    Triple(rejected, expired, changes)
+                } ?: return@launch
+                val (rejected, expired, changesResult) = synced
+                val briefs = runCatching { api.todaysBriefs() }.getOrNull()
+                if (briefs != null) cacheBriefs(cache, briefs)
+                val cached = briefs?.map { BriefEntity(it.principalId, it.value, it.rev) } ?: cache.db.briefs().get()
+                val names = principalNames(api)
+                savePrincipalNames(cache, names)
+                cache.withEngine { syncEngine ->
+                    if (!currentOrExpired(session, cache)) return@withEngine
                     val restored = restoredState(syncEngine, cache.identity.principalId)
                     val changes = changesResult.getOrNull() ?: _state.value.agentChanges
-                    _state.value = _state.value.copy(
-                        snapshot = syncEngine.snapshot(),
-                        principalId = cache.identity.principalId,
-                        states = effectiveStates(syncEngine, cache.identity.principalId),
+                    _state.update { current -> current.copy(
+                        snapshot = restored.snapshot,
+                        principalId = restored.principalId,
+                        states = restored.states,
                         cadences = restored.cadences,
                         riverEntryIds = restored.riverEntryIds,
                         agentChanges = changes,
@@ -168,26 +226,30 @@ class AppViewModel internal constructor(
                         briefs = cached,
                         principals = names.ifEmpty { cachedPrincipalNames(cache) },
                         rejected = rejected,
-                        error = if (rejected.isEmpty()) null else "Some reading actions could not be synced because they expired or their articles were removed.",
+                        error = droppedOperationMessage(rejected, expired),
                         expired = expired,
-                    )
+                    ) }
                 }
+                refreshWidgets(getApplication())
             } catch (error: ApiException) {
-                if (!isCurrent(session, cache)) return@launch
-                if (error.isUnauthorized) {
-                    logout()
+                if (!currentOrExpired(session, cache)) return@launch
+                if (error.isUnauthorized && sessions.current() == session) {
+                    // Clear only the session that failed: a login that completed
+                    // concurrently must not lose its token or get signed out.
+                    sessions.clearToken()
+                    if (sessions.current() == null) sessionExpired()
                 }
-                _state.value = _state.value.copy(error = error.message)
+                _state.update { current -> current.copy(error = error.message) }
             } catch (error: Exception) {
-                if (isCurrent(session, cache)) _state.value = _state.value.copy(error = error.message)
+                if (currentOrExpired(session, cache)) _state.update { current -> current.copy(error = error.message) }
             } finally {
-                if (isCurrent(session, cache)) _state.value = _state.value.copy(loading = false)
+                if (currentOrExpired(session, cache)) _state.update { current -> current.copy(loading = false) }
             }
         }
     }
 
     fun markSeen(entryId: Long) {
-        queue(entryId, SyncEngine.REGISTER_SEEN, JsonPrimitive(SyncEngine.VALUE_SEEN), SyncEngine.KIND_PASSIVE, "render")
+        queue(entryId, SyncEngine.REGISTER_SEEN, JsonPrimitive(SyncEngine.VALUE_SEEN), SyncEngine.KIND_PASSIVE, "seen")
     }
 
     fun later(entryId: Long, onSaved: () -> Unit = {}) {
@@ -216,14 +278,13 @@ class AppViewModel internal constructor(
 
     private fun queue(entryId: Long, register: String, value: JsonElement, kind: String, action: String, onSaved: () -> Unit = {}) {
         viewModelScope.launch(Dispatchers.IO) {
-            val cache = account ?: return@launch
-            val session = activeSession ?: return@launch
+            val (cache, session) = activeAccount("Still signing in; the action was not saved.") ?: return@launch
             try {
                 cache.withEngine { syncEngine ->
-                    if (!isCurrent(session, cache)) return@withEngine
+                    if (!currentOrExpired(session, cache)) return@withEngine
                     val principal = cache.identity.principalId
                     if (principal == 0L || syncEngine.snapshot().cursor.generation.isEmpty()) {
-                        _state.value = _state.value.copy(error = "Still signing in; the action was not saved.")
+                        _state.update { current -> current.copy(error = "Still signing in; the action was not saved.") }
                         return@withEngine
                     }
                     val current = syncEngine.state(principal, entryId)
@@ -244,21 +305,85 @@ class AppViewModel internal constructor(
                     )
                     syncEngine.queue(write)
                     syncEngine.flush()
-                    _state.value = _state.value.copy(
-                        snapshot = syncEngine.snapshot(),
-                        states = effectiveStates(syncEngine, principal),
-                        cadences = restoredState(syncEngine, principal).cadences,
-                        agentChanges = cache.agentChanges(),
-                        sessionAgentChanges = activitySince(cache.agentChanges(), sessionStartedAt),
-                    )
+                    val restored = restoredState(syncEngine, principal)
+                    val agentChanges = cache.agentChanges()
+                    _state.update { current -> current.copy(
+                        snapshot = restored.snapshot,
+                        states = restored.states,
+                        cadences = restored.cadences,
+                        agentChanges = agentChanges,
+                        sessionAgentChanges = activitySince(agentChanges, sessionStartedAt),
+                    ) }
                     onSaved()
+                    flushScheduler.request()
                 }
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
             } catch (error: Exception) {
-                if (isCurrent(session, cache)) {
-                    _state.value = _state.value.copy(error = "Could not save the action: ${error.message}")
+                if (currentOrExpired(session, cache)) {
+                    _state.update { current -> current.copy(error = "Could not save the action: ${error.message}") }
                 }
+            }
+        }
+    }
+
+    /**
+     * Sends the durable outbox shortly after the last queued action. A network
+     * failure leaves the queue intact for the periodic sync; only a rejected
+     * operation is reported, because local state still shows the intent.
+     */
+    private suspend fun flushOutbox() {
+        // Room refuses main-thread access, so the flush leaves Main after the debounce.
+        withContext(Dispatchers.IO) {
+            val cache = account ?: return@withContext
+            val session = activeSession ?: return@withContext
+            if (!currentOrExpired(session, cache)) return@withContext
+            try {
+                // withSync serialises the flush against pull cycles; its engine
+                // sections take SyncAccess.mutex only around load-mutate-save,
+                // so the batch request never blocks a queued action.
+                val synced = cache.withSync(apiFactory(session)) { repository ->
+                    if (!currentOrExpired(session, cache)) return@withSync null
+                    val rejected = repository.flush()
+                    val expired = repository.expire(Instant.now()).map { it.operation.opId }
+                    rejected to expired
+                } ?: return@withContext
+                val (rejected, expired) = synced
+                cache.withEngine { syncEngine ->
+                    if (!currentOrExpired(session, cache)) return@withEngine
+                    // The session's river membership is left alone: only a refresh
+                    // starts a new one, so passive seen marks do not drop rows.
+                    // The update is atomic: a concurrent writer (refresh's loading
+                    // flag, an action error) must not be clobbered by this rebuild.
+                    // Read the engine before the update: its lambda may run more than once.
+                    val snapshot = syncEngine.snapshot()
+                    val principalId = cache.identity.principalId
+                    val states = effectiveStates(syncEngine, principalId)
+                    val agentChanges = cache.agentChanges()
+                    _state.update { current ->
+                        current.copy(
+                            snapshot = snapshot,
+                            principalId = principalId,
+                            states = states,
+                            agentChanges = agentChanges,
+                            sessionAgentChanges = activitySince(agentChanges, sessionStartedAt),
+                            rejected = rejected,
+                            error = droppedOperationMessage(rejected, expired) ?: current.error,
+                        )
+                    }
+                }
+            } catch (error: ApiException) {
+                if (!currentOrExpired(session, cache)) return@withContext
+                if (error.isUnauthorized && sessions.current() == session) {
+                    // Clear only the session that failed: a login that completed
+                    // concurrently must not lose its token or get signed out.
+                    sessions.clearToken()
+                    if (sessions.current() == null) sessionExpired()
+                }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                // The queue is durable; the periodic sync retries without user action.
             }
         }
     }
@@ -268,7 +393,7 @@ class AppViewModel internal constructor(
             val api = api() ?: return@launch
             runCatching { api.subscribe(SubscriptionBody(url = url, opId = opId("subscribe"), cadence = cadence)) }
                 .onSuccess { refresh() }
-                .onFailure { _state.value = _state.value.copy(error = it.message) }
+                .onFailure { _state.update { current -> current.copy(error = it.message) } }
         }
     }
 
@@ -277,7 +402,7 @@ class AppViewModel internal constructor(
             val api = api() ?: return@launch
             runCatching { api.unsubscribe(subscriptionId, opId("unsubscribe")) }
                 .onSuccess { refresh() }
-                .onFailure { _state.value = _state.value.copy(error = it.message) }
+                .onFailure { _state.update { current -> current.copy(error = it.message) } }
         }
     }
 
@@ -287,7 +412,7 @@ class AppViewModel internal constructor(
             runCatching {
                 api.updateSubscription(subscriptionId, SubscriptionPatch(opId = opId("cadence"), cadence = cadence))
             }.onSuccess { refresh() }
-            .onFailure { _state.value = _state.value.copy(error = it.message) }
+            .onFailure { _state.update { current -> current.copy(error = it.message) } }
         }
     }
 
@@ -296,18 +421,21 @@ class AppViewModel internal constructor(
             val api = api() ?: return@launch
             runCatching { api.revertActivity(activityId, opId("revert")) }
                 .onSuccess { refresh() }
-                .onFailure { _state.value = _state.value.copy(error = it.message) }
+                .onFailure { _state.update { current -> current.copy(error = it.message) } }
         }
     }
 
     /**
      * Fetches the signed content URL and caches the readable content. Returns
      * null when the server cannot be reached and nothing is cached.
+     *
+     * [agentSelected] marks an entry an agent surfaced (a notification, a deep
+     * link or an agent-change notice). Its images wait for a click so that
+     * automatic image loading cannot tell a publisher which entry an agent
+     * chose (docs/research/llm.md, "Agent selection stays unobservable").
      */
-    suspend fun openEntry(entryId: Long): ContentUrlResult? = withContext(Dispatchers.IO) {
-        val cache = account ?: return@withContext null
-        val session = activeSession ?: return@withContext null
-        if (!isCurrent(session, cache)) return@withContext null
+    suspend fun openEntry(entryId: Long, agentSelected: Boolean = false): ContentUrlResult? = withContext(Dispatchers.IO) {
+        val (cache, session) = activeAccount("Still signing in; the entry was not loaded.") ?: return@withContext null
         val api = apiFactory(session)
         val cached = cache.db.content().get(entryId)
         val content = runCatching { api.content(entryId) }.getOrNull()
@@ -323,9 +451,9 @@ class AppViewModel internal constructor(
                 ),
             )
         }
-        val url = runCatching { api.contentUrl(entryId) }.getOrNull()
+        val url = runCatching { api.contentUrl(entryId, mode = if (agentSelected) "click" else null) }.getOrNull()
         val fallback = content?.html ?: cached?.html
-        if (!isCurrent(session, cache)) return@withContext null
+        if (!currentOrExpired(session, cache)) return@withContext null
         when {
             url != null -> ContentUrlResult(url.url, url.expiresAt, fallback)
             fallback != null -> ContentUrlResult(null, null, fallback)
@@ -340,24 +468,19 @@ class AppViewModel internal constructor(
 
     /** Resolves a stored notification to the entry it should open. */
     suspend fun notificationEntry(notificationId: Long): Long? = withContext(Dispatchers.IO) {
-        val cache = account ?: return@withContext null
-        val session = activeSession ?: return@withContext null
-        val api = api() ?: return@withContext null
-        val entry = runCatching { api.notification(notificationId).entryIds?.firstOrNull() }.getOrNull()
-        entry.takeIf { isCurrent(session, cache) }
+        val (cache, session) = activeAccount("Still signing in; the entry was not loaded.") ?: return@withContext null
+        val entry = runCatching { apiFactory(session).notification(notificationId).entryIds?.firstOrNull() }.getOrNull()
+        entry.takeIf { currentOrExpired(session, cache) }
     }
 
     internal suspend fun loadEntry(entryId: Long): ch.lkmc.earnest.core.CachedEntry? = withContext(Dispatchers.IO) {
-        val cache = account ?: return@withContext null
-        val session = activeSession ?: return@withContext null
+        val (cache, session) = activeAccount("Still signing in; the entry was not loaded.") ?: return@withContext null
+        val entry = cache.repository(apiFactory(session)).loadEntry(entryId)
         cache.withEngine { engine ->
-            if (!isCurrent(session, cache)) return@withEngine null
-            val entry = SyncRepository(apiFactory(session), engine).loadEntry(entryId)
-            if (!isCurrent(session, cache)) return@withEngine null
-            _state.value = _state.value.copy(
-                snapshot = engine.snapshot(),
-                states = effectiveStates(engine, cache.identity.principalId),
-            )
+            if (!currentOrExpired(session, cache)) return@withEngine null
+            val snapshot = engine.snapshot()
+            val states = effectiveStates(engine, cache.identity.principalId)
+            _state.update { current -> current.copy(snapshot = snapshot, states = states) }
             entry
         }
     }
@@ -365,11 +488,43 @@ class AppViewModel internal constructor(
     private fun isCurrent(session: AuthenticatedSession, cache: SessionCache): Boolean =
         account === cache && activeSession == session && sessions.current() == session
 
-    private fun api(): EarnestApi? {
-        val session = sessions.current() ?: return null
-        if (session.identity != account?.identity) return null
-        return apiFactory(session)
+    /**
+     * [isCurrent] plus the side effect a dropped session needs: when the store
+     * lost the token (a background sync hit 401), the UI signs out instead of
+     * dropping the action silently.
+     */
+    private fun currentOrExpired(session: AuthenticatedSession, cache: SessionCache): Boolean {
+        if (isCurrent(session, cache)) return true
+        if (sessions.current() == null) sessionExpired()
+        return false
     }
+
+    /**
+     * The live account for a foreground action, or null when it cannot run. A
+     * dropped token signs the UI out; missing handles mean sign-in is still
+     * restoring and surface [pendingError] instead of a silent drop. A newer
+     * session in the store leaves its own owner to report.
+     */
+    private fun activeAccount(pendingError: String): Pair<SessionCache, AuthenticatedSession>? {
+        val cache = account
+        val session = activeSession
+        if (cache != null && session != null && isCurrent(session, cache)) return cache to session
+        if (sessions.current() == null) sessionExpired()
+        else if (cache == null || session == null) _state.update { it.copy(error = pendingError) }
+        return null
+    }
+
+    /** The stored session is gone: drop the account state and show sign-in. */
+    private fun sessionExpired() {
+        account = null
+        activeSession = null
+        _state.value = UiState()
+        if (_loggedIn.value) _sessionNotice.value = "Your session expired. Sign in again."
+        _loggedIn.value = false
+    }
+
+    private fun api(): EarnestApi? =
+        activeAccount("Still signing in; the action was not saved.")?.let { apiFactory(it.second) }
 
     /** Maps principal IDs to the names agents chose for themselves. */
     private suspend fun principalNames(api: EarnestApi): Map<Long, String> =
@@ -402,15 +557,29 @@ class AppViewModel internal constructor(
 
     private fun effectiveStates(syncEngine: SyncEngine, principal: Long): Map<Long, State> {
         if (principal == 0L) return emptyMap()
-        return syncEngine.snapshot().entries
-            .filterNot { it.deleted }
-            .associate { it.id to syncEngine.state(principal, it.id) }
+        return syncEngine.states(principal)
     }
 
     private fun opId(action: String) = "$action-${java.util.UUID.randomUUID()}"
 
+    /** Summarises dropped operations without exposing internal operation IDs. */
+    private fun droppedOperationMessage(rejected: List<RejectedOperation>, expired: List<String>): String? {
+        if (rejected.isEmpty() && expired.isEmpty()) return null
+        val expiredCount = rejected.count { it.status == "expired" } + expired.size
+        val goneCount = rejected.count { it.status == "gone" }
+        val otherCount = rejected.size - rejected.count { it.status == "expired" || it.status == "gone" }
+        val parts = mutableListOf<String>()
+        if (expiredCount > 0) parts += "$expiredCount expired before they could sync"
+        if (goneCount > 0) parts += "$goneCount could not be applied because the article was removed"
+        if (otherCount > 0) parts += "$otherCount could not be synced"
+        return "Some reading actions could not be synced: " + parts.joinToString(", ")
+    }
+
     companion object {
         private const val KEY_PRINCIPALS = "principal_names"
+        private const val AGENT_CHANGES_STALE_MESSAGE =
+            "Agent changes could not be refreshed. Reconnect to check automated actions."
+        private const val FLUSH_DEBOUNCE_MILLIS = 1500L
     }
 }
 
