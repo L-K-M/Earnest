@@ -23,6 +23,12 @@ const deviceLifetime = 10 * time.Minute
 const deviceInterval = 5
 const userCodeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
+// Device starts are public and unauthenticated, so they are capped per client
+// key. The cap is generous for a household and small enough that a flood
+// cannot grow the device_codes table without bound.
+const deviceStartLimit = 10
+const deviceStartWindow = 15 * time.Minute
+
 // DeviceAuthorization gives a native client its codes and polling parameters.
 type DeviceAuthorization struct {
 	DeviceCode      string
@@ -32,10 +38,39 @@ type DeviceAuthorization struct {
 	ExpiresAt       time.Time
 }
 
-// StartDeviceAuth begins a device authorization request.
-func (a *Auth) StartDeviceAuth(ctx context.Context, clientName string) (DeviceAuthorization, error) {
+// throttleDevice caps device authorization starts per client key. It shares
+// the login attempt map but uses its own "d:" key namespace, so device starts
+// never count against login attempts.
+func (a *Auth) throttleDevice(clientKey string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	now := a.now()
+	for key, v := range a.attempts {
+		if !now.Before(v.until) {
+			delete(a.attempts, key)
+		}
+	}
+	key := "d:" + clientKey
+	v := a.attempts[key]
+	if v.until.IsZero() {
+		v.until = now.Add(deviceStartWindow)
+	}
+	v.count++
+	a.attempts[key] = v
+	return v.count > deviceStartLimit
+}
+
+// StartDeviceAuth begins a device authorization request. clientKey is the
+// caller's address (or another stable client identifier); an empty key skips
+// the per-client cap, which only tests and in-process callers use. Callers
+// behind one NAT gateway share a single bucket; behind a reverse proxy, the
+// API keys clients through EARNEST_TRUSTED_PROXIES like login attempts.
+func (a *Auth) StartDeviceAuth(ctx context.Context, clientName, clientKey string) (DeviceAuthorization, error) {
 	if strings.TrimSpace(clientName) == "" {
 		return DeviceAuthorization{}, fmt.Errorf("client name: %w", ErrInvalid)
+	}
+	if clientKey != "" && a.throttleDevice(clientKey) {
+		return DeviceAuthorization{}, ErrRateLimited
 	}
 	code, err := makeSecret("")
 	if err != nil {
