@@ -38,16 +38,23 @@ final class IdentityTests: XCTestCase {
         XCTAssertThrowsError(try IdentityStore(defaults: defaults).load(server: URL(string: "https://nas.test")!))
     }
 
-    func testOnlyConnectionErrorsReuseRememberedIdentity() throws {
+    func testTransientFailuresReuseRememberedIdentity() throws {
         let remembered = try identity("http://127.0.0.1:18080", user: 1, principal: 7)
-        for code in [URLError.Code.cannotConnectToHost, .notConnectedToInternet, .networkConnectionLost, .timedOut, .cannotFindHost, .dnsLookupFailed] {
-            let result = Result<APIValue, Error>.failure(URLError(code))
+        let unavailable = try JSONDecoder().decode(APIProblem.self, from: Data(#"{"type":"about:blank","title":"Unavailable","status":503}"#.utf8))
+        let transient: [Error] = [
+            URLError(.cannotConnectToHost), URLError(.notConnectedToInternet), URLError(.networkConnectionLost),
+            URLError(.timedOut), URLError(.cannotFindHost), URLError(.dnsLookupFailed), URLError(.badServerResponse),
+            APIError.httpStatus(500), APIError.httpStatus(429), APIError.invalidResponse,
+            DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "bad payload")), unavailable,
+        ]
+        for error in transient {
+            let result = Result<APIValue, Error>.failure(error)
             XCTAssertEqual(try SessionResolution.resolve(server: remembered.server, result: result, remembered: remembered), .offline(remembered))
             XCTAssertThrowsError(try SessionResolution.resolve(server: remembered.server, result: result, remembered: nil))
             XCTAssertThrowsError(try SessionResolution.resolve(server: URL(string: "https://different.test")!, result: result, remembered: remembered))
         }
         let problem = try JSONDecoder().decode(APIProblem.self, from: Data(#"{"type":"about:blank","title":"Unauthorized","status":401}"#.utf8))
-        for error: Error in [problem, APIError.httpStatus(401), APIError.httpStatus(403), APIError.httpStatus(500), URLError(.secureConnectionFailed), URLError(.cancelled), APIError.invalidResponse] {
+        for error: Error in [problem, APIError.httpStatus(401), APIError.httpStatus(403), APIError.httpStatus(404), URLError(.secureConnectionFailed), URLError(.cancelled)] {
             XCTAssertThrowsError(try SessionResolution.resolve(server: remembered.server, result: .failure(error), remembered: remembered))
         }
     }
@@ -136,6 +143,16 @@ final class ErrorPresentationTests: XCTestCase {
         XCTAssertEqual(ErrorPresentation.message(problem), "Enter a feed URL.")
         XCTAssertFalse(ErrorPresentation.isConnection(APIError.httpStatus(503)))
         XCTAssertFalse(ErrorPresentation.isConnection(URLError(.serverCertificateUntrusted)))
+        XCTAssertTrue(ErrorPresentation.isTransient(APIError.httpStatus(503)))
+        XCTAssertTrue(ErrorPresentation.isTransient(APIError.httpStatus(429)))
+        XCTAssertTrue(ErrorPresentation.isTransient(APIError.invalidResponse))
+        XCTAssertTrue(ErrorPresentation.isTransient(URLError(.timedOut)))
+        XCTAssertTrue(ErrorPresentation.isTransient(URLError(.badServerResponse)))
+        XCTAssertFalse(ErrorPresentation.isTransient(APIError.httpStatus(401)))
+        XCTAssertFalse(ErrorPresentation.isTransient(APIError.httpStatus(403)))
+        XCTAssertFalse(ErrorPresentation.isTransient(APIError.httpStatus(404)))
+        XCTAssertFalse(ErrorPresentation.isTransient(URLError(.cancelled)))
+        XCTAssertFalse(ErrorPresentation.isTransient(URLError(.serverCertificateUntrusted)))
     }
 }
 
