@@ -11,7 +11,7 @@ const status = {summary:'enabled',edition:'enabled',ask:'enabled',blurb:'enabled
 function mount(ui: React.ReactNode) {return render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}>{ui}</QueryClientProvider>)}
 it('hides disabled summary and edition without requesting output', async () => {
   vi.mocked(request).mockResolvedValue({summary:'disabled',edition:'disabled'})
-  mount(<><Summary entryID={1} shortcuts/><Edition onOpen={vi.fn()}/></>)
+  mount(<><Summary entryID={1}/><Edition onOpen={vi.fn()}/></>)
   await waitFor(() => expect(request).toHaveBeenCalledWith('/v1/pipeline',expect.anything()))
   expect(screen.queryByText('Summary')).toBeNull()
   expect(screen.queryByText("Make this week's edition")).toBeNull()
@@ -19,7 +19,7 @@ it('hides disabled summary and edition without requesting output', async () => {
 })
 it('requests summary on demand, renders hostile output literally, and exposes unavailable highlighting', async () => {
   vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? status : {model:'model',generated_at:'2026-01-01T00:00:00Z',excerpt_notice:'The feed gave an excerpt only. This summary covers the excerpt.',claims:[{text:hostile,passages:['Source passage'],verified:false}]})
-  const {container} = mount(<Summary entryID={1} shortcuts/>)
+  const {container} = mount(<Summary entryID={1}/>)
   fireEvent.click(await screen.findByRole('button',{name:'Summary'}))
   expect(await screen.findByText(hostile)).toBeTruthy()
   expect(screen.getByText('Citation not found in the article')).toBeTruthy()
@@ -59,26 +59,26 @@ it('shows edition prose and triggers a weekly edition', async () => {
   await waitFor(() => expect(request).toHaveBeenCalledWith('/v1/editions',expect.objectContaining({method:'POST',body:expect.stringContaining('weekly')})))
 })
 
-it('allows forward Tab navigation except when hiding a visible summary', async () => {
+it('never hijacks Tab while a summary is visible', async () => {
   vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? status : {model:'m',generated_at:'2026-01-01T00:00:00Z',claims:[]})
-  mount(<><h2 tabIndex={-1}>Article</h2><input aria-label="Other input"/><Summary entryID={1} shortcuts/></>)
+  mount(<><h2 tabIndex={-1}>Article</h2><input aria-label="Other input"/><Summary entryID={1}/></>)
   await screen.findByRole('button',{name:'Summary'})
   const heading = screen.getByText('Article')
+  // Tab must not open a collapsed summary either.
   expect(fireEvent.keyDown(heading,{key:'Tab'})).toBe(true)
   expect(screen.getByRole('button',{name:'Summary'}).getAttribute('aria-expanded')).toBe('false')
   fireEvent.click(screen.getByRole('button',{name:'Summary'}))
   expect(await screen.findByText(/Summary · m/)).toBeTruthy()
-  fireEvent.keyDown(screen.getByLabelText('Other input'),{key:'Tab'})
-  expect(screen.getByText(/Summary · m/)).toBeTruthy()
-  expect(fireEvent.keyDown(heading,{key:'Tab',shiftKey:true})).toBe(true)
-  expect(fireEvent.keyDown(heading,{key:'Tab'})).toBe(false)
-  expect(screen.queryByText(/Summary · m/)).toBeNull()
+  // Keyboard focus must keep moving normally with a summary open.
   expect(fireEvent.keyDown(heading,{key:'Tab'})).toBe(true)
+  expect(fireEvent.keyDown(heading,{key:'Tab',shiftKey:true})).toBe(true)
+  expect(fireEvent.keyDown(screen.getByLabelText('Other input'),{key:'Tab'})).toBe(true)
+  expect(screen.getByText(/Summary · m/)).toBeTruthy()
 })
 
 it('explains paused tasks and preserves the latest edition without triggering generation',async () => {
   vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {summary:'paused',edition:'paused'} : {sections:[],status:'ready'})
-  mount(<><Summary entryID={1} shortcuts/><Edition onOpen={vi.fn()}/></>)
+  mount(<><Summary entryID={1}/><Edition onOpen={vi.fn()}/></>)
   await screen.findByText('Summaries are paused because the provider budget is unavailable.')
   await screen.findByText('Edition generation is paused because the provider budget is unavailable.')
   expect(screen.getByRole('button',{name:"Make this week's edition"})).toHaveProperty('disabled',true)
