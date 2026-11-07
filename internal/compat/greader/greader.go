@@ -10,12 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/L-K-M/Earnest/internal/clientip"
 	"github.com/L-K-M/Earnest/internal/service"
 	"github.com/L-K-M/Earnest/internal/syncmodel"
 )
@@ -103,9 +103,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Bad Request", 400)
 			return
 		}
-		client := r.RemoteAddr
-		if host, _, err := net.SplitHostPort(client); err == nil {
-			client = host
+		// Behind a same-host proxy the socket address is the proxy's; use the
+		// forwarded client or a per-credential bucket, never one shared bucket.
+		client, ok := clientip.Key(r)
+		if !ok {
+			client = "user:" + r.Form.Get("Email")
 		}
 		token, err := h.auth.CompatLogin(r.Context(), r.Form.Get("Email"), r.Form.Get("Passwd"), client)
 		if err != nil {
@@ -382,19 +384,11 @@ func (h *handler) markAll(w http.ResponseWriter, r *http.Request, a service.Acto
 	return nil
 }
 func (h *handler) unreadCount(w http.ResponseWriter, r *http.Request, a service.Actor) error {
-	f := service.EntryFilter{View: service.ViewAll, UnreadOnly: true, Limit: 200}
-	count := 0
-	for {
-		entries, err := h.svc.Entries(r.Context(), a, f)
-		if err != nil {
-			return err
-		}
-		count += len(entries)
-		if len(entries) < 200 {
-			break
-		}
-		f.AfterSeq = entries[len(entries)-1].Seq
+	// One grouped query replaces paging every unread entry to count it.
+	counts, err := h.svc.UnreadCounts(r.Context(), a)
+	if err != nil {
+		return err
 	}
-	writeJSON(w, map[string]any{"unreadcounts": []any{map[string]any{"id": statePrefix + "reading-list", "count": count, "newestItemTimestampUsec": "0"}}})
+	writeJSON(w, map[string]any{"unreadcounts": []any{map[string]any{"id": statePrefix + "reading-list", "count": counts.Total, "newestItemTimestampUsec": "0"}}})
 	return nil
 }

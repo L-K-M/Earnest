@@ -9,6 +9,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -47,19 +48,21 @@ private fun parseInstant(value: String): Instant? = runCatching { Instant.parse(
 
 /**
  * The reading view. JavaScript, file access and content access are off. The
- * main frame may load only the signed content origin (or the local asset
- * origin when offline); every other link opens in the browser.
+ * main frame may load only the signed article URL (or the local asset
+ * origin when offline); every other link opens in the browser. [theme]
+ * reaches the article page through the content URL's theme parameter.
  */
 @Composable
-internal fun Reader(url: String?, cachedHtml: String?, modifier: Modifier = Modifier) {
+internal fun Reader(url: String?, cachedHtml: String?, theme: ThemeSetting, modifier: Modifier = Modifier) {
+    val displayUrl = url?.let { readerUrl(it, theme.contentTheme(isSystemInDarkTheme())) }
     key(url, cachedHtml) {
         AndroidView(
             modifier = modifier,
-            factory = { context -> createReaderWebView(context, url, cachedHtml) },
+            factory = { context -> createReaderWebView(context, displayUrl, cachedHtml) },
             update = { webView ->
-                if (webView.tag != (url ?: cachedHtml)) {
-                    webView.tag = url ?: cachedHtml
-                    if (url != null) webView.loadUrl(url) else webView.loadUrl(ASSET_URL)
+                if (webView.tag != (displayUrl ?: cachedHtml)) {
+                    webView.tag = displayUrl ?: cachedHtml
+                    if (displayUrl != null) webView.loadUrl(displayUrl) else webView.loadUrl(ASSET_URL)
                 }
             },
             onReset = null,
@@ -67,6 +70,23 @@ internal fun Reader(url: String?, cachedHtml: String?, modifier: Modifier = Modi
         )
     }
 }
+
+/** Maps the app theme to the content origin's `theme` value (internal/web/content.go). */
+internal fun ThemeSetting.contentTheme(systemDark: Boolean): String = when (this) {
+    ThemeSetting.SYSTEM -> if (systemDark) "dark" else "light"
+    ThemeSetting.LIGHT -> "light"
+    ThemeSetting.DARK -> "dark"
+    ThemeSetting.BLACK -> "black"
+    ThemeSetting.E_INK -> "eink"
+}
+
+/**
+ * Adds the display params the content origin reads (internal/web/content.go).
+ * The app has no measure or font setting, so only the theme travels and the
+ * server's typography defaults apply.
+ */
+internal fun readerUrl(url: String, theme: String): String =
+    url.toUri().buildUpon().appendQueryParameter("theme", theme).toString()
 
 /** State for one selection; cancellation clears the previous load before a new one starts. */
 internal class ReaderLoadState {
@@ -101,6 +121,9 @@ internal fun createReaderWebView(context: Context, url: String?, cachedHtml: Str
     fun allowed(uri: android.net.Uri): Boolean = allowedOrigin != null &&
         uri.scheme == "https" && uri.host.equals(allowedOrigin.host, ignoreCase = true) &&
         (if (uri.port == -1) 443 else uri.port) == (if (allowedOrigin.port == -1) 443 else allowedOrigin.port)
+    // Only the article path itself may drive the main frame: click-to-load
+    // /img/ links share the origin and would otherwise replace the article.
+    fun article(uri: android.net.Uri): Boolean = allowed(uri) && uri.encodedPath == allowedOrigin?.encodedPath
     return WebView(context).apply {
         settings.javaScriptEnabled = false
         settings.allowFileAccess = false
@@ -146,7 +169,7 @@ internal fun createReaderWebView(context: Context, url: String?, cachedHtml: Str
 
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val uri = request.url
-                if (request.isForMainFrame && !usingFallback && allowed(uri)) return false
+                if (request.isForMainFrame && !usingFallback && article(uri)) return false
                 if (request.isForMainFrame && uri.toString() == ASSET_URL) return false
                 if (request.hasGesture() && (uri.scheme == "https" || uri.scheme == "http")) {
                     runCatching { view.context.startActivity(Intent(Intent.ACTION_VIEW, uri)) }

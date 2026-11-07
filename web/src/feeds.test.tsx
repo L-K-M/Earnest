@@ -194,6 +194,31 @@ describe('Feeds', () => {
     expect(new Headers(post[1]?.headers).get('Content-Type')).toBe('text/x-opml')
   })
 
+  it('updates the title input when the feed title changes externally', async () => {
+    const routes: Routes = {'/v1/subscriptions': [sub()], '/v1/folders': [], '/v1/mutes': []}
+    api(routes)
+    render(<Feeds onChanged={() => {}} />)
+    expect((await screen.findByLabelText('Title') as HTMLInputElement).value).toBe('Feed One')
+    routes['/v1/subscriptions'] = [sub({title: 'Renamed', rev: 2})]
+    fireEvent.click(screen.getByRole('button', {name: 'Refresh now'}))
+    await waitFor(() => expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('Renamed'))
+  })
+
+  it('keeps an unsaved draft title when the feed title changes externally', async () => {
+    const routes: Routes = {'/v1/subscriptions': [sub()], '/v1/folders': [], '/v1/mutes': []}
+    api(routes)
+    render(<Feeds onChanged={() => {}} />)
+    const input = await screen.findByLabelText('Title') as HTMLInputElement
+    input.focus()
+    fireEvent.change(input, {target: {value: 'My draft'}})
+    // Clicking a button moves focus in a real browser; the draft must survive.
+    input.blur()
+    routes['/v1/subscriptions'] = [sub({title: 'Renamed', rev: 2})]
+    fireEvent.click(screen.getByRole('button', {name: 'Refresh now'}))
+    await waitFor(() => expect((screen.getByRole('button', {name: 'Refresh now'}) as HTMLButtonElement).disabled).toBe(false))
+    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('My draft')
+  })
+
   it('revokes the OPML download URL only after the download starts', async () => {
     api({'/v1/subscriptions': [sub()], '/v1/folders': [], '/v1/mutes': [], '/v1/opml': '<opml/>'})
     render(<Feeds onChanged={() => {}} />)
