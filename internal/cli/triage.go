@@ -76,11 +76,15 @@ func (a *app) triage(ctx context.Context, args []string) error {
 }
 
 func (a *app) revert(ctx context.Context, args []string) error {
-	fs := newFlagSet("revert")
-	if err := fs.Parse(args); err != nil || fs.NArg() != 1 {
+	// Revert has no command-specific flags. Its opaque base64url handle may
+	// start with a dash, so treat it literally, with or without a separator.
+	if len(args) > 0 && args[0] == "--" {
+		args = args[1:]
+	}
+	if len(args) != 1 {
 		return usagef("usage: earnest revert <handle>")
 	}
-	handle := fs.Arg(0)
+	handle := args[0]
 	c, err := a.client()
 	if err != nil {
 		return err
