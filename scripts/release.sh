@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Tags a source revision as "v<version>"; --push also pushes branch and tag.
-# CI (images.yml) verifies the image builds for both architectures on every
-# tag; deployments build locally from the chosen source revision via
-# ./update.sh, so nothing publishes to a registry. No committed file declares
-# a release version, so the version argument is required.
+# CI validates server, web, images and both native clients at the tag before
+# preparing a release draft. Signed client packages and acceptance evidence
+# are still required before publication; see docs/releases.md. Deployments
+# build the server image locally, never through a registry. The tag supplies
+# the release version, so the version argument is required.
 #
 #   scripts/release.sh 0.1.0          # check tree is clean + tag is new, tag v0.1.0
 #   scripts/release.sh 0.1.0 --push   # …also push HEAD + tag (CI checks builds)
@@ -14,7 +15,7 @@ set -euo pipefail
 
 export RELEASE_APP_NAME="Earnest"
 export RELEASE_KIND="tag-only"
-export RELEASE_CI_NOTE="CI (images.yml) verifies both image architectures on the tag; the release is the tagged source, deployed via ./update.sh which builds locally."
+export RELEASE_CI_NOTE="CI validates server, web, images and both native clients at the tag, then prepares a draft. Build signed clients with scripts/package-client.sh and record acceptance before publishing (docs/releases.md). Server images are built locally."
 export RELEASE_INVOKED_AS="scripts/release.sh"
 
 BIN="${LKM_RELEASE_BIN:-lkm-release}"

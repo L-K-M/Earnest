@@ -26,6 +26,7 @@ build: web-build
 test:
 	$(GO) test -race -count=1 ./...
 	sh scripts/backup_test.sh
+	python3 scripts/package_client_test.py
 
 lint:
 	test -z "$$(gofmt -l cmd internal)"
@@ -38,5 +39,5 @@ docker-build:
 compose-check:
 	docker compose -f compose.yaml config --quiet
 
-# Mirrors CI exactly: the Go checks, the compose validation and the image build.
+# Mirrors the server/web CI gate. Native checks use their platform workflows.
 check: lint test web-check compose-check docker-build
