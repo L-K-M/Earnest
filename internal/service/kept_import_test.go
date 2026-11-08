@@ -273,6 +273,117 @@ func TestImportKept(t *testing.T) {
 		}
 	})
 
+	t.Run("recognises_articles_by_link_and_title_when_guids_cannot_decide", func(t *testing.T) {
+		f := newCoreFixture(t, template)
+		ctx := context.Background()
+		// A fetch stored these under GUID identities; an Inoreader export
+		// carries no GUID, so only the link and title can recognise them.
+		fetched := f.ingestKept(t, feed.Item{GUID: "tag:example.test,2026:fetched", URL: "https://example.test/fetched", Title: "Fetched"})
+		// A Ghost entry identified by link, under a GUID the export disagrees with.
+		ghost := f.ingestKept(t, feed.Item{URL: "https://example.test/ghost"})
+		if _, err := f.db.Pool().Exec(ctx, "UPDATE entries SET guid='6915a1b2c3d4e5f6a7b8c9d0' WHERE id=$1", ghost); err != nil {
+			t.Fatal(err)
+		}
+		report, err := f.s.ImportKept(ctx, f.a, []KeptImportItem{
+			{FeedURL: keptTestFeed, URL: "https://example.test/fetched", Title: "Fetched"},
+			{FeedURL: keptTestFeed, URL: "https://example.test/fetched", Title: "Another article on that link"},
+			{FeedURL: keptTestFeed, GUID: "7a26b3c4d5e6f7a8b9c0d1e2", URL: "https://example.test/ghost", Title: "Ghost"},
+		}, MissingFeedsSkip)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantStatuses(t, report, KeptImportMatched, KeptImportCreated, KeptImportCreated)
+		if report.Results[0].EntryID != fetched || report.Results[2].EntryID == ghost {
+			t.Fatalf("results = %+v", report.Results)
+		}
+	})
+
+	t.Run("two_articles_naming_one_stored_entry_write_once", func(t *testing.T) {
+		f := newCoreFixture(t, template)
+		existing := f.ingestKept(t, feed.Item{GUID: "https://example.test/twice", URL: "https://example.test/twice", Title: "Twice"})
+		item := KeptImportItem{FeedURL: keptTestFeed, GUID: "https://example.test/twice", Title: "Twice", Read: true}
+		report, err := f.s.ImportKept(context.Background(), f.a, []KeptImportItem{item, item}, MissingFeedsSkip)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantStatuses(t, report, KeptImportMatched, KeptImportUnchanged)
+		if report.Results[0].EntryID != existing || report.Results[1].EntryID != existing {
+			t.Fatalf("results = %+v", report.Results)
+		}
+	})
+
+	t.Run("matches_the_stored_guid_when_link_and_title_changed", func(t *testing.T) {
+		f := newCoreFixture(t, template)
+		ctx := context.Background()
+		// Stored by link identity under an unstable GUID; the link moved since.
+		existing := f.ingestKept(t, feed.Item{URL: "https://example.test/old-link"})
+		if _, err := f.db.Pool().Exec(ctx, "UPDATE entries SET guid='6915a1b2c3d4e5f6a7b8c9d0' WHERE id=$1", existing); err != nil {
+			t.Fatal(err)
+		}
+		report, err := f.s.ImportKept(ctx, f.a, []KeptImportItem{{FeedURL: keptTestFeed, GUID: "6915a1b2c3d4e5f6a7b8c9d0", URL: "https://example.test/new-link", Title: "Renamed"}}, MissingFeedsSkip)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantStatuses(t, report, KeptImportMatched)
+		if report.Results[0].EntryID != existing {
+			t.Fatalf("matched %d, want %d", report.Results[0].EntryID, existing)
+		}
+	})
+
+	t.Run("keeps_undated_and_summary_only_articles_as_history", func(t *testing.T) {
+		f := newCoreFixture(t, template)
+		ctx := context.Background()
+		if _, err := f.db.Pool().Exec(ctx, "UPDATE subscriptions SET cadence='week' WHERE id=$1", f.subscription); err != nil {
+			t.Fatal(err)
+		}
+		// No dates at all: first seen at receipt, unread, yet still history.
+		report, err := f.s.ImportKept(ctx, f.a, []KeptImportItem{{FeedURL: keptTestFeed, GUID: "tag:example.test,2026:undated", Title: "Undated", SummaryHTML: "<p>Only a summary</p>"}}, MissingFeedsSkip)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantStatuses(t, report, KeptImportCreated)
+		created := report.Results[0].EntryID
+		if f.count(t, "SELECT count(*) FROM entries WHERE id=$1 AND first_seen_at=$2", created, f.s.now()) != 1 {
+			t.Fatal("an undated article is first seen at receipt")
+		}
+		if f.viewIDs(t, f.a, ViewRiver)[created] {
+			t.Fatal("an imported article no fetch has seen must stay out of the river")
+		}
+		candidates, err := f.db.EditionCandidates(ctx, f.a.UserID, f.s.now().Add(-weekDecay), f.s.now().Add(time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range candidates {
+			if c.ID == created {
+				t.Fatal("an imported article must stay out of the weekly edition")
+			}
+		}
+		html, _, _, _, err := store.LoadContent(ctx, f.db.Pool(), created)
+		if err != nil || !strings.Contains(html, "Only a summary") {
+			t.Fatalf("summary body = %q, %v", html, err)
+		}
+		if f.count(t, "SELECT count(*) FROM contents WHERE entry_id=$1 AND excerpt_only", created) != 1 {
+			t.Fatal("a summary-only article is stored as an excerpt")
+		}
+	})
+
+	t.Run("fails_only_the_articles_the_database_cannot_hold", func(t *testing.T) {
+		f := newCoreFixture(t, template)
+		farFuture := time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
+		report, err := f.s.ImportKept(context.Background(), f.a, []KeptImportItem{
+			{FeedURL: keptTestFeed, GUID: "far", Title: "Far", PublishedAt: &farFuture},
+			{FeedURL: keptTestFeed, GUID: "huge", Title: "Huge", ContentHTML: strings.Repeat("x", maxKeptImportBody+1)},
+			{FeedURL: keptTestFeed, GUID: "fine", Title: "Fine"},
+		}, MissingFeedsSkip)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantStatuses(t, report, KeptImportFailed, KeptImportFailed, KeptImportCreated)
+		if report.Results[0].Error != errKeptBadDate.Error() || report.Results[1].Error != errKeptBodyTooBig.Error() {
+			t.Fatalf("errors = %q, %q", report.Results[0].Error, report.Results[1].Error)
+		}
+	})
+
 	t.Run("subscribes_to_missing_feeds_only_when_asked", func(t *testing.T) {
 		f := newCoreFixture(t, template)
 		ctx := context.Background()
@@ -405,7 +516,9 @@ func TestImportKept(t *testing.T) {
 		if err := f.db.Pool().QueryRow(ctx, "SELECT identity_hash,title,imported,first_seen_at FROM entries WHERE id=$1", imported).Scan(&stored, &title, &stillImported, &firstSeen); err != nil {
 			t.Fatal(err)
 		}
-		if fmt.Sprintf("%x", stored) != identity || title != "Ghost, live" || stillImported || !firstSeen.Equal(*keptTime("2026-03-01T00:00:00Z")) {
+		// Seen in the live feed, the article has arrived: it is dated from
+		// this fetch, so another subscriber of the feed still meets it.
+		if fmt.Sprintf("%x", stored) != identity || title != "Ghost, live" || stillImported || !firstSeen.Equal(f.s.now()) {
 			t.Fatalf("adopted entry identity=%x title=%q imported=%v first_seen=%v", stored, title, stillImported, firstSeen)
 		}
 		if state := f.keptState(t, imported); state.Kept.Value != syncmodel.True {
@@ -477,8 +590,31 @@ func TestImportKept(t *testing.T) {
 		if f.count(t, "SELECT count(*) FROM entries WHERE imported") != 0 || f.count(t, "SELECT count(*) FROM entries") != 1 {
 			t.Fatal("a fetch that matches an imported entry by identity must clear its import flag")
 		}
-		if report.Results[0].EntryID == 0 {
-			t.Fatal("missing entry")
+		entry := report.Results[0].EntryID
+		if f.count(t, "SELECT count(*) FROM entries WHERE id=$1 AND first_seen_at=$2", entry, f.s.now()) != 1 {
+			t.Fatal("the reconciled entry must be dated from the fetch that saw it")
+		}
+		if f.count(t, `SELECT count(*) FROM changes WHERE user_id=$1 AND type='entry.updated' AND (payload->'entry'->>'id')::bigint=$2`, f.a.UserID, entry) != 1 {
+			t.Fatal("clients must learn the new first sighting")
+		}
+		coreCheckGapless(t, f.db, f.a.UserID)
+	})
+
+	t.Run("a_fetch_without_a_guid_adopts_by_link_and_title", func(t *testing.T) {
+		f := newCoreFixture(t, template)
+		ctx := context.Background()
+		// The exporting reader invented a GUID for a feed that has none.
+		report, err := f.s.ImportKept(ctx, f.a, []KeptImportItem{{FeedURL: keptTestFeed, GUID: "https://example.test/?p=9", URL: "https://example.test/no-guid", Title: "No GUID"}}, MissingFeedsSkip)
+		if err != nil {
+			t.Fatal(err)
+		}
+		live := IngestItem{IdentityHash: feed.IdentityHash(feed.Item{URL: "https://example.test/no-guid"}), URL: "https://example.test/no-guid", Title: "No GUID", ContentHash: coreHash("no-guid"), SanitizerVersion: 1, ContentSource: ContentFromFeed}
+		summary, err := f.s.RecordFetch(ctx, FetchOutcome{FeedID: f.feed, Status: FetchOK, Items: []IngestItem{live}})
+		if err != nil || summary.Created != 0 || summary.Updated != 1 {
+			t.Fatalf("summary = %+v, %v", summary, err)
+		}
+		if f.count(t, "SELECT count(*) FROM entries WHERE id=$1 AND NOT imported", report.Results[0].EntryID) != 1 || f.count(t, "SELECT count(*) FROM entries") != 1 {
+			t.Fatal("the GUID-less fetch must adopt the imported entry")
 		}
 	})
 

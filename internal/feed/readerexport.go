@@ -241,12 +241,10 @@ func readerLink(m map[string]any) string {
 // decimal strings in practice; numbers are accepted too.
 func readerCrawled(m map[string]any) *time.Time {
 	if ms := coerceInt(numberish(m["crawlTimeMsec"])); ms > 0 {
-		t := time.UnixMilli(ms).UTC()
-		return &t
+		return plausibleTime(time.UnixMilli(ms))
 	}
 	if us := coerceInt(numberish(m["timestampUsec"])); us > 0 {
-		t := time.UnixMicro(us).UTC()
-		return &t
+		return plausibleTime(time.UnixMicro(us))
 	}
 	return nil
 }
@@ -256,7 +254,20 @@ func unixSeconds(v any) *time.Time {
 	if s <= 0 {
 		return nil
 	}
-	t := time.Unix(s, 0).UTC()
+	return plausibleTime(time.Unix(s, 0))
+}
+
+// latestPlausibleYear bounds exported timestamps. Later values are corrupt,
+// and past the year 294276 a database cannot store them at all.
+const latestPlausibleYear = 9999
+
+// plausibleTime drops a timestamp no feed could have meant, field by field
+// like other malformed values.
+func plausibleTime(t time.Time) *time.Time {
+	t = t.UTC()
+	if t.Year() > latestPlausibleYear {
+		return nil
+	}
 	return &t
 }
 

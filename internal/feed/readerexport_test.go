@@ -197,6 +197,21 @@ func TestParseReaderExportRejectsOtherDocuments(t *testing.T) {
 	}
 }
 
+func TestParseReaderExportBoundsTimeAndDates(t *testing.T) {
+	if _, err := ParseReaderExport([]byte(freshRSSExport), Limits{Timeout: time.Nanosecond}); !errors.Is(err, ErrParseTimeout) {
+		t.Fatalf("timeout: %v", err)
+	}
+	// Dates no database can hold degrade to absent instead of failing later.
+	export, err := ParseReaderExport([]byte(`{"items": [{"published": 10000000000000000, "updated": 1700000000, "crawlTimeMsec": "99999999999999999"}]}`), Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := export.Items[0]
+	if it.Item.Published != nil || it.Crawled != nil || it.Item.Updated == nil {
+		t.Fatalf("published=%v crawled=%v updated=%v", it.Item.Published, it.Crawled, it.Item.Updated)
+	}
+}
+
 func TestIdentityCandidates(t *testing.T) {
 	published := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	withGUID := Item{GUID: "6915a1b2c3d4e5f6a7b8c9d0", URL: "https://example.com/post", Title: "Post", Published: &published}

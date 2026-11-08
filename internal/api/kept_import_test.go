@@ -2,7 +2,9 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"net/http"
@@ -111,4 +113,54 @@ func TestKeptImportAPI(t *testing.T) {
 		})
 	}
 	requireStatus(t, upload(export, "application/json", "", requestCredentials{}), http.StatusUnauthorized)
+}
+
+func TestUploadBody(t *testing.T) {
+	upload := func(body []byte, contentType string, limit int64) ([]byte, error) {
+		r := httptest.NewRequest(http.MethodPost, "/v1/kept:import", bytes.NewReader(body))
+		r.Header.Set("Content-Type", contentType)
+		return uploadBody(context.WithValue(context.Background(), requestKey{}, r), body, limit, "file")
+	}
+	multipartBody := func(field, filename, content string) ([]byte, string) {
+		var buf bytes.Buffer
+		form := multipart.NewWriter(&buf)
+		var err error
+		if filename == "" {
+			err = form.WriteField(field, content)
+		} else {
+			var part interface{ Write([]byte) (int, error) }
+			part, err = form.CreateFormFile(field, filename)
+			if err == nil {
+				_, err = part.Write([]byte(content))
+			}
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := form.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes(), form.FormDataContentType()
+	}
+	if got, err := upload([]byte("raw"), "application/json", 8); err != nil || string(got) != "raw" {
+		t.Fatalf("raw = %q, %v", got, err)
+	}
+	if _, err := upload([]byte("too long"), "application/json", 4); !errors.Is(err, service.ErrInvalid) {
+		t.Fatalf("raw over the limit: %v", err)
+	}
+	body, contentType := multipartBody("file", "starred.json", "{}")
+	if got, err := upload(body, contentType, 1<<10); err != nil || string(got) != "{}" {
+		t.Fatalf("multipart file = %q, %v", got, err)
+	}
+	body, contentType = multipartBody("description", "", "no file here")
+	if _, err := upload(body, contentType, 1<<10); !errors.Is(err, service.ErrInvalid) {
+		t.Fatalf("multipart without a file: %v", err)
+	}
+	body, contentType = multipartBody("file", "starred.json", strings.Repeat("x", 100))
+	if _, err := upload(body, contentType, 50); !errors.Is(err, service.ErrInvalid) {
+		t.Fatalf("multipart file over the limit: %v", err)
+	}
+	if _, err := upload([]byte("x"), "multipart/form-data", 8); !errors.Is(err, service.ErrInvalid) {
+		t.Fatalf("multipart without a boundary: %v", err)
+	}
 }

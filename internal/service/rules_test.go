@@ -412,8 +412,9 @@ func TestLegacyRuleJobMigratesAndExecutes(t *testing.T) {
 	if _, err := f.db.Pool().Exec(ctx, `UPDATE jobs SET payload=payload-'generation' WHERE kind='rule'`); err != nil {
 		t.Fatal(err)
 	}
-	// Recreate the upgrade boundary with a pending pre-generation job.
-	if _, err := f.db.Pool().Exec(ctx, `DELETE FROM schema_migrations WHERE name='0009_rule_job_generation.sql'`); err != nil {
+	// Recreate the upgrade boundary with a pending pre-generation job. Later
+	// migrations are idempotent and rerun with it.
+	if _, err := f.db.Pool().Exec(ctx, `DELETE FROM schema_migrations WHERE name>='0009_'`); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.db.Migrate(ctx); err != nil {

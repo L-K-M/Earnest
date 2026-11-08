@@ -158,7 +158,7 @@ type ingestChange struct {
 	seq               uint64
 	firstSeen         time.Time
 	kind              syncmodel.ChangeType
-	// adopt moves an imported entry to this fetch's identity.
+	// adopt moves an imported entry to this fetch's identity and first sighting.
 	adopt bool
 }
 
@@ -265,6 +265,7 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 				}
 				if found {
 					adopted = append(adopted, p.id)
+					p.firstSeen = receipt
 					changes = append(changes, p)
 					summary.Updated++
 					continue
@@ -283,11 +284,14 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 				continue
 			}
 			if imported {
-				// The fetch found the exported copy under its own identity:
-				// it is reconciled and must never be adopted by another article.
-				if _, err := tx.Exec(ctx, "UPDATE entries SET imported=false WHERE id=$1", p.id); err != nil {
-					return fmt.Errorf("reconcile imported entry: %w", err)
-				}
+				// The fetch found the exported copy under its own identity, so
+				// it is adopted as is: reconciled, and dated from this fetch.
+				p.kind = syncmodel.EntryUpdated
+				p.adopt = true
+				p.firstSeen = receipt
+				changes = append(changes, p)
+				summary.Updated++
+				continue
 			}
 			var oldEnclosures []Enclosure
 			if err := json.Unmarshal(enclosures, &oldEnclosures); err != nil {
@@ -356,7 +360,7 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 				newEntries = append(newEntries, p.id)
 			}
 			if p.adopt {
-				if _, err := tx.Exec(ctx, "UPDATE entries SET identity_hash=$2,imported=false WHERE id=$1", p.id, p.identity); err != nil {
+				if _, err := tx.Exec(ctx, "UPDATE entries SET identity_hash=$2,imported=false,first_seen_at=$3 WHERE id=$1", p.id, p.identity, p.firstSeen); err != nil {
 					return fmt.Errorf("adopt imported entry: %w", err)
 				}
 			}
@@ -418,8 +422,9 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 // does the link decide, and then the title must agree too: some feeds publish
 // different articles with one link, and adopting the wrong one would replace
 // a kept article. A found entry becomes an update that takes the fetch's
-// identity, so later fetches match it directly. A retention tombstone is
-// reported as deleted and is never resurrected.
+// identity, so later fetches match it directly, and is dated from this fetch:
+// the article has now arrived. A retention tombstone is reported as deleted
+// and is never resurrected.
 func adoptImported(ctx context.Context, tx pgx.Tx, feedID int64, p *ingestChange, adopted []int64) (found, deleted bool, err error) {
 	byGUID := []byte{}
 	if strings.TrimSpace(p.item.GUID) != "" {
@@ -431,7 +436,7 @@ func adoptImported(ctx context.Context, tx pgx.Tx, feedID int64, p *ingestChange
 	err = tx.QueryRow(ctx, `SELECT id,seq,first_seen_at,deleted_at IS NOT NULL FROM entries
  WHERE feed_id=$1 AND imported AND NOT id=ANY($6)
  AND (($3<>'' AND (identity_hash=$2 OR guid=$3))
-  OR ($4<>'' AND url=$4 AND title=$5 AND ($3='' OR coalesce(guid,'')='')))
+  OR ($4<>'' AND $5<>'' AND url=$4 AND title=$5 AND ($3='' OR coalesce(guid,'')='')))
  ORDER BY coalesce(guid=$3,false) DESC,id LIMIT 1`,
 		feedID, byGUID, p.item.GUID, p.item.URL, p.item.Title, adopted).Scan(&p.id, &p.seq, &p.firstSeen, &deleted)
 	if errors.Is(err, pgx.ErrNoRows) {

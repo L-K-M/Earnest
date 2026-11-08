@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -27,9 +28,12 @@ import (
 //	  kept=true (deliberate) and, if the export says read, seen (passive)
 //
 // An exported copy is history, not an arrival. It keeps the time the
-// exporting reader first stored it as first_seen_at, so river decay and the
-// subscription's initial window keep it out of every river, and it enqueues
-// no rule jobs, so rules, notifications and webhooks never fire for it. Its
+// exporting reader first stored it as first_seen_at, the river and editions
+// leave out imported entries whatever their dates, and it enqueues no rule
+// jobs, so rules, notifications and webhooks never fire for it. Once
+// a fetch sees the article in the live feed it is an arrival like any other:
+// RecordFetch dates it from that fetch, so another subscriber of the shared
+// feed still meets it, and a crafted export cannot hide a real article. Its
 // seq is new, so Kept lists imported articles in the exporting reader's order,
 // newest first. Existing entries are never rewritten: the import only adds
 // what a fetch did not store and changes your state. A later fetch of a stored
@@ -42,6 +46,9 @@ const (
 	keptImportChunkSize = 100
 	// maxKeptImportField bounds each exported text field except the body.
 	maxKeptImportField = 8 << 10
+	// maxKeptImportBody bounds one article's markup. Sanitising builds a tree
+	// several times the input's size; real articles stay far below this.
+	maxKeptImportBody = 4 << 20
 	// maxKeptImportEnclosures bounds the attachments stored per article.
 	maxKeptImportEnclosures = 32
 	// keptReportTextBytes bounds the title and feed URL echoed in a result.
@@ -124,6 +131,8 @@ var (
 	errKeptNoFeed     = errors.New("the export does not say which feed this article came from")
 	errKeptNoIdentity = errors.New("the article has no ID, link or title")
 	errKeptTooLong    = errors.New("a field is longer than 8 KiB")
+	errKeptBodyTooBig = errors.New("the article body is larger than 4 MiB")
+	errKeptBadDate    = errors.New("a date is outside the years 1 to 9999")
 )
 
 // keptWork is one validated article, ready to store.
@@ -226,6 +235,14 @@ func prepareKept(index int, in KeptImportItem, receipt time.Time) (keptWork, err
 	for _, field := range []string{in.FeedTitle, in.SiteURL, in.GUID, in.URL, in.Title, in.Author} {
 		if len(field) > maxKeptImportField {
 			return keptWork{}, errKeptTooLong
+		}
+	}
+	if len(in.ContentHTML) > maxKeptImportBody || len(in.SummaryHTML) > maxKeptImportBody {
+		return keptWork{}, errKeptBodyTooBig
+	}
+	for _, t := range []*time.Time{in.PublishedAt, in.UpdatedAt, in.CrawledAt} {
+		if t != nil && (t.Year() < 1 || t.Year() > 9999) {
+			return keptWork{}, errKeptBadDate
 		}
 	}
 	guid := strings.TrimSpace(in.GUID)
@@ -356,14 +373,15 @@ func (s *Service) importKeptChunk(ctx context.Context, tx pgx.Tx, a Actor, gener
 
 	// Find what a fetch, or an earlier import, already stored. Two articles
 	// of one export can name the same entry; only the first writes state.
+	candidates, err := keptCandidates(ctx, tx, chunk, feeds)
+	if err != nil {
+		return nil, nil, err
+	}
 	targets := []keptTarget{}
 	claimed := map[int64]bool{}
 	pending := map[string]int{} // feed and identity of an entry to create → chunk index
 	var create []int
 	for i, w := range chunk {
-		if err := ctx.Err(); err != nil {
-			return nil, nil, err
-		}
 		f := feeds[w.feedURL]
 		switch {
 		case f.err != nil:
@@ -374,13 +392,9 @@ func (s *Service) importKeptChunk(ctx context.Context, tx pgx.Tx, a Actor, gener
 			continue
 		}
 		results[i].SubscriptionID = f.subscription
-		var id int64
-		var deleted bool
-		err := tx.QueryRow(ctx, `SELECT id,deleted_at IS NOT NULL FROM entries
- WHERE feed_id=$1 AND (identity_hash=ANY($2) OR ($3<>'' AND guid=$3))
- ORDER BY array_position($2,identity_hash) NULLS LAST,id LIMIT 1`, f.feed, w.identities, w.change.item.GUID).Scan(&id, &deleted)
+		match, ok := matchKept(w, candidates[f.feed])
 		switch {
-		case errors.Is(err, pgx.ErrNoRows):
+		case !ok:
 			key := fmt.Sprintf("%d:%x", f.feed, w.change.identity)
 			if first, ok := pending[key]; ok {
 				results[i].Status = KeptImportUnchanged
@@ -389,16 +403,14 @@ func (s *Service) importKeptChunk(ctx context.Context, tx pgx.Tx, a Actor, gener
 			}
 			pending[key] = i
 			create = append(create, i)
-		case err != nil:
-			return nil, nil, fmt.Errorf("find kept import entry: %w", err)
-		case deleted:
-			results[i].Status, results[i].EntryID = KeptImportGone, id
-		case claimed[id]:
-			results[i].Status, results[i].EntryID = KeptImportUnchanged, id
+		case match.deleted:
+			results[i].Status, results[i].EntryID = KeptImportGone, match.id
+		case claimed[match.id]:
+			results[i].Status, results[i].EntryID = KeptImportUnchanged, match.id
 		default:
-			claimed[id] = true
-			results[i].EntryID = id
-			targets = append(targets, keptTarget{result: i, entry: id, read: w.read})
+			claimed[match.id] = true
+			results[i].EntryID = match.id
+			targets = append(targets, keptTarget{result: i, entry: match.id, read: w.read})
 		}
 	}
 
@@ -422,6 +434,95 @@ func (s *Service) importKeptChunk(ctx context.Context, tx pgx.Tx, a Actor, gener
 		return nil, nil, err
 	}
 	return results, subscribed, nil
+}
+
+// keptCandidate is a stored entry an exported article may be.
+type keptCandidate struct {
+	id               int64
+	identity         []byte
+	guid, url, title string
+	deleted          bool
+}
+
+// keptCandidates loads, with one query per feed, every entry of the chunk's
+// subscribed feeds that shares an identity, GUID or link with one of its
+// articles. GUID and link are not indexed, so batching bounds the scans of a
+// large feed to one per chunk.
+func keptCandidates(ctx context.Context, tx pgx.Tx, chunk []keptWork, feeds map[string]keptFeed) (map[int64][]keptCandidate, error) {
+	type keys struct {
+		identities  [][]byte
+		guids, urls []string
+	}
+	byFeed := map[int64]*keys{}
+	for _, w := range chunk {
+		f := feeds[w.feedURL]
+		if f.err != nil || f.missing {
+			continue
+		}
+		k := byFeed[f.feed]
+		if k == nil {
+			k = &keys{}
+			byFeed[f.feed] = k
+		}
+		k.identities = append(k.identities, w.identities...)
+		if w.change.item.GUID != "" {
+			k.guids = append(k.guids, w.change.item.GUID)
+		}
+		if w.change.item.URL != "" {
+			k.urls = append(k.urls, w.change.item.URL)
+		}
+	}
+	out := map[int64][]keptCandidate{}
+	for feedID, k := range byFeed {
+		rows, err := tx.Query(ctx, `SELECT id,identity_hash,coalesce(guid,''),coalesce(url,''),title,deleted_at IS NOT NULL FROM entries
+ WHERE feed_id=$1 AND (identity_hash=ANY($2) OR guid=ANY($3) OR url=ANY($4)) ORDER BY id`, feedID, k.identities, k.guids, k.urls)
+		if err != nil {
+			return nil, fmt.Errorf("find kept import entries: %w", err)
+		}
+		for rows.Next() {
+			var c keptCandidate
+			if err := rows.Scan(&c.id, &c.identity, &c.guid, &c.url, &c.title, &c.deleted); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("find kept import entries: %w", err)
+			}
+			out[feedID] = append(out[feedID], c)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("find kept import entries: %w", err)
+		}
+	}
+	return out, nil
+}
+
+// matchKept picks the stored entry an exported article is, by RecordFetch's
+// adoption rules in reverse, strongest first: the identity this import would
+// create; the publisher's GUID; the link identity a fetch uses for unstable
+// GUIDs, unless both sides have GUIDs that disagree; and, when one side has no
+// GUID (Inoreader exports have none), the link together with the title,
+// because some feeds publish different articles under one link. Candidates
+// arrive in ID order, so ties go to the oldest entry.
+func matchKept(w keptWork, candidates []keptCandidate) (keptCandidate, bool) {
+	guid, link, title := w.change.item.GUID, w.change.item.URL, w.change.item.Title
+	linkIdentity := w.identities[len(w.identities)-1]
+	rules := []func(c keptCandidate) bool{
+		func(c keptCandidate) bool { return bytes.Equal(c.identity, w.identities[0]) },
+		func(c keptCandidate) bool { return guid != "" && c.guid == guid },
+		func(c keptCandidate) bool {
+			return bytes.Equal(c.identity, linkIdentity) && (guid == "" || c.guid == "" || c.guid == guid)
+		},
+		func(c keptCandidate) bool {
+			return link != "" && title != "" && c.url == link && c.title == title && (guid == "" || c.guid == "")
+		},
+	}
+	for _, rule := range rules {
+		for _, c := range candidates {
+			if rule(c) {
+				return c, true
+			}
+		}
+	}
+	return keptCandidate{}, false
 }
 
 // resolveKeptFeed finds your subscription to the article's feed, by the URL

@@ -51,8 +51,9 @@ placeholder until the web bundle has been copied into `internal/web/dist`.
 
 Importing starred articles keeps the articles Earnest already has and stores the
 rest from the export. It never rewrites an article, leaves out articles you
-removed from Kept, and keeps imported articles out of Today. Articles from feeds
-you don't follow are skipped unless you choose to subscribe to those feeds.
+removed from Kept, and keeps imported articles out of Today; an unread one the
+feed still carries arrives with the feed's next fetch. Articles from feeds you
+don't follow are skipped unless you choose to subscribe to those feeds.
 
 Search separates publisher matches from labelled agent notes and supports
 full-text search without models. When embeddings are enabled, Hybrid search and
