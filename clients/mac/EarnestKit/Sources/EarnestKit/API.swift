@@ -288,6 +288,29 @@ public final class EarnestAPI: Sendable {
     public func annotations(afterID: Int64 = 0) async throws -> [APIValue] {
         try await generated { try adapt(try await client.listAnnotations(.init(query: .init(includeDeleted: true, afterId: afterID, limit: 1000))).ok.body.json ?? []) }
     }
+    /// Search entries and agent notes, paging with an opaque cursor.
+    public func search(query: String, filter: APISearchFilter = .init(), cursor: String? = nil) async throws -> APISearchPage {
+        guard let mode = Operations.Search.Input.Query.ModePayload(rawValue: filter.mode.rawValue) else { throw APIError.invalidResponse }
+        let input = Operations.Search.Input(query: .init(q: query, mode: mode, subscriptionId: filter.subscriptionID, folderId: filter.folderID, limit: filter.limit, cursor: cursor))
+        return try await generated { try adapt(try await client.search(input).ok.body.json) }
+    }
+    public func savedSearches() async throws -> [APISavedSearch] {
+        try await generated { try adapt(try await client.listSavedSearches(.init()).ok.body.json ?? []) }
+    }
+    public func createSavedSearch(name: String, query: String, filter: APISearchFilter) async throws -> APISavedSearch {
+        try await generated {
+            try adapt(try await client.createSavedSearch(.init(body: .json(.init(filters: adapt(filter), name: name, query: query)))).ok.body.json)
+        }
+    }
+    public func renameSavedSearch(id: Int64, name: String) async throws {
+        _ = try await generated { try await client.renameSavedSearch(.init(path: .init(id: id), body: .json(.init(name: name)))).ok.body.json }
+    }
+    public func deleteSavedSearch(id: Int64) async throws {
+        _ = try await generated { try await client.deleteSavedSearch(.init(path: .init(id: id))).ok.body.json }
+    }
+    public func pipelineStatus() async throws -> APIValue {
+        try await generated { try adapt(try await client.pipelineStatus(.init()).ok.body.json, as: APIValue.self) }
+    }
 }
 
 func parseAPIDate(_ text: String) -> Date? {

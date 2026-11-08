@@ -78,6 +78,22 @@ class AppViewModel internal constructor(
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
+    internal val search = SearchModel(viewModelScope) {
+        activeAccount("Still signing in; search did not run.")?.let { (cache, session) ->
+            val generation = _state.value.snapshot.cursor.generation
+            SearchSession(
+                api = apiFactory(session),
+                isCurrent = { currentOrExpired(session, cache) && _state.value.snapshot.cursor.generation == generation },
+                unauthorized = {
+                    if (currentOrExpired(session, cache) && sessions.current() == session) {
+                        sessions.clearToken()
+                        if (sessions.current() == null) sessionExpired()
+                    }
+                },
+            )
+        }
+    }
+
     private val _loggedIn = MutableStateFlow(sessions.current() != null)
     val loggedIn: StateFlow<Boolean> = _loggedIn.asStateFlow()
 
@@ -94,12 +110,14 @@ class AppViewModel internal constructor(
     }
 
     override fun onCleared() {
+        search.reset()
         flushScheduler.cancel()
         super.onCleared()
     }
 
     /** Called only after /v1/me established the authenticated account. */
     fun onLoggedIn() {
+        search.reset()
         account = null
         activeSession = null
         _sessionNotice.value = null
@@ -120,7 +138,9 @@ class AppViewModel internal constructor(
                     changesSince = cache.preferences.getString(SessionCache.KEY_CHANGES_SINCE, null)
                         ?.takeIf { runCatching { Instant.parse(it) }.isSuccess } ?: Instant.EPOCH.toString()
                     val changes = activitySince(cache.agentChanges(), Instant.parse(changesSince))
-                    _state.value = restoredState(syncEngine, session.identity.principalId).copy(
+                    val restored = restoredState(syncEngine, session.identity.principalId)
+                    search.invalidateForGeneration(restored.snapshot.cursor.generation)
+                    _state.value = restored.copy(
                         accountKey = session.identity.cacheKey,
                         cacheNotice = if (cache.legacyCacheRetained) "An older cache is retained on this device. Its unsent actions need manual recovery because their account is unknown." else null,
                         briefs = cache.db.briefs().get(),
@@ -156,6 +176,7 @@ class AppViewModel internal constructor(
             cache.withEngine { engine ->
                 if (!isCurrent(session, cache)) return@withEngine
                 val restored = restoredState(engine, cache.identity.principalId)
+                search.invalidateForGeneration(restored.snapshot.cursor.generation)
                 val changes = cache.agentChanges()
                 // update{} keeps the reload from clobbering a concurrent
                 // foreground write to the state flow.
@@ -175,6 +196,7 @@ class AppViewModel internal constructor(
     }
 
     fun logout() {
+        search.reset()
         sessions.clearToken()
         activeSession = null
         account = null
@@ -213,6 +235,7 @@ class AppViewModel internal constructor(
                 cache.withEngine { syncEngine ->
                     if (!currentOrExpired(session, cache)) return@withEngine
                     val restored = restoredState(syncEngine, cache.identity.principalId)
+                    search.invalidateForGeneration(restored.snapshot.cursor.generation)
                     val changes = changesResult.getOrNull() ?: _state.value.agentChanges
                     _state.update { current -> current.copy(
                         snapshot = restored.snapshot,
@@ -308,6 +331,7 @@ class AppViewModel internal constructor(
                     syncEngine.queue(write)
                     syncEngine.flush()
                     val restored = restoredState(syncEngine, principal)
+                    search.invalidateForGeneration(restored.snapshot.cursor.generation)
                     val agentChanges = cache.agentChanges()
                     _state.update { current -> current.copy(
                         snapshot = restored.snapshot,
@@ -359,6 +383,7 @@ class AppViewModel internal constructor(
                     // flag, an action error) must not be clobbered by this rebuild.
                     // Read the engine before the update: its lambda may run more than once.
                     val snapshot = syncEngine.snapshot()
+                    search.invalidateForGeneration(snapshot.cursor.generation)
                     val principalId = cache.identity.principalId
                     val states = effectiveStates(syncEngine, principalId)
                     val agentChanges = cache.agentChanges()
@@ -481,6 +506,7 @@ class AppViewModel internal constructor(
         cache.withEngine { engine ->
             if (!currentOrExpired(session, cache)) return@withEngine null
             val snapshot = engine.snapshot()
+            search.invalidateForGeneration(snapshot.cursor.generation)
             val states = effectiveStates(engine, cache.identity.principalId)
             _state.update { current -> current.copy(snapshot = snapshot, states = states) }
             entry
@@ -518,6 +544,7 @@ class AppViewModel internal constructor(
 
     /** The stored session is gone: drop the account state and show sign-in. */
     private fun sessionExpired() {
+        search.reset()
         account = null
         activeSession = null
         _state.value = UiState()

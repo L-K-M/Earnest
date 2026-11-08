@@ -30,3 +30,9 @@ filter:
     - list-tokens
     - list-mutes
     - get-settings
+    - search
+    - list-saved-searches
+    - create-saved-search
+    - rename-saved-search
+    - delete-saved-search
+    - pipeline-status

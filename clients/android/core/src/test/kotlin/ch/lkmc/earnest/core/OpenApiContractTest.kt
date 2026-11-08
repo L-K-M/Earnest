@@ -96,6 +96,18 @@ class OpenApiContractTest {
         "Notification" to encode(Notification.serializer(), notification()),
         "Problem" to encode(Problem.serializer(), Problem("about:blank", "Invalid", 400, "invalid", "detail", null)),
         "Empty" to encode(Empty.serializer(), Empty()),
+        "SearchFilter" to encode(SearchFilter.serializer(), SearchFilter(SearchMode.HYBRID, 9007199254740993, 2, 3)),
+        "SearchMatch" to encode(SearchMatch.serializer(), searchMatch()),
+        "SearchPage" to encode(SearchPage.serializer(), SearchPage(listOf(searchMatch()), "cursor", "enabled")),
+        "SavedSearch" to encode(
+            SavedSearch.serializer(),
+            SavedSearch(9007199254740993, "Stored", "query", SearchFilter(SearchMode.HYBRID, 2, 3, 4)),
+        ),
+        "SavedSearchBody" to encode(
+            SavedSearchBody.serializer(),
+            SavedSearchBody("Stored", "query", SearchFilter(SearchMode.FULLTEXT, 2, 3, 4)),
+        ),
+        "SavedSearchRename" to encode(SavedSearchRename.serializer(), SavedSearchRename("Renamed")),
     )
 
     @Test
@@ -302,6 +314,21 @@ class OpenApiContractTest {
         "2026-11-02T12:00:00Z",
         "revert",
         "reason",
+    )
+
+    private fun searchMatch() = SearchMatch(
+        "agent_note",
+        9007199254740993,
+        2,
+        3,
+        4,
+        "Title",
+        "https://example.test/a",
+        "Snippet",
+        1.25,
+        true,
+        84,
+        "Morning Agent",
     )
 
     private fun notification() = Notification(

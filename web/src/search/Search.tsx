@@ -1,4 +1,4 @@
-import {useState} from 'react'
+import {useEffect,useState} from 'react'
 import {useInfiniteQuery, useQuery, useQueryClient} from '@tanstack/react-query'
 import type {components} from '../api.generated'
 import type {Entry, Subscription} from '../reader'
@@ -44,9 +44,17 @@ export function Search({saved, onOpen, subscriptions = [], folders = []}: {saved
   const [folderID,setFolderID] = useState(saved?.filters.folder_id ?? 0)
   const [limit,setLimit] = useState(saved?.filters.limit ?? 0)
   const [name,setName] = useState('')
+  const [renameName,setRenameName] = useState(saved?.name ?? '')
+  const [savedTitle,setSavedTitle] = useState(saved?.name ?? '')
+  const [removed,setRemoved] = useState(false)
+  const [renaming,setRenaming] = useState(false)
+  const [renameError,setRenameError] = useState('')
+  const [renameMessage,setRenameMessage] = useState('')
   const [error,setError] = useState('')
   const [saving,setSaving] = useState(false)
   const [savedMessage,setSavedMessage] = useState('')
+  useEffect(() => {setRenameName(saved?.name ?? '');setSavedTitle(saved?.name ?? '');setRemoved(false);setRenameError('');setRenameMessage('')},[saved?.id,saved?.name])
+  const activeSaved = saved && !removed
   const effectiveMode = pipeline.status.embed === 'enabled' ? mode : 'fulltext'
   const filters = {...saved?.filters,mode:effectiveMode}
   if (subscriptionID) filters.subscription_id = subscriptionID
@@ -66,6 +74,7 @@ export function Search({saved, onOpen, subscriptions = [], folders = []}: {saved
   }, getNextPageParam:page => page.matches?.length ? page.next_cursor : undefined})
   const matches = [...new Map((results.data?.pages.flatMap(page => page.matches ?? []) ?? []).map(match => [`${match.kind}:${match.entry_id}:${match.annotation_id ?? 0}`,match])).values()]
   const status = results.data?.pages.at(-1)?.status
+  const unavailable = status === 'disabled' || status === 'paused'
   async function save(event: React.FormEvent) {
     event.preventDefault();setSaving(true);setError('');setSavedMessage('')
     try {await request('/v1/saved-searches',{method:'POST',body:JSON.stringify({name,query,filters})});await cache.invalidateQueries({queryKey:['saved-searches']});setName('');setSavedMessage('Search saved in the sidebar.')}
@@ -73,14 +82,30 @@ export function Search({saved, onOpen, subscriptions = [], folders = []}: {saved
     finally {setSaving(false)}
   }
   async function remove() {
-    if (!saved) return
+    if (!saved || removed) return
     setSaving(true);setError('');setSavedMessage('')
-    try {await request(`/v1/saved-searches/${encodeURIComponent(saved.id)}`,{method:'DELETE'});setSavedMessage('Saved search deleted. It is gone from the sidebar.');await cache.invalidateQueries({queryKey:['saved-searches']})}
+    try {await request(`/v1/saved-searches/${encodeURIComponent(saved.id)}`,{method:'DELETE'});setRemoved(true);setRenameError('');setRenameMessage('');setSavedMessage('Saved search deleted. It is gone from the sidebar.');await cache.invalidateQueries({queryKey:['saved-searches']})}
     catch(error) {setError(error instanceof Error ? error.message : 'Could not delete the saved search.')}
     finally {setSaving(false)}
   }
-  return <main aria-label="Search"><h2>{saved?.name ?? 'Search'}</h2>
-    {saved && <p><button disabled={saving} onClick={() => {if (window.confirm(`Delete the saved search “${saved.name}”?`)) void remove()}}>Delete “{saved.name}”</button></p>}
+  async function rename(event: React.FormEvent) {
+    event.preventDefault()
+    if (!saved || removed) return
+    const next = renameName.trim()
+    if (!next) {setRenameError('Enter a name for the saved search.');setRenameMessage('');return}
+    setRenaming(true);setRenameError('');setRenameMessage('')
+    try {
+      await request(`/v1/saved-searches/${encodeURIComponent(saved.id)}`,{method:'PATCH',body:JSON.stringify({name:next})})
+      await cache.invalidateQueries({queryKey:['saved-searches']})
+      setSavedTitle(next);setRenameName(next);setRenameMessage('Saved search renamed.')
+    } catch(error) {setRenameError(error instanceof Error ? error.message : 'Could not rename the saved search.')}
+    finally {setRenaming(false)}
+  }
+  return <main aria-label="Search"><h2>{activeSaved ? savedTitle : 'Search'}</h2>
+    {activeSaved && <p><button disabled={saving || renaming} onClick={() => {if (window.confirm(`Delete the saved search “${savedTitle}”?`)) void remove()}}>Delete “{savedTitle}”</button></p>}
+    {activeSaved && <form onSubmit={event => {void rename(event)}}><label>Rename saved search<input value={renameName} onChange={event => {setRenameName(event.target.value);setRenameError('');setRenameMessage('')}}/></label><button disabled={renaming || saving}>{renaming ? 'Renaming…' : 'Rename'}</button></form>}
+    {activeSaved && renameError && <p role="alert">{renameError}</p>}
+    {activeSaved && renameMessage && <p role="status">{renameMessage}</p>}
     <form onSubmit={event => {event.preventDefault();setQuery(input.trim());setSavedMessage('')}}><label>Search your feeds<input type="search" required value={input} onChange={event => setInput(event.target.value)}/></label>
       {pipeline.status.embed === 'enabled' && <label>Search mode<select value={mode} onChange={event => setMode(event.target.value)}><option value="fulltext">Full text</option><option value="hybrid">Hybrid: full text and meaning</option></select></label>}
       <label>Feed<select value={subscriptionID} onChange={event => setSubscriptionID(Number(event.target.value))}><option value={0}>All feeds</option>{subscriptions.filter(sub => !sub.deleted).map(sub => <option key={sub.id} value={sub.id}>{sub.title || sub.url}</option>)}</select></label>
@@ -94,7 +119,7 @@ export function Search({saved, onOpen, subscriptions = [], folders = []}: {saved
     {(error || results.error) && <p role="alert">{error || results.error?.message}</p>}
     {results.isFetching && <p role="status">Searching…</p>}
     {(status === 'disabled' || status === 'paused') && <p role="status">Hybrid search is {status}. <button onClick={() => setMode('fulltext')}>Use full-text search</button></p>}
-    {results.isSuccess && !status && !matches.length && <p>No matches.</p>}
+    {results.isSuccess && !unavailable && !matches.length && <p>No matches.</p>}
     {results.isSuccess && <Matches matches={matches} onOpen={onOpen}/>}
     {results.hasNextPage && <button disabled={results.isFetchingNextPage} onClick={() => {void results.fetchNextPage()}}>More search results</button>}
     {query && <form onSubmit={event => {void save(event)}}><label>Saved search name<input required value={name} onChange={event => setName(event.target.value)}/></label><button disabled={saving}>Save search as a view</button></form>}
@@ -106,11 +131,12 @@ export function MoreLikeThis({entryID,onOpen}: {entryID: number; onOpen: (entry:
   const pipeline = usePipeline()
   const [requested,setRequested] = useState(false)
   const similar = useQuery({queryKey:['similar',entryID], enabled:requested && pipeline.status.embed !== 'disabled', queryFn:({signal}) => request<Page>(`/v1/entries/${entryID}/similar`,{signal})})
+  const unavailable = similar.data?.status === 'disabled' || similar.data?.status === 'paused'
   if (pipeline.status.embed === 'disabled') return null
   return <section aria-label="Similar articles"><button onClick={() => setRequested(true)}>More like this</button>
     {requested && similar.isPending && <p role="status">Finding similar articles…</p>}
     {similar.error && <p role="alert">{similar.error.message}</p>}
-    {requested && similar.data?.status && <p role="status">Similar articles are {similar.data.status}.</p>}
-    {requested && similar.isSuccess && !similar.data.status && <><Matches matches={similar.data.matches ?? []} onOpen={onOpen}/>{!similar.data.matches?.length && <p>No similar articles yet.</p>}</>}
+    {requested && unavailable && <p role="status">Similar articles are {similar.data?.status}.</p>}
+    {requested && similar.isSuccess && !unavailable && <><Matches matches={similar.data.matches ?? []} onOpen={onOpen}/>{!similar.data.matches?.length && <p>No similar articles yet.</p>}</>}
   </section>
 }

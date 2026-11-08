@@ -114,6 +114,22 @@ Incremental entry events are hydrated before their page and cursor are committed
 A metadata 404 is retained as a tombstone; other failures leave the cursor for
 retry.
 
+## Search and saved views
+
+Use the top-bar Search action to search stored articles and separately labelled
+agent notes. Full-text search works without models. When embeddings are enabled,
+you can choose Hybrid, which can make an embedding call. Feed, folder and page-size
+filters are available. More search results and Save as new keep the submitted
+query and filters even while you edit the next query.
+
+Save a query as a named view, open it from Saved searches, rename it or delete
+its definition without removing articles. Mutations report errors rather than
+claiming offline success. Search is online-only; its transient results and drafts
+are cleared when you change accounts or sign out, and invalidated after a server
+restore. A failed AI availability check still leaves full-text search available.
+Opening an agent-note result uses click-to-load images like other agent-surfaced
+articles. Notes and snippets remain plain text.
+
 ## Feeds and activity
 
 Feeds subscribes by URL, changes a subscription's cadence (Now, Today, This
