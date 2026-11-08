@@ -12,7 +12,7 @@ import {shortcutsAllowed, viewKey, type Entry, type EntryState, type ReaderActio
 import {Search, useSavedSearches} from './search/Search'
 import {markRestCommand} from './markRest'
 import {Palette, type Command, type PaletteHandle} from './palette/Palette'
-import {OfflineStatus, clearOffline} from './offline/Offline'
+import {OfflineStatus, clearOffline, useOnline} from './offline/Offline'
 import {Ask} from './pipeline/Pipeline'
 import {Brand} from './Brand'
 import {Icon} from './Icon'
@@ -139,6 +139,15 @@ function Session({onLogout}: {onLogout: () => void}) {
 
   const userID = identity?.user_id ?? 0
   const remember = useCallback((entry: Entry) => { queryClient.setQueryData(['entry', userID, entry.id], entry) }, [queryClient, userID])
+  function cachedEntry(id: number | undefined): Entry | undefined {
+    if (id === undefined) return undefined
+    for (const [, data] of queryClient.getQueriesData<{pages?: {entries?: Entry[]}[]}>({queryKey: ['river']})) {
+      const found = data?.pages?.flatMap(page => page.entries ?? []).find(entry => entry.id === id)
+      if (found) return found
+    }
+    return undefined
+  }
+  const online = useOnline()
 
   const notificationOpened = useRef(false)
   useEffect(() => {
@@ -207,10 +216,21 @@ function Session({onLogout}: {onLogout: () => void}) {
   })()
   const view = resolved.view
   const openID = riverRoute?.entry
+  // An article link opened offline cannot fetch the article, but the list it
+  // belongs to usually comes from the offline cache a moment later; the retry
+  // finds it there.
   const openQuery = useQuery({
     queryKey: ['entry', userID, openID], enabled: signedIn && openID !== undefined, staleTime: Infinity,
-    queryFn: ({signal}) => request<Entry>(`/v1/entries/${openID}`, {signal}),
-    retry: (count, failure) => !(failure instanceof RequestError && failure.status === 404) && count < 1,
+    queryFn: async ({signal}) => {
+      try {
+        return await request<Entry>(`/v1/entries/${openID}`, {signal})
+      } catch (failure) {
+        const listed = cachedEntry(openID)
+        if (listed && !(failure instanceof RequestError)) return listed
+        throw failure
+      }
+    },
+    retry: (count, failure) => !(failure instanceof RequestError && failure.status === 404) && count < 2,
   })
   const openEntry = openID !== undefined ? openQuery.data : undefined
   const current = openEntry ?? selected
@@ -343,7 +363,7 @@ function Session({onLogout}: {onLogout: () => void}) {
 
   const pageTitle = (() => {
     switch (route.name) {
-    case 'river': return openEntry ? `${openEntry.title || 'Untitled'} · ${view.title}` : view.title
+    case 'river': return openEntry ? `${openEntry.title || 'Untitled'} · ${view.title}` : openID !== undefined && openQuery.isError ? `Article unavailable · ${view.title}` : view.title
     case 'search': return route.saved !== undefined ? savedSearches.data?.find(saved => saved.id === route.saved)?.name ?? 'Saved search' : route.search.q ? `${route.search.q} · Search` : 'Search'
     case 'ask': return 'Ask my feeds'
     case 'rules': return route.rule === 'new' ? 'New rule' : 'Rules'
@@ -458,8 +478,10 @@ function Session({onLogout}: {onLogout: () => void}) {
 
   const firstRun = route.name === 'river' && openID === undefined && !onboarded && (onboardingStarted || (subscriptions.isSuccess && subscriptions.data.length === 0 && preferences.isSuccess && preferences.data.rev === 0))
   const reading = openID !== undefined
-  const syncTone = sync.error ? 'problem' as const : /waiting|Restoring|Opening/.test(sync.status) ? 'waiting' as const : 'quiet' as const
-  const syncText = sync.error ? 'Sync needs attention' : sync.status.replace(/\.$/, '')
+  // Offline, failed requests are expected; the offline notice says so once
+  // instead of a banner per failed request.
+  const syncTone = sync.error && online ? 'problem' as const : !online || /waiting|Restoring|Opening/.test(sync.status) ? 'waiting' as const : 'quiet' as const
+  const syncText = !online ? `Offline. ${sync.status.replace(/\.$/, '')}` : sync.error ? 'Sync needs attention' : sync.status.replace(/\.$/, '')
   const sidebar = <Sidebar route={route} subscriptions={subs} folders={folders.data ?? []} labels={labels.data ?? []} savedSearches={savedSearches.data ?? []} counts={settings.reading_mode === 'unread_counts' ? unreadCounts.data : undefined} askEnabled={pipeline.data?.ask === 'enabled'} sync={{text: syncText, tone: syncTone}} onNavigate={() => drawer.current?.close()} onPalette={() => {drawer.current?.close(); palette.current?.openPalette()}} onHelp={() => {drawer.current?.close(); palette.current?.openHelp()}} onSignOut={() => {void logout()}} prefetch={prefetch} />
 
   function screen(): ReactNode {
@@ -510,8 +532,8 @@ function Session({onLogout}: {onLogout: () => void}) {
       <div className="banners">
         {error && <p role="alert" className="banner problem">{error} <button type="button" className="quiet" onClick={() => setError('')}>Dismiss</button></p>}
         {(subscriptions.error || preferences.error) && <p role="alert" className="banner problem">{subscriptions.error?.message || preferences.error?.message} <button type="button" className="quiet" onClick={() => {void subscriptions.refetch();void preferences.refetch()}}>Try again</button></p>}
-        {settings.reading_mode === 'unread_counts' && unreadCounts.error && <p role="alert" className="banner problem">Unread counts: {unreadCounts.error.message}</p>}
-        {sync.error && <p role="alert" className="banner problem">{sync.error} <button type="button" onClick={sync.retry}>Retry sync</button></p>}
+        {online && settings.reading_mode === 'unread_counts' && unreadCounts.error && <p role="alert" className="banner problem">Unread counts: {unreadCounts.error.message}</p>}
+        {online && sync.error && <p role="alert" className="banner problem">{sync.error} <button type="button" onClick={sync.retry}>Retry sync</button></p>}
         <OfflineStatus/>
       </div>
       <main id="main" tabIndex={-1} className={`main ${route.name === 'river' && !firstRun ? 'is-river' : 'is-page'}`}>

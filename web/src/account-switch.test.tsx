@@ -11,7 +11,7 @@ const {entry,late} = vi.hoisted(() => ({late:{open:null as null | ((entry: Entry
 vi.mock('react-dom/client',() => ({createRoot:vi.fn()}))
 vi.mock('./request',() => ({request:vi.fn(),setCSRF:vi.fn()}))
 vi.mock('./syncBridge',() => ({useReaderSync:() => ({state:(value: Entry) => value.state,act:vi.fn(),retry:vi.fn(),status:'Synced',error:''})}))
-vi.mock('./offline/Offline',() => ({OfflineStatus:() => null,registerOffline:vi.fn().mockResolvedValue(undefined),clearOffline:vi.fn().mockResolvedValue(undefined)}))
+vi.mock('./offline/Offline',() => ({OfflineStatus:() => null,useOnline:() => true,registerOffline:vi.fn().mockResolvedValue(undefined),clearOffline:vi.fn().mockResolvedValue(undefined)}))
 vi.mock('./River',() => ({River:({view,onOpen}: {view: View;onOpen:(entry: Entry)=>void}) => <main><h2>{view.title} articles</h2><button onClick={() => onOpen(entry as Entry)}>Open private article</button></main>}))
 vi.mock('./ArticleReader',() => ({Reader:({entry,onOpen}:{entry: Entry;onOpen:(entry: Entry)=>void}) => {late.open=onOpen;return <article>{entry.title} {entry.author} <a href={entry.url}>Original</a></article>}}))
 afterEach(() => {cleanup();localStorage.clear();vi.resetAllMocks()})

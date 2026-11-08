@@ -214,3 +214,47 @@ it('reports the newest loaded entry for the mark-rest command', async () => {
   render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'today',title:'Today'}} subscriptions={[]} actions={{act:vi.fn(),state:entry=>entry.state}} selected={null} onSelect={vi.fn()} onOpen={vi.fn()} shortcuts counts={false} summary={{seen:0,done:0,later:0,kept:0}} onNewestLoaded={onNewestLoaded} /></QueryClientProvider>)
   await waitFor(() => expect(onNewestLoaded).toHaveBeenLastCalledWith(Math.max(...entries.map(entry => entry.seq))))
 })
+
+describe('list navigation', () => {
+  function mountWith(props: {reading?: boolean; selected?: Entry; shortcuts?: boolean}) {
+    vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {blurb:'disabled'} : path.startsWith('/v1/positions') ? {seq:0} : {entries})
+    const onSelect = vi.fn()
+    const onOpen = vi.fn()
+    render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'feed',id:9,title:'Rust'}} subscriptions={[]} actions={{act:vi.fn().mockResolvedValue(undefined),state:entry=>entry.state}} selected={props.selected ?? entries[0]} onSelect={onSelect} onOpen={onOpen} reading={props.reading} shortcuts={props.shortcuts ?? true} counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>)
+    return {onSelect, onOpen}
+  }
+  it('renders rows as links to the article in this view with one tab stop', async () => {
+    mountWith({})
+    const link = (await screen.findByText('Article 1')).closest('a')!
+    expect(link.getAttribute('href')).toBe('/feeds/9/articles/1')
+    expect(document.querySelectorAll('.entry[tabindex="0"]')).toHaveLength(1)
+  })
+  it('leaves modified clicks to the browser so articles open in a new tab', async () => {
+    const {onOpen} = mountWith({})
+    const link = (await screen.findByText('Article 2')).closest('a')!
+    const event = new MouseEvent('click', {bubbles:true, cancelable:true, metaKey:true})
+    link.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(false)
+    expect(onOpen).not.toHaveBeenCalled()
+  })
+  it('moves the selection with arrow keys even with single-key shortcuts off', async () => {
+    const {onSelect} = mountWith({shortcuts:false})
+    const link = (await screen.findByText('Article 1')).closest('a')!
+    link.focus()
+    fireEvent.keyDown(link, {key:'ArrowDown'})
+    expect(onSelect).toHaveBeenLastCalledWith(entries[1])
+    fireEvent.keyDown(link, {key:'End'})
+    expect(onSelect).toHaveBeenLastCalledWith(entries[2])
+  })
+  it('opens the next article in place while one is being read', async () => {
+    const {onOpen} = mountWith({reading:true})
+    await screen.findByText('Article 1')
+    fireEvent.keyDown(document.body, {key:'j'})
+    expect(onOpen).toHaveBeenCalledWith(entries[1], 'replace')
+  })
+  it('names each list’s emptiness instead of reusing the river line', async () => {
+    vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {blurb:'disabled'} : path.startsWith('/v1/positions') ? {seq:0} : {entries:[]})
+    render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'later',title:'Later'}} subscriptions={[]} actions={{act:vi.fn(),state:entry=>entry.state}} selected={null} onSelect={vi.fn()} onOpen={vi.fn()} shortcuts counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>)
+    expect(await screen.findByText(/Nothing waiting for later/)).toBeTruthy()
+  })
+})

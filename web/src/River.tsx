@@ -146,7 +146,13 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   // opening alongside it (the reader takes focus then).
   const readingRef = useRef(reading)
   useEffect(() => { readingRef.current = reading }, [reading])
-  useEffect(() => { if (!readingRef.current) heading.current?.focus({preventScroll: true}) }, [key])
+  // A frame later, so a closing dialog (the palette) restores its own focus
+  // first and the new list still ends up with it.
+  useEffect(() => {
+    if (readingRef.current) return
+    const frame = window.requestAnimationFrame(() => heading.current?.focus({preventScroll: true}))
+    return () => window.cancelAnimationFrame(frame)
+  }, [key])
 
   // Come back to the same place in a list after reading elsewhere.
   useEffect(() => {

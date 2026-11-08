@@ -11,10 +11,12 @@ function Guarded({active}: {active: boolean}) {
   const release = useBlocker(active, 'Discard changes?')
   return <button onClick={release}>Release</button>
 }
+// history.go is asynchronous; wait for the popstate it produces.
 async function popTo(steps: number) {
   await act(async () => {
+    const popped = new Promise(resolve => window.addEventListener('popstate', resolve, {once: true}))
     history.go(steps)
-    await new Promise(resolve => window.setTimeout(resolve, 20))
+    await popped
   })
 }
 beforeEach(() => {history.replaceState(null, '', '/');initializeHistory()})
@@ -47,7 +49,11 @@ it('returns to the list an article was opened from instead of stacking another e
   act(() => {navigate('/today/articles/4', {from: '/today'})})
   expect(openedFrom()).toBe('/today')
   const length = history.length
-  await act(async () => {returnTo('/today');await new Promise(resolve => window.setTimeout(resolve, 20))})
+  await act(async () => {
+    const popped = new Promise(resolve => window.addEventListener('popstate', resolve, {once: true}))
+    returnTo('/today')
+    await popped
+  })
   expect(location.pathname).toBe('/today')
   expect(history.length).toBe(length)
 })

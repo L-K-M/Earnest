@@ -2,6 +2,8 @@ package web
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 
 	"github.com/L-K-M/Earnest/internal/imageproxy"
 	"github.com/L-K-M/Earnest/internal/outbound"
@@ -55,6 +57,58 @@ func (fakeContent) Content(_ context.Context, _ service.Actor, _ int64) (service
 	return service.EntryContent{HTML: "<p>Article</p>"}, nil
 }
 
+func newContentRecorder(t *testing.T, query string) *httptest.ResponseRecorder {
+	t.Helper()
+	egress, err := outbound.New(outbound.Config{Version: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy, err := imageproxy.New([]byte(strings.Repeat("x", 32)), egress, "https://content.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Content{svc: fakeContent{}, proxy: proxy, signer: &TicketSigner{key: []byte(strings.Repeat("x", 32)), origin: "https://content.example", now: func() time.Time { return time.Unix(100, 0) }}}
+	sig := c.signer.Sign(Ticket{UserID: 1, PrincipalID: 2, Kind: service.PrincipalHuman, EntryID: 3, Expires: 101, Mode: ImageProxied})
+	w := httptest.NewRecorder()
+	c.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/content/3?sig="+sig+query, nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	return w
+}
+
+func TestContentStyleHashMatchesCSS(t *testing.T) {
+	w := newContentRecorder(t, "")
+	body := w.Body.String()
+	start := strings.Index(body, "<style>")
+	end := strings.Index(body, "</style>")
+	if start < 0 || end < 0 || end < start {
+		t.Fatalf("style element not found in %q", body)
+	}
+	css := body[start+len("<style>") : end]
+	sum := sha256.Sum256([]byte(css))
+	want := "style-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+	if policy := w.Header().Get("Content-Security-Policy"); !strings.Contains(policy, want) {
+		t.Fatalf("CSP = %q, want %q", policy, want)
+	}
+}
+
+func TestContentDarkThemeStyles(t *testing.T) {
+	w := newContentRecorder(t, "&theme=dark")
+	body := w.Body.String()
+	for _, want := range []string{
+		"border-inline-start:3px solid #a3a09a",
+		"border:1px solid #a3a09a",
+		"background:#2e2e2c",
+		"blockquote{",
+		"table{",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body missing %q", want)
+		}
+	}
+}
+
 func TestContentPolicy(t *testing.T) {
 	egress, err := outbound.New(outbound.Config{Version: "test"})
 	if err != nil {
@@ -78,7 +132,7 @@ func TestContentPolicy(t *testing.T) {
 }
 
 func TestReaderIframeSandbox(t *testing.T) {
-	source, err := os.ReadFile("../../web/src/main.tsx")
+	source, err := os.ReadFile("../../web/src/App.tsx")
 	if err != nil {
 		t.Fatal(err)
 	}

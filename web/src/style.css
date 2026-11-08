@@ -197,7 +197,8 @@ dd {margin: 0}
 .agent-today > *, .river [aria-label="Edition prose"] {margin: var(--s2) var(--s3); padding: var(--s2) var(--s3); border: 1px solid var(--line); border-radius: var(--r2); background: var(--surface)}
 .agent-today:empty {display: none}
 .river [aria-label="Edition prose"] {max-height: 40%; overflow: auto}
-.empty-state, .river > .empty-state {padding: var(--s6) var(--s4)}
+.river .empty-state {padding: var(--s6) var(--s4)}
+.page-inner .empty-state {padding: var(--s3) 0}
 
 .skeleton {position: relative; overflow: hidden; border-radius: var(--r1); background: var(--surface-2)}
 .skeleton.line {height: .8rem; margin: .5rem 0}
@@ -215,6 +216,10 @@ dd {margin: 0}
 .tool[aria-pressed=true] {background: var(--brand-soft); color: var(--brand)}
 .tool-divider {flex: none; width: 1px; height: 1.25rem; margin: 0 var(--s1); background: var(--line)}
 .tool-spacer {flex: 1}
+@container reader (max-width: 62rem) {
+  .tool.secondary .label {position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap}
+  .tool.secondary {padding: 0; width: var(--control); justify-content: center}
+}
 @container reader (max-width: 40rem) {
   .tool .label {position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap}
   .tool {padding: 0; width: var(--control); justify-content: center}
@@ -275,7 +280,6 @@ dd {margin: 0}
 .settings-layout > .page-header {grid-column: 1 / -1}
 .section-nav {position: sticky; top: 0}
 .section-nav ul {display: grid; gap: 2px; margin: 0; padding: 0; list-style: none}
-.page-inner .section-nav li {padding: 0; border: 0}
 .section-nav a {display: block; padding: .4rem .6rem; border-radius: var(--r2); color: var(--ink-muted); text-decoration: none}
 .section-nav a:hover {background: var(--hover); color: var(--ink)}
 @container page (max-width: 52rem) {

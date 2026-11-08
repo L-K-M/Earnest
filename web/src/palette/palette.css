@@ -17,4 +17,5 @@ dialog.palette[open] {display: flex; flex-direction: column}
 dialog.shortcuts {width: min(46rem, calc(100vw - 2rem))}
 .shortcut-groups {display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 0 var(--s5)}
 .shortcut-groups h3 {margin: var(--s4) 0 var(--s2); font-size: var(--step--1); text-transform: uppercase; letter-spacing: .05em; color: var(--ink-muted)}
-.shortcut-groups dt {min-width: 6.5rem}
+.shortcut-groups dt {min-width: 9.5rem}
+.shortcut-groups kbd {white-space: nowrap}

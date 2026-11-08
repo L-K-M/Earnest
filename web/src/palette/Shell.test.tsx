@@ -12,7 +12,7 @@ const {changes,act,entry} = vi.hoisted(() => ({changes:{current:null as null | (
 vi.mock('react-dom/client',() => ({createRoot:vi.fn()}))
 vi.mock('../request',() => ({request:vi.fn(),setCSRF:vi.fn()}))
 vi.mock('../syncBridge',() => ({useReaderSync:(_identity: unknown,onChanges: (reason?: 'generation') => void) => {changes.current=onChanges;return {state:(value: Entry) => value.state,act,retry:vi.fn(),status:'Reading actions synced.',error:''}}}))
-vi.mock('../offline/Offline',() => ({OfflineStatus:() => null,registerOffline:vi.fn().mockResolvedValue(undefined),clearOffline:vi.fn().mockResolvedValue(undefined)}))
+vi.mock('../offline/Offline',() => ({OfflineStatus:() => null,useOnline:() => true,registerOffline:vi.fn().mockResolvedValue(undefined),clearOffline:vi.fn().mockResolvedValue(undefined)}))
 vi.mock('../River',() => ({River:({view,onSelect}: {view: View; onSelect: (entry: Entry) => void}) => <main><h2>{view.title} articles</h2><button onClick={() => onSelect(entry as Entry)}>Select article</button></main>}))
 afterEach(() => {cleanup();localStorage.clear();vi.resetAllMocks()})
 

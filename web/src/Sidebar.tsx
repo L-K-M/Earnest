@@ -41,7 +41,7 @@ export function FeedMark({title}: {title: string}) {
 
 function Count({value}: {value?: number}) {
   if (!value) return null
-  return <span className="nav-count">{value > 999 ? '999+' : value}<span className="sr-only"> unread</span></span>
+  return <span className="nav-count"><span className="sr-only">, </span>{value > 999 ? '999+' : value}<span className="sr-only"> unread</span></span>
 }
 
 type Props = {
@@ -82,7 +82,7 @@ export function Sidebar({route, subscriptions, folders, labels, savedSearches, c
       {props.mark !== undefined ? <FeedMark title={props.mark} /> : props.icon && <Icon name={props.icon} />}
       <span className="nav-label">{props.label}</span>
       {props.warning && <span className="nav-warning" title={props.warning}><Icon name="warning" size={14} /><span className="sr-only">, failing: {props.warning}</span></span>}
-      <Count value={props.count} />
+      {props.count ? ' ' : null}<Count value={props.count} />
     </Link>
   const feedLink = (sub: Subscription) => <li key={sub.id}>{nav({to:viewHref({kind:'feed', id:sub.id}), label:sub.title || sub.url, mark:sub.title || sub.url, current:current(`river:feed:${sub.id}`), count:feedCount(sub), warning:explainHealth(sub.health)})}</li>
   const activeLabels = labels.filter(label => !label.deleted)

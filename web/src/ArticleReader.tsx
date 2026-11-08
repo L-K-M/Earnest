@@ -88,10 +88,10 @@ export function Reader({entry, subscription, settings, actions, onClose, onSetti
       <button type="button" className="tool" aria-pressed={state.kept.value === true} onClick={() => act('kept', state.kept.value !== true)} title="Keep (f)" aria-keyshortcuts="f"><Icon name="keep" /><span className="label">Keep</span></button>
       <button type="button" className="tool" onClick={() => act('seen', 'unseen')} title="Mark unread (m)" aria-keyshortcuts="m"><Icon name="unread" /><span className="label">Mark unread</span></button>
       <span className="tool-spacer" />
-      <a className="tool" href={entry.url} target="_blank" rel="noopener noreferrer" title="Open original (v)" aria-keyshortcuts="v"><Icon name="external" /><span className="label">Open original</span></a>
-      <button type="button" className="tool" onClick={() => {void copyLink()}} title="Copy link to the original"><Icon name="link" /><span className="label">Copy link</span></button>
-      {canShare && <button type="button" className="tool" onClick={() => {void share()}} title="Share"><Icon name="share" /><span className="label">Share</span></button>}
-      <button type="button" className="tool" popoverTarget={`${ids}-typography`} title="Typography for this feed"><Icon name="type" /><span className="label">Typography</span></button>
+      <a className="tool secondary" href={entry.url} target="_blank" rel="noopener noreferrer" title="Open original (v)" aria-keyshortcuts="v"><Icon name="external" /><span className="label">Open original</span></a>
+      <button type="button" className="tool secondary" onClick={() => {void copyLink()}} title="Copy link to the original"><Icon name="link" /><span className="label">Copy link</span></button>
+      {canShare && <button type="button" className="tool secondary" onClick={() => {void share()}} title="Share"><Icon name="share" /><span className="label">Share</span></button>}
+      <button type="button" className="tool secondary" popoverTarget={`${ids}-typography`} title="Typography for this feed"><Icon name="type" /><span className="label">Typography</span></button>
     </div>
     <div className="reader-scroll">
       <header className="article-header">
