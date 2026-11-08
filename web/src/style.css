@@ -376,3 +376,14 @@ dialog::backdrop {background: rgb(10 10 8 / .42)}
   .sidebar, .topbar, .reader-toolbar, .toast-region, .list-pane, .banners {display: none}
   .app, .panes {display: block; height: auto; overflow: visible}
 }
+
+/* Account settings */
+.settings-list {list-style: none; margin: var(--s2) 0; padding: 0}
+.settings-list > li {padding: var(--s3) 0; border-top: 1px solid var(--line)}
+.settings-list > li:last-child {border-bottom: 1px solid var(--line)}
+.settings-row-head {display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2)}
+.settings-row-detail {margin: var(--s1) 0 0; font-size: var(--step--1); color: var(--ink-muted); overflow-wrap: anywhere}
+.settings-list .button-row {margin-top: var(--s2)}
+.settings-list .empty-state {padding: var(--s2) 0; font-size: var(--step--1)}
+.label-name {font-weight: 600}
+.secret {display: block; margin: var(--s2) 0; padding: var(--s3); border: 1px solid var(--line); border-radius: var(--r2); background: var(--surface-2); overflow-wrap: anywhere; white-space: pre-wrap}
