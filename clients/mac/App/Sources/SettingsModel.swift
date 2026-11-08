@@ -10,9 +10,15 @@ import EarnestKit
     @Published var draft: APIReaderSettings {
         didSet {
             confirmed = false
-            if draft != oldValue { pending = nil }
+            if draft != oldValue {
+                pending = nil
+                if autosaves { scheduleAutosave() }
+            }
         }
     }
+    /// Apply changes as they are made, the Mac Settings convention. The
+    /// Settings window turns this on; the model's tests drive save() directly.
+    var autosaves = false
     @Published private(set) var baseline: APIReaderSettings
     @Published private(set) var busy = false
     @Published private(set) var error: String?
@@ -23,6 +29,7 @@ import EarnestKit
     private let app: AppModel
     private var pending: PendingSave?
     private var task: Task<Void, Never>?
+    private var autosaveTask: Task<Void, Never>?
     private var scope: ReaderPreferencesScope?
     private var requestID = 0
 
@@ -37,6 +44,22 @@ import EarnestKit
         baseline = app.readerSettings
         scope = app.readerPreferencesScope()
         ready = scope != nil
+        app.register(preferences: self)
+    }
+
+    /// Save shortly after the last edit. A save already in flight finishes
+    /// first; edits made meanwhile are saved after it. A conflict waits for
+    /// Reload, and a failure waits for the next edit or Save.
+    private func scheduleAutosave() {
+        autosaveTask?.cancel()
+        autosaveTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            while let self, self.busy, !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            guard let self, !Task.isCancelled, self.ready, self.isDirty, !self.conflict else { return }
+            self.save()
+        }
     }
 
     var isDirty: Bool { draft != baseline }
@@ -198,6 +221,8 @@ import EarnestKit
         requestID &+= 1
         task?.cancel()
         task = nil
+        autosaveTask?.cancel()
+        autosaveTask = nil
         pending = nil
         busy = false
         error = nil

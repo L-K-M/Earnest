@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import EarnestKit
 #if canImport(SwiftUI)
@@ -17,7 +18,13 @@ import AppKit
     @Published var rows: [EntryRow] = []
     @Published var editionGroups: [EditionGroup] = []
     @Published var selected: Int64? {
-        didSet { if oldValue != selected { open(selected) } }
+        didSet {
+            guard oldValue != selected else { return }
+            // The article read before stays in the river only while it is
+            // open; drop it from the list as soon as the selection moves.
+            if oldValue != nil, section == .today || section == .edition { rebuildPresentation() }
+            open(selected)
+        }
     }
     @Published var html = ""
     @Published private(set) var imageOrigin: URL?
@@ -27,7 +34,6 @@ import AppKit
     /// The selected article could not be fetched and has no offline copy.
     @Published private(set) var articleUnavailable = false
     @Published var palette = false
-    @Published var editingSearch = false
     /// Mirrors the account's single-key preference so commands can drop the
     /// unmodified-letter bindings without disabling the menu actions.
     @Published private(set) var singleKeyShortcuts = true
@@ -35,14 +41,52 @@ import AppKit
     /// override. Recomputed from the shared settings on every rebuild.
     @Published private(set) var readerStyle = ReaderStyle.default
     let search: SearchModel
-    let settings: ReaderSettingsModel
+    /// The live WKWebView behind this window's reader, for zoom and find.
+    let reader = ReaderController()
     @Published var endTitle = ""
     @Published var endDetail = ""
     @Published var subscribeURL = ""
     @Published var subscribeCadence = "today"
+    /// The New Subscription sheet is showing.
+    @Published var subscribing = false
+    /// The subscription selected in Feeds, shown in the detail column.
+    @Published var selectedFeedID: Int64?
+    /// A subscription waiting for Unsubscribe to be confirmed.
+    @Published var unsubscribing: FeedInfo?
+    /// The search result row selected, which may be an article or an agent note.
+    @Published var selectedMatchID: String?
+    /// The activity row selected in Activity.
+    @Published var selectedActivityID: Int64?
+    /// The window's undo manager, supplied by its view. Reading actions
+    /// register their inverse here so Edit > Undo names and reverses them.
+    weak var undoManager: UndoManager?
+    /// The window this model drives, for routing plain-key shortcuts.
+    weak var nsWindow: NSWindow?
+    /// Whether this window presents app-wide alerts (errors, Sign Out): the
+    /// key reading window, or the first one when Settings or nothing is key,
+    /// so exactly one window asks.
+    var presentsAppAlerts: Bool {
+        #if canImport(AppKit)
+        let windows = app.windows
+        if let key = NSApp.keyWindow ?? NSApp.mainWindow {
+            let owner = key.sheetParent ?? key
+            if let front = windows.first(where: { $0.nsWindow === owner }) { return front === self }
+        }
+        return windows.first === self
+        #else
+        return true
+        #endif
+    }
+    /// Where clearing the search field returns to.
+    private(set) var sectionBeforeSearch: Section = .today
+    /// An article restored with the window, opened once the account's cache is ready.
+    var pendingRestoredSelection: Int64?
+    /// An `earnest:` link that arrived before the account's cache was ready.
+    private var pendingDeepLink: Int64?
 
     let app: AppModel
     private var tasks: [String: Task<Void, Never>] = [:]
+    private var searchChanges: AnyCancellable?
     // Whether this window's candidates came from the cache or the server's
     // filtered river. Another window's successful fetch must not change it.
     private var cachedPresentation = false
@@ -50,7 +94,6 @@ import AppKit
     init(app: AppModel) {
         self.app = app
         search = SearchModel(app: app)
-        settings = ReaderSettingsModel(app: app)
         singleKeyShortcuts = app.readerSettings.singleKeyShortcuts
         readerStyle = app.readerStyle(for: nil)
         if let sibling = app.windows.first(where: { $0.section == section && !$0.entries.isEmpty }) {
@@ -63,11 +106,34 @@ import AppKit
         }
         app.register(self)
         rebuildPresentation()
+        // The window's title, sidebar and commands read the search state, so
+        // a change to it is a change to the window.
+        searchChanges = search.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
     }
 
     func restoreCachedEntries(_ entries: [APIEntry]) {
-        self.entries = entries
+        self.entries = keepingOpenArticle(entries)
         cachedPresentation = true
+    }
+
+    /// Put a cached article back into this window's entries.
+    private func restoreEntryFromCache(_ id: Int64) {
+        guard !entries.contains(where: { $0.id == id }), let engine = app.engine, app.principalID > 0,
+              let cached = try? engine.entry(id), !cached.deleted, cached.hasBody,
+              let entry = try? cachedEntry(cached, principal: app.principalID, engine: engine) else { return }
+        entries.insert(entry, at: entries.firstIndex { $0.seq > entry.seq } ?? entries.endIndex)
+    }
+
+    /// The server's river omits an article once it is seen, so a refresh
+    /// would drop the one you are reading, and with it the commands that act
+    /// on it. Keep the open article until the selection moves on.
+    private func keepingOpenArticle(_ fresh: [APIEntry]) -> [APIEntry] {
+        guard let selected, !fresh.contains(where: { $0.id == selected }),
+              let open = entries.first(where: { $0.id == selected }) ?? readingEntry.flatMap({ $0.id == selected ? $0 : nil })
+        else { return fresh }
+        var kept = fresh
+        kept.insert(open, at: kept.firstIndex { $0.seq > open.seq } ?? kept.endIndex)
+        return kept
     }
 
     /// Every chunk of async work is a named task so selection changes cancel
@@ -87,10 +153,16 @@ import AppKit
         tasks.values.forEach { $0.cancel() }
         tasks.removeAll()
         search.reset()
-        settings.endSession()
         singleKeyShortcuts = true
         readerStyle = .default
-        editingSearch = false
+        subscribing = false
+        unsubscribing = nil
+        selectedMatchID = nil
+        selectedFeedID = nil
+        selectedActivityID = nil
+        pendingRestoredSelection = nil
+        pendingDeepLink = nil
+        undoManager?.removeAllActions(withTarget: self)
         entries = []
         cachedPresentation = false
         rows = []
@@ -136,8 +208,6 @@ import AppKit
             await app.refreshActivity()
         case .search:
             search.loadMetadata()
-        case .settings:
-            break
         }
         guard self.section == expected, app.loggedIn, !Task.isCancelled else { return }
         app.rebuildPresentation()
@@ -165,7 +235,7 @@ import AppKit
             guard self.section == expected, app.loggedIn, app.session == expectedSession, !Task.isCancelled else { return }
             try engine.mergeEntries(all, generation: generation)
             cachedPresentation = false
-            entries = all
+            entries = keepingOpenArticle(all)
         } catch is CancellationError {
         } catch {
             guard app.session == expectedSession, (try? engine.snapshot().cursor?.generation) == generation else { return }
@@ -191,24 +261,24 @@ import AppKit
     }
 
     private func row(_ entry: APIEntry, _ state: EarnestKit.State) -> EntryRow {
+        // Source, then age, then author: truncation drops the least useful part first.
         var subtitle = app.feedMap[entry.subscriptionID]?.title ?? "Feed \(entry.subscriptionID)"
-        if !entry.author.isEmpty { subtitle += " · \(entry.author)" }
         let date = entry.publishedAt.flatMap(DateFormatting.parse) ?? DateFormatting.parse(entry.firstSeenAt)
         if let date { subtitle += " · \(DateFormatting.relative.localizedString(for: date, relativeTo: Date()))" }
-        var badges: [String] = []
-        if state.kept.value == .flag(true) { badges.append("Kept") }
-        if state.shelf.value == .text("later") { badges.append("Later") }
-        if state.shelf.value == .text("done") { badges.append("Done") }
-        if !badges.isEmpty { subtitle += " · " + badges.joined(separator: " · ") }
-        return EntryRow(id: entry.id, title: entry.title.isEmpty ? "(untitled)" : entry.title,
-                        subtitle: subtitle, unread: state.seen.value == .text("unseen"))
+        if !entry.author.isEmpty { subtitle += " · \(entry.author)" }
+        // Kept and Later show as row markers; Done, which has none, stays in words.
+        if state.shelf.value == .text("done") && section != .done { subtitle += " · Done" }
+        let url = URL(string: entry.url).flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil }
+        return EntryRow(id: entry.id, title: entry.title.isEmpty ? "Untitled" : entry.title,
+                        subtitle: subtitle, unread: state.seen.value == .text("unseen"),
+                        kept: state.kept.value == .flag(true), later: state.shelf.value == .text("later"),
+                        url: url)
     }
 
     func rebuildPresentation() {
         search.invalidateAfterRestore()
         singleKeyShortcuts = app.readerSettings.singleKeyShortcuts
         readerStyle = app.readerStyle(for: readingEntry)
-        settings.update(from: app.readerSettings)
         let snapshot = try? app.engine?.snapshot()
         let knownIDs = Set(entries.map(\.id))
         let pendingIDs = Set(snapshot?.outbox.filter { $0.principal == app.principalID }.map(\.entryID) ?? [])
@@ -237,7 +307,7 @@ import AppKit
                     case .later: belongs = state.shelf.value == .text("later")
                     case .kept: belongs = state.kept.value == .flag(true)
                     case .done: belongs = state.shelf.value == .text("done")
-                    case .feeds, .activity, .search, .settings: belongs = false
+                    case .feeds, .activity, .search: belongs = false
                     }
                     return belongs ? try cachedEntry(entry, principal: app.principalID, engine: engine, state: state) : nil
                 }
@@ -260,12 +330,20 @@ import AppKit
         } else {
             riverIDs = Set(presented.filter { $0.1.seen.value == .text("unseen") && $0.1.shelf.value == .text("none") }.map { $0.0.id })
         }
+        // Opening an article marks it seen, which takes it out of the river.
+        // Keep the open article in place until the selection moves on, as Mail
+        // does in an unread view, so the list never shifts under the reader.
+        // Explicit Done and Later still remove it at once.
+        let sticky: Int64? = presented.first {
+            $0.0.id == selected && $0.1.shelf.value == .text("none") && !riverIDs.contains($0.0.id)
+        }?.0.id
+        let inRiver = { (id: Int64) in riverIDs.contains(id) || id == sticky }
         switch section {
         case .today:
-            rows = presented.filter { riverIDs.contains($0.0.id) && cadence(of: $0.0) != "week" }.map { row($0.0, $0.1) }
+            rows = presented.filter { inRiver($0.0.id) && cadence(of: $0.0) != "week" }.map { row($0.0, $0.1) }
             editionGroups = []
         case .edition:
-            let week = presented.filter { riverIDs.contains($0.0.id) && cadence(of: $0.0) == "week" }
+            let week = presented.filter { inRiver($0.0.id) && cadence(of: $0.0) == "week" }
             var groups: [Int64: EditionGroup] = [:]
             var order: [Int64] = []
             for (entry, state) in week {
@@ -289,11 +367,20 @@ import AppKit
         case .kept:
             rows = presented.filter { $0.1.kept.value == .flag(true) }.map { row($0.0, $0.1) }
             editionGroups = []
-        case .feeds, .activity, .search, .settings:
+        case .feeds, .activity, .search:
             rows = []
             editionGroups = []
         }
         updateEndStatement(presented, riverIDs: riverIDs)
+        if let link = pendingDeepLink, app.engine != nil, app.loggedIn {
+            pendingDeepLink = nil
+            pendingRestoredSelection = nil
+            if selected == link { open(link) } else { selected = link }
+        } else if let pending = pendingRestoredSelection, app.engine != nil, app.loggedIn {
+            pendingRestoredSelection = nil
+            // A restored article that is no longer cached is not worth an error at launch.
+            if entries.contains(where: { $0.id == pending }), selected == nil { selected = pending }
+        }
     }
 
     private func updateEndStatement(_ presented: [(APIEntry, EarnestKit.State)], riverIDs: Set<Int64>) {
@@ -327,20 +414,51 @@ import AppKit
         case .search:
             var seen = Set<Int64>()
             return search.matches.map(\.entryID).filter { seen.insert($0).inserted }
+        case .activity:
+            var seen = Set<Int64>()
+            return app.activityGroups.flatMap(\.items).compactMap(\.entryID).filter { seen.insert($0).inserted }
         default: return rows.map(\.id)
         }
     }
 
     // MARK: - Commands
 
-    var canBrowse: Bool { app.loggedIn && !editingSearch && (section.entryView != nil || section == .search) }
+    var canBrowse: Bool {
+        app.loggedIn && (section.entryView != nil || section == .search || section == .activity)
+    }
+
+    /// The effective state of the open article, for menu titles and toggles.
+    var selectedState: EarnestKit.State? {
+        guard let entry = entries.first(where: { $0.id == selected }) else { return nil }
+        return effectiveState(of: entry)
+    }
+
+    var selectedIsKept: Bool { selectedState?.kept.value == .flag(true) }
+    var selectedIsLater: Bool { selectedState?.shelf.value == .text("later") }
+    var selectedIsUnread: Bool { selectedState?.seen.value == .text("unseen") }
+
+    /// The article's link, when it is a web address the browser can open.
+    var selectedURL: URL? {
+        guard let entry = readingEntry ?? entries.first(where: { $0.id == selected }),
+              let url = URL(string: entry.url), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
+        return url
+    }
+
+    var selectedTitle: String {
+        let entry = readingEntry ?? entries.first(where: { $0.id == selected })
+        return entry.map { $0.title.isEmpty ? "Untitled" : $0.title } ?? ""
+    }
     var canActOnEntry: Bool {
         guard let selected, canBrowse, app.engine != nil, app.principalID > 0 else { return false }
         return entries.contains { $0.id == selected && !$0.deleted }
     }
 
-    func command(_ command: EntryCommand) {
-        guard let entry = entries.first(where: { $0.id == selected }), let engine = app.engine else { return }
+    /// Apply a reading action to the open article, or to the row a context
+    /// menu was opened on.
+    func command(_ command: EntryCommand, entryID: Int64? = nil) {
+        let target = entryID ?? selected
+        guard let entry = entries.first(where: { $0.id == target && !$0.deleted }), let engine = app.engine,
+              app.principalID > 0 else { return }
         guard let generation = try? engine.snapshot().cursor?.generation else {
             app.connectionNote = "Still syncing; try again in a moment."
             return
@@ -350,7 +468,10 @@ import AppKit
         let value: RegisterValue
         switch command {
         case .done: register = .shelf; value = .text("done")
-        case .later: register = .shelf; value = .text("later")
+        case .later:
+            // Later toggles, as `s` does on the web: a Later article leaves the shelf.
+            register = .shelf
+            value = state.shelf.value == .text("later") ? .text("none") : .text("later")
         case .unread: register = .seen; value = .text("unseen")
         case .keep:
             register = .kept
@@ -364,11 +485,104 @@ import AppKit
         do {
             let index = visibleEntryIDs().firstIndex(of: entry.id)
             try engine.queue(write)
-            app.sessionActions.record(command, unkeep: command == .keep && value == .flag(false))
+            let unkeep = command == .keep && value == .flag(false)
+            let counted = !(command == .later && value == .text("none"))
+            if counted { app.sessionActions.record(command, unkeep: unkeep) }
+            registerUndo(entryID: entry.id, prior: Self.registers(of: state),
+                         actionName: Self.actionName(command, value: value),
+                         command: counted ? command : nil, unkeep: unkeep)
             app.rebuildPresentation()
-            keepSelection(near: index)
+            if entry.id == selected { keepSelection(near: index) }
             app.scheduleSync()
         } catch { app.report(error) }
+    }
+
+    /// Open a row's article in the default browser.
+    func openInBrowser(entryID: Int64) {
+        guard let entry = entries.first(where: { $0.id == entryID }), let url = URL(string: entry.url),
+              ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return }
+        #if canImport(AppKit)
+        NSWorkspace.shared.open(url)
+        #endif
+    }
+
+    /// Context-menu and double-click actions for this window's list.
+    var tableActions: EntryTableActions {
+        EntryTableActions(
+            perform: { [weak self] command, id in self?.command(command, entryID: id) },
+            openInBrowser: { [weak self] id in self?.openInBrowser(entryID: id) },
+            canAct: app.loggedIn && app.engine != nil && app.principalID > 0)
+    }
+
+    static func actionName(_ command: EntryCommand, value: RegisterValue) -> String {
+        switch command {
+        case .done: return "Move to Done"
+        case .later: return value == .text("none") ? "Remove from Later" : "Move to Later"
+        case .keep: return value == .flag(false) ? "Unkeep" : "Keep"
+        case .unread: return "Mark as Unread"
+        }
+    }
+
+    private static func registers(of state: EarnestKit.State) -> [Register: RegisterValue] {
+        [.seen: state.seen.value, .shelf: state.shelf.value, .kept: state.kept.value]
+    }
+
+    /// Undo writes back every register the action changed, including ones a
+    /// server rule changed alongside it (Unread clears Done). Redo is the
+    /// inverse of the undo, so the stack can go back and forth.
+    private func registerUndo(entryID: Int64, prior: [Register: RegisterValue], actionName: String,
+                              command: EntryCommand?, unkeep: Bool, undoing: Bool = false) {
+        guard let undoManager else { return }
+        let session = app.session
+        undoManager.registerUndo(withTarget: self) { window in
+            window.restore(entryID: entryID, to: prior, actionName: actionName, command: command,
+                           unkeep: unkeep, undoing: !undoing, session: session)
+        }
+        undoManager.setActionName(actionName)
+    }
+
+    private func restore(entryID: Int64, to values: [Register: RegisterValue], actionName: String,
+                         command: EntryCommand?, unkeep: Bool, undoing: Bool, session: Int) {
+        guard app.session == session, app.loggedIn, let engine = app.engine, app.principalID > 0,
+              let generation = try? engine.snapshot().cursor?.generation else { return }
+        let state = (try? engine.state(principal: app.principalID, entryID: entryID))
+            ?? EarnestKit.State(principal: app.principalID, entryID: entryID)
+        let wasVisible = visibleEntryIDs().contains(entryID)
+        let index = visibleEntryIDs().firstIndex(of: entryID)
+        do {
+            for register in [Register.shelf, .kept, .seen] {
+                guard let value = values[register], state[register].value != value else { continue }
+                try engine.queue(Write(opID: "mac.\(UUID().uuidString.lowercased())",
+                                       principal: app.principalID, entryID: entryID,
+                                       register: register, value: value,
+                                       base: Cursor(generation: generation, rev: state[register].rev),
+                                       occurredAt: Date()))
+            }
+        } catch {
+            app.report(error)
+            return
+        }
+        if let command {
+            if undoing { app.sessionActions.unrecord(command, unkeep: unkeep) }
+            else { app.sessionActions.record(command, unkeep: unkeep) }
+        }
+        registerUndo(entryID: entryID, prior: Self.registers(of: state), actionName: actionName,
+                     command: command, unkeep: unkeep, undoing: undoing)
+        app.rebuildPresentation()
+        // Bring back an article the action had removed from this list, as
+        // Mail reselects a message whose move is undone. Selecting it keeps a
+        // read article in the river while it is open; a refresh since the
+        // action may have dropped it from this window's entries, so restore
+        // it from the cache first. If it still cannot be shown, stay put.
+        if !wasVisible, selected != entryID {
+            let previous = selected
+            restoreEntryFromCache(entryID)
+            selectFromList(entryID)
+            if !visibleEntryIDs().contains(entryID) { selectFromList(previous) }
+        } else if wasVisible, selected == entryID, !visibleEntryIDs().contains(entryID) {
+            keepSelection(near: index)
+        }
+        app.scheduleSync()
     }
 
     private func keepSelection(near index: Int?) {
@@ -410,12 +624,82 @@ import AppKit
     }
 
     func openOriginal() {
-        guard let entry = readingEntry ?? entries.first(where: { $0.id == selected }),
-              let url = URL(string: entry.url),
-              ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return }
+        guard let url = selectedURL else { return }
         #if canImport(AppKit)
         NSWorkspace.shared.open(url)
         #endif
+    }
+
+    // MARK: - Navigation
+
+    /// Navigate from the sidebar, Go menu or palette. The reader closes when
+    /// the section changes, as switching mailboxes does in Mail, so a command
+    /// never acts on an article the list no longer shows.
+    func go(to target: Section) {
+        guard target != section else { return }
+        if target != .search { search.clearQuery() }
+        selectFromList(nil)
+        section = target
+    }
+
+    /// The toolbar search field submitted a query: show results in place of
+    /// the current section, remembering where to return.
+    func submitSearch() {
+        guard search.canSearch else { return }
+        if section != .search {
+            sectionBeforeSearch = section
+            selectFromList(nil)
+            section = .search
+        }
+        search.selectSaved(nil)
+        search.submit()
+    }
+
+    /// Open a saved search from the sidebar.
+    func openSavedSearch(_ saved: APISavedSearch) {
+        if section != .search {
+            sectionBeforeSearch = section
+            selectFromList(nil)
+            section = .search
+        }
+        search.selectSaved(saved)
+    }
+
+    /// The search field was cleared: return to the section searched from.
+    func endSearch() {
+        guard section == .search else { return }
+        search.clearQuery()
+        selectFromList(nil)
+        section = sectionBeforeSearch
+        // Back to the list, as clearing Mail's search field does.
+        requestListFocus()
+    }
+
+    /// Activity rows open the article an agent acted on. Agent-surfaced
+    /// articles block automatic images, like agent-note search matches.
+    func selectActivity(_ item: ActivityItem?) {
+        selectedActivityID = item?.id
+        guard let entryID = item?.entryID else {
+            if item != nil { selectFromList(nil) }
+            return
+        }
+        imageMode = .click
+        if selected == entryID { open(entryID) } else { selected = entryID }
+    }
+
+    /// Change a feed's cadence with an undoable step.
+    func setCadence(_ feed: FeedInfo, _ cadence: String) {
+        let previous = feed.cadence
+        guard previous != cadence else { return }
+        app.setCadence(feed.id, cadence)
+        guard let undoManager else { return }
+        let session = app.session
+        undoManager.registerUndo(withTarget: self) { window in
+            guard window.app.session == session,
+                  let current = window.app.feeds.first(where: { $0.id == feed.id }) else { return }
+            window.setCadence(current, previous)
+        }
+        undoManager.setActionName("Change Cadence")
     }
 
     var readingFeedTitle: String {
@@ -425,11 +709,14 @@ import AppKit
 
     func selectFromList(_ id: Int64?) {
         imageMode = .proxied
+        selectedMatchID = nil
+        if section == .activity, id == nil { selectedActivityID = nil }
         if selected == id { open(id) }
         else { selected = id }
     }
 
     func selectSearchMatch(_ match: APISearchMatch) {
+        selectedMatchID = match.id
         imageMode = match.kind == "agent_note" || match.untrusted ? .click : .proxied
         if selected == match.entryID { open(match.entryID) }
         else { selected = match.entryID }
@@ -439,6 +726,11 @@ import AppKit
         guard let id = DeepLink.entryID(url) else { return }
         section = .today
         imageMode = .click
+        // A link that launched the app opens once the account's cache is ready.
+        guard app.engine != nil else {
+            pendingDeepLink = id
+            return
+        }
         if selected == id { open(id) }
         else { selected = id }
     }
@@ -543,16 +835,22 @@ import AppKit
 
     // MARK: - Feeds
 
-    func subscribe() {
-        let url = subscribeURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !url.isEmpty else { return }
+    /// Subscribe to the address in the New Subscription sheet. A bare address
+    /// gets HTTPS and `feed:` links are unwrapped; `done` runs on success.
+    func subscribe(done: @escaping () -> Void = {}) {
+        let typed = subscribeURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !typed.isEmpty else { return }
+        var url = typed
+        if let link = URL(string: typed), let feed = FeedLink.subscriptionURL(link) { url = feed }
+        else if !typed.contains("://") { url = "https://" + typed }
         guard let parsed = URL(string: url), let scheme = parsed.scheme?.lowercased(),
-              ["http", "https"].contains(scheme), parsed.host != nil else {
-            app.error = "Feed URL must be an http or https URL."
+              ["http", "https"].contains(scheme), parsed.host?.isEmpty == false else {
+            app.error = "Enter a feed address that starts with http:// or https://."
             return
         }
         app.subscribe(url: url, cadence: subscribeCadence) { [weak self] in
             self?.subscribeURL = ""
+            done()
         }
     }
 
@@ -561,21 +859,42 @@ import AppKit
     func paletteCommands() -> [PaletteCommand] {
         let canAct = canActOnEntry
         let hasRows = !visibleEntryIDs().isEmpty
+        let hasURL = selectedURL != nil
         var commands: [PaletteCommand] = [
             PaletteCommand(title: "Next Article", key: "J", enabled: hasRows) { self.move(1) },
             PaletteCommand(title: "Previous Article", key: "K", enabled: hasRows) { self.move(-1) },
-            PaletteCommand(title: "Done", key: "E", enabled: canAct) { self.command(.done) },
-            PaletteCommand(title: "Later", key: "S", enabled: canAct) { self.command(.later) },
-            PaletteCommand(title: "Keep", key: "F", enabled: canAct) { self.command(.keep) },
-            PaletteCommand(title: "Mark Unread", key: "M", enabled: canAct) { self.command(.unread) },
-            PaletteCommand(title: "Open Original", key: "O", enabled: self.selected != nil) { self.openOriginal() },
-            PaletteCommand(title: "View Original", key: "V", enabled: self.selected != nil) { self.openOriginal() },
-            PaletteCommand(title: "Refresh", key: "⌘R", enabled: self.app.loggedIn) { self.app.scheduleSync() },
+            PaletteCommand(title: "Move to Done", key: "E", enabled: canAct) { self.command(.done) },
+            PaletteCommand(title: selectedIsLater ? "Remove from Later" : "Move to Later", key: "S", enabled: canAct) { self.command(.later) },
+            PaletteCommand(title: selectedIsKept ? "Unkeep" : "Keep", key: "F", enabled: canAct) { self.command(.keep) },
+            PaletteCommand(title: "Mark as Unread", key: "M", enabled: canAct) { self.command(.unread) },
+            PaletteCommand(title: "Open in Browser", key: "O", enabled: hasURL) { self.openOriginal() },
+            PaletteCommand(title: "Load Images", key: "", enabled: selected != nil && imageMode == .click) { self.loadImages() },
+            PaletteCommand(title: "Refresh", key: "⌘R", enabled: app.loggedIn) { self.app.scheduleSync() },
+            PaletteCommand(title: "New Subscription…", key: "⌘N", enabled: app.loggedIn) { self.subscribing = true },
         ]
-        commands.append(contentsOf: Section.allCases.map { target in
-            PaletteCommand(title: "Go to \(target.rawValue)", key: "⌘\(target.keyEquivalent)", enabled: true) { self.section = target }
+        commands.append(contentsOf: Section.places.map { target in
+            PaletteCommand(title: "Go to \(target.title)", key: target.keyEquivalent.map { "⌘\($0)" } ?? "", enabled: app.loggedIn) { self.go(to: target) }
         })
-        commands.append(PaletteCommand(title: "Sign Out", key: "", enabled: app.loggedIn) { self.app.signOut() })
+        commands.append(PaletteCommand(title: "Search Articles", key: "⌥⌘F", enabled: app.loggedIn) { self.searchFocusRequest &+= 1 })
+        commands.append(PaletteCommand(title: "Settings…", key: "⌘,", enabled: true) { self.app.openSettingsRequest &+= 1 })
+        commands.append(PaletteCommand(title: "Sign Out…", key: "", enabled: app.loggedIn) { self.app.confirmingSignOut = true })
         return commands
+    }
+
+    /// Incremented to move keyboard focus into the toolbar search field.
+    @Published var searchFocusRequest = 0
+    /// Incremented to move keyboard focus to the article list; the list
+    /// takes the pending request once, even if it is created afterwards.
+    @Published private(set) var listFocusRequest = 0
+    private var listFocusPending = false
+
+    func requestListFocus() {
+        listFocusPending = true
+        listFocusRequest &+= 1
+    }
+
+    func takeListFocusRequest() -> Bool {
+        defer { listFocusPending = false }
+        return listFocusPending
     }
 }

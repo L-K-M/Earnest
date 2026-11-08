@@ -46,6 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The Mac client now requires macOS 26 and follows Mac conventions:
+  Settings in its own window, toolbar search with saved searches in the
+  sidebar, a full menu bar, undoable reading actions, context menus,
+  OPML import and export, find and zoom in the reader, and a clearer
+  sign-in. See `docs/mac.md`.
 - Research, round 9 review: step 0 now requires self-hosted ntfy and an
   allowlist enforced outside the agent; two factual errors fixed; sync
   and security gaps recorded as open in `api.md` and `llm.md` (#2).

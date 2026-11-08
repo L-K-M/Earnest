@@ -59,7 +59,7 @@ import EarnestKit
             "after": .object(["entry_ids": .array([.integer(42)])]),
             "next_action": .string("cancel")
         ]))])]
-        let view = NSHostingView(rootView: ActivityView().environmentObject(model))
+        let view = NSHostingView(rootView: ActivityView().environmentObject(model).environmentObject(windowModel))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 400),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = view
@@ -107,33 +107,6 @@ import EarnestKit
     func testLongBriefStopsGrowingAtMaximumHeight() async throws {
         let height = try await briefHeight(String(repeating: "An agent's plain text briefing. ", count: 100))
         XCTAssertEqual(height, 180, accuracy: 1)
-    }
-
-    func testFeedRowFitsMinimumColumnWidth() async throws {
-        let feed = try XCTUnwrap(FeedInfo(.object([
-            "id": .integer(1), "title": .string("A feed title that needs more than a single short line"),
-            "url": .string("https://example.test/feed"), "cadence": .string("week")
-        ])))
-        // A 320-point column gives list rows 288 points after their insets.
-        let view = NSHostingView(rootView: FeedRow(feed: feed, unreadCount: nil, setCadence: { _ in }, unsubscribe: {})
-            .padding(8).frame(width: 288).fixedSize(horizontal: false, vertical: true)
-            .background(Color(nsColor: .windowBackgroundColor)))
-        let window = NSWindow(contentRect: NSRect(origin: .zero, size: view.fittingSize),
-                              styleMask: [.titled], backing: .buffered, defer: false)
-        window.contentView = view
-        window.orderFront(nil)
-        defer { window.orderOut(nil) }
-        view.layoutSubtreeIfNeeded()
-        try await Task.sleep(for: .milliseconds(100))
-        XCTAssertEqual(view.fittingSize.width, 288, accuracy: 1)
-        XCTAssertGreaterThan(view.fittingSize.height, 80)
-        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
-        view.cacheDisplay(in: view.bounds, to: bitmap)
-        let image = NSImage(size: view.bounds.size)
-        image.addRepresentation(bitmap)
-        let attachment = XCTAttachment(image: image)
-        attachment.lifetime = .keepAlways
-        add(attachment)
     }
 
     private func briefHeight(_ text: String) async throws -> CGFloat {

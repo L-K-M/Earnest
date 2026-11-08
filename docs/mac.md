@@ -9,7 +9,7 @@ swift build
 swift test
 ```
 
-The native app requires macOS 15 or later, Xcode and XcodeGen. Generate the
+The native app requires macOS 26 (Tahoe) or later, Xcode 26 or later and XcodeGen. Generate the
 project and build and test the unsigned app:
 
 ```sh
@@ -128,7 +128,7 @@ for the separate content listener and reverse proxy configuration.
 Agent briefs, notes and notification notes render with plain SwiftUI `Text`,
 without HTML or Markdown interpretation. Deep links accept only positive
 internal 64-bit entry IDs in `earnest://entry/<id>`. External URLs route to an
-existing reader window, creating one only when none exists. File > New Window
+existing reader window, creating one only when none exists. File > New Window (⌥⌘N)
 creates an independent reader: each window keeps its own section, selection,
 article and command palette. Article and Go menu commands act on the focused
 window, and a deep link changes only the window that receives it. Windows share
@@ -175,20 +175,80 @@ Cancellation sends the notification target ID and a fresh `op_id`; delivered
 notifications cannot be recalled. Revert's accessibility label names the action
 and article. Agent text remains plain SwiftUI text.
 
+## Windows, menus and keyboard
+
+Each window has three columns. The sidebar lists Today and Edition under
+Reading, Later, Kept and Done under Shelves, any saved searches, and Feeds and
+Activity under Library; its foot says what sync is doing, what is waiting and
+when the account last caught up. The middle column lists the section, and the
+right column shows the open article, or the selected subscription in Feeds.
+Each window restores its section and open article, and keeps its frame, across
+launches. Closing the last window leaves Earnest running; click its Dock icon or
+choose File > New Window to open another.
+
+Every command is in the menu bar with its key equivalent. File has New
+Subscription… (⌘N), New Window (⌥⌘N) and Import and Export Subscriptions…;
+Edit > Find has Search Articles (⌥⌘F), Find in Article… (⌘F), Find Next (⌘G)
+and Find Previous (⇧⌘G); View has the sidebar and toolbar commands, Refresh
+(⌘R), Actual Size, Zoom In and Zoom Out (⌘0, ⌘+, ⌘−) and the Command Palette
+(⌘K); Go has the seven places (⌘1–⌘7) and Next and Previous Article (J, K);
+Article has Open in Browser (O), Copy Link, Share…, Move to Done (E), Move to
+or Remove from Later (S), Keep or Unkeep (F), Mark as Unread (M) and Load
+Images. Earnest > Sign Out… asks before signing out. Help > Keyboard Shortcuts,
+also shown by pressing ?, lists them all. The toolbar holds Refresh and New
+Subscription beside the list, and the article actions, Open in Browser, Share
+and the search field over the reader.
+
+Single-letter shortcuts act only while no text field has focus: the menus
+drop their letter equivalents while you type, so letters reach the field. V
+opens the original, as on the web. Edit > Undo reverses reading actions and
+cadence changes, naming them ("Undo Move to Done"), and Redo applies them
+again. Undo writes back every register the action changed, including Done
+when Mark as Unread cleared it, and reselects an article it brings back. An
+article you open stays in Today or the Edition until you move to another one,
+so the list does not shift while you read; Done and Later still remove it at
+once and select the next article. Later toggles: on an article already in
+Later, S removes it from the shelf.
+
+Rows have context menus for the same actions on the clicked row, which need not
+be the open one. Double-clicking a row opens it in the browser, dragging a row
+drags its link, and Edit > Copy copies the selected row's link. The article
+header scrolls with the article; its title links to the original. Blocked
+images and offline copies are explained in a floating bar with Load Images.
+Text zoom is shared by every window.
+
+Import Subscriptions… reads an OPML file through the open panel. You can also
+drop an OPML file on a window or open one with Earnest from the Finder; Earnest
+asks before importing and then reports new subscriptions, feeds you already
+follow, folders, feeds still to be checked and any entries it could not import. Export Subscriptions… saves the
+account's OPML through the save panel. Dropping a web address on a window, or
+opening a `feed:` link, fills in New Subscription for you to confirm.
+
+To sign in, type the server address; a bare host name gets `https://`, or
+`http://` for localhost, an IP address, an unqualified name or a `.local` name.
+Earnest shows the device code with Copy Code and Open Sign-In Page, and opens
+the browser only when you ask.
+
 ## Search and saved views
 
-Open Search in the sidebar, Go menu or command palette (Command+8). Full-text
-search works without a model provider. Hybrid search appears when embeddings
-are enabled and can make an embedding call. Feed, folder and page-size filters
-narrow the search; pagination and Save as new use the submitted query and
+Type in the toolbar search field (Edit > Find > Search Articles, ⌥⌘F) and press
+Return. Results replace the list, in the same rows as articles with a snippet
+after the source, until you clear the field or press Escape, which returns to
+the section you searched from with the list focused. Tab moves from the search
+field to the results. Full-text search works without a model provider.
+Hybrid search appears when embeddings are enabled and can make an embedding
+call. The scope bar's feed, folder, mode and results-per-page filters apply at
+once to the submitted search; pagination and Save… use the submitted query and
 filters, not an unsent draft. Empty pages end pagination.
 
 Publisher matches and agent notes have separate sections. Notes and snippets
 remain literal text. Opening an agent-note match blocks automatic images,
 matching other agent-surfaced articles. Reading commands work on an opened
-match, but single-key commands are disabled while you type in search fields.
+match, but single-key commands are disabled while you type in any text field.
 
-You can save, open, rename and delete named searches. Deleting a saved search
+Save… names the submitted search, which then appears under Saved Searches in the
+sidebar, like a smart mailbox. Select it to run it again; its context menu
+renames or deletes it. Deleting a saved search
 only removes its definition, not articles. Search and saved-search management
 require connectivity; they do not pretend an offline request succeeded. Search
 state is window-local, cleared on sign-out and invalidated after a server
@@ -214,9 +274,10 @@ Article and Go menus; only that window's selection or section should change.
 Keep a Done window open while marking an article Done in the other window,
 including offline, and confirm its list updates. Close every window and open the
 URL again to confirm one is created.
-At the 880 × 520 minimum window size, check Feeds: titles wrap above the cadence
-picker and the unsubscribe icon, whose help and accessibility label name the
-feed. Briefs grow with their text up to 180 points, then scroll.
+At the 860 × 520 minimum window size, check Feeds: the table keeps the name
+and cadence columns readable, the cadence pop-up's accessibility label names the
+feed, and Delete asks before unsubscribing. Briefs grow with their text up to
+180 points, then scroll.
 
 For an end-to-end offline check, sign in online, sync, open an article and note
 its brief and feed title. Stop the server, quit and relaunch the app. Confirm
@@ -241,24 +302,30 @@ Private releases use manual updates. No Sparkle update feed is configured.
 
 ## Reader preferences and exact counts
 
-Open Settings from the sidebar, the Go menu or the command palette
-(Command+9). The window edits a local draft over the account's synced reader
-settings. Save publishes explicitly. Reload copies the latest synced account
-preferences. If the account's revision moved elsewhere, Save refuses and asks
-for Reload instead of overwriting. An ambiguous save failure freezes its exact
-body and operation ID, so Save again resends them unchanged; editing the draft
+Open Earnest > Settings… (⌘,). Changes apply as you make them, as in other Mac
+settings windows: the window edits a draft over the account's synced reader
+settings and saves it shortly after each change, after any save in flight. If
+the account's revision moved elsewhere, saving stops and Settings offers Use
+Latest instead of overwriting. An ambiguous save failure freezes its exact
+body and operation ID, so Try Again resends them unchanged; editing the draft
 or losing the account or server scope ends the frozen request. A dirty draft
-survives sync updates and is flagged as a conflict rather than replaced. Save
+survives sync updates and is flagged as a conflict rather than replaced. Saving
 needs your verified account and an available server; failures are reported.
 
 Settings cover the reading mode (river or unread counts), Today decay days
-(1-365), single-key shortcuts, article theme, font and measure (62-72), and
-per-feed typography overrides keyed by feed ID. Each override member can
-inherit or be reset. The single-key toggle removes the unmodified-letter
-bindings but leaves menu commands clickable.
+(1-365), single-key shortcuts, and article theme, font and line length
+(62-72). Numeric fields keep partial input while you type and commit, clamped
+to their range, when you press Return or Tab or leave the field; Escape puts
+the current value back. Their steppers apply at once. Per-feed typography overrides,
+keyed by feed ID, are edited in the feed's detail in Feeds; each member can use
+the account default, and Settings > Reading lists the overridden feeds. The
+single-key toggle removes the unmodified-letter bindings but leaves menu
+commands clickable.
 
-Exact unread totals are requested and shown only in unread-count mode, labelled
-"Counts as last synced." Fetch failures keep the last successful totals. When
+Exact unread totals are requested and shown only in unread-count mode: as
+sidebar badges on Today, Later and Kept, beside each feed in Feeds and in its
+detail, with the sidebar status line's help reading "Counts as last synced."
+Fetch failures keep the last successful totals. When
 none are cached, counts are unavailable, not zero. Cached reading typography
 respects the safe enums and the existing image and origin restrictions.
 Private drafts and transient results clear on sign-out or restore.

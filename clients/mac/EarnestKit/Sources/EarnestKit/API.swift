@@ -128,6 +128,29 @@ public enum APIError: Error, Sendable {
     case invalidBaseURL, invalidResponse, httpStatus(Int), invalidEntryID
 }
 
+/// Outcome of an OPML import: how many subscriptions and folders were created,
+/// how many outlines were deferred, and the per-outline errors, in order.
+public struct OPMLImportSummary: Equatable, Sendable {
+    public let subscribed: Int
+    public let folders: Int
+    public let deferred: Int
+    public let failures: [String]
+    /// The subscriptions the document resolved to, new or already followed,
+    /// in document order without repeats.
+    public let subscriptionIDs: [Int64]
+
+    public init(subscribed: Int, folders: Int, deferred: Int, failures: [String], subscriptionIDs: [Int64] = []) {
+        self.subscribed = subscribed
+        self.folders = folders
+        self.deferred = deferred
+        self.failures = failures
+        self.subscriptionIDs = subscriptionIDs
+    }
+}
+
+/// OPML exports are bounded so a runaway response cannot exhaust memory.
+private let opmlDocumentLimit = 16 * 1024 * 1024
+
 private final class RejectRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
         completionHandler(nil)
@@ -278,6 +301,25 @@ public final class EarnestAPI: Sendable {
     public func unsubscribe(subscriptionID: Int64) async throws {
         _ = try await generated { try await client.unsubscribe(.init(path: .init(id: subscriptionID), query: .init(opId: UUID().uuidString))).ok.body.json }
     }
+    /// The account's OPML subscription document, capped at 16 MiB.
+    public func exportOPML() async throws -> Data {
+        let body = try await generated { try await client.exportOpml(.init()).ok.body }
+        do { return try await Data(collecting: try body.textXOpml, upTo: opmlDocumentLimit) }
+        catch { throw APIError.invalidResponse }
+    }
+    /// Imports an OPML document and summarizes each outline's outcome.
+    public func importOPML(_ document: Data) async throws -> OPMLImportSummary {
+        let results = try await generated {
+            try await client.importOpml(.init(body: .textXOpml(HTTPBody(document)))).ok.body.json
+        } ?? []
+        return summarizeOPMLResults(results)
+    }
+    /// Makes a feed due for the next fetcher pass.
+    public func refreshSubscription(id: Int64) async throws {
+        _ = try await generated {
+            try await client.refreshSubscription(.init(path: .init(id: id), body: .json(.init(opId: UUID().uuidString)))).ok.body.json
+        }
+    }
     public func activity() async throws -> [APIValue] {
         let limit = 1000
         var afterID: Int64 = 0
@@ -363,6 +405,30 @@ func validateReaderSettings(_ settings: APIReaderSettings, opID: String) throws 
             throw APIReaderSettingsError(field: "feed_overrides measure")
         }
     }
+}
+
+/// A result counts as subscribed or as a folder only when it created that
+/// object and reported no error; deferred and failure counts are independent.
+func summarizeOPMLResults(_ results: [Components.Schemas.OPMLResult]) -> OPMLImportSummary {
+    var subscribed = 0
+    var folders = 0
+    var deferred = 0
+    var failures: [String] = []
+    var ids: [Int64] = []
+    for result in results {
+        if let error = result.error, !error.isEmpty {
+            failures.append(error)
+        } else {
+            if let subscription = result.subscription {
+                subscribed += 1
+                if !ids.contains(subscription.id) { ids.append(subscription.id) }
+            }
+            if result.folder != nil { folders += 1 }
+        }
+        if result.deferred { deferred += 1 }
+    }
+    return OPMLImportSummary(subscribed: subscribed, folders: folders, deferred: deferred, failures: failures,
+                             subscriptionIDs: ids)
 }
 
 func parseAPIDate(_ text: String) -> Date? {

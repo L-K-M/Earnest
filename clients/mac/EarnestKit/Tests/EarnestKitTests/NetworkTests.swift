@@ -22,6 +22,10 @@ final class ScriptedHTTP: URLProtocol {
         var status = 200
         var body: String
         var bearer: String? = "Bearer test-token"
+        /// Content type the scripted response advertises.
+        var contentType = "application/json"
+        /// When set, the request must advertise exactly this content type.
+        var requestContentType: String?
         var checkBody: (@Sendable (Data?) throws -> Void)?
         var query: String?
     }
@@ -48,10 +52,13 @@ final class ScriptedHTTP: URLProtocol {
         #expect(request.url?.path == reply.path)
         #expect(request.httpMethod == reply.method)
         if let query = reply.query { #expect(request.url?.query == query) }
+        if let requestContentType = reply.requestContentType {
+            #expect(request.value(forHTTPHeaderField: "Content-Type") == requestContentType)
+        }
         #expect(request.value(forHTTPHeaderField: "Authorization") == reply.bearer)
         do { try reply.checkBody?(Self.body(of: request)) }
         catch { Issue.record("Invalid HTTP body: \(error)") }
-        let response = HTTPURLResponse(url: request.url!, statusCode: reply.status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+        let response = HTTPURLResponse(url: request.url!, statusCode: reply.status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": reply.contentType])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(reply.body.utf8))
         client?.urlProtocolDidFinishLoading(self)

@@ -134,7 +134,19 @@ extension PresentationTests {
     func testReaderHeaderFallsBackToFirstSeen() throws {
         let json = #"{"id":42,"subscription_id":1,"feed_id":2,"seq":3,"title":"A title","url":"https://example.test/article","author":"Ada","first_seen_at":"2026-11-04T08:00:00Z","rev":1,"deleted":false,"state":{"principal":7,"entry_id":42,"state_rev":0,"seen":{"value":"unseen","rev":0,"occurred_at":"","actor":0,"source":""},"shelf":{"value":"none","rev":0,"occurred_at":"","actor":0,"source":""},"kept":{"value":false,"rev":0,"occurred_at":"","actor":0,"source":""}}}"#
         let entry = try JSONDecoder().decode(APIEntry.self, from: Data(json.utf8))
-        let header = ReaderHeader(entry: entry, feedTitle: "Example", openOriginal: {})
+        let header = ArticleHeader(entry: entry, feedTitle: "Example")
         XCTAssertEqual(header.date, DateFormatting.parse(entry.firstSeenAt))
+        XCTAssertTrue(header.html.contains("<a href=\"https://example.test/article\">A title</a>"))
+    }
+
+    func testArticleHeaderEscapesPublisherText() throws {
+        let json = #"{"id":42,"subscription_id":1,"feed_id":2,"seq":3,"title":"<img src=x onerror=alert(1)> & \"quotes\"","url":"javascript:alert(1)","author":"<b>Ada</b>","first_seen_at":"2026-11-04T08:00:00Z","rev":1,"deleted":false,"state":{"principal":7,"entry_id":42,"state_rev":0,"seen":{"value":"unseen","rev":0,"occurred_at":"","actor":0,"source":""},"shelf":{"value":"none","rev":0,"occurred_at":"","actor":0,"source":""},"kept":{"value":false,"rev":0,"occurred_at":"","actor":0,"source":""}}}"#
+        let entry = try JSONDecoder().decode(APIEntry.self, from: Data(json.utf8))
+        let html = ArticleHeader(entry: entry, feedTitle: "<script>Feed</script>").html
+        XCTAssertFalse(html.contains("<img"))
+        XCTAssertFalse(html.contains("<b>"))
+        XCTAssertFalse(html.contains("<script>"))
+        XCTAssertFalse(html.contains("javascript:"), "Only HTTP(S) links become links")
+        XCTAssertTrue(html.contains("&lt;img src=x onerror=alert(1)&gt; &amp; &quot;quotes&quot;"))
     }
 }
