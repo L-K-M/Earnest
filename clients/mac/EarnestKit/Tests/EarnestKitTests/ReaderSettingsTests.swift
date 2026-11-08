@@ -7,6 +7,18 @@ import Testing
 
 /// These live in the serialized NetworkTests suite because ScriptedHTTP keeps
 /// process-global reply queues; a separate suite would race it.
+private final class TrackingSyncStore: SyncStore {
+    var snapshot = SyncSnapshot()
+    var saveCount = 0
+    var failSaves = false
+    func load() throws -> SyncSnapshot { snapshot }
+    func save(_ snapshot: SyncSnapshot) throws {
+        saveCount += 1
+        if failSaves { throw SyncError.invalidPage }
+        self.snapshot = snapshot
+    }
+}
+
 extension NetworkTests {
     private func makeReaderSettingsAPI(_ replies: [ScriptedHTTP.Reply]) throws -> EarnestAPI {
         let session = ScriptedHTTP.install(replies)
@@ -222,10 +234,10 @@ extension NetworkTests {
             "rev": .integer(8),
         ]))
         // An older acknowledged write cannot regress the snapshot.
-        try engine.mergeSettings(APIReaderSettings(readingMode: .unreadCounts, todayDecayDays: 30, rev: 7))
+        try engine.mergeSettings(APIReaderSettings(readingMode: .unreadCounts, todayDecayDays: 30, rev: 7), generation: "g")
         #expect(try engine.readerSettings()?.todayDecayDays == 3)
         // A newer one replaces only the settings object.
-        try engine.mergeSettings(APIReaderSettings(readingMode: .unreadCounts, todayDecayDays: 30, theme: .black, rev: 9))
+        try engine.mergeSettings(APIReaderSettings(readingMode: .unreadCounts, todayDecayDays: 30, theme: .black, rev: 9), generation: "g")
         let settings = try #require(try engine.readerSettings())
         #expect(settings.todayDecayDays == 30)
         #expect(settings.theme == .black)
@@ -235,14 +247,144 @@ extension NetworkTests {
         #expect(snapshot.objects.filter { $0.kind == .settings }.count == 1)
     }
 
-    @Test func unreadCountsPersistAcrossBootstrapForColdLaunch() throws {
+    @Test func scopedMergeSettingsRejectsWrongOrMissingGenerationWithoutMutation() throws {
         let engine = SyncEngine(store: MemorySyncStore())
-        try engine.bootstrap(Cursor(generation: "g", rev: 1))
+        try engine.bootstrap(Cursor(generation: "g1", rev: 5))
+        try engine.replaceRiverResources(mutes: [.object([
+            "id": .integer(1), "kind": .string("author"), "value": .string("spam"), "rev": .integer(2)
+        ])], settings: .object([
+            "reading_mode": .string("river"), "today_decay_days": .integer(3),
+            "single_key_shortcuts": .bool(true), "theme": .string("light"),
+            "measure": .integer(64), "font": .string("sans"), "feed_overrides": .object([:]),
+            "rev": .integer(8),
+        ]))
+        let before = try engine.snapshot()
+        let stale = APIReaderSettings(readingMode: .unreadCounts, todayDecayDays: 30, theme: .black, rev: 1)
+        #expect(try engine.mergeSettings(stale, generation: "g2") == false)
+        #expect(try engine.snapshot() == before)
+        #expect(try engine.mergeSettings(stale, generation: "other") == false)
+        #expect(try engine.snapshot() == before)
+
+        let fresh = SyncEngine(store: MemorySyncStore())
+        #expect(try fresh.mergeSettings(stale, generation: "g1") == false)
+        #expect(try fresh.snapshot() == SyncSnapshot())
+    }
+
+    @Test func scopedMergeSettingsHandlesOlderEqualAndNewerRevisions() throws {
+        let engine = SyncEngine(store: MemorySyncStore())
+        try engine.bootstrap(Cursor(generation: "g1", rev: 5))
+        let original = APIReaderSettings(readingMode: .river, todayDecayDays: 3, singleKeyShortcuts: true, theme: .light, measure: 64, font: .sans, rev: 8)
+        try engine.replaceRiverResources(mutes: [.object([
+            "id": .integer(1), "kind": .string("author"), "value": .string("spam"), "rev": .integer(2)
+        ])], settings: .object([
+            "reading_mode": .string("river"), "today_decay_days": .integer(3),
+            "single_key_shortcuts": .bool(true), "theme": .string("light"),
+            "measure": .integer(64), "font": .string("sans"), "feed_overrides": .object([:]),
+            "rev": .integer(8),
+        ]))
+        #expect(try engine.readerSettings() == original)
+        // Older fragments are rejected without touching the store.
+        #expect(try engine.mergeSettings(APIReaderSettings(readingMode: .unreadCounts, todayDecayDays: 30, rev: 7), generation: "g1") == false)
+        #expect(try engine.readerSettings() == original)
+        // An equal rev is accepted but must not overwrite the stored object.
+        #expect(try engine.mergeSettings(APIReaderSettings(readingMode: .unreadCounts, todayDecayDays: 30, rev: 8), generation: "g1") == true)
+        #expect(try engine.readerSettings() == original)
+        // A newer fragment replaces only the settings object.
+        let newer = APIReaderSettings(readingMode: .unreadCounts, todayDecayDays: 30, theme: .black, rev: 9)
+        #expect(try engine.mergeSettings(newer, generation: "g1") == true)
+        #expect(try engine.readerSettings() == newer)
+        let snapshot = try engine.snapshot()
+        #expect(snapshot.cursor == Cursor(generation: "g1", rev: 5))
+        #expect(snapshot.objects.contains { $0.kind == .mute && $0.id == 1 })
+        #expect(snapshot.objects.filter { $0.kind == .settings }.count == 1)
+    }
+
+    @Test func scopedMergeSettingsSavesWhenAbsent() throws {
+        let engine = SyncEngine(store: MemorySyncStore())
+        try engine.bootstrap(Cursor(generation: "g1", rev: 1))
+        let settings = APIReaderSettings(theme: .dark, rev: 1)
+        #expect(try engine.mergeSettings(settings, generation: "g1") == true)
+        #expect(try engine.readerSettings() == settings)
+    }
+
+    @Test func scopedMergeUnreadCountsRejectsWrongOrMissingGeneration() throws {
+        let engine = SyncEngine(store: MemorySyncStore())
+        try engine.bootstrap(Cursor(generation: "g1", rev: 1))
         let counts = APIUnreadCounts(bySubscription: ["7": 4], later: 1, kept: 2, total: 5)
-        try engine.mergeUnreadCounts(counts)
-        // A new generation replaces the cache but keeps the last-synced counts.
+        #expect(try engine.mergeUnreadCounts(counts, generation: "g2") == false)
+        #expect(try engine.snapshot().unreadCounts == nil)
+        let fresh = SyncEngine(store: MemorySyncStore())
+        #expect(try fresh.mergeUnreadCounts(counts, generation: "g1") == false)
+        #expect(try fresh.snapshot().unreadCounts == nil)
+    }
+
+    @Test func scopedMergesSurfaceStoreWriteFailuresAndSkipWrongGenerationSaves() throws {
+        let store = TrackingSyncStore()
+        let engine = SyncEngine(store: store)
+        try engine.bootstrap(Cursor(generation: "g1", rev: 1))
+        store.failSaves = true
+        #expect(throws: (any Error).self) {
+            _ = try engine.mergeSettings(APIReaderSettings(theme: .dark, rev: 1), generation: "g1")
+        }
+        #expect(throws: (any Error).self) {
+            _ = try engine.mergeUnreadCounts(APIUnreadCounts(total: 3), generation: "g1")
+        }
+        store.failSaves = false
+        let savesBeforeRejection = store.saveCount
+        #expect(try engine.mergeSettings(APIReaderSettings(theme: .dark, rev: 1), generation: "g2") == false)
+        #expect(try engine.mergeUnreadCounts(APIUnreadCounts(total: 3), generation: "g2") == false)
+        #expect(store.saveCount == savesBeforeRejection)
+    }
+
+    @Test func preRestoreAcknowledgementsCannotEnterTheNewGeneration() throws {
+        let engine = SyncEngine(store: MemorySyncStore())
+        try engine.bootstrap(Cursor(generation: "g1", rev: 5))
+        try engine.replaceRiverResources(mutes: [], settings: .object([
+            "reading_mode": .string("river"), "today_decay_days": .integer(3),
+            "single_key_shortcuts": .bool(true), "theme": .string("light"),
+            "measure": .integer(64), "font": .string("sans"), "feed_overrides": .object([:]),
+            "rev": .integer(8),
+        ]))
+        try engine.mergeUnreadCounts(APIUnreadCounts(bySubscription: ["7": 4], later: 1, kept: 2, total: 5), generation: "g1")
         try engine.bootstrap(Cursor(generation: "g2", rev: 0))
+        #expect(try engine.mergeSettings(APIReaderSettings(readingMode: .unreadCounts, todayDecayDays: 30, theme: .black, rev: 9), generation: "g1") == false)
+        #expect(try engine.mergeUnreadCounts(APIUnreadCounts(total: 99), generation: "g1") == false)
+        let snapshot = try engine.snapshot()
+        #expect(snapshot.cursor == Cursor(generation: "g2", rev: 0))
+        #expect(snapshot.objects.isEmpty)
+        #expect(snapshot.unreadCounts == nil)
+    }
+
+    @Test func unreadCountsRetainedAcrossSameGenerationBootstrap() throws {
+        let engine = SyncEngine(store: MemorySyncStore())
+        try engine.bootstrap(Cursor(generation: "g1", rev: 1))
+        let counts = APIUnreadCounts(bySubscription: ["7": 4], later: 1, kept: 2, total: 5)
+        try engine.mergeUnreadCounts(counts, generation: "g1")
+        // Re-bootstrapping the same generation keeps the last-synced counts.
+        try engine.bootstrap(Cursor(generation: "g1", rev: 0))
         #expect(try engine.snapshot().unreadCounts == counts)
+        #expect(try engine.readerSettings() == nil)
+    }
+
+    @Test func unownedCountsAreClearedOnFirstBootstrap() throws {
+        let store = MemorySyncStore()
+        var snapshot = SyncSnapshot()
+        snapshot.unreadCounts = APIUnreadCounts(total: 99)
+        try store.save(snapshot)
+        let engine = SyncEngine(store: store)
+        try engine.bootstrap(Cursor(generation: "g1", rev: 0))
+        #expect(try engine.snapshot().unreadCounts == nil)
+    }
+
+    @Test func unreadCountsClearedWhenBootstrapChangesGeneration() throws {
+        let engine = SyncEngine(store: MemorySyncStore())
+        try engine.bootstrap(Cursor(generation: "g1", rev: 1))
+        let counts = APIUnreadCounts(bySubscription: ["7": 4], later: 1, kept: 2, total: 5)
+        #expect(try engine.mergeUnreadCounts(counts, generation: "g1") == true)
+        // A restore into a different generation must not present the old
+        // generation's counts as current.
+        try engine.bootstrap(Cursor(generation: "g2", rev: 0))
+        #expect(try engine.snapshot().unreadCounts == nil)
         #expect(try engine.readerSettings() == nil)
     }
 }

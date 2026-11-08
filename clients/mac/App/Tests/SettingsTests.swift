@@ -16,6 +16,7 @@ import EarnestKit
             var status = 200
             let body: String
             var failure: URLError.Code?
+            var beforeResponse: (() -> Void)?
         }
         private static let lock = NSLock()
         private static var replies: [Reply] = []
@@ -47,6 +48,7 @@ import EarnestKit
             if let body = Self.body(of: request) {
                 Self.lock.withLock { Self.bodies.append(body) }
             }
+            reply.beforeResponse?()
             if let failure = reply.failure {
                 client?.urlProtocol(self, didFailWithError: URLError(failure))
                 return
@@ -83,7 +85,18 @@ import EarnestKit
     }
 
     private func makeModel(api: EarnestAPI? = nil, engine: SyncEngine? = nil) -> AppModel {
-        AppModel(api: api, engine: engine ?? SyncEngine(store: MemorySyncStore()), principalID: 7)
+        let engine = engine ?? SyncEngine(store: MemorySyncStore())
+        do {
+            if try engine.snapshot().cursor == nil { try engine.bootstrap(Cursor(generation: "g1", rev: 0)) }
+            if try engine.readerSettings() == nil {
+                let generation = try XCTUnwrap(engine.snapshot().cursor?.generation)
+                try engine.mergeSettings(APIReaderSettings(), generation: generation)
+            }
+        } catch { XCTFail("Could not prepare settings fixture: \(error)") }
+        let model = AppModel(api: api, engine: engine, principalID: 7)
+        do { try model.restoreReaderPreferences() }
+        catch { XCTFail("Could not restore settings fixture: \(error)") }
+        return model
     }
 
     private func makeAPI(_ replies: [SettingsHTTP.Reply]) throws -> (EarnestAPI, URLSession) {
@@ -108,6 +121,7 @@ import EarnestKit
                   body: #"{"type":"about:blank","title":"Server","status":500,"error":"boom"}"#),
             .init(method: "PUT", path: "/v1/settings",
                   body: #"{"reading_mode":"unread_counts","today_decay_days":4,"single_key_shortcuts":false,"theme":"dark","measure":68,"font":"sans","feed_overrides":{},"rev":9}"#),
+            .init(path: "/v1/entries:counts", body: #"{"by_subscription":{"1":2},"later":1,"kept":0,"total":3}"#),
         ])
         defer { session.invalidateAndCancel() }
         let engine = SyncEngine(store: MemorySyncStore())
@@ -136,6 +150,8 @@ import EarnestKit
         XCTAssertEqual(secondFields["op_id"]?.stringValue, firstOp)
         XCTAssertEqual(model.readerSettings.rev, 9)
         XCTAssertEqual(try engine.readerSettings()?.rev, 9)
+        try await waitUntil { model.unreadCounts != nil }
+        XCTAssertEqual(model.unreadCounts?.total, 3)
         SettingsHTTP.assertFinished()
     }
 
@@ -190,12 +206,169 @@ import EarnestKit
 
         let engine = SyncEngine(store: MemorySyncStore())
         try engine.bootstrap(Cursor(generation: "g", rev: 1))
-        try engine.mergeSettings(APIReaderSettings(theme: .eink, measure: 70, font: .dyslexic, rev: 4))
+        try engine.mergeSettings(APIReaderSettings(theme: .eink, measure: 70, font: .dyslexic, rev: 4), generation: "g")
         let restored = makeModel(api: nil, engine: engine)
         try restored.restoreReaderPreferences()
         XCTAssertEqual(restored.readerSettings.theme, .eink)
         XCTAssertEqual(restored.readerSettings.measure, 70)
         XCTAssertEqual(restored.readerSettings.rev, 4)
+    }
+
+    private final class ObservingSettingsStore: SyncStore {
+        enum Failure: Error { case diskFull }
+        let memory = MemorySyncStore()
+        var failSaves = false
+        var onSave: ((SyncSnapshot) -> Void)?
+        func load() throws -> SyncSnapshot { try memory.load() }
+        func save(_ snapshot: SyncSnapshot) throws {
+            if failSaves { throw Failure.diskFull }
+            onSave?(snapshot)
+            try memory.save(snapshot)
+        }
+    }
+
+    private func settingsJSON(theme: String = "dark", rev: Int64) -> String {
+        #"{"reading_mode":"river","today_decay_days":2,"single_key_shortcuts":true,"theme":"\#(theme)","measure":66,"font":"serif","feed_overrides":{},"rev":\#(rev)}"#
+    }
+
+    func testUnauthorizedSaveSignsOutTheOwningSession() async throws {
+        let (api, session) = try makeAPI([
+            .init(method: "PUT", path: "/v1/settings", status: 401,
+                  body: #"{"error":"unauthorized"}"#),
+        ])
+        defer { session.invalidateAndCancel() }
+        let engine = SyncEngine(store: MemorySyncStore())
+        try engine.bootstrap(Cursor(generation: "g1", rev: 0))
+        try engine.mergeSettings(APIReaderSettings(), generation: "g1")
+        let app = makeModel(api: api, engine: engine)
+        app.loggedIn = true
+        try app.restoreReaderPreferences()
+        let window = WindowModel(app: app)
+        window.settings.draft.theme = .dark
+        window.settings.save()
+        try await waitUntil { !window.settings.busy }
+        XCTAssertFalse(app.loggedIn)
+        XCTAssertFalse(window.settings.confirmed)
+        XCTAssertFalse(window.settings.isDirty)
+        SettingsHTTP.assertFinished()
+    }
+
+    func testRestoreAdoptsLowerRevisionAndClearsDraft() throws {
+        let engine = SyncEngine(store: MemorySyncStore())
+        try engine.bootstrap(Cursor(generation: "g1", rev: 0))
+        try engine.mergeSettings(APIReaderSettings(theme: .dark, rev: 100), generation: "g1")
+        let app = makeModel(engine: engine)
+        try app.restoreReaderPreferences()
+        let window = WindowModel(app: app)
+        window.settings.draft.theme = .black
+        try engine.bootstrap(Cursor(generation: "g2", rev: 0))
+        try engine.mergeSettings(APIReaderSettings(theme: .light, rev: 2), generation: "g2")
+        try app.restoreReaderPreferences()
+        app.rebuildPresentation()
+        XCTAssertEqual(app.readerSettings.rev, 2)
+        XCTAssertEqual(app.readerSettings.theme, .light)
+        XCTAssertEqual(window.settings.draft.theme, .light)
+        XCTAssertFalse(window.settings.isDirty)
+        XCTAssertFalse(window.settings.conflict)
+    }
+
+    func testPreRestoreSaveCannotPoisonTheNewSnapshot() async throws {
+        let requested = expectation(description: "Old-generation save started")
+        let resume = DispatchSemaphore(value: 0)
+        let (api, session) = try makeAPI([
+            .init(method: "PUT", path: "/v1/settings", body: settingsJSON(rev: 102), beforeResponse: {
+                requested.fulfill()
+                XCTAssertEqual(resume.wait(timeout: .now() + 10), .success)
+            }),
+        ])
+        let store = ObservingSettingsStore()
+        let engine = SyncEngine(store: store)
+        try engine.bootstrap(Cursor(generation: "g1", rev: 0))
+        try engine.mergeSettings(APIReaderSettings(rev: 3), generation: "g1")
+        let app = makeModel(api: api, engine: engine)
+        app.loggedIn = true
+        try app.restoreReaderPreferences()
+        let window = WindowModel(app: app)
+        defer { resume.signal(); app.signOut(); session.invalidateAndCancel() }
+        window.settings.draft.theme = .dark
+        window.settings.save()
+        await fulfillment(of: [requested], timeout: 5)
+        try engine.bootstrap(Cursor(generation: "g2", rev: 0))
+        try engine.mergeSettings(APIReaderSettings(theme: .light, rev: 2), generation: "g2")
+        try app.restoreReaderPreferences()
+        app.rebuildPresentation()
+        let forbidden = expectation(description: "Old acknowledgement must not enter restored snapshot")
+        forbidden.isInverted = true
+        store.onSave = { snapshot in
+            if snapshot.objects.contains(where: { $0.kind == .settings && $0.rev == 102 }) { forbidden.fulfill() }
+        }
+        resume.signal()
+        await fulfillment(of: [forbidden], timeout: 0.2)
+        XCTAssertEqual(try engine.readerSettings()?.rev, 2)
+        XCTAssertEqual(app.readerSettings.rev, 2)
+        XCTAssertFalse(window.settings.confirmed)
+    }
+
+    func testCacheWriteFailureDoesNotConfirmAndRetriesTheSameOperation() async throws {
+        let (api, session) = try makeAPI([
+            .init(method: "PUT", path: "/v1/settings", body: settingsJSON(rev: 9)),
+            .init(method: "PUT", path: "/v1/settings", body: settingsJSON(rev: 9)),
+        ])
+        defer { session.invalidateAndCancel() }
+        let store = ObservingSettingsStore()
+        let engine = SyncEngine(store: store)
+        try engine.bootstrap(Cursor(generation: "g1", rev: 0))
+        try engine.mergeSettings(APIReaderSettings(), generation: "g1")
+        let app = makeModel(api: api, engine: engine)
+        app.loggedIn = true
+        try app.restoreReaderPreferences()
+        let settings = ReaderSettingsModel(app: app)
+        settings.draft.theme = .dark
+        store.failSaves = true
+        settings.save()
+        try await waitUntil { !settings.busy }
+        XCTAssertFalse(settings.confirmed)
+        XCTAssertNotNil(settings.error)
+        XCTAssertEqual(app.readerSettings.rev, 0)
+        XCTAssertEqual(try engine.readerSettings()?.rev, 0)
+        let first = try XCTUnwrap(SettingsHTTP.body(at: 0))
+        store.failSaves = false
+        settings.save()
+        try await waitUntil { !settings.busy }
+        XCTAssertTrue(settings.confirmed)
+        XCTAssertEqual(try XCTUnwrap(SettingsHTTP.body(at: 1)).opID(), try first.opID())
+        XCTAssertEqual(try engine.readerSettings()?.rev, 9)
+        SettingsHTTP.assertFinished()
+    }
+
+    func testEditsDuringAnInflightSaveRemainDirty() async throws {
+        let requested = expectation(description: "Save started")
+        let resume = DispatchSemaphore(value: 0)
+        let (api, session) = try makeAPI([
+            .init(method: "PUT", path: "/v1/settings", body: settingsJSON(rev: 9), beforeResponse: {
+                requested.fulfill()
+                XCTAssertEqual(resume.wait(timeout: .now() + 10), .success)
+            }),
+        ])
+        let engine = SyncEngine(store: MemorySyncStore())
+        try engine.bootstrap(Cursor(generation: "g1", rev: 0))
+        try engine.mergeSettings(APIReaderSettings(), generation: "g1")
+        let app = makeModel(api: api, engine: engine)
+        app.loggedIn = true
+        try app.restoreReaderPreferences()
+        let settings = ReaderSettingsModel(app: app)
+        defer { resume.signal(); app.signOut(); session.invalidateAndCancel() }
+        settings.draft.theme = .dark
+        settings.save()
+        await fulfillment(of: [requested], timeout: 5)
+        settings.draft.theme = .eink
+        resume.signal()
+        try await waitUntil { !settings.busy }
+        XCTAssertEqual(settings.draft.theme, .eink)
+        XCTAssertTrue(settings.isDirty)
+        XCTAssertFalse(settings.confirmed)
+        XCTAssertEqual(app.readerSettings.theme, .dark)
+        SettingsHTTP.assertFinished()
     }
 
     // MARK: - Overrides and inheritance
@@ -232,7 +405,7 @@ import EarnestKit
         settings.draft = APIReaderSettings(theme: .dark, rev: 1)
         XCTAssertTrue(settings.isDirty)
 
-        try engine.mergeSettings(APIReaderSettings(theme: .eink, rev: 2))
+        try engine.mergeSettings(APIReaderSettings(theme: .eink, rev: 2), generation: "g1")
         try model.restoreReaderPreferences()
         settings.update(from: APIReaderSettings(theme: .eink, rev: 2))
         XCTAssertEqual(settings.draft.theme, .dark, "local edits survive external changes")
@@ -285,12 +458,12 @@ import EarnestKit
         let window = WindowModel(app: model)
         XCTAssertTrue(window.singleKeyShortcuts)
 
-        try engine.mergeSettings(APIReaderSettings(singleKeyShortcuts: false, rev: 2))
+        try engine.mergeSettings(APIReaderSettings(singleKeyShortcuts: false, rev: 2), generation: "g1")
         try model.restoreReaderPreferences()
         window.rebuildPresentation()
         XCTAssertFalse(window.singleKeyShortcuts)
 
-        try engine.mergeSettings(APIReaderSettings(singleKeyShortcuts: true, rev: 3))
+        try engine.mergeSettings(APIReaderSettings(singleKeyShortcuts: true, rev: 3), generation: "g1")
         try model.restoreReaderPreferences()
         window.rebuildPresentation()
         XCTAssertTrue(window.singleKeyShortcuts)
@@ -312,11 +485,54 @@ import EarnestKit
         XCTAssertNil(model.unreadCounts)
         XCTAssertEqual(SettingsHTTP.pending, 1, "river mode must not request counts")
 
-        try engine.mergeSettings(APIReaderSettings(readingMode: .unreadCounts, rev: 2))
+        try engine.mergeSettings(APIReaderSettings(readingMode: .unreadCounts, rev: 2), generation: "g1")
         try model.restoreReaderPreferences()
         await model.refreshUnreadCounts()
         XCTAssertEqual(model.unreadCounts?.total, 3)
         XCTAssertEqual(try engine.snapshot().unreadCounts?.bySubscription["1"], 2)
+        SettingsHTTP.assertFinished()
+    }
+
+    func testPreRestoreCountsCannotEnterTheNewSnapshot() async throws {
+        let requested = expectation(description: "Old-generation counts requested")
+        let resume = DispatchSemaphore(value: 0)
+        let (api, session) = try makeAPI([
+            .init(path: "/v1/entries:counts", body: #"{"by_subscription":{"1":99},"later":0,"kept":0,"total":99}"#, beforeResponse: {
+                requested.fulfill()
+                XCTAssertEqual(resume.wait(timeout: .now() + 10), .success)
+            }),
+        ])
+        let engine = SyncEngine(store: MemorySyncStore())
+        try engine.bootstrap(Cursor(generation: "g1", rev: 0))
+        try engine.mergeSettings(APIReaderSettings(readingMode: .unreadCounts, rev: 3), generation: "g1")
+        let model = makeModel(api: api, engine: engine)
+        model.loggedIn = true
+        let task = Task { await model.refreshUnreadCounts() }
+        defer { resume.signal(); task.cancel(); model.signOut(); session.invalidateAndCancel() }
+        await fulfillment(of: [requested], timeout: 5)
+        try engine.bootstrap(Cursor(generation: "g2", rev: 0))
+        try engine.mergeSettings(APIReaderSettings(readingMode: .unreadCounts, rev: 1), generation: "g2")
+        try model.restoreReaderPreferences()
+        resume.signal()
+        await task.value
+        XCTAssertNil(model.unreadCounts)
+        XCTAssertNil(try engine.snapshot().unreadCounts)
+        SettingsHTTP.assertFinished()
+    }
+
+    func testUnauthorizedCountsSignsOutTheOwningSession() async throws {
+        let (api, session) = try makeAPI([
+            .init(path: "/v1/entries:counts", status: 401, body: #"{"error":"unauthorized"}"#),
+        ])
+        defer { session.invalidateAndCancel() }
+        let engine = SyncEngine(store: MemorySyncStore())
+        try engine.bootstrap(Cursor(generation: "g1", rev: 0))
+        try engine.mergeSettings(APIReaderSettings(readingMode: .unreadCounts, rev: 1), generation: "g1")
+        let model = makeModel(api: api, engine: engine)
+        model.loggedIn = true
+        await model.refreshUnreadCounts()
+        XCTAssertFalse(model.loggedIn)
+        XCTAssertNil(model.unreadCounts)
         SettingsHTTP.assertFinished()
     }
 
@@ -331,7 +547,7 @@ import EarnestKit
         let engine = SyncEngine(store: MemorySyncStore())
         let model = makeModel(api: api, engine: engine)
         model.loggedIn = true
-        try engine.mergeSettings(APIReaderSettings(readingMode: .unreadCounts, rev: 2))
+        try engine.mergeSettings(APIReaderSettings(readingMode: .unreadCounts, rev: 2), generation: "g1")
         try model.restoreReaderPreferences()
 
         await model.refreshUnreadCounts()

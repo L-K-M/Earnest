@@ -11,6 +11,9 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            if !settings.ready {
+                Text("Sync your account before editing settings.").font(.caption)
+            }
             SwiftUI.Section("Reading") {
                 Picker("Mode", selection: $settings.draft.readingMode) {
                     Text("A river that ends").tag(APIReadingMode.river)
@@ -72,6 +75,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .disabled(!settings.ready)
         .frame(maxWidth: 560)
         .padding()
     }

@@ -245,6 +245,10 @@ public final class SyncEngine {
         if let previous = data.cursor, previous.generation != cursor.generation {
             data.outbox = data.outbox.map { $0.rebased(generation: cursor.generation) }
         }
+        if data.cursor?.generation != cursor.generation {
+            // Unowned or pre-restore counts cannot describe the new snapshot.
+            data.unreadCounts = nil
+        }
         data.cursor = cursor
         data.bootstrapComplete = false
         data.entries = []; data.states = []; data.objects = []; data.labelDefinitions = []; data.annotations = []; data.positions = []
@@ -280,28 +284,36 @@ public final class SyncEngine {
         try store.load().objects.first { $0.kind == .settings && !$0.deleted }?.readerSettings
     }
 
-    /// Merge an acknowledged settings write into the snapshot only when its
-    /// revision is not older than the stored one. Mutes, other objects and the
+    /// Generation-bound settings merge. Returns false without touching the
+    /// store when the cursor is missing or belongs to another generation, or
+    /// when the stored object's rev is newer. An equal rev is accepted but the
+    /// existing object stays authoritative. Mutes, other resources and the
     /// cursor are never touched.
-    public func mergeSettings(_ settings: APIReaderSettings) throws {
+    @discardableResult
+    public func mergeSettings(_ settings: APIReaderSettings, generation: String) throws -> Bool {
         var data = try store.load()
+        guard data.cursor?.generation == generation else { return false }
         let object = SyncObject(settings: settings)
         guard let index = data.objects.firstIndex(where: { $0.kind == .settings && !$0.deleted }) else {
             data.objects.append(object)
             try store.save(data)
-            return
+            return true
         }
-        guard object.rev >= data.objects[index].rev else { return }
+        guard object.rev > data.objects[index].rev else { return object.rev == data.objects[index].rev }
         data.objects[index] = object
         try store.save(data)
+        return true
     }
 
-    /// Last successfully fetched counts replace earlier values; a failed fetch
-    /// leaves them untouched so an outage never reads as zero.
-    public func mergeUnreadCounts(_ counts: APIUnreadCounts) throws {
+    /// Generation-bound counts merge. Returns false without touching the store
+    /// when the cursor is missing or belongs to another generation.
+    @discardableResult
+    public func mergeUnreadCounts(_ counts: APIUnreadCounts, generation: String) throws -> Bool {
         var data = try store.load()
+        guard data.cursor?.generation == generation else { return false }
         data.unreadCounts = counts
         try store.save(data)
+        return true
     }
 
     /// Merge a fetched list or individual entry response only into its request's generation.

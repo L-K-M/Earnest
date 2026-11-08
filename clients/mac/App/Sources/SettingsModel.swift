@@ -7,16 +7,24 @@ import EarnestKit
 /// editing the draft discards the frozen request. A newer account revision
 /// rejects a stale draft instead of overwriting settings changed elsewhere.
 @MainActor final class ReaderSettingsModel: ObservableObject {
-    @Published var draft: APIReaderSettings { didSet { confirmed = false } }
+    @Published var draft: APIReaderSettings {
+        didSet {
+            confirmed = false
+            if draft != oldValue { pending = nil }
+        }
+    }
     @Published private(set) var baseline: APIReaderSettings
     @Published private(set) var busy = false
     @Published private(set) var error: String?
     @Published private(set) var confirmed = false
     @Published private(set) var conflict = false
+    @Published private(set) var ready = false
 
     private let app: AppModel
     private var pending: PendingSave?
     private var task: Task<Void, Never>?
+    private var scope: ReaderPreferencesScope?
+    private var requestID = 0
 
     private struct PendingSave: Equatable {
         let body: APIReaderSettings
@@ -27,6 +35,8 @@ import EarnestKit
         self.app = app
         draft = app.readerSettings
         baseline = app.readerSettings
+        scope = app.readerPreferencesScope()
+        ready = scope != nil
     }
 
     var isDirty: Bool { draft != baseline }
@@ -35,9 +45,10 @@ import EarnestKit
     /// dirty draft is never overwritten: newer settings are flagged as a
     /// conflict so the local edits survive until the user reloads.
     func update(from settings: APIReaderSettings) {
-        guard settings != baseline else { return }
+        if synchronizeScope() { return }
+        guard settings.rev >= baseline.rev, settings != baseline else { return }
         if isDirty {
-            conflict = settings.rev > baseline.rev
+            conflict = true
             return
         }
         draft = settings
@@ -51,21 +62,21 @@ import EarnestKit
     /// Explicit reload: copy the account settings into the draft. Local edits
     /// are discarded only because the user asked for it.
     func load() {
-        task?.cancel()
-        draft = app.readerSettings
-        baseline = app.readerSettings
-        pending = nil
-        busy = false
-        error = nil
-        confirmed = false
-        conflict = false
+        resetDraft(scope: app.readerPreferencesScope())
     }
 
     func save() {
-        guard !busy, let api = app.api, app.loggedIn else { return }
-        // The draft's base is older than the account's current revision:
-        // saving would silently overwrite newer settings, so reject locally.
-        guard app.readerSettings.rev <= baseline.rev else {
+        guard !busy else { return }
+        if synchronizeScope() {
+            error = "Account data changed. Review the current settings before saving."
+            return
+        }
+        guard let api = app.api, app.loggedIn, let scope else {
+            error = "Sync your account before saving settings."
+            return
+        }
+        guard !conflict, app.readerSettings.rev <= baseline.rev,
+              app.readerSettings.rev != baseline.rev || app.readerSettings == baseline else {
             conflict = true
             error = "Settings changed elsewhere. Reload before saving."
             return
@@ -74,25 +85,66 @@ import EarnestKit
             pending = PendingSave(body: draft, opID: "mac.settings.\(UUID().uuidString.lowercased())")
         }
         guard let pending else { return }
-        let expectedSession = app.session
+        requestID &+= 1
+        let requestID = self.requestID
         busy = true
         error = nil
         confirmed = false
         task = Task { [weak self] in
-            defer { self?.busy = false }
+            guard let self else { return }
+            defer {
+                if self.requestID == requestID {
+                    self.busy = false
+                    self.task = nil
+                }
+            }
             do {
+                guard self.current(requestID, scope: scope) else { return }
                 let saved = try await api.updateReaderSettings(pending.body, opID: pending.opID)
                 try Task.checkCancellation()
-                guard let self, self.app.session == expectedSession, !Task.isCancelled else { return }
-                self.draft = saved
-                self.baseline = saved
+                guard self.current(requestID, scope: scope) else { return }
+                let latestDraft = self.draft
+                let edited = latestDraft != pending.body
+                let effective: APIReaderSettings?
+                do {
+                    effective = try self.app.adoptReaderSettings(saved, scope: scope)
+                } catch {
+                    guard self.current(requestID, scope: scope) else { return }
+                    self.error = "Saved on the server, but could not confirm offline settings. Retry to confirm. \(ErrorPresentation.message(error))"
+                    return
+                }
+                guard let effective, self.current(requestID, scope: scope) else { return }
                 self.pending = nil
+                if effective != saved {
+                    if edited {
+                        self.draft = latestDraft
+                        self.conflict = true
+                    } else {
+                        self.draft = effective
+                        self.baseline = effective
+                        self.conflict = false
+                    }
+                    self.error = "Newer settings are active. Review them before saving again."
+                    self.confirmed = false
+                    return
+                }
+                self.baseline = effective
+                self.draft = edited ? APIReaderSettings(
+                    readingMode: latestDraft.readingMode, todayDecayDays: latestDraft.todayDecayDays,
+                    singleKeyShortcuts: latestDraft.singleKeyShortcuts, theme: latestDraft.theme,
+                    measure: latestDraft.measure, font: latestDraft.font,
+                    feedOverrides: latestDraft.feedOverrides, rev: effective.rev
+                ) : effective
                 self.conflict = false
-                self.confirmed = true
-                self.app.adoptReaderSettings(saved)
+                self.confirmed = !edited
             } catch is CancellationError {
             } catch {
-                guard let self, self.app.session == expectedSession, !Task.isCancelled else { return }
+                guard self.current(requestID, scope: scope) else { return }
+                if ErrorPresentation.isUnauthorized(error) {
+                    self.app.report(error)
+                    self.endSession()
+                    return
+                }
                 self.error = ErrorPresentation.message(error)
             }
         }
@@ -127,6 +179,23 @@ import EarnestKit
     /// The shared session ended: a frozen request must never replay under a
     /// different account or server.
     func endSession() {
+        resetDraft(scope: app.readerPreferencesScope())
+    }
+
+    private func current(_ requestID: Int, scope: ReaderPreferencesScope) -> Bool {
+        self.requestID == requestID && !Task.isCancelled && app.ownsReaderPreferences(scope)
+    }
+
+    @discardableResult
+    private func synchronizeScope() -> Bool {
+        let current = app.readerPreferencesScope()
+        guard scope != current else { return false }
+        resetDraft(scope: current)
+        return true
+    }
+
+    private func resetDraft(scope: ReaderPreferencesScope?) {
+        requestID &+= 1
         task?.cancel()
         task = nil
         pending = nil
@@ -134,8 +203,11 @@ import EarnestKit
         error = nil
         confirmed = false
         conflict = false
-        draft = app.readerSettings
-        baseline = app.readerSettings
+        self.scope = scope
+        ready = scope != nil
+        let settings = scope == nil ? APIReaderSettings() : app.readerSettings
+        draft = settings
+        baseline = settings
     }
 
     private func assign(_ override: APIReaderOverride, feedID: Int64) {
