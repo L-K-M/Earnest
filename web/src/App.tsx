@@ -345,9 +345,10 @@ function Session({onLogout}: {onLogout: () => void}) {
 
   // Screens other than the river put focus on their heading when the route
   // changes, unless the screen already moved it somewhere useful.
-  const section = routeSection(route)
+  const firstRunShown = route.name === 'river' && route.entry === undefined && !onboarded && subscriptions.isSuccess && subscriptions.data.length === 0 && preferences.isSuccess && preferences.data.rev === 0
+  const section = firstRunShown ? 'welcome' : routeSection(route)
   useEffect(() => {
-    if (route.name === 'river' || route.name === 'not-found') return
+    if ((route.name === 'river' && section !== 'welcome') || route.name === 'not-found') return
     return whenPresent(() => page.current?.querySelector<HTMLElement>('h2'), heading => {
       if (page.current?.contains(document.activeElement) && document.activeElement !== page.current) return
       if (!heading.hasAttribute('tabindex')) heading.setAttribute('tabindex', '-1')
@@ -491,7 +492,7 @@ function Session({onLogout}: {onLogout: () => void}) {
   const sidebar = <Sidebar route={route} subscriptions={subs} folders={folders.data ?? []} labels={labels.data ?? []} savedSearches={savedSearches.data ?? []} counts={settings.reading_mode === 'unread_counts' ? unreadCounts.data : undefined} askEnabled={pipeline.data?.ask === 'enabled'} sync={{text: syncText, tone: syncTone}} onNavigate={() => drawer.current?.close()} onPalette={() => {drawer.current?.close(); palette.current?.openPalette()}} onHelp={() => {drawer.current?.close(); palette.current?.openHelp()}} onSignOut={() => {void logout()}} prefetch={prefetch} />
 
   function screen(): ReactNode {
-    if (firstRun) return <div className="page" ref={page}><div className="page-inner" onChangeCapture={() => setOnboardingStarted(true)} onClickCapture={() => setOnboardingStarted(true)}><Suspense fallback={<PageSkeleton />}><OnboardingScreen onComplete={() => {setOnboarded(true);refreshResources();void queryClient.invalidateQueries({queryKey:['position']});go('/today', {replace: true})}} /></Suspense></div></div>
+    if (firstRun) return <div className="page" ref={page}><div className="page-inner onboarding" onChangeCapture={() => setOnboardingStarted(true)} onClickCapture={() => setOnboardingStarted(true)}><Suspense fallback={<PageSkeleton />}><OnboardingScreen onComplete={() => {setOnboarded(true);refreshResources();void queryClient.invalidateQueries({queryKey:['position']});go('/today', {replace: true})}} /></Suspense></div></div>
     switch (route.name) {
     case 'river': return <div className={`panes${reading ? ' reading' : ''}`}>
       <div className="list-pane" inert={compact && reading}>
