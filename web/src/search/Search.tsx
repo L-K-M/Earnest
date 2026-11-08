@@ -45,13 +45,16 @@ export function Search({saved, onOpen, subscriptions = [], folders = []}: {saved
   const [limit,setLimit] = useState(saved?.filters.limit ?? 0)
   const [name,setName] = useState('')
   const [renameName,setRenameName] = useState(saved?.name ?? '')
+  const [savedTitle,setSavedTitle] = useState(saved?.name ?? '')
+  const [removed,setRemoved] = useState(false)
   const [renaming,setRenaming] = useState(false)
   const [renameError,setRenameError] = useState('')
   const [renameMessage,setRenameMessage] = useState('')
   const [error,setError] = useState('')
   const [saving,setSaving] = useState(false)
   const [savedMessage,setSavedMessage] = useState('')
-  useEffect(() => {setRenameName(saved?.name ?? '')},[saved?.id,saved?.name])
+  useEffect(() => {setRenameName(saved?.name ?? '');setSavedTitle(saved?.name ?? '');setRemoved(false);setRenameError('');setRenameMessage('')},[saved?.id,saved?.name])
+  const activeSaved = saved && !removed
   const effectiveMode = pipeline.status.embed === 'enabled' ? mode : 'fulltext'
   const filters = {...saved?.filters,mode:effectiveMode}
   if (subscriptionID) filters.subscription_id = subscriptionID
@@ -79,30 +82,30 @@ export function Search({saved, onOpen, subscriptions = [], folders = []}: {saved
     finally {setSaving(false)}
   }
   async function remove() {
-    if (!saved) return
+    if (!saved || removed) return
     setSaving(true);setError('');setSavedMessage('')
-    try {await request(`/v1/saved-searches/${encodeURIComponent(saved.id)}`,{method:'DELETE'});setSavedMessage('Saved search deleted. It is gone from the sidebar.');await cache.invalidateQueries({queryKey:['saved-searches']})}
+    try {await request(`/v1/saved-searches/${encodeURIComponent(saved.id)}`,{method:'DELETE'});setRemoved(true);setRenameError('');setRenameMessage('');setSavedMessage('Saved search deleted. It is gone from the sidebar.');await cache.invalidateQueries({queryKey:['saved-searches']})}
     catch(error) {setError(error instanceof Error ? error.message : 'Could not delete the saved search.')}
     finally {setSaving(false)}
   }
   async function rename(event: React.FormEvent) {
     event.preventDefault()
-    if (!saved) return
+    if (!saved || removed) return
     const next = renameName.trim()
     if (!next) {setRenameError('Enter a name for the saved search.');setRenameMessage('');return}
     setRenaming(true);setRenameError('');setRenameMessage('')
     try {
       await request(`/v1/saved-searches/${encodeURIComponent(saved.id)}`,{method:'PATCH',body:JSON.stringify({name:next})})
       await cache.invalidateQueries({queryKey:['saved-searches']})
-      setRenameName(next);setRenameMessage('Saved search renamed.')
+      setSavedTitle(next);setRenameName(next);setRenameMessage('Saved search renamed.')
     } catch(error) {setRenameError(error instanceof Error ? error.message : 'Could not rename the saved search.')}
     finally {setRenaming(false)}
   }
-  return <main aria-label="Search"><h2>{saved?.name ?? 'Search'}</h2>
-    {saved && <p><button disabled={saving} onClick={() => {if (window.confirm(`Delete the saved search “${saved.name}”?`)) void remove()}}>Delete “{saved.name}”</button></p>}
-    {saved && <form onSubmit={event => {void rename(event)}}><label>Rename saved search<input value={renameName} onChange={event => {setRenameName(event.target.value);setRenameError('')}}/></label><button disabled={renaming}>{renaming ? 'Renaming…' : 'Rename'}</button></form>}
-    {renameError && <p role="alert">{renameError}</p>}
-    {renameMessage && <p role="status">{renameMessage}</p>}
+  return <main aria-label="Search"><h2>{activeSaved ? savedTitle : 'Search'}</h2>
+    {activeSaved && <p><button disabled={saving || renaming} onClick={() => {if (window.confirm(`Delete the saved search “${savedTitle}”?`)) void remove()}}>Delete “{savedTitle}”</button></p>}
+    {activeSaved && <form onSubmit={event => {void rename(event)}}><label>Rename saved search<input value={renameName} onChange={event => {setRenameName(event.target.value);setRenameError('');setRenameMessage('')}}/></label><button disabled={renaming || saving}>{renaming ? 'Renaming…' : 'Rename'}</button></form>}
+    {activeSaved && renameError && <p role="alert">{renameError}</p>}
+    {activeSaved && renameMessage && <p role="status">{renameMessage}</p>}
     <form onSubmit={event => {event.preventDefault();setQuery(input.trim());setSavedMessage('')}}><label>Search your feeds<input type="search" required value={input} onChange={event => setInput(event.target.value)}/></label>
       {pipeline.status.embed === 'enabled' && <label>Search mode<select value={mode} onChange={event => setMode(event.target.value)}><option value="fulltext">Full text</option><option value="hybrid">Hybrid: full text and meaning</option></select></label>}
       <label>Feed<select value={subscriptionID} onChange={event => setSubscriptionID(Number(event.target.value))}><option value={0}>All feeds</option>{subscriptions.filter(sub => !sub.deleted).map(sub => <option key={sub.id} value={sub.id}>{sub.title || sub.url}</option>)}</select></label>

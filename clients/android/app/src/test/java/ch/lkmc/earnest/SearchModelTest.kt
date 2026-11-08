@@ -10,7 +10,9 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.withTimeout
@@ -102,7 +104,7 @@ class SearchModelTest {
 
         model.loadMetadata()
         val metadata = awaitState(model) { it.metadataError != null && !it.loadingMetadata }
-        assertTrue("metadata error was swallowed: $metadata", metadata.metadataError!!.isNotBlank())
+        assertTrue("saved-search failure was hidden: $metadata", metadata.metadataError!!.startsWith("Could not load saved searches"))
         assertEquals("disabled", metadata.embeddingStatus)
         assertTrue(metadata.savedSearches.isEmpty())
 
@@ -166,6 +168,7 @@ class SearchModelTest {
         assertEquals("fulltext", paused.url.queryParameter("mode"))
         assertEquals("5", paused.url.queryParameter("subscription_id"))
         assertEquals("6", paused.url.queryParameter("folder_id"))
+        assertEquals("Hybrid search is unavailable. This search uses full text.", model.state.value.notice)
 
         // The same hybrid filter is preserved once the pipeline reports enabled.
         http.handler = { request ->
@@ -187,6 +190,7 @@ class SearchModelTest {
         assertEquals("hybrid", enabled.url.queryParameter("mode"))
         assertEquals("5", enabled.url.queryParameter("subscription_id"))
         assertEquals("6", enabled.url.queryParameter("folder_id"))
+        assertNull(model.state.value.notice)
     }
 
     // ---------------------------------------------------------------------
@@ -701,6 +705,59 @@ class SearchModelTest {
     // ---------------------------------------------------------------------
     // Fencing: cancellation, late responses, sessions, generations
     // ---------------------------------------------------------------------
+
+    @Test
+    fun staleSavedSelectionCannotSendPrivateQueryToTheNextAccount() = runBlocking {
+        val dispatched = CompletableDeferred<Request>()
+        http.handler = { request ->
+            when (request.url.encodedPath) {
+                "/v1/saved-searches" -> http.json(request, """[{"id":7,"name":"Private view","query":"private account-a query","filters":{"mode":"fulltext"}}]""")
+                "/v1/pipeline" -> http.json(request, """{"embed":"enabled"}""")
+                else -> {
+                    dispatched.complete(request)
+                    http.json(request, pageJson(emptyList()))
+                }
+            }
+        }
+        newSession("token-a").activate()
+        val model = model()
+        model.loadMetadata()
+        val stale = awaitState(model) { it.savedSearches.size == 1 && !it.loadingMetadata }.savedSearches.single()
+        model.reset()
+        newSession("token-b").activate()
+        model.selectSaved(stale)
+        assertNull("a stale saved definition was dispatched to the next account", withTimeoutOrNull(500) { dispatched.await() })
+        assertTrue(model.state.value.query.isEmpty())
+        assertTrue(model.state.value.submittedQuery.isEmpty())
+        assertTrue(model.state.value.savedName.isEmpty())
+    }
+
+    @Test
+    fun resetBetweenSubmissionAndDispatchCannotReuseTheNewEpoch() = runBlocking {
+        val dispatched = CompletableDeferred<Request>()
+        val reset = CompletableDeferred<Unit>()
+        http.handler = { request ->
+            dispatched.complete(request)
+            http.json(request, pageJson(emptyList()))
+        }
+        newSession("token-a").activate()
+        val model = model()
+        scope.launch {
+            model.state.collect { state ->
+                if (!reset.isCompleted && state.submittedQuery == "validated") {
+                    model.reset()
+                    reset.complete(Unit)
+                }
+            }
+        }
+        model.setQuery("validated")
+        model.submit()
+        withTimeout(5_000) { reset.await() }
+        assertNull("a reset intent was dispatched under the replacement epoch", withTimeoutOrNull(500) { dispatched.await() })
+        assertTrue(model.state.value.matches.isEmpty())
+        assertTrue(model.state.value.submittedQuery.isEmpty())
+        assertFalse(model.state.value.loading)
+    }
 
     @Test
     fun lateResponseAfterNewQueryCannotPopulateState() = runBlocking {

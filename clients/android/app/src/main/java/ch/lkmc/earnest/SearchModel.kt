@@ -38,6 +38,8 @@ internal data class SearchUiState(
     val error: String? = null,
     val metadataError: String? = null,
     val notice: String? = null,
+    // Ownership travels with the draft so reset cannot lend an old intent a new epoch.
+    val epoch: Long = 0,
 )
 
 /** A request remains bound to the verified account that supplied its token. */
@@ -72,7 +74,7 @@ internal class SearchModel(
         searchJob?.cancel()
         metadataJob?.cancel()
         mutationJob?.cancel()
-        publish(current) { SearchUiState() }
+        _state.update { if (epoch.get() == current) SearchUiState(epoch = current) else it }
     }
 
     fun invalidateForGeneration(current: String) {
@@ -80,20 +82,21 @@ internal class SearchModel(
         if (previous != null && previous != current) reset()
     }
 
-    fun setQuery(query: String) { _state.update { it.copy(query = query) } }
+    fun setQuery(query: String) { _state.update { it.copy(query = query, error = null) } }
     fun setFilter(filter: SearchFilter) { _state.update { it.copy(filter = filter) } }
     fun setSavedName(name: String) { _state.update { it.copy(savedName = name) } }
 
     private fun publish(expected: Long, transform: (SearchUiState) -> SearchUiState) {
-        _state.update { if (epoch.get() == expected) transform(it) else it }
+        _state.update { if (it.epoch == expected && epoch.get() == expected) transform(it) else it }
     }
 
     private fun current(context: SearchSession, expected: Long): Boolean =
         epoch.get() == expected && context.isCurrent()
 
     fun loadMetadata() {
+        val expected = _state.value.epoch
+        if (epoch.get() != expected) return
         val context = session() ?: return
-        val expected = epoch.get()
         val request = metadataId.incrementAndGet()
         metadataJob?.cancel()
         publish(expected) { it.copy(loadingMetadata = true, metadataError = null) }
@@ -123,7 +126,7 @@ internal class SearchModel(
                 } catch (error: Exception) {
                     if (!current(context, expected) || metadataId.get() != request) return@launch
                     if (unauthorized(context, error)) return@launch
-                    publish(expected) { it.copy(embeddingStatus = "disabled", metadataError = "Could not check AI search availability. Full-text search is still available.") }
+                    publish(expected) { it.copy(embeddingStatus = "disabled", metadataError = it.metadataError ?: "Could not check AI search availability. Full-text search is still available.") }
                 }
             } finally {
                 if (current(context, expected) && metadataId.get() == request) {
@@ -134,42 +137,51 @@ internal class SearchModel(
     }
 
     fun selectSaved(saved: SavedSearch?) {
-        if (_state.value.saving) return
-        _state.update { it.copy(selectedSavedId = saved?.id, savedName = saved?.name.orEmpty(),
-            query = saved?.query ?: it.query, filter = saved?.filters ?: it.filter) }
-        if (saved != null) submit()
+        val before = _state.value
+        if (before.saving) return
+        // A menu callback can outlive its account. Read only this scope's record.
+        val selected = if (saved == null) null else before.savedSearches.find { it.id == saved.id } ?: return
+        val draft = before.copy(selectedSavedId = selected?.id, savedName = selected?.name.orEmpty(),
+            query = selected?.query ?: before.query, filter = selected?.filters ?: before.filter)
+        publish(before.epoch) { it.copy(selectedSavedId = draft.selectedSavedId, savedName = draft.savedName,
+            query = draft.query, filter = draft.filter) }
+        if (selected != null) submit(draft)
     }
 
-    fun submit() {
-        val before = _state.value
+    fun submit() { submit(_state.value) }
+
+    private fun submit(before: SearchUiState) {
         val query = before.query.trim()
         if (query.isEmpty() || query.toByteArray(Charsets.UTF_8).size > MAX_QUERY_BYTES) {
-            _state.update { it.copy(error = "Enter a search query of at most 4,096 bytes.") }
+            publish(before.epoch) { it.copy(error = "Enter a search query of at most 4,096 bytes.") }
             return
         }
         val filter = if (before.embeddingStatus == "enabled") before.filter else before.filter.copy(mode = SearchMode.FULLTEXT)
-        _state.update { it.copy(submittedQuery = query, submittedFilter = filter, matches = emptyList(), nextCursor = null, status = null, notice = null) }
-        fetch(null)
+        val submitted = before.copy(submittedQuery = query, submittedFilter = filter)
+        val notice = if (filter.mode != before.filter.mode) "Hybrid search is unavailable. This search uses full text." else null
+        publish(before.epoch) { it.copy(submittedQuery = query, submittedFilter = filter, matches = emptyList(), nextCursor = null, status = null, notice = notice) }
+        fetch(null, submitted)
     }
 
     fun loadMore() {
         val before = _state.value
-        if (!before.loading && before.nextCursor != null) fetch(before.nextCursor)
+        if (!before.loading && before.nextCursor != null) fetch(before.nextCursor, before)
     }
 
     fun useFullText() {
-        _state.update { it.copy(filter = it.filter.copy(mode = SearchMode.FULLTEXT)) }
-        submit()
+        val draft = _state.value.let { it.copy(filter = it.filter.copy(mode = SearchMode.FULLTEXT)) }
+        publish(draft.epoch) { it.copy(filter = draft.filter) }
+        submit(draft)
     }
 
-    private fun fetch(cursor: String?) {
-        val expected = epoch.get()
+    private fun fetch(cursor: String?, submitted: SearchUiState) {
+        val expected = submitted.epoch
+        if (epoch.get() != expected) return
         val context = session()
         if (context == null) {
             publish(expected) { it.copy(error = "Still signing in; search did not run.") }
             return
         }
-        val submitted = _state.value
         val request = requestId.incrementAndGet()
         searchJob?.cancel()
         publish(expected) { it.copy(loading = true, error = null) }
@@ -212,27 +224,29 @@ internal class SearchModel(
         val before = _state.value
         val name = before.savedName.trim()
         if (name.isEmpty() || before.submittedQuery.isEmpty()) {
-            _state.update { it.copy(error = "Enter a name and run a search before saving it.") }
+            publish(before.epoch) { it.copy(error = "Enter a name and run a search before saving it.") }
             return
         }
-        mutate(SavedAction.Create(name, before.submittedQuery, before.submittedFilter))
+        mutate(SavedAction.Create(name, before.submittedQuery, before.submittedFilter), before.epoch)
     }
 
     fun rename() {
         val before = _state.value
         val name = before.savedName.trim()
         if (name.isEmpty() || before.selectedSavedId == null) {
-            _state.update { it.copy(error = "Enter a saved search name.") }
+            publish(before.epoch) { it.copy(error = "Enter a saved search name.") }
             return
         }
-        mutate(SavedAction.Rename(before.selectedSavedId, name))
+        mutate(SavedAction.Rename(before.selectedSavedId, name), before.epoch)
     }
 
-    fun delete() { _state.value.selectedSavedId?.let { mutate(SavedAction.Delete(it)) } }
+    fun delete() {
+        val before = _state.value
+        before.selectedSavedId?.let { mutate(SavedAction.Delete(it), before.epoch) }
+    }
 
-    private fun mutate(action: SavedAction) {
-        if (_state.value.saving) return
-        val expected = epoch.get()
+    private fun mutate(action: SavedAction, expected: Long) {
+        if (_state.value.saving || epoch.get() != expected) return
         val context = session() ?: return
         publish(expected) { it.copy(saving = true, error = null, notice = null) }
         mutationJob = scope.launch {

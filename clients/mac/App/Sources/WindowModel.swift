@@ -316,7 +316,10 @@ import AppKit
     // MARK: - Commands
 
     var canBrowse: Bool { app.loggedIn && !editingSearch && (section.entryView != nil || section == .search) }
-    var canActOnEntry: Bool { canBrowse && selected != nil && app.engine != nil && app.principalID > 0 }
+    var canActOnEntry: Bool {
+        guard let selected, canBrowse, app.engine != nil, app.principalID > 0 else { return false }
+        return entries.contains { $0.id == selected && !$0.deleted }
+    }
 
     func command(_ command: EntryCommand) {
         guard let entry = entries.first(where: { $0.id == selected }), let engine = app.engine else { return }
