@@ -25,6 +25,19 @@ export function cacheKind(raw: string, origin: string, method='GET'): 'shell' | 
   return null
 }
 
+// Server-owned paths. Everything else that a browser navigates to is a
+// client route served by the same index.html, so offline it can be served
+// from the cached shell.
+const SERVER_PATHS = /^\/(v1|api|web|mcp|push|content|img|openapi\.json|llms\.txt|metrics|healthz)(\/|$)/
+
+export function appNavigation(raw: string, origin: string): boolean {
+  const url = new URL(raw,origin)
+  if (url.origin !== origin || url.pathname === '/') return false
+  if (SERVER_PATHS.test(url.pathname)) return false
+  // A path ending in a file name is a static file, not a route.
+  return !/\.[a-z0-9]+$/i.test(url.pathname)
+}
+
 // Cache keys are in insertion order. Updating a key moves it to the end.
 export function evictionKeys(keys: string[], incoming: string, limit: number): string[] {
   const ordered = [...keys.filter(key => key !== incoming),incoming]

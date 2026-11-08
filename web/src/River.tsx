@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useRef, useState} from 'react'
+import {useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent} from 'react'
 import {useInfiniteQuery, useQuery} from '@tanstack/react-query'
 import {useVirtualizer} from '@tanstack/react-virtual'
 import {emptyCopy} from './copy'
@@ -7,12 +7,18 @@ import {request} from './request'
 import {TodayAgents, SessionChanges} from './agents/Surfaces'
 import {Edition} from './pipeline/Pipeline'
 import {usePipeline} from './search/pipeline'
+import {Icon} from './Icon'
+import {longDate, shortAge} from './format'
+import {viewHref} from './routes'
+import {whenPresent} from './router'
 
 type ClusterGroup = {entry: Entry; also_in: number}
 type Page = {entries: Entry[]; next_cursor?: string; groups?: ClusterGroup[]}
 type PageParam = {direction: 'forward' | 'backward'; cursor?: string; after?: number}
+type OpenMode = 'push' | 'replace'
 export type SessionSummary = {done: number; later: number; kept: number; seen: number}
 const seenWriteInterval = 600
+const SKELETON_ROWS = 7
 
 // Passive position writes retry after a failure with this backoff, so a long
 // outage cannot cost a write per tick. The floor sits above one interval so a
@@ -20,14 +26,33 @@ const seenWriteInterval = 600
 const POSITION_RETRY_MIN_MS = seenWriteInterval * 2
 const POSITION_RETRY_MAX_MS = 30_000
 
-// Shelf values are stored lowercase; row copy is title case.
-function statusLabel(state: EntryState): string {
+// Done and Later are shown on the row; the read state is carried by weight
+// and a dot, and spelled out for screen readers.
+function shelfLabel(state: EntryState): string {
   if (state.shelf.value === 'done') return 'Done'
   if (state.shelf.value === 'later') return 'Later'
-  return state.seen.value === 'seen' ? 'Seen' : 'Unread'
+  return ''
 }
 
-export function River({view, subscriptions, actions, selected, onSelect, onOpen, shortcuts, counts, summary, onNewestLoaded, since = '1970-01-01T00:00:00Z', sessionStart = '1970-01-01T00:00:00Z'}: {since?:string; sessionStart?:string; onNewestLoaded?: (seq: number) => void; view: View; subscriptions: Subscription[]; actions: ReaderActions; selected: Entry | null; onSelect: (entry: Entry) => void; onOpen: (entry: Entry) => void; shortcuts: boolean; counts: boolean; summary: SessionSummary}) {
+// Each list explains its own emptiness. Wit is reserved for the river.
+function emptyLine(view: View): string {
+  switch (view.kind) {
+  case 'later': return 'Nothing waiting for later. Press s on an article to put it here.'
+  case 'kept': return 'Nothing kept yet. Press f on an article to keep it for good.'
+  case 'done': return 'Nothing marked Done yet.'
+  case 'edition': return 'This week’s edition is empty. Feeds with the This week cadence collect here.'
+  case 'label': return 'No articles carry this label yet.'
+  case 'feed': return 'Nothing new from this feed.'
+  case 'folder': return 'Nothing new in this folder.'
+  default: return emptyCopy()
+  }
+}
+
+function newTabClick(event: ReactMouseEvent): boolean {
+  return event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey
+}
+
+export function River({view, subscriptions, actions, selected, onSelect, onOpen, shortcuts, counts, summary, onNewestLoaded, reading = false, scrollMemory, since = '1970-01-01T00:00:00Z', sessionStart = '1970-01-01T00:00:00Z'}: {since?:string; sessionStart?:string; onNewestLoaded?: (seq: number) => void; view: View; subscriptions: Subscription[]; actions: ReaderActions; selected: Entry | null; onSelect: (entry: Entry) => void; onOpen: (entry: Entry, mode?: OpenMode) => void; shortcuts: boolean; counts: boolean; summary: SessionSummary; reading?: boolean; scrollMemory?: Map<string, number>}) {
   const pipeline = usePipeline()
   const key = viewKey(view)
   const scroller = useRef<HTMLDivElement>(null)
@@ -38,6 +63,8 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   const pending = useRef(new Set<number>())
   const rendered = useRef(new Map<number, {start: number; size: number}>())
   const passed = useRef(new Set<number>())
+  const focusNext = useRef<number | null>(null)
+  const restored = useRef(false)
   const [error, setError] = useState('')
   const [cluster, setCluster] = useState(false)
   const position = useQuery({queryKey: ['position', key], queryFn: ({signal}) => request<{seq: number}>(`/v1/positions/${encodeURIComponent(key)}`, {signal})})
@@ -63,7 +90,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   // Rows are measured (measureElement on each row) so long titles, blurbs and
   // zoomed text are never clipped; estimateSize is only the pre-measure guess.
   // eslint-disable-next-line react-hooks/incompatible-library -- Virtual owns mutable scroll measurements; this app does not use React Compiler.
-  const virtual = useVirtualizer({count: entries.length, getScrollElement: () => scroller.current, estimateSize: () => 100, overscan: 5, scrollMargin, getItemKey: index => entries[index].id})
+  const virtual = useVirtualizer({count: entries.length, getScrollElement: () => scroller.current, estimateSize: () => 76, overscan: 6, scrollMargin, getItemKey: index => entries[index].id})
   // The Today panel sits above the list inside the scroller, so the list's own
   // top is offset from the scroller's content origin. The virtualizer needs
   // that offset as scrollMargin to report row positions in scroller
@@ -115,7 +142,19 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     retryAfter.current = 0
   }, [key])
   useEffect(() => { if (position.data) resumeSeq.current = Math.max(resumeSeq.current, position.data.seq) }, [position.data])
-  useEffect(() => { heading.current?.focus() }, [key])
+  // A newly chosen list takes focus at its heading, unless an article is
+  // opening alongside it (the reader takes focus then).
+  const readingRef = useRef(reading)
+  useEffect(() => { readingRef.current = reading }, [reading])
+  useEffect(() => { if (!readingRef.current) heading.current?.focus({preventScroll: true}) }, [key])
+
+  // Come back to the same place in a list after reading elsewhere.
+  useEffect(() => {
+    if (restored.current || !entries.length) return
+    restored.current = true
+    const top = scrollMemory?.get(key)
+    if (top && scroller.current) scroller.current.scrollTop = top
+  }, [entries.length, key, scrollMemory])
 
   // Remember which rendered rows have been inside the viewport. A row that
   // mounts already above the fold (a jump or a prepended page) never enters
@@ -132,6 +171,17 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
       if (row.start < bottom && row.start + row.size > top) passed.current.add(entry.id)
     }
     rendered.current = next
+  })
+
+  // Keyboard movement inside the list carries focus with the selection; the
+  // target row may need a frame to render after scrollToIndex.
+  useEffect(() => {
+    const id = focusNext.current
+    if (id === null) return
+    return whenPresent(() => listRef.current?.querySelector<HTMLElement>(`[data-entry="${id}"] .entry`), row => {
+      focusNext.current = null
+      row.focus({preventScroll: true})
+    }, 10)
   })
 
   // The interval drains the queue so passive writes are batched and a failed
@@ -173,6 +223,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     const root = scroller.current
     if (!root) return
     const top = root.scrollTop
+    scrollMemory?.set(key, top)
     for (const [id, row] of rendered.current) {
       if (row.start + row.size > top) continue
       if (!passed.current.delete(id)) continue
@@ -180,10 +231,22 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     }
   }
 
-  const open = useCallback((entry: Entry) => {
+  const open = useCallback((entry: Entry, mode?: OpenMode) => {
     pending.current.add(entry.id)
-    onOpen(entry)
+    onOpen(entry, mode)
   }, [onOpen])
+
+  // move selects the row at `index`; in reading mode it opens it in place.
+  const move = useCallback((index: number, from: number, focus: boolean) => {
+    const target = entries[index]
+    if (!target) return
+    // Moving the selection past a row is the keyboard form of scrolling past it.
+    if (from >= 0) pending.current.add(entries[from].id)
+    onSelect(target)
+    virtual.scrollToIndex(index, {align: 'auto'})
+    if (focus) focusNext.current = target.id
+    if (reading && from !== index) open(target, 'replace')
+  }, [entries, onSelect, virtual, reading, open])
 
   useEffect(() => {
     function keyboard(event: KeyboardEvent) {
@@ -193,10 +256,10 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
       if (!entry) return
       if (event.key === 'j' || event.key === 'k') {
         event.preventDefault()
-        // Moving the selection past a row is the keyboard form of scrolling past it.
-        if (index >= 0) pending.current.add(entries[index].id)
         const next = index < 0 ? (event.key === 'j' ? 0 : entries.length - 1) : Math.max(0, Math.min(entries.length - 1, index + (event.key === 'j' ? 1 : -1)))
-        onSelect(entries[next]); virtual.scrollToIndex(next, {align: 'auto'}); return
+        const inList = event.target instanceof Node && Boolean(scroller.current?.contains(event.target))
+        move(next, index, inList)
+        return
       }
       if (event.key === 'o' || event.key === 'Enter') { if (event.target instanceof Element && event.target.closest('button, a')) return; event.preventDefault(); open(entry); return }
       if (event.key === 'v') { event.preventDefault(); window.open(entry.url, '_blank', 'noopener,noreferrer'); return }
@@ -206,16 +269,45 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     }
     window.addEventListener('keydown', keyboard)
     return () => window.removeEventListener('keydown', keyboard)
-  }, [entries, selected, shortcuts, onSelect, open, virtual, actions])
+  }, [entries, selected, shortcuts, open, move, actions])
+
+  // Arrow keys work in the list whether or not single-key shortcuts are on.
+  function listKeys(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.ctrlKey || event.metaKey || event.altKey || !entries.length) return
+    const index = entries.findIndex(entry => entry.id === selected?.id)
+    const next = event.key === 'ArrowDown' ? Math.min(entries.length - 1, index + 1)
+      : event.key === 'ArrowUp' ? Math.max(0, index < 0 ? 0 : index - 1)
+      : event.key === 'Home' ? 0
+      : event.key === 'End' ? entries.length - 1
+      : null
+    if (next === null) return
+    event.preventDefault()
+    move(next, index, true)
+  }
 
   const unread = entries.filter(entry => { const state = actions.state(entry); return state.seen.value === 'unseen' && state.shelf.value !== 'done' }).length
-  return <main className="river" aria-label="Articles">
-    <header><h2 ref={heading} tabIndex={-1}>{view.title}</h2><button disabled={!list.isSuccess || list.isRefetching} onClick={() => {void list.refetch()}}>Refresh articles</button><button disabled={!list.isSuccess || list.isFetchingPreviousPage} onClick={() => { void list.fetchPreviousPage() }}>Earlier articles</button><button aria-pressed={cluster} disabled={!list.isSuccess || list.isFetching} onClick={() => setCluster(value => !value)}>One per story</button>{counts && <p>{unread} unread in loaded {cluster ? 'stories' : 'articles'}</p>}</header>
-    {(error || position.error || list.error) && <p role="alert">{error || position.error?.message || list.error?.message} <button onClick={() => { void (position.isError ? position.refetch() : list.refetch()) }}>Try again</button></p>}
-    {(position.isPending || list.isPending) && <p role="status">Finding your place…</p>}
+  const loading = position.isPending || list.isPending
+  const failure = error || position.error?.message || list.error?.message
+  const rowsShown = new Set(visible.map(row => entries[row.index]?.id))
+  const tabStop = selected && rowsShown.has(selected.id) ? selected.id : entries[visible[0]?.index ?? 0]?.id
+  return <section className="river" aria-label="Articles">
+    <header className="pane-header">
+      <div className="pane-heading">
+        <h2 ref={heading} tabIndex={-1}>{view.title}</h2>
+        <button type="button" className="icon-button" title="Refresh articles" disabled={!list.isSuccess || list.isRefetching} onClick={() => {void list.refetch()}}><Icon name="refresh" /><span className="sr-only">Refresh articles</span></button>
+      </div>
+      <div className="pane-tools">
+        <button type="button" className="quiet small" disabled={!list.isSuccess || list.isFetchingPreviousPage} onClick={() => { void list.fetchPreviousPage() }}><Icon name="earlier" size={16} />Earlier articles</button>
+        <button type="button" className="quiet small toggle" aria-pressed={cluster} disabled={!list.isSuccess || list.isFetching} onClick={() => setCluster(value => !value)}><Icon name="stack" size={16} />One per story</button>
+        {counts && list.isSuccess && <p className="pane-count">{unread} unread in loaded {cluster ? 'stories' : 'articles'}</p>}
+      </div>
+    </header>
+    {failure && <p role="alert" className="banner problem inline">{failure} <button type="button" onClick={() => { setError(''); void (position.isError ? position.refetch() : list.refetch()) }}>Try again</button></p>}
     {view.kind === 'edition' && <Edition onOpen={onOpen}/>}
-    <div className="river-scroll" ref={scroller} onScroll={markScrolledPast} tabIndex={0} aria-label="Article list">
+    <div className="river-scroll" ref={scroller} onScroll={markScrolledPast} onKeyDown={listKeys} tabIndex={-1} aria-label="Article list" aria-busy={loading || undefined}>
       {view.kind === 'today' && <TodayAgents since={since} onOpen={onOpen}/>}
+      {loading && <div className="skeleton-rows" aria-hidden="true">{Array.from({length: SKELETON_ROWS}, (_, index) => <div key={index} className="skeleton-row"><div className="skeleton line" /><div className="skeleton line short" /></div>)}</div>}
+      {loading && <p role="status" className="sr-only">Finding your place…</p>}
       <div ref={listRef} className="virtual-list" style={{height: virtual.getTotalSize()}} role="list">
         {visible.map(row => {
           const entry = entries[row.index]
@@ -223,14 +315,26 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
           const source = subscriptions.find(sub => sub.id === entry.subscription_id)?.title || 'Feed'
           const group = view.kind === 'edition' && (row.index === 0 || entries[row.index - 1].subscription_id !== entry.subscription_id)
           const alsoIn = clusterInfo.get(entry.id) ?? 0
+          const isUnread = state.seen.value !== 'seen' && state.shelf.value !== 'done'
+          const shelf = shelfLabel(state)
+          const date = entry.published_at || entry.first_seen_at
           return <div className="virtual-row" key={entry.id} role="listitem" data-entry={entry.id} data-index={row.index} ref={virtual.measureElement} style={{transform: `translateY(${row.start - virtual.options.scrollMargin}px)`}}>
             {group && <h3 className="feed-group">{source}</h3>}
-            <button className="entry" aria-current={selected?.id === entry.id ? 'true' : undefined} onFocus={() => onSelect(entry)} onClick={() => open(entry)}><strong>{entry.title || 'Untitled'}</strong>{pipeline.status.blurb === 'enabled' && entry.blurb && <span>{entry.blurb}</span>}<span>{source} · {statusLabel(state)}{state.kept.value === true ? ' · Kept' : ''}{cluster && alsoIn > 0 ? ` · also in ${alsoIn}` : ''}</span></button>
+            <a className="entry" href={viewHref({kind: view.kind, id: view.id}, entry.id)} tabIndex={entry.id === tabStop ? 0 : -1} data-unread={isUnread || undefined} data-selected={selected?.id === entry.id || undefined} aria-current={reading && selected?.id === entry.id ? 'page' : undefined} onFocus={() => onSelect(entry)} onClick={event => { if (newTabClick(event)) return; event.preventDefault(); open(entry) }}>
+              <span className="entry-title">{isUnread && <span className="unread-dot" aria-hidden="true" />}{entry.title || 'Untitled'}</span>
+              {pipeline.status.blurb === 'enabled' && entry.blurb && <span className="entry-blurb">{entry.blurb}</span>}
+              <span className="entry-meta"><span className="entry-source">{source}{shelf && ` · ${shelf}`}{state.kept.value === true ? ' · Kept' : ''}{cluster && alsoIn > 0 ? ` · also in ${alsoIn}` : ''}{isUnread && <span className="sr-only"> · Unread</span>}</span>{date && <time dateTime={date} title={longDate(date)}>{shortAge(date)}</time>}</span>
+            </a>
           </div>
         })}
       </div>
-      {list.hasNextPage && <button disabled={list.isFetchingNextPage} onClick={() => { void list.fetchNextPage() }}>More articles</button>}
-      {list.isSuccess && !list.hasNextPage && <section className="session-end" aria-label="Session end"><h3>{entries.length ? 'That is everything in this view.' : emptyCopy()}</h3><p>Your choices this session: {summary.seen} seen, {summary.done} Done, {summary.later} Later, {summary.kept} Keep. Sync status shows any actions still waiting.</p><SessionChanges since={sessionStart}/><p>You can leave the rest here.</p></section>}
+      {list.hasNextPage && <p className="more-row"><button type="button" disabled={list.isFetchingNextPage} onClick={() => { void list.fetchNextPage() }}>{list.isFetchingNextPage ? 'Loading more…' : 'More articles'}</button></p>}
+      {list.isSuccess && !list.hasNextPage && <section className="session-end" aria-label="Session end">
+        <h3>{entries.length ? 'That is everything in this view.' : emptyLine(view)}</h3>
+        {(summary.seen + summary.done + summary.later + summary.kept > 0) && <p>Your choices this session: {summary.seen} seen, {summary.done} Done, {summary.later} Later, {summary.kept} Keep. Sync status shows any actions still waiting.</p>}
+        <SessionChanges since={sessionStart}/>
+        {entries.length > 0 && <p className="muted">You can leave the rest here.</p>}
+      </section>}
     </div>
-  </main>
+  </section>
 }

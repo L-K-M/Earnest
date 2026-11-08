@@ -1,5 +1,20 @@
-#palette-results {list-style:none;padding:0}
-#palette-results button {display:flex;justify-content:space-between;gap:1rem;width:100%;text-align:left}
-#palette-results [aria-selected=true] button {outline:2px solid var(--line)}
-.search-snippet, .offline-article {white-space:pre-wrap;overflow-wrap:anywhere}
-.offline-article {max-width:72ch;margin:2rem auto;font:1.1rem/1.65 Georgia,serif}
+dialog.palette {width: min(40rem, calc(100vw - 2rem)); max-width: none; max-height: min(34rem, 78dvh); margin: 12vh auto auto; padding: 0; overflow: hidden}
+dialog.palette[open] {display: flex; flex-direction: column}
+.palette-search {display: flex; align-items: center; gap: var(--s2); padding: var(--s3) var(--s4); border-bottom: 1px solid var(--line)}
+.palette-search:focus-within {box-shadow: inset 0 -2px 0 var(--brand)}
+.palette-search input {flex: 1; min-width: 0; border: 0; padding: var(--s1) 0; background: transparent; font-size: var(--step-1); outline: none}
+.palette-results {flex: 1; min-height: 0; overflow: auto; margin: 0; padding: var(--s1); list-style: none}
+.palette-results li {display: flex; align-items: center; gap: var(--s3); padding: .5rem var(--s3); border-radius: var(--r2); cursor: pointer}
+.palette-results li[aria-selected=true] {background: var(--selected); box-shadow: inset 3px 0 0 var(--brand)}
+.palette-results li[aria-disabled=true] {opacity: .5; cursor: default}
+.palette-title {flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap}
+.palette-group {font-size: var(--step--2); color: var(--ink-muted)}
+.palette-empty, .palette-error {margin: 0; padding: var(--s4); color: var(--ink-muted)}
+.palette-error {color: var(--danger)}
+.palette-hint {margin: 0; padding: var(--s2) var(--s4); border-top: 1px solid var(--line); font-size: var(--step--2); color: var(--ink-muted)}
+.palette-hint kbd + kbd {margin-left: 2px}
+.palette-esc {flex: none}
+dialog.shortcuts {width: min(46rem, calc(100vw - 2rem))}
+.shortcut-groups {display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 0 var(--s5)}
+.shortcut-groups h3 {margin: var(--s4) 0 var(--s2); font-size: var(--step--1); text-transform: uppercase; letter-spacing: .05em; color: var(--ink-muted)}
+.shortcut-groups dt {min-width: 6.5rem}

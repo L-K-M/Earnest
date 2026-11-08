@@ -1,5 +1,6 @@
 import {useState} from 'react'
 import {request} from './request'
+import {useBlocker} from './router'
 import type {components} from './api.generated'
 
 export type ReadingSettings = Omit<components['schemas']['ReaderSettings'], 'reading_mode' | 'theme' | 'font' | 'feed_overrides' | 'rev'> & {
@@ -28,25 +29,37 @@ export function Settings({settings, onSaved}: {settings: ReadingSettings; onSave
   const [draft, setDraft] = useState(settings)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const comparable = (value: ReadingSettings) => JSON.stringify(settingsInput(value, ''))
+  // Adopt settings saved elsewhere (another tab, a feed override) unless the
+  // reader has unsaved edits of their own.
+  const [base, setBase] = useState(settings)
+  if (settings !== base) {
+    setBase(settings)
+    if (comparable(draft) === comparable(base)) setDraft(settings)
+  }
+  const dirty = comparable(draft) !== comparable(settings)
+  const release = useBlocker(dirty, 'Leave without saving your reading settings?')
   async function save(event: React.FormEvent) {
     event.preventDefault()
     setSaving(true)
-    try { onSaved(await request<ReadingSettings>('/v1/settings', {method: 'PUT', body: JSON.stringify(settingsInput(draft))})); setError('') }
+    try { const next = await request<ReadingSettings>('/v1/settings', {method: 'PUT', body: JSON.stringify(settingsInput(draft))}); release(); onSaved(next); setError(''); setSaved(true) }
     catch (error) { setError(error instanceof Error ? error.message : 'Could not save settings.') }
     finally { setSaving(false) }
   }
-  return <form onSubmit={save}><h2>Reading settings</h2>
+  return <form onSubmit={save} onChange={() => setSaved(false)}><h2>Reading settings</h2>
     <label>Reading mode<select value={draft.reading_mode} onChange={e => setDraft({...draft, reading_mode: e.target.value as ReadingSettings['reading_mode']})}><option value="river">A river that ends</option><option value="unread_counts">Unread counts</option></select></label>
     <label>Today items stay for this many days<input type="number" min="1" max="365" value={draft.today_decay_days} onChange={e => setDraft({...draft, today_decay_days: e.target.valueAsNumber})} required /></label>
     <label><input type="checkbox" checked={draft.single_key_shortcuts} onChange={e => setDraft({...draft, single_key_shortcuts: e.target.checked})} /> Single-key shortcuts</label>
     <Typography value={draft} onChange={value => setDraft({...draft, ...value})} />
-    <button disabled={saving}>Save settings</button>{error && <p role="alert">{error}</p>}
+    <p className="button-row"><button className="primary" disabled={saving || !dirty}>{saving ? 'Saving…' : 'Save settings'}</button>{dirty && <button type="button" onClick={() => setDraft(settings)}>Discard changes</button>}{dirty ? <span className="muted">Unsaved changes</span> : saved && <span role="status" className="muted">Saved.</span>}</p>{error && <p role="alert">{error}</p>}
   </form>
 }
 type TypographySettings = Pick<ReadingSettings, 'theme' | 'measure' | 'font'>
+const THEMES = [['system', 'Match the system'], ['light', 'Light'], ['dark', 'Dark'], ['black', 'True black'], ['eink', 'E-ink']] as const
 export function Typography({value, onChange}: {value: TypographySettings; onChange: (value: TypographySettings) => void}) {
   return <fieldset><legend>Typography</legend>
-    <label>Theme<select value={value.theme} onChange={e => onChange({...value, theme: e.target.value as ReadingSettings['theme']})}>{(['system', 'light', 'dark', 'black', 'eink'] as const).map(theme => <option key={theme}>{theme}</option>)}</select></label>
+    <label>Theme<select value={value.theme} onChange={e => onChange({...value, theme: e.target.value as ReadingSettings['theme']})}>{THEMES.map(([theme, label]) => <option key={theme} value={theme}>{label}</option>)}</select></label>
     <label>Measure (characters)<input type="number" min="62" max="72" value={value.measure} onChange={e => onChange({...value, measure: e.target.valueAsNumber})} required /></label>
     <label>Font<select value={value.font} onChange={e => onChange({...value, font: e.target.value as ReadingSettings['font']})}><option value="serif">Serif</option><option value="sans">Sans serif</option><option value="dyslexic">Dyslexia friendly</option></select></label>
   </fieldset>

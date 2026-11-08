@@ -122,7 +122,7 @@ function SubscribeForm({folders, busy, act}: {folders: Folder[]; busy: boolean; 
     }
   }
 
-  return <section aria-labelledby="subscribe-heading"><h3 id="subscribe-heading">Subscribe</h3>
+  return <section id="subscribe" className="card" aria-labelledby="subscribe-heading"><h3 id="subscribe-heading">Subscribe</h3>
     <form onSubmit={submit}>
       <label>Feed or site URL<input type="url" value={url} onChange={e => setURL(e.target.value)} placeholder="https://example.com/feed.xml" required /></label>
       <label>Title (optional)<input value={title} onChange={e => setTitle(e.target.value)} placeholder="Leave empty to use the feed’s own title" /></label>
@@ -261,7 +261,7 @@ function SubscriptionRow({sub, folders, busy, act}: {sub: Subscription; folders:
   }
   const explanation = explainHealth(sub.health)
   const patch = (body: Omit<SubscriptionPatch, 'op_id'>, note: string) => act(() => patchSubscription(sub.id, {...body, op_id: newOp()}), note)
-  return <li>
+  return <li id={`subscription-${sub.id}`}>
     <strong>{sub.title || sub.url}</strong>{sub.private && ' · private'}{isFirehose(sub) && ' · firehose'}
     {' '}<a href={sub.site_url || sub.url} target="_blank" rel="noopener noreferrer">Site</a>
     <form onSubmit={event => { event.preventDefault(); void patch({title: title.trim()}, 'Title saved.').then(saved => { if (saved) setDirty(false) }) }}>

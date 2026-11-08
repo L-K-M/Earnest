@@ -32,9 +32,9 @@ it('connects sidebar searches, feed and label commands, and reading actions to t
     return []
   })
   await import('../main')
-  fireEvent.click(await screen.findByRole('button',{name:'Ask my feeds'},{timeout:10000}))
+  fireEvent.click(await screen.findByRole('link',{name:'Ask my feeds'},{timeout:10000}))
   expect(screen.getByRole('heading',{name:'Ask my feeds'})).toBeTruthy()
-  fireEvent.click(screen.getByRole('button',{name:'Today'}))
+  fireEvent.click(screen.getByRole('link',{name:'Today'}))
   fireEvent.click(await screen.findByRole('button',{name:'Select article'}))
   function palette(query: string) {
     fireEvent.keyDown(document.body,{key:'k',ctrlKey:true})
@@ -55,7 +55,7 @@ it('connects sidebar searches, feed and label commands, and reading actions to t
   await waitFor(() => expect(screen.queryByRole('dialog',{name:'Command palette'})).toBeNull())
   palette('Label: Research')
   expect(await screen.findByRole('heading',{name:'Research articles'})).toBeTruthy()
-  fireEvent.click(screen.getByRole('button',{name:'Rust searches'}))
+  fireEvent.click(screen.getByRole('link',{name:'Rust searches'}))
   expect(await screen.findByRole('heading',{name:'Rust searches'})).toBeTruthy()
   await waitFor(() => expect(request).toHaveBeenCalledWith('/v1/search?q=rust&mode=fulltext',expect.anything()))
 }, 15000)

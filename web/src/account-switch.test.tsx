@@ -28,7 +28,7 @@ it('clears private reader metadata and the selected feed when accounts switch',a
     return []
   })
   await import('./main')
-  fireEvent.click(await screen.findByRole('button',{name:'A private feed'},{timeout:10000}))
+  fireEvent.click(await screen.findByRole('link',{name:'A private feed'},{timeout:10000}))
   fireEvent.click(screen.getByRole('button',{name:'Open private article'}))
   expect(screen.getByText(/A private article/)).toBeTruthy()
   const oldOpen = late.open!
