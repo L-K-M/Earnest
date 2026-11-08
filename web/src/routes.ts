@@ -82,6 +82,14 @@ function searchRoute(params: URLSearchParams): SearchRoute {
   return search
 }
 
+// realDay accepts YYYY-MM-DD only when it names a calendar day; 2026-02-31
+// would otherwise roll over to March and 2026-13-45 would not parse at all.
+function realDay(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const time = Date.parse(`${value}T00:00:00Z`)
+  return !Number.isNaN(time) && new Date(time).toISOString().startsWith(value)
+}
+
 function activityFilters(params: URLSearchParams): ActivityFilters {
   const filters: ActivityFilters = {}
   const agent = params.get('agent')
@@ -89,7 +97,7 @@ function activityFilters(params: URLSearchParams): ActivityFilters {
   const since = params.get('since')
   if (agent && positiveID(agent) !== undefined) filters.agent = agent
   if (action) filters.action = action
-  if (since && /^\d{4}-\d{2}-\d{2}$/.test(since)) filters.since = since
+  if (since && realDay(since)) filters.since = since
   return filters
 }
 

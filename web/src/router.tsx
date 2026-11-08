@@ -92,6 +92,9 @@ export function currentHref(): string {
 
 export function navigate(to: string, options: NavigateOptions = {}): boolean {
   const url = new URL(to, location.href)
+  // Defence in depth: nothing but http(s) may be navigated to, so a
+  // javascript: or data: target can never run in the app's origin.
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
   if (url.origin !== location.origin) {
     window.location.assign(url.href)
     return true

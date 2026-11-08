@@ -186,7 +186,9 @@ it('serves the cached shell for an offline deep link and refreshes it online',as
   expect(await (await online.response)!.text()).toBe('New app shell')
   await online.done()
   expect(await (await (await cache(shellCache)).match('/'))!.text()).toBe('New app shell')
+  // An API path is not an app route: the worker leaves it to the network.
+  vi.mocked(fetch).mockRejectedValue(new TypeError('Offline'))
   const api = dispatch('/v1/subscriptions','GET','navigate')
-  expect(api.response).toBeDefined()
+  if (api.response) await expect(api.response).rejects.toThrow('Offline')
   await api.done()
 })

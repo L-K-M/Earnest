@@ -122,7 +122,7 @@ export function ActivityScreen({filters, onFilters}: {filters?: ActivityFilters;
   const update = (change: ActivityFilters) => { const next = {...current, ...change}; for (const key of ['agent','action','since'] as const) if (!next[key]) delete next[key]; if (onFilters) onFilters(next); else setLocal(next) }
   const principal = current.agent ?? ''; const action = current.action ?? ''; const since = current.since ?? ''
   const setPrincipal = (agent: string) => update({agent}); const setAction = (value: string) => update({action:value}); const setSince = (value: string) => update({since:value})
-  const params = new URLSearchParams(); if(principal) params.set('principal_id',principal); if(action) params.set('action',action); if(since) params.set('since',new Date(since).toISOString())
+  const params = new URLSearchParams(); if(principal) params.set('principal_id',principal); if(action) params.set('action',action); if(since && !Number.isNaN(Date.parse(since))) params.set('since',new Date(since).toISOString())
   const activity = useActivities(params.toString())
   const agents = useQuery({queryKey:['agents'], queryFn:({signal})=>request<AgentNotificationStatus[] | null>('/v1/agents',{signal})})
   const filtered = Boolean(principal || action || since)

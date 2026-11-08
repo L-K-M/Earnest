@@ -293,11 +293,17 @@ function Session({onLogout}: {onLogout: () => void}) {
   function undoFor(entry: Entry, register: Register, value: Value, before: EntryState) {
     return async () => {
       setToast(null)
-      if (register === 'seen') {
-        await sync.act(entry, 'seen', before.seen.value)
-        if (before.shelf.value === 'done') await sync.act(entry, 'shelf', 'done')
-      } else {
-        await sync.act(entry, register, before[register].value)
+      try {
+        if (register === 'seen') {
+          await sync.act(entry, 'seen', before.seen.value)
+          if (before.shelf.value === 'done') await sync.act(entry, 'shelf', 'done')
+        } else {
+          await sync.act(entry, register, before[register].value)
+        }
+      } catch (failure) {
+        // Say so instead of dropping the undo silently; the action stands.
+        notify(`Could not undo: ${failure instanceof Error ? failure.message : 'the change was not saved.'}`)
+        return
       }
       count(register, value, -1)
       notify('Undone.')
@@ -434,7 +440,12 @@ function Session({onLogout}: {onLogout: () => void}) {
     articleCommand('keep', 'Toggle Keep', 'f', entry => actions.act(entry,'kept',actions.state(entry).kept.value !== true)),
     articleCommand('unread', 'Mark unread', 'm', entry => actions.act(entry,'seen','unseen')),
     articleCommand('original', 'Open original', 'v', entry => {window.open(entry.url, '_blank', 'noopener,noreferrer')}),
-    articleCommand('copy-link', 'Copy Earnest link to the article', '', async entry => {await navigator.clipboard.writeText(new URL(viewHref(viewRef, entry.id), window.location.origin).href);notify('Link copied.')}),
+    articleCommand('copy-link', 'Copy Earnest link to the article', '', async entry => {
+      // The clipboard API exists only in secure contexts (HTTPS or localhost).
+      if (!navigator.clipboard) throw new Error('Copying needs Earnest on HTTPS or localhost. Copy the address bar instead.')
+      await navigator.clipboard.writeText(new URL(viewHref(viewRef, entry.id), window.location.origin).href)
+      notify('Link copied.')
+    }),
     {id:'undo', title:'Undo the last action', key:'z', group:'Article', disabled:!toast?.undo, run:async () => {await toast?.undo?.()}},
     {...markRestCommand(view, subs, newestLoaded.key === viewKey(view) ? newestLoaded.seq : 0, (scope, throughSeq) => sync.actRange(scope, throughSeq)), group:'Article', key:undefined},
     {id:'subscribe', title:'Subscribe to a feed', group:'Feeds', run:() => {go('/feeds#subscribe')}},
@@ -514,10 +525,12 @@ function Session({onLogout}: {onLogout: () => void}) {
     case 'search': {
       const saved = route.saved === undefined ? undefined : savedSearches.data?.find(item => item.id === route.saved)
       return <div className="page" ref={page}><div className="page-inner">{route.saved !== undefined && !saved
-        ? savedSearches.isPending ? <PageSkeleton /> : <div className="empty-state"><h2>This saved search no longer exists</h2><p><Link to="/search">Start a new search</Link></p></div>
+        ? savedSearches.isPending ? <PageSkeleton />
+          : savedSearches.isError ? <div className="problem" role="alert"><h2>Saved searches did not load</h2><p>{savedSearches.error.message} Check your connection and try again.</p><button type="button" className="primary" onClick={() => {void savedSearches.refetch()}}>Try again</button></div>
+          : <div className="empty-state"><h2>This saved search no longer exists</h2><p><Link to="/search">Start a new search</Link></p></div>
         : <Search key={route.saved ?? 'search'} saved={saved} route={route.saved === undefined ? route.search : undefined} onRoute={(next, replace) => {go(searchHref(next), {replace})}} onDeleted={() => {notify('Saved search deleted.');go('/search', {replace: true})}} onOpen={openElsewhere} subscriptions={subs} folders={folders.data ?? []}/>}</div></div>
     }
-    case 'ask': return <div className="page" ref={page}><div className="page-inner">{pipeline.data?.ask === 'enabled' ? <Ask onOpen={openElsewhere}/> : pipeline.isPending ? <PageSkeleton /> : <div className="empty-state"><h2>Ask my feeds is off</h2><p>Questions need the ask task, which an operator enables in the server configuration.</p><p><Link to="/search">Search your feeds instead</Link></p></div>}</div></div>
+    case 'ask': return <div className="page" ref={page}><div className="page-inner">{pipeline.data?.ask === 'enabled' ? <Ask onOpen={openElsewhere}/> : pipeline.isPending ? <PageSkeleton /> : pipeline.isError ? <div className="problem" role="alert"><h2>Ask my feeds did not load</h2><p>{pipeline.error.message} Check your connection and try again.</p><button type="button" className="primary" onClick={() => {void pipeline.refetch()}}>Try again</button></div> : <div className="empty-state"><h2>Ask my feeds is off</h2><p>Questions need the ask task, which an operator enables in the server configuration.</p><p><Link to="/search">Search your feeds instead</Link></p></div>}</div></div>
     case 'rules': return <div className="page" ref={page}><div className="page-inner"><Suspense fallback={<PageSkeleton />}><RulesScreen feeds={subs} folders={folders.data ?? []} labels={labels.data ?? []} editing={route.rule} onEdit={id => {go(`/rules/${id}`)}} onClose={() => { if (openedFrom() === '/rules') history.back(); else go('/rules', {replace: true}) }} /></Suspense></div></div>
     case 'activity': return <div className="page" ref={page}><div className="page-inner"><ActivityScreen filters={route.filters} onFilters={filters => {go(activityHref(filters), {replace: true})}} /></div></div>
     case 'notifications': return <div className="page" ref={page}><div className="page-inner"><Notifications selectedID={route.id} onSelect={id => {go(`/notifications/${id}`, {replace: route.id !== undefined})}} onOpen={openElsewhere} onOpenSettings={() => {go('/settings#push')}} /></div></div>
@@ -543,7 +556,7 @@ function Session({onLogout}: {onLogout: () => void}) {
       <div className="banners">
         {error && <p role="alert" className="banner problem">{error} <button type="button" className="quiet" onClick={() => setError('')}>Dismiss</button></p>}
         {(subscriptions.error || preferences.error) && <p role="alert" className="banner problem">{subscriptions.error?.message || preferences.error?.message} <button type="button" className="quiet" onClick={() => {void subscriptions.refetch();void preferences.refetch()}}>Try again</button></p>}
-        {online && settings.reading_mode === 'unread_counts' && unreadCounts.error && <p role="alert" className="banner problem">Unread counts: {unreadCounts.error.message}</p>}
+        {online && settings.reading_mode === 'unread_counts' && unreadCounts.error && <p role="alert" className="banner problem">Unread counts: {unreadCounts.error.message} <button type="button" className="quiet" onClick={() => {void unreadCounts.refetch()}}>Try again</button></p>}
         {online && sync.error && <p role="alert" className="banner problem">{sync.error} <button type="button" onClick={sync.retry}>Retry sync</button></p>}
         <OfflineStatus/>
       </div>

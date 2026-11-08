@@ -90,7 +90,7 @@ export function Palette({commands,shortcuts,enabled=true,helpRef,triggers=true,r
   // Keep the active option visible while arrowing through a long list.
   useEffect(() => {
     if (!active) return
-    document.getElementById(optionID(active))?.scrollIntoView?.({block:'nearest'})
+    list.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({block:'nearest'})
   })
   async function run(command: Command | undefined) {
     if (!command || command.disabled || running) return

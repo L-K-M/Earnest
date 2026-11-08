@@ -51,7 +51,7 @@ export function Ask({onOpen}: {onOpen: (entry: Entry) => void}) {
   const [busy, setBusy] = useState(false)
   async function submit() {
     setBusy(true);setError('')
-    try {setResult(await request('/v1/ask',{method:'POST',body:JSON.stringify({question})}))}
+    try {setResult(await request('/v1/ask',{method:'POST',body:JSON.stringify({question})}));try {sessionStorage.removeItem(ASK_DRAFT)} catch { /* Nothing to clear. */ }}
     catch (error) {setError(message(error))}
     finally {setBusy(false)}
   }

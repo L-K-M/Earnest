@@ -382,6 +382,8 @@ dialog::backdrop {background: rgb(10 10 8 / .42)}
 @media print {
   .sidebar, .topbar, .reader-toolbar, .toast-region, .list-pane, .banners {display: none}
   .app, .panes {display: block; height: auto; overflow: visible}
+  .reader-pane, .reader, .reader-scroll, .page {display: block; height: auto; overflow: visible; container-type: normal}
+  .article-body iframe {height: 100vh}
 }
 
 /* Account settings */

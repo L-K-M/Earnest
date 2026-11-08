@@ -77,7 +77,7 @@ export function LabelSettings() {
           }}>
             <label>Rename {label.name}<input value={draft} onChange={event => setDraft(event.target.value)} required aria-invalid={field === 'rename' ? true : undefined} aria-describedby={field === 'rename' ? 'label-error' : undefined} /></label>
             <button disabled={busy}>Save</button>
-            <button type="button" disabled={busy} onClick={() => setEditing(null)}>Cancel</button>
+            <button type="button" disabled={busy} onClick={() => { setEditing(null); setError(''); setField(null) }}>Cancel</button>
           </form>
         : <><span className="label-name">{label.name}</span>
           <div className="button-row">

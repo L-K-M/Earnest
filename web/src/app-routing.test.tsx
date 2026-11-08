@@ -18,7 +18,6 @@ vi.mock('./offline/Offline',() => ({OfflineStatus:() => null,useOnline:() => tru
 vi.mock('./River',() => ({River:({view,onOpen}: {view: View; onOpen: (entry: Entry) => void}) => <section><h2>{view.title} list</h2>{entries.map(entry => <button key={entry.id} onClick={() => onOpen(entry as Entry)}>Open {entry.title}</button>)}</section>}))
 vi.mock('./ArticleReader',() => ({Reader:({entry,onClose}: {entry: Entry; onClose: () => void}) => <article><h2>{entry.title}</h2><button onClick={onClose}>Back</button></article>}))
 
-let mounted = false
 beforeEach(async () => {
   HTMLDialogElement.prototype.showModal = function() {this.setAttribute('open','')}
   HTMLDialogElement.prototype.close = function() {this.removeAttribute('open');this.dispatchEvent(new Event('close'))}
@@ -33,7 +32,6 @@ beforeEach(async () => {
     return []
   })
   vi.mocked(createRoot).mockImplementation(() => ({render:(node: ReactNode) => {render(node)},unmount:() => undefined}))
-  if (!mounted) { mounted = true; return }
 })
 afterEach(() => {cleanup();localStorage.clear();vi.clearAllMocks()})
 

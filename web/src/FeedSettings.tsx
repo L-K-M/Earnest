@@ -122,6 +122,9 @@ function SubscribeForm({folders, busy, act}: {folders: Folder[]; busy: boolean; 
     } catch { /* Storage can be full or disabled; the form still works. */ }
   }, [url, title, folderID, cadence, extract])
 
+  // A restored draft may name a folder deleted since; it falls back to none.
+  const folderChoice = folders.some(folder => folder.id === folderID) ? folderID : 0
+
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const normalized = normalizeFeedURLInput(url)
@@ -147,7 +150,7 @@ function SubscribeForm({folders, busy, act}: {folders: Folder[]; busy: boolean; 
     const body: SubscribeBody = {
       url: normalized, cadence, op_id: newOp(),
       ...(title.trim() ? {title: title.trim()} : {}),
-      ...(folderID ? {folder_id: folderID} : {}),
+      ...(folderChoice ? {folder_id: folderChoice} : {}),
       ...(extract ? {extract} : {}),
       ...(credentials ? {credentials} : {}),
     }
@@ -183,7 +186,7 @@ function SubscribeForm({folders, busy, act}: {folders: Folder[]; busy: boolean; 
         aria-describedby={urlError ? 'subscribe-url-hint subscribe-url-error' : 'subscribe-url-hint'} /></label>
       <p id="subscribe-url-hint" className="hint">Paste a feed or a site address; Earnest finds the feed.</p>
       <label>Title (optional)<input value={title} onChange={e => setTitle(e.target.value)} placeholder="Leave empty to use the feed’s own title" /></label>
-      <label>Folder<select value={folderID} onChange={e => setFolderID(Number(e.target.value))}><option value={0}>No folder</option>{folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
+      <label>Folder<select value={folderChoice} onChange={e => setFolderID(Number(e.target.value))}><option value={0}>No folder</option>{folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
       <fieldset><legend>Cadence</legend>{CADENCES.map(option => <label key={option.value}><input type="radio" name="cadence" checked={cadence === option.value} onChange={() => setCadence(option.value)} /> {option.label}: {option.hint}</label>)}</fieldset>
       <label>Full text<select value={extract} onChange={e => setExtract(e.target.value)}>{EXTRACT_MODES.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
       <details><summary>Private feed credentials</summary>

@@ -65,13 +65,11 @@ export function Sidebar({route, subscriptions, folders, labels, savedSearches, c
   const section = routeSection(route)
   const current = (key: string) => section === key ? 'page' as const : undefined
   function toggle(id: number) {
-    setCollapsed(old => {
-      const next = new Set(old)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next])) } catch { /* Collapsing still works for this visit. */ }
-      return next
-    })
+    const next = new Set(collapsed)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    setCollapsed(next)
+    try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next])) } catch { /* Collapsing still works for this visit. */ }
   }
   const feedCount = (sub: Subscription) => counts?.bySubscription[String(sub.id)]
   const groups = groupByFolder(subscriptions, folders)

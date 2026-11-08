@@ -81,3 +81,11 @@ it('undoes a Back the reader declines to take', async () => {
   expect(location.pathname).toBe('/rules/new')
   rerender(<Guarded active={false} />)
 })
+
+it('refuses to navigate anywhere but http and https', () => {
+  const assign = vi.fn()
+  vi.spyOn(window, 'location', 'get').mockReturnValue({...window.location, assign, href: window.location.href, origin: window.location.origin} as Location)
+  expect(navigate('javascript:alert(document.domain)')).toBe(false)
+  expect(navigate('data:text/html,<script>alert(1)</script>')).toBe(false)
+  expect(assign).not.toHaveBeenCalled()
+})

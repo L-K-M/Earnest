@@ -32,6 +32,9 @@ describe('route contract', () => {
   it('drops filters it cannot use instead of passing them on', () => {
     expect(parseRoute('/search', '?q=x&mode=semantic&feed=-1&limit=lots')).toEqual({name: 'search', search: {q: 'x'}})
     expect(parseRoute('/activity', '?agent=me&since=yesterday')).toEqual({name: 'activity', filters: {}})
+    expect(parseRoute('/activity', '?since=2026-13-45')).toEqual({name: 'activity', filters: {}})
+    expect(parseRoute('/activity', '?since=2026-02-31')).toEqual({name: 'activity', filters: {}})
+    expect(parseRoute('/activity', '?since=2024-02-29')).toEqual({name: 'activity', filters: {since: '2024-02-29'}})
   })
 
   it('formats every route back to a path that parses to the same route', () => {
