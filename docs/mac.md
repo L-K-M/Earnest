@@ -239,3 +239,27 @@ signing and notarization must remain outside the repository.
 
 Sparkle updates are planned for later; no update feed, signing keys or
 release automation are configured here.
+
+## Reader preferences and exact counts
+
+Open Settings from the sidebar, the Go menu or the command palette
+(Command+9). The window edits a local draft over the account's synced reader
+settings. Save publishes explicitly. Reload copies the latest synced account
+preferences. If the account's revision moved elsewhere, Save refuses and asks
+for Reload instead of overwriting. An ambiguous save failure freezes its exact
+body and operation ID, so Save again resends them unchanged; editing the draft
+or losing the account or server scope ends the frozen request. A dirty draft
+survives sync updates and is flagged as a conflict rather than replaced. Save
+needs your verified account and an available server; failures are reported.
+
+Settings cover the reading mode (river or unread counts), Today decay days
+(1-365), single-key shortcuts, article theme, font and measure (62-72), and
+per-feed typography overrides keyed by feed ID. Each override member can
+inherit or be reset. The single-key toggle removes the unmodified-letter
+bindings but leaves menu commands clickable.
+
+Exact unread totals are requested and shown only in unread-count mode, labelled
+"Counts as last synced." Fetch failures keep the last successful totals. When
+none are cached, counts are unavailable, not zero. Cached reading typography respects the safe enums and the existing image and
+origin restrictions. Private drafts and transient results clear on sign-out or
+restore.
