@@ -3,7 +3,7 @@ import {afterEach, describe, expect, it, vi} from 'vitest'
 import {cleanup, fireEvent, render, screen, waitFor, within} from '@testing-library/react'
 import {QueryClient, QueryClientProvider} from '@tanstack/react-query'
 import {River} from './River'
-import type {Entry, ReaderActions} from './reader'
+import type {Entry, ReaderActions, Subscription} from './reader'
 import {request} from './request'
 vi.mock('./request', () => ({request:vi.fn()}))
 const virtualItems = vi.hoisted(() => ({items: [0, 1]}))
@@ -257,4 +257,13 @@ describe('list navigation', () => {
     render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'later',title:'Later'}} subscriptions={[]} actions={{act:vi.fn(),state:entry=>entry.state}} selected={null} onSelect={vi.fn()} onOpen={vi.fn()} shortcuts counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>)
     expect(await screen.findByText(/Nothing waiting for later/)).toBeTruthy()
   })
+})
+
+it('says when the feed being read is failing and links to its settings', async () => {
+  vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {blurb:'disabled'} : path.startsWith('/v1/positions') ? {seq:0} : {entries})
+  const failing = {id:9, title:'Rust', health:{consecutive_failures:3, error_class:''}} as unknown as Subscription
+  render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'feed',id:9,title:'Rust'}} subscriptions={[failing]} actions={{act:vi.fn(),state:entry=>entry.state}} selected={null} onSelect={vi.fn()} onOpen={vi.fn()} shortcuts counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>)
+  expect(await screen.findByText('Fetch failed.')).toBeTruthy()
+  expect(screen.getByRole('link',{name:'Fix it in feed settings'}).getAttribute('href')).toBe('/feeds#subscription-9')
+  expect(screen.getByRole('link',{name:'Feed settings'}).getAttribute('href')).toBe('/feeds#subscription-9')
 })

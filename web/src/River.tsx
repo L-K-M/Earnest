@@ -10,7 +10,8 @@ import {usePipeline} from './search/pipeline'
 import {Icon} from './Icon'
 import {longDate, shortAge} from './format'
 import {viewHref} from './routes'
-import {whenPresent} from './router'
+import {Link, whenPresent} from './router'
+import {explainHealth} from './feeds'
 
 type ClusterGroup = {entry: Entry; also_in: number}
 type Page = {entries: Entry[]; next_cursor?: string; groups?: ClusterGroup[]}
@@ -294,6 +295,8 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   const unread = entries.filter(entry => { const state = actions.state(entry); return state.seen.value === 'unseen' && state.shelf.value !== 'done' }).length
   const loading = position.isPending || list.isPending
   const failure = error || position.error?.message || list.error?.message
+  const feed = view.kind === 'feed' ? subscriptions.find(sub => sub.id === view.id) : undefined
+  const feedProblem = feed ? explainHealth(feed.health) : null
   const rowsShown = new Set(visible.map(row => entries[row.index]?.id))
   const tabStop = selected && rowsShown.has(selected.id) ? selected.id : entries[visible[0]?.index ?? 0]?.id
   return <section className="river" aria-label="Articles">
@@ -305,9 +308,11 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
       <div className="pane-tools">
         <button type="button" className="quiet small" disabled={!list.isSuccess || list.isFetchingPreviousPage} onClick={() => { void list.fetchPreviousPage() }}><Icon name="earlier" size={16} />Earlier articles</button>
         <button type="button" className="quiet small toggle" aria-pressed={cluster} disabled={!list.isSuccess || list.isFetching} onClick={() => setCluster(value => !value)}><Icon name="stack" size={16} />One per story</button>
+        {view.kind === 'feed' && <Link className="pane-link" to={`/feeds#subscription-${view.id}`}>Feed settings</Link>}
         {counts && list.isSuccess && <p className="pane-count">{unread} unread in loaded {cluster ? 'stories' : 'articles'}</p>}
       </div>
     </header>
+    {feedProblem && <p className="banner inline" role="status"><strong>Failing:</strong> {feedProblem} <Link to={`/feeds#subscription-${view.id}`}>Fix it in feed settings</Link></p>}
     {failure && <p role="alert" className="banner problem inline">{failure} <button type="button" onClick={() => { setError(''); void (position.isError ? position.refetch() : list.refetch()) }}>Try again</button></p>}
     {view.kind === 'edition' && <Edition onOpen={onOpen}/>}
     <div className="river-scroll" ref={scroller} onScroll={markScrolledPast} onKeyDown={listKeys} tabIndex={-1} aria-label="Article list" aria-busy={loading || undefined}>
