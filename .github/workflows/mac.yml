@@ -52,10 +52,10 @@ jobs:
         run: |
           xcodebuild archive -project Earnest.xcodeproj -scheme Earnest -configuration Release \
             -destination 'generic/platform=macOS' -archivePath "$RUNNER_TEMP/Earnest.xcarchive" \
-            ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO MARKETING_VERSION=0.0.0 \
-            CURRENT_PROJECT_VERSION=1 CODE_SIGNING_ALLOWED=NO -skipPackagePluginValidation -jobs 2
+            ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO MARKETING_VERSION=9.9.9 \
+            CURRENT_PROJECT_VERSION=99 CODE_SIGNING_ALLOWED=NO -skipPackagePluginValidation -jobs 2
           app="$RUNNER_TEMP/Earnest.xcarchive/Products/Applications/Earnest.app"
           architectures=" $(lipo -archs "$app/Contents/MacOS/Earnest") "
           [[ "$architectures" == *' arm64 '* && "$architectures" == *' x86_64 '* ]]
-          test "$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")" = 0.0.0
-          test "$(plutil -extract CFBundleVersion raw -o - "$app/Contents/Info.plist")" = 1
+          test "$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")" = 9.9.9
+          test "$(plutil -extract CFBundleVersion raw -o - "$app/Contents/Info.plist")" = 99

@@ -148,11 +148,19 @@ action has synced. Uninstalling deletes that installation's private cache and
 outbox; do not uninstall while it contains unsent actions.
 
 Only after all gates pass, upload both platform directories' package, receipt
-and checksum files to the existing draft, then publish it. For example:
+and checksum files to the existing draft. Set `tag` to the exact tag you packaged, and use your chosen output
+directory. For the default layout:
 
 ```sh
+tag=vX.Y.Z
+out="dist/clients/$tag"
 gh release upload "$tag" "$out"/mac/* "$out"/android/*
-# Inspect the attachments, acceptance record and tag checks before publishing.
+```
+
+Confirm the upload succeeded, then inspect the attachments, acceptance record
+and tag checks. Only after that review, publish it separately:
+
+```sh
 gh release edit "$tag" --draft=false
 ```
 

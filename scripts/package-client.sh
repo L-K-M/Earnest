@@ -103,7 +103,9 @@ if [[ "$platform" == mac ]]; then
   (
     cd "$source_root/clients/mac/App"
     xcodegen generate
-    xcodebuild archive -project Earnest.xcodeproj -scheme Earnest -configuration Release \
+    # An inherited development xcconfig can override even explicit signing
+    # arguments. Distribution must use this source tree and its selected key.
+    env -u XCODE_XCCONFIG_FILE xcodebuild archive -project Earnest.xcodeproj -scheme Earnest -configuration Release \
       -destination 'generic/platform=macOS' -archivePath "$scratch/Earnest.xcarchive" \
       -derivedDataPath "$scratch/DerivedData" -skipPackagePluginValidation -jobs 2 \
       ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO MARKETING_VERSION="$marketing" \

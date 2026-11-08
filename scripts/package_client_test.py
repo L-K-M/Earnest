@@ -10,7 +10,9 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
+import time
 import tempfile
 import unittest
 import zipfile
@@ -20,7 +22,7 @@ SCRIPT = Path(__file__).with_name("package-client.sh")
 CERTIFICATE = b"fixture-public-certificate"
 
 TOOLS = r'''#!/usr/bin/env python3
-import hashlib, json, os, pathlib, sys, zipfile
+import hashlib, json, os, pathlib, signal, sys, zipfile
 p = pathlib.Path
 name = p(sys.argv[0]).name
 args = sys.argv[1:]
@@ -36,7 +38,11 @@ elif name == 'xcodegen':
     pass
 elif name == 'xcodebuild':
     if enabled('FAKE_BUILD_FAIL'): sys.exit(42)
-    if p('Sources/Untracked.swift').exists() or p('Sources/local-secret.txt').exists():
+    if enabled('FAKE_REQUIRE_RELEASE_CONFIG') and os.environ.get('XCODE_XCCONFIG_FILE'):
+        sys.exit('Development configuration overrides release signing')
+    project = p(value('-project')) if '-project' in args else p.cwd()
+    sources = project.parent if project.suffix == '.xcodeproj' else project
+    if (sources / 'Sources/Untracked.swift').exists() or (sources / 'Sources/local-secret.txt').exists():
         sys.exit('Uncommitted sources entered the build')
     app = p(value('-archivePath')) / 'Products/Applications/Earnest.app'
     (app / 'Contents/MacOS').mkdir(parents=True)
@@ -69,6 +75,7 @@ elif name == 'xcrun':
     if args[:1] == ['--find']:
         print('/fixture/notarytool')
     elif args[:2] == ['notarytool', 'submit']:
+        if enabled('FAKE_HOLD_NOTARY'): signal.pause()
         print(json.dumps({'status': 'Invalid' if enabled('FAKE_NOTARY_INVALID') else 'Accepted', 'id': 'fixture-submission'}))
     elif args[:2] == ['stapler', 'staple']:
         (p(args[-1]) / 'Contents/.ticket').write_text('fixture-ticket')
@@ -129,6 +136,8 @@ class PackageClientTests(unittest.TestCase):
         self.env.update({
             "PATH": str(self.bin) + os.pathsep + os.environ["PATH"],
             "FAKE_LOG": str(self.log),
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_SYSTEM": os.devnull,
             "EARNEST_MAC_SIGN_IDENTITY": "Developer ID Application: Fixture (ABCDEFGHIJ)",
             "EARNEST_MAC_TEAM_ID": "ABCDEFGHIJ",
             "EARNEST_MAC_NOTARY_PROFILE": "fixture-profile",
@@ -188,6 +197,41 @@ class PackageClientTests(unittest.TestCase):
         self.assertIn("No build, signing, notarization or device test was performed", result.stdout)
         self.assertFalse(self.output.exists())
         self.assertFalse(any(call["tool"] == "xcodebuild" for call in self.calls()))
+
+    def test_release_signing_ignores_inherited_xcode_overrides(self):
+        result = self.run_package(env={
+            "XCODE_XCCONFIG_FILE": "/fixture/development-signing.xcconfig",
+            "FAKE_REQUIRE_RELEASE_CONFIG": "1",
+        })
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.output / "mac/release-mac.json").exists())
+
+    def test_terminating_notary_wait_cleans_private_build_tree(self):
+        command = [str(self.repo / "scripts/package-client.sh"), "mac", "v1.2.3", str(self.output)]
+        process = subprocess.Popen(command, env={**self.env, "FAKE_HOLD_NOTARY": "1"},
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                   start_new_session=True)
+        try:
+            deadline = time.monotonic() + 20
+            call = None
+            while time.monotonic() < deadline:
+                call = next((item for item in self.calls() if item["tool"] == "xcrun" and item["args"][:2] == ["notarytool", "submit"]), None)
+                if call is not None or process.poll() is not None:
+                    break
+                time.sleep(0.01)
+            self.assertIsNotNone(call, "package never reached the notary wait")
+            scratch = Path(call["args"][2]).parent
+            self.addCleanup(shutil.rmtree, scratch, ignore_errors=True)
+            self.assertTrue(scratch.is_dir())
+            os.killpg(process.pid, signal.SIGTERM)
+            stdout, stderr = process.communicate(timeout=10)
+            self.assertNotEqual(process.returncode, 0, stdout + stderr)
+            self.assertFalse(scratch.exists(), "interrupted build tree was not removed")
+            self.assertFalse(self.output.exists())
+        finally:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.communicate(timeout=10)
 
     def test_requires_an_exact_existing_source_tag(self):
         self.rejected(self.run_package(tag="v9.9.9"))
