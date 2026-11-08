@@ -618,6 +618,32 @@ func TestImportKept(t *testing.T) {
 		}
 	})
 
+	t.Run("importing_again_after_adoption_finds_the_adopted_entry", func(t *testing.T) {
+		f := newCoreFixture(t, template)
+		ctx := context.Background()
+		const link = "https://example.test/adopted"
+		withoutGUID := KeptImportItem{FeedURL: keptTestFeed, URL: link, Title: "Adopted"}
+		first, err := f.s.ImportKept(ctx, f.a, []KeptImportItem{withoutGUID}, MissingFeedsSkip)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The fetch knows the article by its GUID and adopts the GUID-less copy.
+		const guid = "tag:example.test,2026:adopted"
+		live := IngestItem{IdentityHash: feed.IdentityHash(feed.Item{GUID: guid}), GUID: guid, URL: link, Title: "Adopted", ContentHash: coreHash("adopted"), SanitizerVersion: 1, ContentSource: ContentFromFeed}
+		if summary, err := f.s.RecordFetch(ctx, FetchOutcome{FeedID: f.feed, Status: FetchOK, Items: []IngestItem{live}}); err != nil || summary.Updated != 1 {
+			t.Fatalf("adoption = %+v, %v", summary, err)
+		}
+		// The same export again, and a GUID-carrying export of the same star.
+		again, err := f.s.ImportKept(ctx, f.a, []KeptImportItem{withoutGUID, {FeedURL: keptTestFeed, GUID: guid, URL: link, Title: "Adopted"}}, MissingFeedsSkip)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantStatuses(t, again, KeptImportUnchanged, KeptImportUnchanged)
+		if again.Results[0].EntryID != first.Results[0].EntryID || again.Results[1].EntryID != first.Results[0].EntryID || f.count(t, "SELECT count(*) FROM entries") != 1 {
+			t.Fatalf("re-import must find the adopted entry: %+v", again.Results)
+		}
+	})
+
 	t.Run("a_fetch_never_resurrects_a_removed_import", func(t *testing.T) {
 		f := newCoreFixture(t, template)
 		ctx := context.Background()

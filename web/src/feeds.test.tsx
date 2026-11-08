@@ -281,6 +281,30 @@ describe('Feeds', () => {
     expect(calls('/v1/kept:import', 'POST')[0][0]).toBe('/v1/kept:import?missing_feeds=subscribe')
   })
 
+  it('imports once per click and forgets the report when another file is chosen', async () => {
+    let finish: (value: unknown) => void = () => {}
+    api({
+      '/v1/subscriptions': [],
+      '/v1/folders': [],
+      '/v1/mutes': [],
+      '/v1/kept:import': () => new Promise(resolve => { finish = resolve }),
+    })
+    render(<Feeds onChanged={() => {}} />)
+    const input = await screen.findByLabelText('Import starred articles')
+    fireEvent.change(input, {target: {files: [new window.File(['{"items":[]}'], 'starred.json', {type: 'application/json'})]}})
+    const button = screen.getByRole('button', {name: 'Import starred'})
+    fireEvent.click(button)
+    fireEvent.click(button)
+    await waitFor(() => expect(calls('/v1/kept:import', 'POST')).toHaveLength(1))
+    expect((button as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => { finish({results: [{index: 0, status: 'not_subscribed', feed_url: 'https://b.example/rss'}], subscribed: []}) })
+    await screen.findByRole('button', {name: 'Subscribe to these feeds and import again'})
+    expect(calls('/v1/kept:import', 'POST')).toHaveLength(1)
+    fireEvent.change(input, {target: {files: [new window.File(['{"items":[{}]}'], 'other.json', {type: 'application/json'})]}})
+    expect(screen.queryByRole('button', {name: 'Subscribe to these feeds and import again'})).toBeNull()
+    expect(screen.queryByText(/skipped because you don/)).toBeNull()
+  })
+
   it('updates the title input when the feed title changes externally', async () => {
     const routes: Routes = {'/v1/subscriptions': [sub()], '/v1/folders': [], '/v1/mutes': []}
     api(routes)

@@ -206,10 +206,14 @@ function KeptImportTools({busy, act}: {busy: boolean; act: Act}) {
   const [error, setError] = useState('')
   const [working, setWorking] = useState(false)
 
-  async function importText(contents: string, missing: MissingFeeds) {
+  // Reading the file counts as working, so a second click cannot start a
+  // second import while the first file is still being read.
+  async function run(read: () => Promise<string>, missing: MissingFeeds) {
     setWorking(true)
     setError('')
     try {
+      const contents = await read()
+      setText(contents)
       setReport(await importKept(contents, missing))
       await act(async () => undefined, 'Starred articles imported.')
     } catch (cause) {
@@ -219,24 +223,21 @@ function KeptImportTools({busy, act}: {busy: boolean; act: Act}) {
     }
   }
 
-  async function upload() {
-    if (!file) return
-    try {
-      const contents = await readFileText(file)
-      setText(contents)
-      await importText(contents, subscribe ? 'subscribe' : 'skip')
-    } catch (cause) {
-      setError(message(cause, 'Could not import that file.'))
-    }
+  function choose(next: File | null) {
+    // A report and its retry describe the file they came from, not the new one.
+    setFile(next)
+    setText('')
+    setReport(null)
+    setError('')
   }
 
   const summary = report && summarizeKeptImport(report)
   const skippedTotal = summary?.skipped.reduce((total, group) => total + group.count, 0) ?? 0
   return <section aria-labelledby="kept-import-heading"><h3 id="kept-import-heading">Starred articles</h3>
     <p>Bring starred articles from another reader into Kept. Export them as Google Reader JSON, for example from FreshRSS or Inoreader.</p>
-    <label>Import starred articles<input type="file" accept=".json,application/json" onChange={e => setFile(e.target.files?.[0] ?? null)} /></label>
+    <label>Import starred articles<input type="file" accept=".json,application/json" onChange={e => choose(e.target.files?.[0] ?? null)} /></label>
     <label><input type="checkbox" checked={subscribe} onChange={e => setSubscribe(e.target.checked)} /> Also subscribe to feeds you don't follow</label>
-    <button disabled={busy || working || !file} onClick={() => { void upload() }}>Import starred</button>
+    <button disabled={busy || working || !file} onClick={() => { if (file) void run(() => readFileText(file), subscribe ? 'subscribe' : 'skip') }}>Import starred</button>
     {error && <p role="alert">{error}</p>}
     {summary && <div role="status">
       <p>{summary.added + summary.existing} {summary.added + summary.existing === 1 ? 'article' : 'articles'} in Kept: {summary.added} added from the export, {summary.existing} already in Earnest.</p>
@@ -246,7 +247,7 @@ function KeptImportTools({busy, act}: {busy: boolean; act: Act}) {
       {summary.skipped.length > 0 && <>
         <p>{skippedTotal} skipped because you don't follow their feed:</p>
         <ul>{summary.skipped.map(group => <li key={group.feedURL}>{group.feedURL || 'Unknown feed'} ({group.count})</li>)}</ul>
-        <button disabled={busy || working} onClick={() => { void importText(text, 'subscribe') }}>Subscribe to these feeds and import again</button>
+        <button disabled={busy || working || !text} onClick={() => { void run(async () => text, 'subscribe') }}>Subscribe to these feeds and import again</button>
       </>}
       {summary.failed.length > 0 && <p role="alert">{summary.failed.length} could not be imported: {summary.failed.join('; ')}</p>}
     </div>}
