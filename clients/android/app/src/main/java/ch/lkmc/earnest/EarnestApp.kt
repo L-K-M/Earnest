@@ -1,5 +1,6 @@
 package ch.lkmc.earnest
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -89,6 +90,8 @@ import ch.lkmc.earnest.core.CachedEntry
 import ch.lkmc.earnest.core.River
 import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.core.SyncSnapshot
+import ch.lkmc.earnest.core.UnreadCounts
+import ch.lkmc.earnest.core.typographyFor
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
@@ -179,6 +182,7 @@ private fun MainScaffold(
 ) {
     val navigator = rememberListDetailPaneScaffoldNavigator<Long>()
     var view by remember { mutableStateOf(View.TODAY) }
+    var showSettings by remember { mutableStateOf(false) }
     val readerEntry = state.snapshot.entries.firstOrNull { it.id == navigator.currentDestination?.contentKey && !it.deleted }
     val reader = remember { ReaderLoadState() }
     var activityGroups by remember { mutableStateOf<List<ch.lkmc.earnest.core.ActivityGroup>>(emptyList()) }
@@ -285,7 +289,7 @@ private fun MainScaffold(
         Scaffold(
             topBar = {
                 EarnestTopBar(
-                    view.label,
+                    if (showSettings) "Settings" else view.label,
                     state.loading,
                     model,
                     theme,
@@ -296,6 +300,7 @@ private fun MainScaffold(
                         view = View.SEARCH
                         scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.List) }
                     },
+                    onSettings = { showSettings = true },
                 )
             },
             snackbarHost = { SnackbarHost(snackbar) },
@@ -305,6 +310,15 @@ private fun MainScaffold(
                 state.error?.let {
                     Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(8.dp))
                 }
+                if (showSettings) {
+                    BackHandler { showSettings = false }
+                    SettingsScreen(
+                        model = model,
+                        state = state,
+                        onBack = { showSettings = false },
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
                 NavigableListDetailPaneScaffold(
                     navigator = navigator,
                     listPane = {
@@ -321,6 +335,9 @@ private fun MainScaffold(
                                 )
                                 View.FEEDS -> FeedsScreen(
                                     state = state,
+                                    unreadCounts = state.unreadCounts,
+                                    unreadSyncedAt = state.unreadCountsSyncedAt,
+                                    unreadMode = state.readerSettings.readingMode == ch.lkmc.earnest.core.ReadingMode.UNREAD_COUNTS,
                                     onSubscribe = { showSubscribe = true },
                                     onUnsubscribe = { model.unsubscribe(it) },
                                     onCadence = { id, cadence -> model.setCadence(id, cadence) },
@@ -342,6 +359,9 @@ private fun MainScaffold(
                                     agentChanges = if (view == View.TODAY) state.agentChanges else emptyList(),
                                     sessionChanges = if (view == View.TODAY) state.sessionAgentChanges else emptyList(),
                                     agentChangesError = if (view == View.TODAY) state.agentChangesError else null,
+                                    unreadCounts = if (view == View.TODAY) state.unreadCounts else null,
+                                    unreadSyncedAt = if (view == View.TODAY) state.unreadCountsSyncedAt else null,
+                                    unreadMode = view == View.TODAY && state.readerSettings.readingMode == ch.lkmc.earnest.core.ReadingMode.UNREAD_COUNTS,
                                     onRevert = model::revert,
                                     onOpen = { entryId ->
                                         scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
@@ -395,7 +415,7 @@ private fun MainScaffold(
                                         else -> Reader(
                                             url = content.url,
                                             cachedHtml = content.cachedHtml,
-                                            theme = theme,
+                                            typography = state.readerSettings.typographyFor(entry.feedId),
                                             modifier = Modifier.fillMaxSize(),
                                         )
                                     }
@@ -404,6 +424,7 @@ private fun MainScaffold(
                         }
                     },
                 )
+                }
             }
         }
     }
@@ -430,6 +451,7 @@ private fun EarnestTopBar(
     notificationsDenied: Boolean,
     onRequestNotifications: () -> Unit,
     onSearch: () -> Unit,
+    onSettings: () -> Unit,
 ) {
     var themeOpen by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
@@ -459,6 +481,13 @@ private fun EarnestTopBar(
                     Icon(Icons.Filled.MoreVert, contentDescription = "More options")
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Settings") },
+                        onClick = {
+                            menuOpen = false
+                            onSettings()
+                        },
+                    )
                     DropdownMenuItem(
                         text = { Text("Sign out") },
                         onClick = {
@@ -550,6 +579,9 @@ private fun EntryListScreen(
     agentChanges: List<ch.lkmc.earnest.core.Activity>,
     sessionChanges: List<ch.lkmc.earnest.core.Activity>,
     agentChangesError: String?,
+    unreadCounts: UnreadCounts? = null,
+    unreadSyncedAt: Long? = null,
+    unreadMode: Boolean = false,
     onRevert: (Long) -> Unit,
     onOpen: (Long) -> Unit,
     onOpenAgentSelected: (Long) -> Unit,
@@ -569,6 +601,16 @@ private fun EntryListScreen(
         }
     }
     LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+        if (unreadMode) {
+            item(key = "unread-counts") {
+                val text = when {
+                    unreadCounts == null -> "Unread counts unavailable"
+                    unreadSyncedAt != null -> "Unread ${unreadCounts.total} · last synced ${unreadSyncedAt.relativeTime()}"
+                    else -> "Unread ${unreadCounts.total}"
+                }
+                Text(text, modifier = Modifier.fillMaxWidth().padding(16.dp), style = MaterialTheme.typography.bodyMedium)
+            }
+        }
         if (briefs.isNotEmpty()) {
             item(key = "briefs") {
                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -745,12 +787,30 @@ private fun SwipeActionRow(
 @Composable
 private fun FeedsScreen(
     state: UiState,
+    unreadCounts: UnreadCounts?,
+    unreadSyncedAt: Long?,
+    unreadMode: Boolean,
     onSubscribe: () -> Unit,
     onUnsubscribe: (Long) -> Unit,
     onCadence: (Long, String) -> Unit,
 ) {
     val subscriptions = state.snapshot.objects.filter { it.kind == SyncEngine.OBJECT_SUBSCRIPTION && !it.deleted }
     LazyColumn(Modifier.fillMaxSize()) {
+        if (unreadMode) {
+            item(key = "unread-synced") {
+                val text = when {
+                    unreadCounts == null -> "Unread counts unavailable"
+                    unreadSyncedAt != null -> "Counts as last synced ${unreadSyncedAt.relativeTime()}"
+                    else -> "Counts as last synced (time unavailable)"
+                }
+                Text(
+                    text,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
+        }
         item {
             TextButton(onClick = onSubscribe) {
                 Icon(Icons.Filled.Add, contentDescription = null)
@@ -765,6 +825,14 @@ private fun FeedsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (unreadMode) {
+                    val count = unreadCounts?.bySubscription?.get(subscription.id)
+                    Text(
+                        count?.let { "Unread $it" } ?: "Unread unavailable",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -877,6 +945,16 @@ private fun String.dayName(): String = runCatching {
     val instant = Instant.parse(this)
     instant.atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("EEEE"))
 }.getOrDefault("today")
+
+private fun Long.relativeTime(): String {
+    val minutes = java.time.Duration.between(Instant.ofEpochMilli(this), Instant.now()).toMinutes()
+    return when {
+        minutes < 1 -> "just now"
+        minutes < 60 -> "${minutes}m ago"
+        minutes < 60 * 24 -> "${minutes / 60}h ago"
+        else -> "${minutes / (60 * 24)}d ago"
+    }
+}
 
 private fun String.relativeTime(): String = runCatching {
     val instant = Instant.parse(this)

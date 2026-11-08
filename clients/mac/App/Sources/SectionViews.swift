@@ -78,7 +78,11 @@ struct FeedsView: View {
                                        description: Text("Paste a feed URL above."))
             } else {
                 List(model.feeds) { feed in
-                    FeedRow(feed: feed, setCadence: { model.setCadence(feed.id, $0) }, unsubscribe: { removing = feed })
+                    FeedRow(feed: feed,
+                            unreadCount: model.readerSettings.readingMode == .unreadCounts
+                                ? model.unreadCounts?.bySubscription[String(feed.id)] : nil,
+                            setCadence: { model.setCadence(feed.id, $0) },
+                            unsubscribe: { removing = feed })
                 }
             }
         }
@@ -92,6 +96,46 @@ struct FeedsView: View {
             }
             Button("Cancel", role: .cancel) { removing = nil }
         }
+    }
+}
+
+/// Exact unread totals in the unread-count reading mode. Values are the last
+/// successfully synced ones; when the endpoint is unreachable the view says
+/// so instead of presenting an empty list as zero.
+struct UnreadCountsView: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let counts = model.unreadCounts {
+                Text("\(counts.total) unread · \(counts.later) later · \(counts.kept) kept")
+                    .font(.headline)
+                Text("Counts as last synced.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ForEach(model.feeds.filter { !$0.deleted }) { feed in
+                    HStack {
+                        Text(feed.title.isEmpty ? feed.url : feed.title)
+                            .lineLimit(1)
+                        Spacer()
+                        Text("\(counts.bySubscription[String(feed.id)] ?? 0)")
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.callout)
+                }
+            } else {
+                Text("Unread counts unavailable").font(.headline)
+                Text("Earnest could not reach the server. Counts appear after the next sync.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let error = model.unreadCountsError {
+                Text(error).font(.caption).foregroundStyle(.orange)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(.regularMaterial)
     }
 }
 
@@ -161,6 +205,9 @@ struct ActivityView: View {
 
 struct FeedRow: View {
     let feed: FeedInfo
+    /// Last-synced unread count, or nil in river mode / before the first
+    /// successful fetch. Absence is shown as no count, never as zero.
+    let unreadCount: Int64?
     let setCadence: (String) -> Void
     let unsubscribe: () -> Void
 
@@ -177,6 +224,9 @@ struct FeedRow: View {
                 .textSelection(.enabled)
             if let issue = feed.issue {
                 Text(issue).font(.caption).foregroundStyle(.red)
+            }
+            if let unreadCount {
+                Text("\(unreadCount) unread").font(.caption).foregroundStyle(.secondary)
             }
             HStack {
                 Picker("Cadence", selection: Binding(get: { feed.cadence }, set: setCadence)) {

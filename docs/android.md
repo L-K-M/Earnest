@@ -188,3 +188,28 @@ has no compatible binary. Other hosts retain legacy mode because native SQLite
 stalled on the shared CI host. There is no emulator in CI, so the device-flow
 approval, UnifiedPush delivery, widget rendering and WebView reading have not
 been verified on a device.
+
+## Reader preferences and exact counts
+
+Open Settings from the top-bar overflow. The screen edits a local draft over
+the account's synced reader preferences. Wait for a synced baseline or load it
+before editing; assumed defaults cannot be saved. Save publishes explicitly. Load
+fetches the server's preferences with GET only, without a PUT, and preserves an
+edited draft. Reload explicitly discards the draft and loads the newest known
+settings. If a newer account revision is known, your draft is kept; reload
+explicitly before saving instead of overwriting it. An ambiguous save failure freezes the exact body
+and operation ID, so Retry resends them unchanged; editing the draft or losing
+the account or server scope ends the frozen request. Errors are reported
+honestly. Private drafts and transient results clear on account change,
+sign-out or restore.
+
+Settings cover the reading mode, Today decay days (1-365), single-key shortcuts
+(shared with web and Mac), article theme, font and measure (62-72), and
+per-feed typography overrides keyed by feed ID with inherit and reset. The
+device-local chrome theme stays separate from these synced article appearance
+settings.
+
+Exact unread totals are requested and shown only in unread-count mode,
+labelled with the last-synced time. Fetch failures retain the last successful
+totals. When none are cached, counts are unavailable, not zero. Cached reading typography respects the safe enums and the existing
+image and origin restrictions.

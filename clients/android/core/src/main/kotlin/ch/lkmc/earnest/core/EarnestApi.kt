@@ -194,6 +194,35 @@ class EarnestApi(
 
     suspend fun settings(): JsonElement = get(url("/v1/settings"))
 
+    /**
+     * Exact unread counts in one aggregate request. Callers must gate this to
+     * unread-count reading mode and must never page entries to count them.
+     */
+    suspend fun unreadCounts(): UnreadCounts = get(url("/v1/entries:counts")).decode()
+
+    /** The typed reader slice of `/v1/settings`; [settings] stays raw for sync. */
+    suspend fun readerSettings(): ReaderSettings = get(url("/v1/settings")).decode()
+
+    /**
+     * Replaces the reader slice. The supplied [opId] is sent verbatim (no
+     * implicit new ID), [ReaderSettings.rev] is never sent, and the returned
+     * settings carry the server's new revision.
+     */
+    suspend fun updateReaderSettings(settings: ReaderSettings, opId: String): ReaderSettings {
+        validateReaderSettings(settings, opId)
+        val body = ReaderSettingsBody(
+            readingMode = settings.readingMode,
+            todayDecayDays = settings.todayDecayDays,
+            singleKeyShortcuts = settings.singleKeyShortcuts,
+            theme = settings.theme,
+            measure = settings.measure,
+            font = settings.font,
+            feedOverrides = settings.feedOverrides,
+            opId = opId,
+        )
+        return put(url("/v1/settings"), encoder.encodeToJsonElement(ReaderSettingsBody.serializer(), body)).decode()
+    }
+
     suspend fun subscriptions(): List<Subscription> = get(url("/v1/subscriptions")).decode()
 
     suspend fun subscribe(body: SubscriptionBody): Subscription =

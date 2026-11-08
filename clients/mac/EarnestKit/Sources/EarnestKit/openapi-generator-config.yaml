@@ -30,6 +30,8 @@ filter:
     - list-tokens
     - list-mutes
     - get-settings
+    - put-settings
+    - entry-counts
     - search
     - list-saved-searches
     - create-saved-search

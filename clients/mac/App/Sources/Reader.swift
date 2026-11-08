@@ -9,6 +9,7 @@ import EarnestKit
 final class ArticleScheme: NSObject, WKURLSchemeHandler {
     var html = ""
     var imageOrigin: URL?
+    var style = ReaderStyle.default
 
     func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
         guard let url = task.request.url, url.scheme == "earnest-content", url.host == "article" else {
@@ -26,13 +27,8 @@ final class ArticleScheme: NSObject, WKURLSchemeHandler {
         return """
         <!doctype html><html><head><meta charset="utf-8">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src \(imageSource); style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
-        <meta name="color-scheme" content="light dark">
-        <style>
-        :root{color-scheme:light dark;background:Canvas;color:CanvasText}
-        /* Signed pages also contain publisher-independent server styles. Keep the native reader palette. */
-        body{max-width:68ch!important;margin:2rem auto;padding:0 1rem;font:1.1rem/1.65 Georgia,serif;overflow-wrap:anywhere;background:Canvas!important;color:CanvasText!important}
-        img{max-width:100%;height:auto}pre{overflow:auto}a{color:inherit}
-        </style>
+        <meta name="color-scheme" content="\(style.colorScheme)">
+        <style>\(style.css)</style>
         </head><body>\(html)</body></html>
         """
     }
@@ -43,6 +39,7 @@ final class ArticleScheme: NSObject, WKURLSchemeHandler {
 struct Reader: NSViewRepresentable {
     let html: String
     var imageOrigin: URL? = nil
+    var style: ReaderStyle = .default
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -57,9 +54,11 @@ struct Reader: NSViewRepresentable {
     }
 
     func updateNSView(_ web: WKWebView, context: Context) {
-        guard context.coordinator.scheme.html != html || context.coordinator.scheme.imageOrigin != imageOrigin || web.url == nil else { return }
-        context.coordinator.scheme.html = html
-        context.coordinator.scheme.imageOrigin = imageOrigin
+        let scheme = context.coordinator.scheme
+        guard scheme.html != html || scheme.imageOrigin != imageOrigin || scheme.style != style || web.url == nil else { return }
+        scheme.html = html
+        scheme.imageOrigin = imageOrigin
+        scheme.style = style
         web.load(URLRequest(url: URL(string: "earnest-content://article/")!))
     }
 

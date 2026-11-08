@@ -7,6 +7,11 @@ import SwiftUI
 import AppKit
 #endif
 
+struct ReaderPreferencesScope: Equatable {
+    let session: Int
+    let generation: String
+}
+
 /// One per app: server login, identity, connection and the shared sync
 /// engine. What one window shows lives in WindowModel; AppModel keeps weak
 /// references to the open windows so shared changes refresh every window's
@@ -27,6 +32,16 @@ import AppKit
     @Published var connected = false
     @Published var syncing = false
     @Published var pendingOps = 0
+    /// The shared account reader settings, restored from the durable snapshot
+    /// on cold launch and refreshed after every sync. Windows keep their own
+    /// drafts; this value is the account truth.
+    @Published private(set) var readerSettings = APIReaderSettings()
+    /// Last successfully synced unread totals. nil means never synced or the
+    /// last fetch failed; it is never treated as zero.
+    @Published private(set) var unreadCounts: APIUnreadCounts?
+    @Published private(set) var unreadCountsError: String?
+    private var readerSettingsGeneration: String?
+    private var countsRequestID = 0
 
     private(set) var api: EarnestAPI?
     private var tokens: (any TokenStore)?
@@ -110,6 +125,11 @@ import AppKit
         pendingOps = 0
         connectionNote = nil
         sessionActions = SessionCounts()
+        readerSettings = APIReaderSettings()
+        readerSettingsGeneration = nil
+        countsRequestID &+= 1
+        unreadCounts = nil
+        unreadCountsError = nil
         error = nil
         for window in windows { window.endSession() }
     }
@@ -274,6 +294,7 @@ import AppKit
         feedMap = Dictionary(feeds.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         briefs = try cache.resource("briefs", generation: generation).compactMap(BriefItem.init)
         for window in windows { window.restoreCachedEntries(entries) }
+        try restoreReaderPreferences()
         rebuildPresentation()
     }
 
@@ -338,6 +359,7 @@ import AppKit
                     for window in self.windows { window.selected = nil }
                     try self.restoreCachedPresentation()
                 }
+                try self.restoreReaderPreferences()
                 if !report.droppedOperationIDs.isEmpty {
                     self.connectionNote = "\(report.droppedOperationIDs.count) queued action(s) expired or no longer apply."
                 } else {
@@ -447,6 +469,10 @@ import AppKit
         if sections.contains(.activity) { await refreshActivity() }
         for window in windows { await window.refreshEntries() }
         rebuildPresentation()
+        // An optional counts endpoint must not delay the primary reading refresh.
+        if readerSettings.readingMode == .unreadCounts {
+            await refreshUnreadCounts()
+        }
     }
 
     func refreshFeeds() async {
@@ -559,6 +585,87 @@ import AppKit
     func rebuildPresentation() {
         pendingOps = (try? engine?.snapshot().outbox.count) ?? 0
         for window in windows { window.rebuildPresentation() }
+    }
+
+    /// Read the durable settings and last-synced counts into the shared
+    /// presentation. The engine's merge rules already reject older settings
+    /// revisions; a cold launch restores the same values without a request.
+    func restoreReaderPreferences() throws {
+        guard let engine else { return }
+        let snapshot = try engine.snapshot()
+        let settings = try engine.readerSettings() ?? APIReaderSettings()
+        let generation = snapshot.objects.contains { $0.kind == .settings && !$0.deleted }
+            ? snapshot.cursor?.generation : nil
+        let changed = generation != readerSettingsGeneration
+        if changed {
+            readerSettings = settings
+            readerSettingsGeneration = generation
+            countsRequestID &+= 1
+            unreadCountsError = nil
+        } else if settings.rev >= readerSettings.rev {
+            readerSettings = settings
+        }
+        unreadCounts = generation == nil ? nil : snapshot.unreadCounts
+        if changed {
+            for window in windows { window.settings.update(from: readerSettings) }
+        }
+    }
+
+    /// A complete account baseline must belong to the active snapshot. During
+    /// restore, the engine can advance before its presentation is rebuilt.
+    func readerPreferencesScope() -> ReaderPreferencesScope? {
+        guard let generation = readerSettingsGeneration,
+              let snapshot = try? engine?.snapshot(), snapshot.cursor?.generation == generation else { return nil }
+        return ReaderPreferencesScope(session: session, generation: generation)
+    }
+
+    func ownsReaderPreferences(_ scope: ReaderPreferencesScope) -> Bool {
+        loggedIn && readerPreferencesScope() == scope
+    }
+
+    /// Persist before confirming success. The stored object remains canonical
+    /// when another window or sync has already committed a newer revision.
+    func adoptReaderSettings(_ settings: APIReaderSettings, scope: ReaderPreferencesScope) throws -> APIReaderSettings? {
+        guard ownsReaderPreferences(scope), let engine else { return nil }
+        try engine.mergeSettings(settings, generation: scope.generation)
+        guard ownsReaderPreferences(scope) else { return nil }
+        guard let effective = try engine.readerSettings() else { throw SyncError.invalidPage }
+        readerSettings = effective
+        for window in windows { window.rebuildPresentation() }
+        if effective.readingMode == .unreadCounts {
+            Task { [weak self] in await self?.refreshUnreadCounts() }
+        }
+        return effective
+    }
+
+    /// The reader typography for an open article, resolving its feed's
+    /// override. App chrome stays platform-native; only the article HTML
+    /// uses the synced palette.
+    func readerStyle(for entry: APIEntry?) -> ReaderStyle {
+        ReaderStyle.resolve(readerSettings, feedID: entry?.feedID)
+    }
+
+    /// Fetch exact unread totals. River mode never calls this; a failure keeps
+    /// the last-synced values so an outage cannot masquerade as zero.
+    func refreshUnreadCounts() async {
+        guard let api, loggedIn, readerSettings.readingMode == .unreadCounts,
+              let scope = readerPreferencesScope() else { return }
+        countsRequestID &+= 1
+        let requestID = countsRequestID
+        do {
+            let counts = try await api.unreadCounts()
+            guard countsRequestID == requestID, ownsReaderPreferences(scope), !Task.isCancelled,
+                  readerSettings.readingMode == .unreadCounts, let engine else { return }
+            guard try engine.mergeUnreadCounts(counts, generation: scope.generation) else { return }
+            unreadCounts = counts
+            unreadCountsError = nil
+        } catch is CancellationError {
+        } catch {
+            guard countsRequestID == requestID, ownsReaderPreferences(scope), !Task.isCancelled,
+                  readerSettings.readingMode == .unreadCounts else { return }
+            if ErrorPresentation.isUnauthorized(error) { report(error); return }
+            unreadCountsError = ErrorPresentation.message(error)
+        }
     }
 
     func title(for entryID: Int64?) -> String? {

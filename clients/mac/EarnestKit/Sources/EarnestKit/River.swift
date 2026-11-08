@@ -53,9 +53,42 @@ extension SyncObject {
         fields = ["mute_kind": .string(kind), "value": .string(text)]
     }
 
+    /// The flat `/v1/settings` document and a `settings.updated` payload both
+    /// carry the whole reader slice. Capture every field so a sync event or a
+    /// cold launch restores the full presentation, not just the decay days.
     public init?(settings value: APIValue) {
         guard let days = value["today_decay_days"]?.int64Value else { return nil }
         self.init(kind: .settings, id: 1, rev: value["rev"]?.int64Value ?? 0)
         fields = ["today_decay_days": .integer(days)]
+        if let mode = value["reading_mode"]?.stringValue { fields["reading_mode"] = .string(mode) }
+        if let on = value["single_key_shortcuts"]?.boolValue { fields["single_key_shortcuts"] = .bool(on) }
+        if let theme = value["theme"]?.stringValue { fields["theme"] = .string(theme) }
+        if let measure = value["measure"]?.int64Value { fields["measure"] = .integer(measure) }
+        if let font = value["font"]?.stringValue { fields["font"] = .string(font) }
+        if let overrides = value["feed_overrides"]?.objectValue { fields["feed_overrides"] = .object(overrides) }
+    }
+
+    /// The durable snapshot's typed reader settings, or nil when the object
+    /// predates a field and cannot be decoded.
+    public var readerSettings: APIReaderSettings? { APIReaderSettings(self) }
+
+    /// Full typed capture used when an acknowledged save enters the snapshot.
+    public init(settings value: APIReaderSettings) {
+        self.init(kind: .settings, id: 1, rev: value.rev)
+        fields = [
+            "reading_mode": .string(value.readingMode.rawValue),
+            "today_decay_days": .integer(value.todayDecayDays),
+            "single_key_shortcuts": .bool(value.singleKeyShortcuts),
+            "theme": .string(value.theme.rawValue),
+            "measure": .integer(value.measure),
+            "font": .string(value.font.rawValue),
+            "feed_overrides": .object(value.feedOverrides.mapValues { override in
+                var fields: [String: APIValue] = [:]
+                if let theme = override.theme { fields["theme"] = .string(theme.rawValue) }
+                if let measure = override.measure { fields["measure"] = .integer(measure) }
+                if let font = override.font { fields["font"] = .string(font.rawValue) }
+                return .object(fields)
+            }),
+        ]
     }
 }
