@@ -27,7 +27,7 @@ export function SettingsPage({device, settings, onSaved}: {device: boolean; sett
     <div className="page-header"><h2>{device ? 'Approve a device' : 'Settings'}</h2></div>
     <nav className="section-nav" aria-label="Settings sections"><ul className="section-list">{SECTIONS.map(section => <li key={section.id}><Link to={`/settings#${section.id}`} replace>{section.title}</Link></li>)}</ul></nav>
     <div className="settings-sections">
-      <section id="reading" className="card" aria-label="Reading"><Settings settings={settings} onSaved={onSaved} /></section>
+      <div id="reading" className="card"><Settings settings={settings} onSaved={onSaved} /></div>
       <div id="labels" className="card"><LabelSettings /></div>
       <div id="tokens" className="card"><Tokens /></div>
       <div id="push" className="card"><Push /></div>

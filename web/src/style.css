@@ -141,7 +141,7 @@ dd {margin: 0}
 .sidebar-body {flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 var(--s2) var(--s3)}
 .nav-heading {margin: var(--s4) var(--s2) var(--s1); font-size: var(--step--2); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-muted)}
 .nav-list {list-style: none; margin: 0; padding: 0}
-.nav-list.nested {padding-left: 1.4rem}
+.nav-list.nested {padding-left: 1.5rem}
 .nav-link {display: flex; align-items: center; gap: var(--s2); width: 100%; min-height: 2rem; padding: .3rem var(--s2); border: 0; border-radius: var(--r2); background: transparent; color: var(--ink); font-weight: 400; font-size: var(--step-0); text-align: left; text-decoration: none; justify-content: flex-start}
 .nav-link:hover {background: var(--hover)}
 .nav-link[aria-current=page] {background: var(--selected); font-weight: 600}
@@ -152,7 +152,7 @@ dd {margin: 0}
 .nav-warning {display: inline-flex; color: var(--warning)}
 .nav-folder-row {display: flex; align-items: center}
 .nav-folder-row .nav-link {padding-left: .15rem}
-.disclosure {flex: none; display: grid; place-items: center; width: 1.4rem; height: 2rem; min-height: 0; padding: 0; border: 0; border-radius: var(--r1); background: transparent; color: var(--ink-muted)}
+.disclosure {flex: none; display: grid; place-items: center; width: 1.5rem; height: 2rem; min-height: 0; padding: 0; border: 0; border-radius: var(--r1); background: transparent; color: var(--ink-muted)}
 .disclosure[aria-expanded=true] .icon {rotate: 90deg}
 .feed-mark {flex: none; display: grid; place-items: center; width: 1.15rem; height: 1.15rem; border-radius: var(--r1); font-size: .66rem; font-weight: 700; line-height: 1; color: #fff; background: oklch(.5 .1 calc(var(--hue, 200) * 1deg))}
 [data-theme=eink] .feed-mark {color: #000; background: #fff; outline: 1px solid #000}

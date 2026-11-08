@@ -46,6 +46,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The web client gives every view a URL: lists, open articles, searches,
+  rules, notifications, feed management and settings survive refresh,
+  Back and Forward, and can be bookmarked. Rows are links, `j`/`k` open
+  the next article while reading, deliberate actions offer an undo
+  (`z`), and narrow screens get a drawer and a single-pane reader.
+  Fingerprinted web assets are served precompressed (Brotli or gzip).
 - Research, round 9 review: step 0 now requires self-hosted ntfy and an
   allowlist enforced outside the agent; two factual errors fixed; sync
   and security gaps recorded as open in `api.md` and `llm.md` (#2).

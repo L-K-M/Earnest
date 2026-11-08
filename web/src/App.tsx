@@ -450,7 +450,13 @@ function Session({onLogout}: {onLogout: () => void}) {
       setCSRF(result.csrf_token)
       setIdentity(await request<Identity>('/v1/me')); setError('')
       return null
-    } catch (error) { return error instanceof Error ? error.message : 'Sign in failed.' }
+    } catch (error) {
+      // The server's problem titles are terse; say what to do instead.
+      if (error instanceof RequestError && error.status === 401) return 'That username and password do not match. Check both and try again.'
+      if (error instanceof RequestError && error.status === 429) return 'Too many sign-in attempts. Wait a minute, then try again.'
+      if (!(error instanceof RequestError)) return 'Earnest could not be reached. Check your connection and try again.'
+      return error.message || 'Sign in failed.'
+    }
   }
   async function logout() {
     try {

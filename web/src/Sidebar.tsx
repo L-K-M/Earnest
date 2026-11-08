@@ -96,11 +96,11 @@ export function Sidebar({route, subscriptions, folders, labels, savedSearches, c
       </div>
     </div>
     <div className="sidebar-body">
-      <section aria-labelledby="nav-reading">
+      <div role="group" aria-labelledby="nav-reading">
         <h2 id="nav-reading" className="nav-heading sr-only">Reading</h2>
         <ul className="nav-list">{READING_VIEWS.map(item => <li key={item.kind}>{nav({to:viewHref({kind:item.kind}), icon:item.icon, label:item.title, current:current(`river:${item.kind}:`), count:item.kind === 'later' ? counts?.later : item.kind === 'kept' ? counts?.kept : undefined})}</li>)}</ul>
-      </section>
-      {subscriptions.some(sub => !sub.deleted) && <section aria-labelledby="nav-feeds">
+      </div>
+      {subscriptions.some(sub => !sub.deleted) && <div role="group" aria-labelledby="nav-feeds">
         <h2 id="nav-feeds" className="nav-heading">Feeds</h2>
         <ul className="nav-list">
           {filed.map(({folder, subscriptions: members}) => {
@@ -117,16 +117,16 @@ export function Sidebar({route, subscriptions, folders, labels, savedSearches, c
           })}
           {unfiled.map(feedLink)}
         </ul>
-      </section>}
-      {activeLabels.length > 0 && <section aria-labelledby="nav-labels">
+      </div>}
+      {activeLabels.length > 0 && <div role="group" aria-labelledby="nav-labels">
         <h2 id="nav-labels" className="nav-heading">Labels</h2>
         <ul className="nav-list">{activeLabels.map(label => <li key={label.id}>{nav({to:viewHref({kind:'label', id:label.id}), icon:'tag', label:label.name, current:current(`river:label:${label.id}`)})}</li>)}</ul>
-      </section>}
-      {savedSearches.length > 0 && <section aria-labelledby="nav-saved">
+      </div>}
+      {savedSearches.length > 0 && <div role="group" aria-labelledby="nav-saved">
         <h2 id="nav-saved" className="nav-heading">Saved searches</h2>
         <ul className="nav-list">{savedSearches.map(saved => <li key={saved.id}>{nav({to:`/search/saved/${saved.id}`, icon:'saved', label:saved.name, current:current(`saved:${saved.id}`)})}</li>)}</ul>
-      </section>}
-      <section aria-labelledby="nav-tools">
+      </div>}
+      <div role="group" aria-labelledby="nav-tools">
         <h2 id="nav-tools" className="nav-heading">Tools</h2>
         <ul className="nav-list">
           {askEnabled && <li>{nav({to:'/ask', icon:'ask', label:'Ask my feeds', current:current('ask')})}</li>}
@@ -134,7 +134,7 @@ export function Sidebar({route, subscriptions, folders, labels, savedSearches, c
           <li>{nav({to:'/activity', icon:'activity', label:'Activity', current:current('activity')})}</li>
           <li>{nav({to:'/notifications', icon:'bell', label:'Notifications', current:current('notifications')})}</li>
         </ul>
-      </section>
+      </div>
     </div>
     <div className="sidebar-foot">
       <ul className="nav-list">
