@@ -2,6 +2,7 @@
 
 - [Configuration](configuration.md): environment settings and defaults.
 - [Operations](operations.md): deployment, backups, updates and troubleshooting.
+- [Releases](releases.md): three-platform gates, client signing, packaging and acceptance.
 - [Architecture](architecture.md): package boundaries and conventions.
 - [Sync](sync.md): state, conflicts, synchronization and restore generations.
 - [Schema](schema.md): database tables, invariants and migrations.

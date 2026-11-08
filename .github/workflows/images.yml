@@ -1,9 +1,9 @@
 name: image-build
 
 on:
+  workflow_call:
   push:
     branches: [main]
-    tags: ['v*.*.*']
   pull_request:
 
 permissions:
@@ -13,9 +13,10 @@ concurrency:
   group: image-build-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Verifies the image builds for both architectures — including on release
-# tags, where it is the publish gate. Nothing pushes to a registry: deployments
-# build the image locally via ./update.sh (pull_policy: build), so a private
+# Verifies image builds for both architectures. Release tags call this
+# workflow through release.yml before preparing a release draft. Nothing pushes
+# to a registry: deployments build locally via ./update.sh (pull_policy: build),
+# so a private
 # or self-hosted deployment never depends on an anonymous ghcr pull.
 jobs:
   image:

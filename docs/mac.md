@@ -227,18 +227,17 @@ the queued state syncs and the connection note clears. Repeat with a revoked
 token to check sign-out, and sign in as another account to check that the prior
 account's rows, briefs, HTML and queued actions never appear.
 
-## Distribution later
+## Distribution
 
-The CI build is unsigned and is not a distribution artifact. Distribution
-will require an Apple Developer ID Application certificate and a team with
-Developer ID access. Configure the team and signing identity in Xcode, archive
-with the hardened runtime enabled, sign the exported app, submit it to
-Apple's notary service with `notarytool`, and staple the resulting ticket.
-Verify the signature and stapled ticket before distribution. Credentials for
-signing and notarization must remain outside the repository.
+The CI build is unsigned and is not a distribution artifact. From the exact
+source tag, use `scripts/package-client.sh mac <tag>` to build a universal
+Developer ID Application archive, notarize and staple it, and verify the app
+re-extracted from the final ZIP. A development or ad-hoc identity is rejected.
+Signing and notary credentials must remain outside the repository. See
+[three-platform releases](releases.md) for prerequisites, receipts, checksums
+and device/deployment acceptance; a successful build is not that acceptance.
 
-Sparkle updates are planned for later; no update feed, signing keys or
-release automation are configured here.
+Private releases use manual updates. No Sparkle update feed is configured.
 
 ## Reader preferences and exact counts
 
@@ -260,6 +259,6 @@ bindings but leaves menu commands clickable.
 
 Exact unread totals are requested and shown only in unread-count mode, labelled
 "Counts as last synced." Fetch failures keep the last successful totals. When
-none are cached, counts are unavailable, not zero. Cached reading typography respects the safe enums and the existing image and
-origin restrictions. Private drafts and transient results clear on sign-out or
-restore.
+none are cached, counts are unavailable, not zero. Cached reading typography
+respects the safe enums and the existing image and origin restrictions.
+Private drafts and transient results clear on sign-out or restore.

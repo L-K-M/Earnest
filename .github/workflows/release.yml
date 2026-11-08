@@ -1,33 +1,57 @@
 name: release
 
-# The tag IS the release: scripts/release.sh X.Y.Z --push creates vX.Y.Z, this
-# mints the GitHub release with generated notes, and images.yml verifies the
-# image builds on the same tag. Deployments then run ./update.sh, which builds
-# the image locally from the tagged source — nothing is published to a registry.
+# A tag fixes the source version. Prepare a draft only after every platform
+# passes its gate; signed clients and acceptance evidence are still required
+# before the operator publishes the finished three-platform release.
 on:
+  workflow_dispatch:
   push:
     tags: ['v*.*.*']
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  server-and-web:
+    uses: ./.github/workflows/ci.yml
+  image:
+    uses: ./.github/workflows/images.yml
+  mac:
+    uses: ./.github/workflows/mac.yml
+  android:
+    uses: ./.github/workflows/android.yml
+
   release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: [server-and-web, image, mac, android]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Create the GitHub release
+      - name: Prepare the release draft
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
+          draft: true
           generate_release_notes: true
           body: |
-            Deploy or update on your host with `./update.sh` — the image is
-            built locally from this source revision (see `compose.yaml`).
+            Source tag: `${{ github.ref_name }}`
+            Source revision: `${{ github.sha }}`
 
-            **Latest tag:** `${{ github.ref_name }}`
+            This is a draft, not a finished three-platform release. Server,
+            web, Mac and Android CI have passed for this tag. Before publishing,
+            attach both signed client packages, their release receipts and
+            checksums, and record the device/deployment acceptance results.
+
+            Build the clients from the tagged checkout with:
+            `scripts/package-client.sh mac ${{ github.ref_name }}`
+            `scripts/package-client.sh android ${{ github.ref_name }}`
+
+            See `docs/releases.md` for signing prerequisites and the final gate.
+            The server image is built locally on your host, never pulled from
+            a registry. See `compose.yaml` and `docs/operations.md`.
