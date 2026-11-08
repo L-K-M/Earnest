@@ -80,12 +80,13 @@ import EarnestKit
         let search = window.search
         search.loadMetadata()
         try await idle(search)
-        XCTAssertNotNil(search.metadataError)
+        XCTAssertTrue(search.metadataError?.contains("load saved searches") == true)
         search.query = "funding"
         search.filter.mode = .hybrid
         search.submit()
         try await idle(search)
         XCTAssertNil(search.error)
+        XCTAssertEqual(search.notice, "Hybrid search is unavailable. This search uses full text.")
         search.loadMore()
         try await idle(search)
         XCTAssertTrue(search.error?.contains("repeated search cursor") == true)
@@ -192,6 +193,71 @@ import EarnestKit
         XCTAssertFalse(app.loggedIn)
         XCTAssertTrue(window.search.query.isEmpty)
         XCTAssertTrue(window.search.matches.isEmpty)
+        ContentHTTP.assertFinished()
+    }
+
+    func testSavedSelectionCannotRestorePrivateDraftAfterSignOut() async throws {
+        let saved = #"[{"id":7,"name":"Private view","query":"private account-a query","filters":{"mode":"fulltext"}}]"#
+        let (session, app, window) = try fixture([
+            .init(path: "/v1/saved-searches", body: saved),
+            .init(path: "/v1/pipeline", body: pipeline),
+        ])
+        defer { app.signOut(); session.invalidateAndCancel() }
+        window.search.loadMetadata()
+        try await idle(window.search)
+        let stale = try XCTUnwrap(window.search.savedSearches.first)
+        app.signOut()
+        window.search.selectSaved(stale)
+        XCTAssertEqual(window.search.query, "")
+        XCTAssertEqual(window.search.savedName, "")
+        XCTAssertEqual(window.search.submittedQuery, "")
+        ContentHTTP.assertFinished()
+    }
+
+    func testSubmitClearsRestoreBeforeCapturingTheDraft() throws {
+        let engine = SyncEngine(store: MemorySyncStore())
+        try engine.bootstrap(Cursor(generation: "g", rev: 0))
+        try engine.finishBootstrap()
+        let app = AppModel(engine: engine, principalID: 7)
+        app.loggedIn = true
+        let window = WindowModel(app: app)
+        defer { app.signOut() }
+        window.search.invalidateAfterRestore()
+        window.search.query = "private pre-restore query"
+        try engine.bootstrap(Cursor(generation: "restored", rev: 0))
+        window.search.submit()
+        XCTAssertEqual(window.search.query, "")
+        XCTAssertEqual(window.search.submittedQuery, "", "Do not recapture a draft that restore just cleared")
+        XCTAssertFalse(window.search.loading)
+    }
+
+    func testSearchCommandsWaitForUncachedEntryMetadata() async throws {
+        let requested = expectation(description: "Search entry metadata requested")
+        let resume = DispatchSemaphore(value: 0)
+        let entry = ContentLoadingTests.entryJSON.replacingOccurrences(of: "\"occurred_at\":\"\"", with: "\"occurred_at\":\"2026-11-04T08:00:00Z\"")
+        let (session, app, window) = try fixture([
+            .init(path: "/v1/entries/42", body: entry, beforeResponse: {
+                requested.fulfill()
+                XCTAssertEqual(resume.wait(timeout: .now() + 10), .success)
+            }),
+            .signed(mode: "proxied"), .article,
+        ])
+        defer { resume.signal(); app.signOut(); session.invalidateAndCancel() }
+        window.section = .search
+        let selected = try JSONDecoder().decode(APISearchMatch.self, from: Data(match(42).utf8))
+        window.selectSearchMatch(selected)
+        await fulfillment(of: [requested], timeout: 5)
+        XCTAssertFalse(window.canActOnEntry, "Do not offer commands that cannot run until metadata is available")
+        resume.signal()
+        let deadline = Date().addingTimeInterval(5)
+        while window.html.isEmpty && app.error == nil && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNil(app.error)
+        XCTAssertFalse(window.html.isEmpty)
+        XCTAssertTrue(window.canActOnEntry)
+        window.command(.keep)
+        XCTAssertTrue(try app.engine?.snapshot().outbox.contains { $0.register == .kept && $0.value == .flag(true) } == true)
         ContentHTTP.assertFinished()
     }
 

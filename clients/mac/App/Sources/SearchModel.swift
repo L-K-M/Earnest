@@ -106,33 +106,42 @@ import SwiftUI
                 guard self.isCurrent(session, generation: generation) else { return }
                 if ErrorPresentation.isUnauthorized(error) { app.report(error); return }
                 self.embeddingStatus = "disabled"
-                self.metadataError = "Could not check AI search availability. Full-text search is still available."
+                if self.metadataError == nil {
+                    self.metadataError = "Could not check AI search availability. Full-text search is still available."
+                }
             }
         }
     }
 
     func selectSaved(_ saved: APISavedSearch?) {
+        invalidateAfterRestore()
         guard !saving else { return }
-        selectedSavedID = saved?.id
-        savedName = saved?.name ?? ""
-        guard let saved else { return }
-        query = saved.query
-        filter = saved.filters
+        guard let saved else {
+            selectedSavedID = nil
+            savedName = ""
+            return
+        }
+        // A menu callback can outlive its account. Read only this scope's record.
+        guard let current = savedSearches.first(where: { $0.id == saved.id }) else { return }
+        selectedSavedID = current.id
+        savedName = current.name
+        query = current.query
+        filter = current.filters
         submit()
     }
 
     func submit() {
+        invalidateAfterRestore()
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { error = "Enter a search query."; return }
         guard trimmed.utf8.count <= 4096 else { error = "Search queries must be at most 4,096 bytes."; return }
-        invalidateAfterRestore()
         submittedQuery = trimmed
         submittedFilter = filter
         if embeddingStatus != "enabled" { submittedFilter.mode = .fulltext }
         matches = []
         nextCursor = nil
         status = nil
-        notice = nil
+        notice = submittedFilter.mode != filter.mode ? "Hybrid search is unavailable. This search uses full text." : nil
         fetch(cursor: nil)
     }
 
