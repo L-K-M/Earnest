@@ -274,7 +274,8 @@ enum ServerAddress {
         }
         while trimmed.hasSuffix("/") { trimmed.removeLast() }
         guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(),
-              ["http", "https"].contains(scheme), let host = url.host, !host.isEmpty else { return nil }
+              ["http", "https"].contains(scheme), let host = url.host, !host.isEmpty,
+              url.user == nil, url.password == nil else { return nil }
         return trimmed
     }
 }

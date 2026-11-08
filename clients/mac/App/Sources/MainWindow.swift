@@ -176,8 +176,18 @@ import EarnestKit
     private func handleDrop(_ urls: [URL]) -> Bool {
         guard model.loggedIn, let url = urls.first else { return false }
         if url.isFileURL { stage(url); return true }
-        guard ["http", "https", "feed"].contains(url.scheme?.lowercased() ?? "") else { return false }
-        window.subscribeURL = FeedLink.subscriptionURL(url) ?? url.absoluteString
+        let address: String
+        switch url.scheme?.lowercased() {
+        case "feed":
+            guard let unwrapped = FeedLink.subscriptionURL(url) else { return false }
+            address = unwrapped
+        case "http", "https":
+            guard url.user == nil, url.password == nil else { return false }
+            address = url.absoluteString
+        default:
+            return false
+        }
+        window.subscribeURL = address
         window.subscribing = true
         return true
     }

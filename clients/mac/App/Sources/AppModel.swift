@@ -164,6 +164,7 @@ struct ReaderPreferencesScope: Equatable {
         unreadCounts = nil
         unreadCountsError = nil
         lastSyncedAt = nil
+        confirmingSignOut = false
         subscribing = false
         transfer = nil
         error = nil
@@ -832,14 +833,18 @@ struct ReaderPreferencesScope: Equatable {
 
     // MARK: - Subscription files
 
-    /// OPML larger than this is not a subscription list.
-    static let opmlLimit = 16 << 20
+    /// The server and the API transport accept request bodies up to 8 MiB.
+    static let opmlLimit = 8 << 20
 
     /// Import an OPML document's folders and feeds. The server skips feeds
     /// you already follow; the report, handed to the window that asked, says
     /// what happened, failures included.
     func importOPML(_ document: Data, name: String, reported: @escaping (ImportReport) -> Void) {
-        guard let api, loggedIn, transfer == nil else { return }
+        guard let api, loggedIn else { return }
+        guard transfer == nil else {
+            error = "Wait for the current subscription transfer to finish, then import “\(name)” again."
+            return
+        }
         guard document.count <= Self.opmlLimit else {
             error = "“\(name)” is too large to be a subscription list."
             return

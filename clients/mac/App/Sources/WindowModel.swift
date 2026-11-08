@@ -503,7 +503,7 @@ import AppKit
             let unkeep = command == .keep && value == .flag(false)
             let counted = !(command == .later && value == .text("none"))
             if counted { app.sessionActions.record(command, unkeep: unkeep) }
-            registerUndo(entryID: entry.id, prior: Self.registers(of: state),
+            registerUndo(entryID: entry.id, prior: Self.registers(of: state, changedBy: command),
                          actionName: Self.actionName(command, value: value),
                          command: counted ? command : nil, unkeep: unkeep)
             app.rebuildPresentation()
@@ -538,8 +538,16 @@ import AppKit
         }
     }
 
-    private static func registers(of state: EarnestKit.State) -> [Register: RegisterValue] {
-        [.seen: state.seen.value, .shelf: state.shelf.value, .kept: state.kept.value]
+    /// The registers an action changes, with their values before it: its
+    /// own register, plus the shelf for Mark as Unread, which the server
+    /// clears when the article was Done. Registers changed elsewhere since
+    /// are left alone by undo.
+    private static func registers(of state: EarnestKit.State, changedBy command: EntryCommand) -> [Register: RegisterValue] {
+        switch command {
+        case .done, .later: return [.shelf: state.shelf.value]
+        case .keep: return [.kept: state.kept.value]
+        case .unread: return [.seen: state.seen.value, .shelf: state.shelf.value]
+        }
     }
 
     /// Undo writes back every register the action changed, including ones a
@@ -581,7 +589,8 @@ import AppKit
             if undoing { app.sessionActions.unrecord(command, unkeep: unkeep) }
             else { app.sessionActions.record(command, unkeep: unkeep) }
         }
-        registerUndo(entryID: entryID, prior: Self.registers(of: state), actionName: actionName,
+        let current = Dictionary(uniqueKeysWithValues: values.keys.map { ($0, state[$0].value) })
+        registerUndo(entryID: entryID, prior: current, actionName: actionName,
                      command: command, unkeep: unkeep, undoing: undoing)
         app.rebuildPresentation()
         // Bring back an article the action had removed from this list, as
@@ -627,15 +636,24 @@ import AppKit
     }
 
     func move(_ offset: Int) {
+        if section == .search {
+            moveInSearch(offset)
+            return
+        }
         let ids = visibleEntryIDs()
         guard !ids.isEmpty else { return }
         let current = ids.firstIndex(of: selected ?? -1) ?? (offset > 0 ? -1 : ids.count)
-        let id = ids[min(ids.count - 1, max(0, current + offset))]
-        if section == .search, let match = search.matches.first(where: { $0.entryID == id }) {
-            selectSearchMatch(match)
-        } else {
-            selectFromList(id)
-        }
+        selectFromList(ids[min(ids.count - 1, max(0, current + offset))])
+    }
+
+    /// Search results show articles, then agent notes; J and K follow that
+    /// order, match by match, since a note and its article share an entry.
+    private func moveInSearch(_ offset: Int) {
+        let displayed = search.matches.filter { $0.kind == "entry" } + search.matches.filter { $0.kind == "agent_note" }
+        guard !displayed.isEmpty else { return }
+        let current = displayed.firstIndex { $0.id == selectedMatchID && $0.entryID == selected }
+            ?? (offset > 0 ? -1 : displayed.count)
+        selectSearchMatch(displayed[min(displayed.count - 1, max(0, current + offset))])
     }
 
     func openOriginal() {
@@ -695,7 +713,8 @@ import AppKit
     func selectActivity(_ item: ActivityItem?) {
         selectedActivityID = item?.id
         guard let entryID = item?.entryID else {
-            if item != nil { selectFromList(nil) }
+            // A row without an article, such as a notification, stays selected.
+            if item != nil { selected = nil }
             return
         }
         imageMode = .click
@@ -723,9 +742,13 @@ import AppKit
     }
 
     func selectFromList(_ id: Int64?) {
-        imageMode = .proxied
+        // Articles reached from Activity were surfaced by an agent and never
+        // load images automatically, however they were selected.
+        imageMode = section == .activity ? .click : .proxied
         selectedMatchID = nil
-        if section == .activity, id == nil { selectedActivityID = nil }
+        if section == .activity {
+            selectedActivityID = id.flatMap { id in app.activityGroups.flatMap(\.items).first { $0.entryID == id }?.id }
+        }
         if selected == id { open(id) }
         else { selected = id }
     }

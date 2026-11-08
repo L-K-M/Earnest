@@ -103,6 +103,43 @@ import EarnestKit
         XCTAssertNil(window.pendingDeepLink)
     }
 
+    func testUndoLeavesRegistersTheActionDidNotChange() throws {
+        let model = try makeModel()
+        defer { model.signOut() }
+        let engine = try XCTUnwrap(model.engine)
+        let window = WindowModel(app: model)
+        let undo = UndoManager()
+        undo.groupsByEvent = false
+        window.undoManager = undo
+        window.selected = 42
+        undo.beginUndoGrouping()
+        window.command(.done)
+        undo.endUndoGrouping()
+        // Kept on another device after the Mac's Done.
+        try engine.queue(Write(opID: "web-keep", principal: 7, entryID: 42, register: .kept, value: .flag(true),
+                               base: Cursor(generation: "g", rev: 0), occurredAt: Date()))
+        undo.undo()
+        let state = try engine.state(principal: 7, entryID: 42)
+        XCTAssertEqual(state.shelf.value, .text("none"), "Undo reverses the Done")
+        XCTAssertEqual(state.kept.value, .flag(true), "Undo leaves the other device's Keep alone")
+    }
+
+    func testActivityArticlesKeepImagesBlockedWhenMovedTo() throws {
+        let model = try makeModel()
+        defer { model.signOut() }
+        let window = WindowModel(app: model)
+        window.go(to: .activity)
+        window.selectFromList(42)
+        XCTAssertEqual(window.imageMode, .click, "Agent-surfaced articles never load images automatically")
+    }
+
+    func testSignOutClearsAPendingConfirmation() throws {
+        let model = try makeModel()
+        model.confirmingSignOut = true
+        model.signOut()
+        XCTAssertFalse(model.confirmingSignOut)
+    }
+
     func testSignOutForgetsTheSubscriptionDraft() throws {
         let model = try makeModel()
         let window = WindowModel(app: model)
@@ -262,6 +299,8 @@ import EarnestKit
         XCTAssertEqual(ServerAddress.normalize("http://earnest.example.com"), "http://earnest.example.com")
         XCTAssertNil(ServerAddress.normalize(""))
         XCTAssertNil(ServerAddress.normalize("ftp://earnest.example.com"))
+        XCTAssertNil(ServerAddress.normalize("user:secret@nas.local"), "Credentials never go in the address")
+        XCTAssertNil(ServerAddress.normalize("https://user:secret@earnest.example.com"))
     }
 
     func testFeedLinksUnwrapToHTTP() throws {
@@ -273,6 +312,7 @@ import EarnestKit
     }
 
     func testImportReportStatesFailuresPlainly() {
+        XCTAssertEqual(AppModel.opmlLimit, 8 << 20, "The server and transport accept 8 MiB")
         let clean = AppModel.report(for: OPMLImportSummary(subscribed: 3, folders: 1, deferred: 0, failures: [],
                                                            subscriptionIDs: [4, 5, 1]),
                                     name: "subs.opml", followed: [1, 2])
