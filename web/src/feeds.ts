@@ -7,6 +7,9 @@ export type Folder = components['schemas']['Folder']
 export type Mute = components['schemas']['Mute']
 export type FeedHealth = components['schemas']['FeedHealth']
 export type OPMLResult = components['schemas']['OPMLResult']
+export type KeptImportReport = components['schemas']['KeptImportReport']
+export type KeptImportResult = components['schemas']['KeptImportResult']
+export type MissingFeeds = 'skip' | 'subscribe'
 export type SubscribeBody = components['schemas']['SubscriptionBody']
 export type SubscriptionPatch = components['schemas']['SubscriptionPatch']
 
@@ -115,6 +118,42 @@ export function summarizeImport(results: OPMLResult[]): ImportSummary {
   return summary
 }
 
+export type KeptImportSummary = {
+  added: number
+  existing: number
+  unkept: number
+  gone: number
+  skipped: {feedURL: string; count: number}[]
+  failed: string[]
+  subscribed: number
+}
+export function summarizeKeptImport(report: KeptImportReport): KeptImportSummary {
+  const summary: KeptImportSummary = {added: 0, existing: 0, unkept: 0, gone: 0, skipped: [], failed: [], subscribed: 0}
+  const skipped = new Map<string, number>()
+  for (const result of report.results ?? []) {
+    if (result.status === 'created') {
+      summary.added++
+    } else if (result.status === 'matched' || result.status === 'unchanged') {
+      summary.existing++
+    } else if (result.status === 'unkept') {
+      summary.unkept++
+    } else if (result.status === 'gone') {
+      summary.gone++
+    } else if (result.status === 'not_subscribed') {
+      const feedURL = result.feed_url ?? ''
+      skipped.set(feedURL, (skipped.get(feedURL) ?? 0) + 1)
+    } else if (result.status === 'failed') {
+      const title = result.title || `Article ${result.index + 1}`
+      const error = result.error || 'could not be imported'
+      summary.failed.push(`${title}: ${error}`)
+    }
+  }
+  summary.skipped = [...skipped].map(([feedURL, count]) => ({feedURL, count}))
+    .sort((a, b) => b.count - a.count || (a.feedURL < b.feedURL ? -1 : a.feedURL > b.feedURL ? 1 : 0))
+  summary.subscribed = report.subscribed?.length ?? 0
+  return summary
+}
+
 export type FolderGroup = {folder: Folder | null; subscriptions: Subscription[]}
 export function groupByFolder(subscriptions: Subscription[], folders: Folder[]): FolderGroup[] {
   const active = subscriptions.filter(sub => !sub.deleted)
@@ -164,6 +203,7 @@ export function readFileText(file: File): Promise<string> {
 }
 
 export const importOPML = (text: string) => request<OPMLResult[]>('/v1/opml:import', {method: 'POST', headers: {'Content-Type': 'text/x-opml'}, body: text})
+export const importKept = (text: string, missing: MissingFeeds) => request<KeptImportReport>(`/v1/kept:import?missing_feeds=${missing}`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: text})
 export const exportOPML = () => request<string>('/v1/opml')
 
 export const putSettings = (settings: ReadingSettings) => request<ReadingSettings>('/v1/settings', {method: 'PUT', body: JSON.stringify(settingsBody(settings))})

@@ -26,7 +26,7 @@ Create a user on the NAS and enter a password at the prompt:
 docker compose exec earnest earnest user create <name>
 ```
 
-Sign in to the web app and import OPML in onboarding. To connect a Google Reader client, generate its separate compatibility password:
+Sign in to the web app and import OPML in onboarding. To bring your starred articles along, export them from your old reader as Google Reader JSON (FreshRSS offers this for favourites under Import / export) and import the file in Manage feeds, or run `earnest entries import starred.json`. Imported articles land in Kept. To connect a Google Reader client, generate its separate compatibility password:
 
 ```sh
 docker compose exec earnest earnest compat-password --user <name>

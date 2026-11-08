@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/L-K-M/Earnest/internal/feed"
 	"github.com/L-K-M/Earnest/internal/store"
 	"github.com/L-K-M/Earnest/internal/syncmodel"
 	"github.com/jackc/pgx/v5"
@@ -157,6 +158,8 @@ type ingestChange struct {
 	seq               uint64
 	firstSeen         time.Time
 	kind              syncmodel.ChangeType
+	// adopt moves an imported entry to this fetch's identity.
+	adopt bool
 }
 
 // RecordFetch commits identity/content versions, user events and health together.
@@ -236,6 +239,11 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 			titleChanged = oldTitle != outcome.Feed.Title
 			siteChanged = oldSite != outcome.Feed.SiteURL
 		}
+		var hasImported bool
+		if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM entries WHERE feed_id=$1 AND imported)", outcome.FeedID).Scan(&hasImported); err != nil {
+			return fmt.Errorf("find imported entries: %w", err)
+		}
+		adopted := []int64{}
 		changes := make([]ingestChange, 0, len(prepared))
 		for _, p := range prepared {
 			var oldHash []byte
@@ -243,9 +251,25 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 			var pub, updated *time.Time
 			var enclosures []byte
 			var deleted, hasVersion bool
+			var imported bool
 			err := tx.QueryRow(ctx, `SELECT e.id,e.seq,e.first_seen_at,e.content_hash,coalesce(e.guid,''),coalesce(e.url,''),e.title,e.author,e.language,e.published_at,e.updated_at,e.enclosures,e.deleted_at IS NOT NULL,
-    EXISTS(SELECT 1 FROM contents c WHERE c.entry_id=e.id AND c.content_hash=$3 AND c.sanitizer_version=$4 AND c.source=$5 AND c.excerpt_only=$6)
-    FROM entries e WHERE e.feed_id=$1 AND e.identity_hash=$2`, outcome.FeedID, p.identity, p.content, p.item.SanitizerVersion, string(p.item.ContentSource), p.excerptOnly).Scan(&p.id, &p.seq, &p.firstSeen, &oldHash, &guid, &rawURL, &title, &author, &language, &pub, &updated, &enclosures, &deleted, &hasVersion)
+    EXISTS(SELECT 1 FROM contents c WHERE c.entry_id=e.id AND c.content_hash=$3 AND c.sanitizer_version=$4 AND c.source=$5 AND c.excerpt_only=$6),e.imported
+    FROM entries e WHERE e.feed_id=$1 AND e.identity_hash=$2`, outcome.FeedID, p.identity, p.content, p.item.SanitizerVersion, string(p.item.ContentSource), p.excerptOnly).Scan(&p.id, &p.seq, &p.firstSeen, &oldHash, &guid, &rawURL, &title, &author, &language, &pub, &updated, &enclosures, &deleted, &hasVersion, &imported)
+			if errors.Is(err, pgx.ErrNoRows) && hasImported {
+				found, deleted, err := adoptImported(ctx, tx, outcome.FeedID, &p, adopted)
+				if err != nil {
+					return err
+				}
+				if found && deleted {
+					continue
+				}
+				if found {
+					adopted = append(adopted, p.id)
+					changes = append(changes, p)
+					summary.Updated++
+					continue
+				}
+			}
 			if errors.Is(err, pgx.ErrNoRows) {
 				p.kind = syncmodel.EntryCreated
 				changes = append(changes, p)
@@ -257,6 +281,13 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 			}
 			if deleted {
 				continue
+			}
+			if imported {
+				// The fetch found the exported copy under its own identity:
+				// it is reconciled and must never be adopted by another article.
+				if _, err := tx.Exec(ctx, "UPDATE entries SET imported=false WHERE id=$1", p.id); err != nil {
+					return fmt.Errorf("reconcile imported entry: %w", err)
+				}
 			}
 			var oldEnclosures []Enclosure
 			if err := json.Unmarshal(enclosures, &oldEnclosures); err != nil {
@@ -324,31 +355,18 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 				}
 				newEntries = append(newEntries, p.id)
 			}
-			if _, err := tx.Exec(ctx, `INSERT INTO contents(entry_id,content_hash,sanitizer_version,source,html,text,created_at,excerpt_only) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(entry_id,content_hash,sanitizer_version,source) DO UPDATE SET excerpt_only=EXCLUDED.excerpt_only`, p.id, p.content, p.item.SanitizerVersion, string(p.item.ContentSource), p.item.ContentHTML, p.item.ContentText, receipt, p.excerptOnly); err != nil {
-				return fmt.Errorf("store content version: %w", err)
+			if p.adopt {
+				if _, err := tx.Exec(ctx, "UPDATE entries SET identity_hash=$2,imported=false WHERE id=$1", p.id, p.identity); err != nil {
+					return fmt.Errorf("adopt imported entry: %w", err)
+				}
 			}
-			enclosures := p.item.Enclosures
-			if enclosures == nil {
-				enclosures = []Enclosure{}
-			}
-			body, err := json.Marshal(enclosures)
-			if err != nil {
-				return fmt.Errorf("encode enclosures: %w", err)
-			}
-			if _, err := tx.Exec(ctx, `UPDATE entries SET guid=$2,url=$3,title=$4,author=$5,published_at=$6,updated_at=$7,content_hash=$8,language=$9,enclosures=$10 WHERE id=$1`, p.id, p.item.GUID, p.item.URL, p.item.Title, p.item.Author, p.item.PublishedAt, p.item.UpdatedAt, p.content, p.item.Language, body); err != nil {
-				return fmt.Errorf("update ingested entry: %w", err)
+			if err := storeEntryVersion(ctx, tx, p, receipt); err != nil {
+				return err
 			}
 			for _, sub := range subscribers {
 				rev := allocation.Revs[sub.user].First + int64(i)
-				e := syncmodel.Entry{ID: syncmodel.ID(p.id), SubscriptionID: syncmodel.ID(sub.id), Seq: p.seq, FirstSeenAt: p.firstSeen, Rev: uint64(rev)}
-				if p.item.PublishedAt != nil {
-					e.PublishedAt = *p.item.PublishedAt
-				}
-				if err := insertEvent(ctx, tx, sub.user, rev, string(p.kind), map[string]any{"entry": e}, receipt); err != nil {
+				if err := announceEntry(ctx, tx, sub.user, sub.id, rev, p, receipt); err != nil {
 					return err
-				}
-				if _, err := tx.Exec(ctx, `INSERT INTO entry_revisions(user_id,entry_id,rev) VALUES($1,$2,$3) ON CONFLICT(user_id,entry_id) DO UPDATE SET rev=EXCLUDED.rev`, sub.user, p.id, rev); err != nil {
-					return fmt.Errorf("stamp ingested entry: %w", err)
 				}
 			}
 		}
@@ -391,6 +409,76 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 		return IngestSummary{}, err
 	}
 	return summary, nil
+}
+
+// adoptImported finds an imported entry for an article this fetch has no
+// identity match for, skipping entries this fetch already adopted. Two GUIDs
+// must agree, as values or as the identity an export carrying this GUID was
+// stored under. Only when one side has no GUID, as in exports without one,
+// does the link decide, and then the title must agree too: some feeds publish
+// different articles with one link, and adopting the wrong one would replace
+// a kept article. A found entry becomes an update that takes the fetch's
+// identity, so later fetches match it directly. A retention tombstone is
+// reported as deleted and is never resurrected.
+func adoptImported(ctx context.Context, tx pgx.Tx, feedID int64, p *ingestChange, adopted []int64) (found, deleted bool, err error) {
+	byGUID := []byte{}
+	if strings.TrimSpace(p.item.GUID) != "" {
+		byGUID, err = decodeHash(feed.IdentityHash(feed.Item{GUID: p.item.GUID}))
+		if err != nil {
+			return false, false, err
+		}
+	}
+	err = tx.QueryRow(ctx, `SELECT id,seq,first_seen_at,deleted_at IS NOT NULL FROM entries
+ WHERE feed_id=$1 AND imported AND NOT id=ANY($6)
+ AND (($3<>'' AND (identity_hash=$2 OR guid=$3))
+  OR ($4<>'' AND url=$4 AND title=$5 AND ($3='' OR coalesce(guid,'')='')))
+ ORDER BY coalesce(guid=$3,false) DESC,id LIMIT 1`,
+		feedID, byGUID, p.item.GUID, p.item.URL, p.item.Title, adopted).Scan(&p.id, &p.seq, &p.firstSeen, &deleted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, fmt.Errorf("find imported entry: %w", err)
+	}
+	p.kind = syncmodel.EntryUpdated
+	p.adopt = true
+	return true, deleted, nil
+}
+
+// storeEntryVersion stores p's sanitised content version and makes it, with
+// p's metadata, the entry's current state. p.id must already exist.
+func storeEntryVersion(ctx context.Context, tx pgx.Tx, p ingestChange, at time.Time) error {
+	if _, err := tx.Exec(ctx, `INSERT INTO contents(entry_id,content_hash,sanitizer_version,source,html,text,created_at,excerpt_only) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(entry_id,content_hash,sanitizer_version,source) DO UPDATE SET excerpt_only=EXCLUDED.excerpt_only`, p.id, p.content, p.item.SanitizerVersion, string(p.item.ContentSource), p.item.ContentHTML, p.item.ContentText, at, p.excerptOnly); err != nil {
+		return fmt.Errorf("store content version: %w", err)
+	}
+	enclosures := p.item.Enclosures
+	if enclosures == nil {
+		enclosures = []Enclosure{}
+	}
+	body, err := json.Marshal(enclosures)
+	if err != nil {
+		return fmt.Errorf("encode enclosures: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE entries SET guid=$2,url=$3,title=$4,author=$5,published_at=$6,updated_at=$7,content_hash=$8,language=$9,enclosures=$10 WHERE id=$1`, p.id, p.item.GUID, p.item.URL, p.item.Title, p.item.Author, p.item.PublishedAt, p.item.UpdatedAt, p.content, p.item.Language, body); err != nil {
+		return fmt.Errorf("update ingested entry: %w", err)
+	}
+	return nil
+}
+
+// announceEntry emits p's change to one subscriber at the allocated rev and
+// stamps that user's entry revision.
+func announceEntry(ctx context.Context, tx pgx.Tx, user, subscription, rev int64, p ingestChange, at time.Time) error {
+	e := syncmodel.Entry{ID: syncmodel.ID(p.id), SubscriptionID: syncmodel.ID(subscription), Seq: p.seq, FirstSeenAt: p.firstSeen, Rev: uint64(rev)}
+	if p.item.PublishedAt != nil {
+		e.PublishedAt = *p.item.PublishedAt
+	}
+	if err := insertEvent(ctx, tx, user, rev, string(p.kind), map[string]any{"entry": e}, at); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO entry_revisions(user_id,entry_id,rev) VALUES($1,$2,$3) ON CONFLICT(user_id,entry_id) DO UPDATE SET rev=EXCLUDED.rev`, user, p.id, rev); err != nil {
+		return fmt.Errorf("stamp ingested entry: %w", err)
+	}
+	return nil
 }
 
 func timePtrEqual(a, b *time.Time) bool {

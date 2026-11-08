@@ -3,6 +3,8 @@ package cli
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -204,6 +206,183 @@ func TestBriefingCursor(t *testing.T) {
 	requireCode(t, code, exitOK, errOut)
 	if requests := log.snapshot(); len(requests) != 2 {
 		t.Fatalf("requests = %+v", requests)
+	}
+}
+
+// writeExport writes a small export file and returns its path.
+func writeExport(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "starred.json")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// requireLines asserts the output lines, ignoring table padding.
+func requireLines(t *testing.T, out string, want []string) {
+	t.Helper()
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if len(lines) != len(want) {
+		t.Fatalf("output has %d lines, want %d:\n%s", len(lines), len(want), out)
+	}
+	for i, line := range lines {
+		if got := strings.Join(strings.Fields(line), " "); got != want[i] {
+			t.Fatalf("line %d = %q, want %q", i, got, want[i])
+		}
+	}
+}
+
+func TestEntriesImportRequestAndOutput(t *testing.T) {
+	export := []byte(`{"subscriptions":[],"items":[{"title":"An article"}]}` + "\n")
+	file := writeExport(t, string(export))
+	report := keptImportReport{
+		Results: []keptImportResult{
+			{Index: 0, Status: "created", EntryID: 12, SubscriptionID: 3, FeedURL: "https://a.example/feed", Title: "An article"},
+			{Index: 1, Status: "matched", EntryID: 13, Title: "Another"},
+			{Index: 2, Status: "not_subscribed", FeedURL: "https://b.example/rss", Title: "Third"},
+			{Index: 3, Status: "failed", Title: "Broken", Error: "the article has no ID, link or title"},
+		},
+		Subscribed: []subscription{testSubscription(), {ID: 6, URL: "https://example.com/other.xml"}},
+	}
+	code, out, errOut, log := runStub(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/kept:import" || r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+			t.Errorf("content type = %q", ct)
+		}
+		if got := r.URL.Query().Get("missing_feeds"); got != "" {
+			t.Errorf("missing_feeds = %q, want empty by default", got)
+		}
+		writeJSON(w, report)
+	}, testToken, "entries", "import", file)
+	requireCode(t, code, exitOK, errOut)
+	requests := log.snapshot()
+	if len(requests) != 1 {
+		t.Fatalf("requests = %d", len(requests))
+	}
+	if string(requests[0].body) != string(export) {
+		t.Fatalf("body = %q, want %q", requests[0].body, export)
+	}
+	requireLines(t, out, []string{
+		"ARTICLE RESULT TITLE",
+		"0 created An article",
+		"1 matched Another",
+		"2 not subscribed: https://b.example/rss Third",
+		"3 failed: the article has no ID, link or title Broken",
+		"subscribed: Example Feed",
+		"subscribed: https://example.com/other.xml",
+		"summary: 1 created, 1 matched, 1 not subscribed, 1 failed",
+		"1 skipped because you don't follow their feed; run again with --subscribe-missing to subscribe and import them",
+	})
+}
+
+func TestEntriesImportSubscribeMissing(t *testing.T) {
+	file := writeExport(t, `{}`)
+	report := keptImportReport{
+		Results: []keptImportResult{
+			{Index: 0, Status: "not_subscribed", FeedURL: "https://b.example/rss", Title: "Third"},
+		},
+	}
+	code, out, errOut, log := runStub(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("missing_feeds"); got != "subscribe" {
+			t.Errorf("missing_feeds = %q, want subscribe", got)
+		}
+		writeJSON(w, report)
+	}, testToken, "entries", "import", "--subscribe-missing", file)
+	requireCode(t, code, exitOK, errOut)
+	if strings.Contains(out, "skipped because you don't follow") {
+		t.Fatalf("hint printed with --subscribe-missing: %q", out)
+	}
+	if requests := log.snapshot(); len(requests) != 1 {
+		t.Fatalf("requests = %d", len(requests))
+	}
+}
+
+func TestEntriesImportStatusLabels(t *testing.T) {
+	file := writeExport(t, `{}`)
+	report := keptImportReport{
+		Results: []keptImportResult{
+			{Index: 0, Status: "unchanged", Title: "Kept already"},
+			{Index: 1, Status: "unkept", Title: "Removed"},
+			{Index: 2, Status: "gone", Title: "Retained out"},
+			{Index: 3, Status: "not_subscribed"},
+		},
+	}
+	code, out, errOut, _ := runStub(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, report)
+	}, testToken, "entries", "import", file)
+	requireCode(t, code, exitOK, errOut)
+	requireLines(t, out, []string{
+		"ARTICLE RESULT TITLE",
+		"0 unchanged Kept already",
+		"1 unkept Removed",
+		"2 gone Retained out",
+		"3 not subscribed -",
+		"summary: 1 unchanged, 1 unkept, 1 not subscribed, 1 gone",
+		"1 skipped because you don't follow their feed; run again with --subscribe-missing to subscribe and import them",
+	})
+}
+
+func TestEntriesImportEmptyReport(t *testing.T) {
+	file := writeExport(t, `{}`)
+	code, out, errOut, _ := runStub(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, keptImportReport{})
+	}, testToken, "entries", "import", file)
+	requireCode(t, code, exitOK, errOut)
+	requireLines(t, out, []string{"ARTICLE RESULT TITLE", "summary: nothing to import"})
+}
+
+func TestEntriesImportJSON(t *testing.T) {
+	file := writeExport(t, `{}`)
+	report := keptImportReport{
+		Results: []keptImportResult{
+			{Index: 0, Status: "created", EntryID: 12, Title: "An article"},
+			{Index: 1, Status: "failed", Title: "Broken", Error: "no id"},
+		},
+		Subscribed: []subscription{testSubscription()},
+	}
+	code, out, errOut, _ := runStub(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, report)
+	}, testToken, "--json", "entries", "import", file)
+	requireCode(t, code, exitOK, errOut)
+	var decoded keptImportReport
+	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, out)
+	}
+	if len(decoded.Results) != 2 || decoded.Results[0].Status != "created" || decoded.Results[1].Error != "no id" {
+		t.Fatalf("decoded = %+v", decoded)
+	}
+	if len(decoded.Subscribed) != 1 || decoded.Subscribed[0].Title != "Example Feed" {
+		t.Fatalf("decoded = %+v", decoded)
+	}
+	if strings.Contains(out, "summary:") {
+		t.Fatalf("--json added text: %q", out)
+	}
+}
+
+func TestEntriesImportRequiresFile(t *testing.T) {
+	code, _, errOut, log := runStub(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("server should not be called")
+	}, testToken, "entries", "import")
+	requireCode(t, code, exitUsage, errOut)
+	if !strings.Contains(errOut, "usage: earnest entries import") {
+		t.Fatalf("stderr = %q", errOut)
+	}
+	if requests := log.snapshot(); len(requests) != 0 {
+		t.Fatalf("requests = %d", len(requests))
+	}
+}
+
+func TestEntriesImportMissingFile(t *testing.T) {
+	code, _, errOut, _ := runStub(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("server should not be called")
+	}, testToken, "entries", "import", filepath.Join(t.TempDir(), "absent.json"))
+	requireCode(t, code, exitFailure, errOut)
+	if !strings.Contains(errOut, "read export:") {
+		t.Fatalf("stderr = %q", errOut)
 	}
 }
 

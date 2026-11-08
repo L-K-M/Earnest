@@ -516,6 +516,26 @@ export interface paths {
         patch: operations["rename-folder"];
         trace?: never;
     };
+    "/v1/kept:import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import starred articles into Kept
+         * @description Keeps the articles of a Google Reader JSON export, such as the starred-articles export of FreshRSS, Inoreader or Google Takeout. Articles Earnest already has are kept; others are stored from the export. The import never rewrites existing articles, never overrides an article you un-kept, and keeps imported articles out of the river.
+         */
+        post: operations["import-kept"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/labels": {
         parameters: {
             query?: never;
@@ -1511,6 +1531,23 @@ export interface components {
             citations: components["schemas"]["PassageCitation"][] | null;
             text: string;
             verified: boolean;
+        };
+        KeptImportReport: {
+            results: components["schemas"]["KeptImportResult"][] | null;
+            subscribed: components["schemas"]["Subscription"][] | null;
+        };
+        KeptImportResult: {
+            /** Format: int64 */
+            entry_id?: number;
+            error?: string;
+            feed_url?: string;
+            /** Format: int64 */
+            index: number;
+            /** @enum {string} */
+            status: "created" | "matched" | "unchanged" | "unkept" | "not_subscribed" | "gone" | "failed";
+            /** Format: int64 */
+            subscription_id?: number;
+            title?: string;
         };
         Label: {
             deleted: boolean;
@@ -6355,6 +6392,127 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Folder"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Gone */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    "import-kept": {
+        parameters: {
+            query?: {
+                /** @description What to do with articles whose feed you don't follow: skip them, or subscribe to the feed first. */
+                missing_feeds?: "skip" | "subscribe";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeptImportReport"];
                 };
             };
             /** @description Bad Request */

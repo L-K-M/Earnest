@@ -100,6 +100,7 @@ func build(svc *service.Service, auth *service.Auth, logger *slog.Logger, baseUR
 	s.readerRoutes()
 	s.syncRoutes()
 	s.opmlRoutes()
+	s.keptImportRoutes()
 	s.annotationRoutes()
 	s.notificationRoutes()
 	s.pushRoutes()
@@ -272,6 +273,19 @@ func register[I, O any](s *server, method, path, id string, access routeAccess, 
 	registerStatus(s, method, path, id, access, http.StatusOK, fn)
 }
 func registerStatus[I, O any](s *server, method, path, id string, access routeAccess, status int, fn func(context.Context, *I) (O, error)) {
+	registerOperation(s, method, path, id, access, status, defaultMaxBodyBytes, fn)
+}
+
+// routeUpload is route for an authenticated upload larger than the default
+// request body limit.
+func routeUpload[I, O any](s *server, method, path, id string, maxBody int64, fn func(context.Context, *I) (O, error)) {
+	registerOperation(s, method, path, id, authenticatedAccess, http.StatusOK, maxBody, fn)
+}
+
+// defaultMaxBodyBytes bounds every request body unless a route raises it.
+const defaultMaxBodyBytes = 8 << 20
+
+func registerOperation[I, O any](s *server, method, path, id string, access routeAccess, status int, maxBody int64, fn func(context.Context, *I) (O, error)) {
 	security := []map[string][]string{{"bearer": {}}, {"session": {}}}
 	if method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions {
 		security[1]["csrf"] = []string{}
@@ -279,7 +293,7 @@ func registerStatus[I, O any](s *server, method, path, id string, access routeAc
 	if access == publicAccess {
 		security = []map[string][]string{}
 	}
-	huma.Register(s.api, huma.Operation{Method: method, Path: path, OperationID: id, DefaultStatus: status, Metadata: map[string]any{"public": access == publicAccess}, Security: security, Errors: []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusGone, http.StatusTooManyRequests, http.StatusServiceUnavailable}, MaxBodyBytes: 8 << 20}, func(ctx context.Context, in *I) (*output[O], error) {
+	huma.Register(s.api, huma.Operation{Method: method, Path: path, OperationID: id, DefaultStatus: status, Metadata: map[string]any{"public": access == publicAccess}, Security: security, Errors: []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusGone, http.StatusTooManyRequests, http.StatusServiceUnavailable}, MaxBodyBytes: maxBody}, func(ctx context.Context, in *I) (*output[O], error) {
 		result, err := fn(ctx, in)
 		if err != nil {
 			var p *problem

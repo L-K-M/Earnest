@@ -45,8 +45,14 @@ placeholder until the web bundle has been copied into `internal/web/dist`.
    leaves its row in place, avoiding a moving target during a reading session.
 7. In Manage feeds, subscribe by URL, set credentials and custom headers, choose
    cadence/full-text behavior, manage folders, unsubscribe, refresh a feed, import
-   or export OPML, and mute keywords/authors. Feed health explains failure classes
-   and shows the service's last attempt/success and next scheduled fetch.
+   or export OPML, import starred articles from another reader's Google Reader
+   JSON export into Kept, and mute keywords/authors. Feed health explains failure
+   classes and shows the service's last attempt/success and next scheduled fetch.
+
+Importing starred articles keeps the articles Earnest already has and stores the
+rest from the export. It never rewrites an article, leaves out articles you
+removed from Kept, and keeps imported articles out of Today. Articles from feeds
+you don't follow are skipped unless you choose to subscribe to those feeds.
 
 Search separates publisher matches from labelled agent notes and supports
 full-text search without models. When embeddings are enabled, Hybrid search and

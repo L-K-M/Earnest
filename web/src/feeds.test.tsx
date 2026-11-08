@@ -5,8 +5,8 @@ import {request} from './request'
 import {Feeds} from './FeedSettings'
 import {
   defaultReadingSettings, explainHealth, groupByFolder, healthPending, isFirehose,
-  normalizeFeedURLInput, parseCredentialHeaders, settingsBody, summarizeImport,
-  type Folder, type OPMLResult, type Subscription,
+  normalizeFeedURLInput, parseCredentialHeaders, settingsBody, summarizeImport, summarizeKeptImport,
+  type Folder, type KeptImportReport, type OPMLResult, type Subscription,
 } from './feeds'
 
 vi.mock('./request', () => ({request: vi.fn()}))
@@ -73,6 +73,44 @@ describe('feed rules', () => {
       {path: [2], deferred: false, error: 'invalid feed URL'},
     ]
     expect(summarizeImport(results)).toEqual({feeds: 1, folders: 1, deferred: 1, failed: ['invalid feed URL']})
+  })
+
+  it('summarizes a kept import by status', () => {
+    const report: KeptImportReport = {
+      results: [
+        {index: 0, status: 'created', title: 'New'},
+        {index: 1, status: 'matched', title: 'Found'},
+        {index: 2, status: 'unchanged', title: 'Kept'},
+        {index: 3, status: 'unkept', title: 'Removed'},
+        {index: 4, status: 'gone', title: 'Expired'},
+        {index: 5, status: 'not_subscribed', feed_url: 'https://b.example/rss', title: 'Six'},
+        {index: 6, status: 'not_subscribed', feed_url: 'https://a.example/feed', title: 'Seven'},
+        {index: 7, status: 'not_subscribed', feed_url: 'https://b.example/rss', title: 'Eight'},
+        {index: 8, status: 'not_subscribed', title: 'Nine'},
+        {index: 9, status: 'failed', title: '', error: ''},
+        {index: 10, status: 'failed', title: 'Broken', error: 'no link'},
+      ],
+      subscribed: [sub(), sub(), sub()],
+    }
+    expect(summarizeKeptImport(report)).toEqual({
+      added: 1,
+      existing: 2,
+      unkept: 1,
+      gone: 1,
+      skipped: [
+        {feedURL: 'https://b.example/rss', count: 2},
+        {feedURL: '', count: 1},
+        {feedURL: 'https://a.example/feed', count: 1},
+      ],
+      failed: ['Article 10: could not be imported', 'Broken: no link'],
+      subscribed: 3,
+    })
+  })
+
+  it('treats null lists as empty in a kept import', () => {
+    expect(summarizeKeptImport({results: null, subscribed: null})).toEqual({
+      added: 0, existing: 0, unkept: 0, gone: 0, skipped: [], failed: [], subscribed: 0,
+    })
   })
 
   it('detects firehoses and pending health', () => {
@@ -192,6 +230,55 @@ describe('Feeds', () => {
     const post = calls('/v1/opml:import', 'POST')[0]
     expect(post[0]).toBe('/v1/opml:import')
     expect(new Headers(post[1]?.headers).get('Content-Type')).toBe('text/x-opml')
+  })
+
+  it('imports starred articles and reports the outcome', async () => {
+    api({
+      '/v1/subscriptions': [],
+      '/v1/folders': [],
+      '/v1/mutes': [],
+      '/v1/kept:import': {
+        results: [
+          {index: 0, status: 'created', title: 'New'},
+          {index: 1, status: 'matched', title: 'Found'},
+          {index: 2, status: 'not_subscribed', feed_url: 'https://b.example/rss', title: 'Skipped'},
+          {index: 3, status: 'failed', title: 'Broken', error: 'no link'},
+        ],
+        subscribed: [sub()],
+      },
+    })
+    render(<Feeds onChanged={() => {}} />)
+    fireEvent.change(await screen.findByLabelText('Import starred articles'), {target: {files: [new window.File(['{"items":[]}'], 'starred.json', {type: 'application/json'})]}})
+    fireEvent.click(screen.getByRole('button', {name: 'Import starred'}))
+    await screen.findByText(/2 articles in Kept: 1 added from the export, 1 already in Earnest/)
+    await screen.findByText(/Subscribed to 1 feed/)
+    await screen.findByText(/1 skipped because you don/)
+    expect(screen.getByText('https://b.example/rss (1)')).toBeTruthy()
+    await screen.findByText(/1 could not be imported: Broken: no link/)
+    const post = calls('/v1/kept:import', 'POST')[0]
+    expect(post[0]).toBe('/v1/kept:import?missing_feeds=skip')
+    expect(new Headers(post[1]?.headers).get('Content-Type')).toBe('application/json')
+    expect(post[1]?.body).toBe('{"items":[]}')
+    fireEvent.click(screen.getByRole('button', {name: 'Subscribe to these feeds and import again'}))
+    await waitFor(() => expect(calls('/v1/kept:import', 'POST')).toHaveLength(2))
+    const again = calls('/v1/kept:import', 'POST')[1]
+    expect(again[0]).toBe('/v1/kept:import?missing_feeds=subscribe')
+    expect(again[1]?.body).toBe('{"items":[]}')
+  })
+
+  it('subscribes to missing feeds when the option is checked before importing', async () => {
+    api({
+      '/v1/subscriptions': [],
+      '/v1/folders': [],
+      '/v1/mutes': [],
+      '/v1/kept:import': {results: [], subscribed: []},
+    })
+    render(<Feeds onChanged={() => {}} />)
+    fireEvent.change(await screen.findByLabelText('Import starred articles'), {target: {files: [new window.File(['{"items":[]}'], 'starred.json', {type: 'application/json'})]}})
+    fireEvent.click(screen.getByLabelText("Also subscribe to feeds you don't follow"))
+    fireEvent.click(screen.getByRole('button', {name: 'Import starred'}))
+    await waitFor(() => expect(calls('/v1/kept:import', 'POST')).toHaveLength(1))
+    expect(calls('/v1/kept:import', 'POST')[0][0]).toBe('/v1/kept:import?missing_feeds=subscribe')
   })
 
   it('updates the title input when the feed title changes externally', async () => {

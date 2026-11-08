@@ -1,9 +1,9 @@
 import {useCallback, useEffect, useState} from 'react'
 import {
   CADENCES, EXTRACT_MODES, groupByFolder, isFirehose, newOp, normalizeFeedURLInput, parseCredentialHeaders, summarizeImport,
-  createFolder, createMute, deleteFolder, deleteMute, explainHealth, exportOPML, importOPML, readFileText,
+  createFolder, createMute, deleteFolder, deleteMute, explainHealth, exportOPML, importKept, importOPML, readFileText, summarizeKeptImport,
   listFolders, listMutes, listSubscriptions, patchSubscription, refreshSubscription, renameFolder, subscribe, unsubscribe,
-  type Folder, type Mute, type OPMLResult, type SubscribeBody, type Subscription, type SubscriptionPatch,
+  type Folder, type KeptImportReport, type MissingFeeds, type Mute, type OPMLResult, type SubscribeBody, type Subscription, type SubscriptionPatch,
 } from './feeds'
 
 function message(error: unknown, fallback: string): string {
@@ -67,6 +67,7 @@ export function Feeds({onChanged}: {onChanged: () => void}) {
     {notice && <p role="status">{notice}</p>}
     <SubscribeForm folders={folders} busy={busy} act={act} />
     <OPMLTools busy={busy} act={act} />
+    <KeptImportTools busy={busy} act={act} />
     <FolderSection folders={folders} busy={busy} act={act} />
     <SubscriptionSection subs={subs} folders={folders} busy={busy} act={act} />
     <MuteSection mutes={mutes} busy={busy} act={act} />
@@ -192,6 +193,61 @@ function OPMLTools({busy, act}: {busy: boolean; act: Act}) {
     {error && <p role="alert">{error}</p>}
     {summary && <div role="status">
       <p>{summary.feeds} {summary.feeds === 1 ? 'feed' : 'feeds'} subscribed{summary.folders > 0 && `, ${summary.folders} ${summary.folders === 1 ? 'folder' : 'folders'} created`}{summary.deferred > 0 && '. Their first fetches run in the background.'}</p>
+      {summary.failed.length > 0 && <p role="alert">{summary.failed.length} could not be imported: {summary.failed.join('; ')}</p>}
+    </div>}
+  </section>
+}
+
+function KeptImportTools({busy, act}: {busy: boolean; act: Act}) {
+  const [file, setFile] = useState<File | null>(null)
+  const [text, setText] = useState('')
+  const [subscribe, setSubscribe] = useState(false)
+  const [report, setReport] = useState<KeptImportReport | null>(null)
+  const [error, setError] = useState('')
+  const [working, setWorking] = useState(false)
+
+  async function importText(contents: string, missing: MissingFeeds) {
+    setWorking(true)
+    setError('')
+    try {
+      setReport(await importKept(contents, missing))
+      await act(async () => undefined, 'Starred articles imported.')
+    } catch (cause) {
+      setError(message(cause, 'Could not import that file.'))
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  async function upload() {
+    if (!file) return
+    try {
+      const contents = await readFileText(file)
+      setText(contents)
+      await importText(contents, subscribe ? 'subscribe' : 'skip')
+    } catch (cause) {
+      setError(message(cause, 'Could not import that file.'))
+    }
+  }
+
+  const summary = report && summarizeKeptImport(report)
+  const skippedTotal = summary?.skipped.reduce((total, group) => total + group.count, 0) ?? 0
+  return <section aria-labelledby="kept-import-heading"><h3 id="kept-import-heading">Starred articles</h3>
+    <p>Bring starred articles from another reader into Kept. Export them as Google Reader JSON, for example from FreshRSS or Inoreader.</p>
+    <label>Import starred articles<input type="file" accept=".json,application/json" onChange={e => setFile(e.target.files?.[0] ?? null)} /></label>
+    <label><input type="checkbox" checked={subscribe} onChange={e => setSubscribe(e.target.checked)} /> Also subscribe to feeds you don't follow</label>
+    <button disabled={busy || working || !file} onClick={() => { void upload() }}>Import starred</button>
+    {error && <p role="alert">{error}</p>}
+    {summary && <div role="status">
+      <p>{summary.added + summary.existing} {summary.added + summary.existing === 1 ? 'article' : 'articles'} in Kept: {summary.added} added from the export, {summary.existing} already in Earnest.</p>
+      {summary.subscribed > 0 && <p>Subscribed to {summary.subscribed} {summary.subscribed === 1 ? 'feed' : 'feeds'}. Their first fetches run in the background.</p>}
+      {summary.unkept > 0 && <p>{summary.unkept} left out because you removed them from Kept.</p>}
+      {summary.gone > 0 && <p>{summary.gone} no longer available in Earnest.</p>}
+      {summary.skipped.length > 0 && <>
+        <p>{skippedTotal} skipped because you don't follow their feed:</p>
+        <ul>{summary.skipped.map(group => <li key={group.feedURL}>{group.feedURL || 'Unknown feed'} ({group.count})</li>)}</ul>
+        <button disabled={busy || working} onClick={() => { void importText(text, 'subscribe') }}>Subscribe to these feeds and import again</button>
+      </>}
       {summary.failed.length > 0 && <p role="alert">{summary.failed.length} could not be imported: {summary.failed.join('; ')}</p>}
     </div>}
   </section>

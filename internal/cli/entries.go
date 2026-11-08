@@ -3,7 +3,9 @@ package cli
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -13,7 +15,7 @@ const maxEntryLimit = 200
 
 func (a *app) entries(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return usagef("usage: earnest entries list")
+		return usagef("usage: earnest entries list|import")
 	}
 	c, err := a.client()
 	if err != nil {
@@ -22,6 +24,8 @@ func (a *app) entries(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "list":
 		return a.entriesList(ctx, c, args[1:])
+	case "import":
+		return a.entriesImport(ctx, c, args[1:])
 	default:
 		return usagef("unknown entries command %q", args[0])
 	}
@@ -98,6 +102,104 @@ func (a *app) printEntries(page entriesPage) {
 	writeTable(a.out, []string{"ID", "SUB", "TITLE", "PUBLISHED", "STATE"}, rows)
 	if page.NextCursor != "" {
 		fmt.Fprintf(a.out, "more: --cursor %s\n", page.NextCursor)
+	}
+}
+
+// keptImportSummary orders the summary counts; "not subscribed" is the
+// human label for the not_subscribed status.
+var keptImportSummary = []struct {
+	status string
+	label  string
+}{
+	{"created", "created"},
+	{"matched", "matched"},
+	{"unchanged", "unchanged"},
+	{"unkept", "unkept"},
+	{"not_subscribed", "not subscribed"},
+	{"gone", "gone"},
+	{"failed", "failed"},
+}
+
+func (a *app) entriesImport(ctx context.Context, c *client, args []string) error {
+	subscribeMissing := false
+	fs := newFlagSet("entries import")
+	fs.BoolVar(&subscribeMissing, "subscribe-missing", false, "subscribe to feeds you don't follow, then import their articles")
+	if err := parseFlags(fs, args, nil); err != nil || fs.NArg() != 1 {
+		return usagef("usage: earnest entries import [--subscribe-missing] <export.json>")
+	}
+	body, err := os.ReadFile(fs.Arg(0))
+	if err != nil {
+		return fmt.Errorf("read export: %w", err)
+	}
+	var query url.Values
+	if subscribeMissing {
+		query = url.Values{"missing_feeds": {"subscribe"}}
+	}
+	raw, err := c.do(ctx, http.MethodPost, "/v1/kept:import", query, "application/json", body)
+	if err != nil {
+		return err
+	}
+	if a.json {
+		return a.writeJSON(raw)
+	}
+	var report keptImportReport
+	if err := decode(raw, &report); err != nil {
+		return err
+	}
+	a.printKeptImport(report, subscribeMissing)
+	return nil
+}
+
+// printKeptImport renders the per-article table, the subscriptions the import
+// created, the status summary and the --subscribe-missing hint.
+func (a *app) printKeptImport(report keptImportReport, subscribeMissing bool) {
+	rows := tableRows(len(report.Results))
+	counts := map[string]int{}
+	for _, result := range report.Results {
+		counts[result.Status]++
+		title := result.Title
+		if title == "" {
+			title = "-"
+		}
+		rows = append(rows, []string{strconv.Itoa(result.Index), keptResultCell(result), cell(title)})
+	}
+	writeTable(a.out, []string{"ARTICLE", "RESULT", "TITLE"}, rows)
+	for _, sub := range report.Subscribed {
+		title := sub.Title
+		if title == "" {
+			title = sub.URL
+		}
+		fmt.Fprintf(a.out, "subscribed: %s\n", title)
+	}
+	if len(report.Results) == 0 {
+		fmt.Fprintln(a.out, "summary: nothing to import")
+	} else {
+		parts := make([]string, 0, len(keptImportSummary))
+		for _, item := range keptImportSummary {
+			if counts[item.status] > 0 {
+				parts = append(parts, fmt.Sprintf("%d %s", counts[item.status], item.label))
+			}
+		}
+		fmt.Fprintf(a.out, "summary: %s\n", strings.Join(parts, ", "))
+	}
+	if !subscribeMissing && counts["not_subscribed"] > 0 {
+		fmt.Fprintf(a.out, "%d skipped because you don't follow their feed; run again with --subscribe-missing to subscribe and import them\n", counts["not_subscribed"])
+	}
+}
+
+// keptResultCell renders one result cell: the error for failures, the feed URL
+// for skipped feeds, or the status with underscores turned into spaces.
+func keptResultCell(result keptImportResult) string {
+	switch result.Status {
+	case "failed":
+		return "failed: " + result.Error
+	case "not_subscribed":
+		if result.FeedURL != "" {
+			return "not subscribed: " + result.FeedURL
+		}
+		return "not subscribed"
+	default:
+		return strings.ReplaceAll(result.Status, "_", " ")
 	}
 }
 
