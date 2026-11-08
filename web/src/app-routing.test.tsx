@@ -28,6 +28,7 @@ beforeEach(async () => {
     if (path === '/v1/subscriptions') return [{id:8,feed_id:42,title:'Rust',url:'https://feed.test',deleted:false,folder_id:0,health:{consecutive_failures:0}}]
     if (path === '/v1/entries/4') return entries[0]
     if (path === '/v1/entries/77') throw new RequestError(404, 'Not found')
+    if (path === '/v1/entries/5') return new Promise(() => undefined)
     if (path === '/v1/pipeline') return {ask:'disabled'}
     return []
   })
@@ -55,9 +56,10 @@ it('opens from the list with a new history entry and goes back to it', async () 
   await start('/today')
   fireEvent.click(await screen.findByRole('button',{name:'Open Article 5'},{timeout:5000}))
   await waitFor(() => expect(location.pathname).toBe('/today/articles/5'))
+  // The list's copy renders the article at once; the refresh behind it
+  // (which never answers here) is not waited for.
   expect(await screen.findByRole('heading',{name:'Article 5'})).toBeTruthy()
-  // The article was handed over from the list; no extra request was needed.
-  expect(vi.mocked(request).mock.calls.some(([path]) => path === '/v1/entries/5')).toBe(false)
+  await waitFor(() => expect(vi.mocked(request).mock.calls.some(([path]) => path === '/v1/entries/5')).toBe(true))
   fireEvent.click(screen.getByRole('button',{name:'Back'}))
   await waitFor(() => expect(location.pathname).toBe('/today'))
 })

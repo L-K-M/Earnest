@@ -8,7 +8,7 @@ describe('offline cache allowlist',() => {
     ['/icon-192.png','shell'],['/wordmark.png','shell'],['/icon-512.png',null],
     ['/v1/me','resource'],['/v1/settings','resource'],['/v1/subscriptions','resource'],
     ['/v1/positions/feed%3A7','reading'],['/v1/entries?view=river&after_seq=7','reading'],
-    ['/v1/entries/42/content','content'],
+    ['/v1/entries/42/content','content'],['/v1/entries/42','reading'],
     ['/v1/state:batch',null],['/v1/events',null],['/v1/bootstrap',null],['/v1/changes?cursor=1',null],
     ['/web/content-url/42',null],['/v1/tokens',null],['/v1/session/login',null],
     ['/v1/entries/42/annotations',null],['/v1/entries/0/content',null],

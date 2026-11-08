@@ -134,7 +134,9 @@ function Session({onLogout}: {onLogout: () => void}) {
   useEffect(() => { const save = () => localStorage.setItem('earnest.lastVisit', new Date().toISOString()); window.addEventListener('pagehide', save); return () => window.removeEventListener('pagehide', save) }, [])
 
   const userID = identity?.user_id ?? 0
-  const remember = useCallback((entry: Entry) => { queryClient.setQueryData(['entry', userID, entry.id], entry) }, [queryClient, userID])
+  // The list's copy renders the article at once; marking it as old makes the
+  // reader refresh it in the background, which also stores it for offline.
+  const remember = useCallback((entry: Entry) => { queryClient.setQueryData(['entry', userID, entry.id], entry, {updatedAt: 0}) }, [queryClient, userID])
   function cachedEntry(id: number | undefined): Entry | undefined {
     if (id === undefined) return undefined
     for (const [, data] of queryClient.getQueriesData<{pages?: {entries?: Entry[]}[]}>({queryKey: ['river']})) {
@@ -216,7 +218,7 @@ function Session({onLogout}: {onLogout: () => void}) {
   // belongs to usually comes from the offline cache a moment later; the retry
   // finds it there.
   const openQuery = useQuery({
-    queryKey: ['entry', userID, openID], enabled: signedIn && openID !== undefined, staleTime: Infinity,
+    queryKey: ['entry', userID, openID], enabled: signedIn && openID !== undefined, staleTime: 5 * 60_000,
     queryFn: async ({signal}) => {
       try {
         return await request<Entry>(`/v1/entries/${openID}`, {signal})
