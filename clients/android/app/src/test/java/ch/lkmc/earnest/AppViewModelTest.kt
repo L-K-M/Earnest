@@ -350,10 +350,11 @@ class AppViewModelTest {
         var unauthorizedPath: String? = null
         val model = AppViewModel(app, sessions) { api(unauthorizedPath = unauthorizedPath) }
         withTimeout(15_000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
-        val before = calls.size
         unauthorizedPath = path
         model.refresh()
-        withTimeout(15_000) { model.state.first { !model.loggedIn.value || (!it.loading && calls.drop(before).contains(path)) } }
+        // Clearing credentials and publishing the signed-out UI are separate
+        // transitions. Await the flag itself, not an earlier state emission.
+        withTimeout(15_000) { model.loggedIn.first { !it } }
         assertNull("optional metadata must not hide an owning 401", sessions.current())
         assertFalse(model.loggedIn.value)
     }

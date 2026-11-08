@@ -44,17 +44,21 @@ internal class SyncWorker(context: Context, params: WorkerParameters) : Coroutin
                 cache.beginUnreadCountsRequest(generation) { secrets.current() == session }
             }
             if (countsRequest != null) {
-                try {
-                    val counts = api.unreadCounts()
-                    cache.mergeUnreadCounts(countsRequest, counts) { secrets.current() == session }
+                val counts = try {
+                    api.unreadCounts()
                 } catch (error: ApiException) {
                     if (error.isUnauthorized && cache.ownsUnreadCounts(countsRequest)) throw error
                     // Counts are optional. Keep the last successful snapshot.
+                    null
                 } catch (error: CancellationException) {
                     throw error
                 } catch (_: Exception) {
                     // An unavailable count endpoint is not a zero count.
+                    null
                 }
+                // Only endpoint failure is optional; a failed local commit
+                // must reach the outer retry handler.
+                if (counts != null) cache.mergeUnreadCounts(countsRequest, counts) { secrets.current() == session }
             }
             SyncAccess.committed.tryEmit(session.identity.cacheKey)
             refreshWidgets(applicationContext)
