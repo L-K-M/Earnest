@@ -18,7 +18,7 @@ import {Brand} from './Brand'
 import {Icon} from './Icon'
 import {Login} from './Login'
 import {READING_VIEWS, Sidebar} from './Sidebar'
-import {currentHref, initializeHistory, Link, navigate, openedFrom, resetLocation, useLocation, useScrollRestoration, whenPresent} from './router'
+import {currentHref, initializeHistory, Link, navigate, openedFrom, resetLocation, returnTo, useLocation, useScrollRestoration, whenPresent} from './router'
 import {activityHref, parseRoute, routeSection, searchHref, TODAY, viewHref, type Route, type ViewRef} from './routes'
 
 type Identity = {user_id: number; principal_id: number}
@@ -123,7 +123,6 @@ function Session({onLogout}: {onLogout: () => void}) {
   const palette = useRef<PaletteHandle>(null)
   const drawer = useRef<HTMLDialogElement>(null)
   const page = useRef<HTMLDivElement>(null)
-  const scrollMemory = useRef(new Map<string, number>())
   const [drawerOpen, setDrawerOpen] = useState(false)
   const narrow = useMedia('(max-width: 1099px)')
   const compact = useMedia('(max-width: 759px)')
@@ -239,7 +238,8 @@ function Session({onLogout}: {onLogout: () => void}) {
     if (reason === 'generation') {
       setResettingGeneration(true);setSelected(null)
       const open = routeRef.current
-      if (open.name === 'river' && open.entry !== undefined) go(viewHref(open.view), {replace: true})
+      // Back to the list the article was opened from, as closing it would.
+      if (open.name === 'river' && open.entry !== undefined) returnTo(viewHref(open.view))
       // Old revision numbers must not re-enter sync from an offline response.
       void clearOffline().then(async () => {
         await request<Identity>('/v1/me')
@@ -252,7 +252,7 @@ function Session({onLogout}: {onLogout: () => void}) {
       return
     }
     invalidateResources()
-  }, [queryClient, go])
+  }, [queryClient])
   const syncRefresh = useRef<number | undefined>(undefined)
   const refreshAfterSync = useCallback((reason?: 'generation') => {
     // A generation rotation must clear caches at once and cancel any pending
@@ -513,7 +513,7 @@ function Session({onLogout}: {onLogout: () => void}) {
       <div className="list-pane" inert={compact && reading}>
         {resolved.missing
           ? <section className="river"><div className="empty-state"><h2 tabIndex={-1}>This {viewRef.kind} is gone</h2><p>It may have been deleted or unsubscribed on another device.</p><p><Link to="/today">Go to Today</Link></p></div></section>
-          : <River since={since} sessionStart={sessionStart} key={viewKey(view)} onNewestLoaded={seq => setNewestLoaded({key: viewKey(view), seq})} view={view} subscriptions={subs} actions={actions} selected={current} onSelect={setSelected} onOpen={openFromList} reading={reading} scrollMemory={scrollMemory.current} shortcuts={shortcuts} counts={settings.reading_mode === 'unread_counts'} summary={summary} />}
+          : <River since={since} sessionStart={sessionStart} key={viewKey(view)} onNewestLoaded={seq => setNewestLoaded({key: viewKey(view), seq})} view={view} subscriptions={subs} actions={actions} selected={current} onSelect={setSelected} onOpen={openFromList} reading={reading} shortcuts={shortcuts} counts={settings.reading_mode === 'unread_counts'} summary={summary} />}
       </div>
       <div className="reader-pane">
         {!reading ? <ReaderPlaceholder shortcuts={shortcuts} />

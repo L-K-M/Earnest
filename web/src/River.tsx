@@ -53,7 +53,7 @@ function newTabClick(event: ReactMouseEvent): boolean {
   return event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey
 }
 
-export function River({view, subscriptions, actions, selected, onSelect, onOpen, shortcuts, counts, summary, onNewestLoaded, reading = false, scrollMemory, since = '1970-01-01T00:00:00Z', sessionStart = '1970-01-01T00:00:00Z'}: {since?:string; sessionStart?:string; onNewestLoaded?: (seq: number) => void; view: View; subscriptions: Subscription[]; actions: ReaderActions; selected: Entry | null; onSelect: (entry: Entry) => void; onOpen: (entry: Entry, mode?: OpenMode) => void; shortcuts: boolean; counts: boolean; summary: SessionSummary; reading?: boolean; scrollMemory?: Map<string, number>}) {
+export function River({view, subscriptions, actions, selected, onSelect, onOpen, shortcuts, counts, summary, onNewestLoaded, reading = false, since = '1970-01-01T00:00:00Z', sessionStart = '1970-01-01T00:00:00Z'}: {since?:string; sessionStart?:string; onNewestLoaded?: (seq: number) => void; view: View; subscriptions: Subscription[]; actions: ReaderActions; selected: Entry | null; onSelect: (entry: Entry) => void; onOpen: (entry: Entry, mode?: OpenMode) => void; shortcuts: boolean; counts: boolean; summary: SessionSummary; reading?: boolean}) {
   const pipeline = usePipeline()
   const key = viewKey(view)
   const scroller = useRef<HTMLDivElement>(null)
@@ -65,7 +65,6 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   const rendered = useRef(new Map<number, {start: number; size: number}>())
   const passed = useRef(new Set<number>())
   const focusNext = useRef<number | null>(null)
-  const restored = useRef(false)
   const [error, setError] = useState('')
   const [cluster, setCluster] = useState(false)
   const position = useQuery({queryKey: ['position', key], queryFn: ({signal}) => request<{seq: number}>(`/v1/positions/${encodeURIComponent(key)}`, {signal})})
@@ -155,14 +154,6 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     return () => window.cancelAnimationFrame(frame)
   }, [key])
 
-  // Come back to the same place in a list after reading elsewhere.
-  useEffect(() => {
-    if (restored.current || !entries.length) return
-    restored.current = true
-    const top = scrollMemory?.get(key)
-    if (top && scroller.current) scroller.current.scrollTop = top
-  }, [entries.length, key, scrollMemory])
-
   // Remember which rendered rows have been inside the viewport. A row that
   // mounts already above the fold (a jump or a prepended page) never enters
   // this set, so it stays unseen until the reader actually scrolls to it.
@@ -230,7 +221,6 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     const root = scroller.current
     if (!root) return
     const top = root.scrollTop
-    scrollMemory?.set(key, top)
     for (const [id, row] of rendered.current) {
       if (row.start + row.size > top) continue
       if (!passed.current.delete(id)) continue
