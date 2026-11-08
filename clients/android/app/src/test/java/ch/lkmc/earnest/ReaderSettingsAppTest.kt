@@ -338,6 +338,7 @@ class ReaderSettingsAppTest {
         assertEquals(70L, model.state.value.readerSettings.measure)
         assertEquals(7L, model.state.value.readerSettingsUi.loadedRev)
         assertFalse("an older acknowledgement is not the active preferences", model.state.value.readerSettingsUi.success)
+        assertEquals("Newer settings are active. Review them before saving again.", model.state.value.readerSettingsUi.error)
     }
 
     @Test fun olderAcknowledgementCannotRebaseInFlightEditsOverNewerAccountFields() = runBlocking(Dispatchers.IO) {

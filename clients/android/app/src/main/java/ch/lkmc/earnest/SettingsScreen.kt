@@ -69,7 +69,7 @@ internal fun SettingsScreen(
     var addOverride by remember(state.accountKey, ui.epoch) { mutableStateOf(false) }
     var overrideFeedId by remember(state.accountKey, ui.epoch) { mutableStateOf<Long?>(null) }
     var overrideTheme by remember(state.accountKey, ui.epoch) { mutableStateOf<ReaderTheme?>(null) }
-    var overrideMeasure by remember(state.accountKey, ui.epoch) { mutableStateOf<Long?>(null) }
+    var overrideMeasureInput by remember(state.accountKey, ui.epoch) { mutableStateOf(OverrideMeasureInput.fromValue(null)) }
     var overrideFont by remember(state.accountKey, ui.epoch) { mutableStateOf<ReaderFont?>(null) }
 
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
@@ -178,7 +178,7 @@ internal fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            feeds.forEach { (subscriptionId, feedId, name) ->
+            feeds.forEach { (_, feedId, name) ->
                 val override = settings.feedOverrides[feedId.toString()]
                 Row(
                     Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -188,7 +188,7 @@ internal fun SettingsScreen(
                     Column(Modifier.weight(1f)) {
                         Text("$name (feed $feedId)", style = MaterialTheme.typography.bodyMedium)
                         Text(
-                            overrideSummary(subscriptionId, override),
+                            overrideSummary(override),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -196,7 +196,7 @@ internal fun SettingsScreen(
                     TextButton(onClick = {
                         overrideFeedId = feedId
                         overrideTheme = override?.theme
-                        overrideMeasure = override?.measure
+                        overrideMeasureInput = OverrideMeasureInput.fromValue(override?.measure)
                         overrideFont = override?.font
                     }) { Text("Override") }
                     TextButton(
@@ -216,7 +216,7 @@ internal fun SettingsScreen(
                 addOverride = false
                 overrideFeedId = feedId
                 overrideTheme = null
-                overrideMeasure = null
+                overrideMeasureInput = OverrideMeasureInput.fromValue(null)
                 overrideFont = null
             },
         )
@@ -236,11 +236,10 @@ internal fun SettingsScreen(
                         onSelect = { overrideTheme = it },
                     )
                     OutlinedTextField(
-                        value = overrideMeasure?.toString().orEmpty(),
-                        onValueChange = { value ->
-                            overrideMeasure = value.trim().toLongOrNull()?.takeIf { it in 62..72 }
-                        },
+                        value = overrideMeasureInput.text,
+                        onValueChange = { overrideMeasureInput = overrideMeasureInput.edit(it) },
                         label = { Text("Measure 62-72 (blank inherits)") },
+                        isError = !overrideMeasureInput.canApply,
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     )
@@ -259,14 +258,14 @@ internal fun SettingsScreen(
                             feedOverrides = current.feedOverrides + (
                                 editingFeed.toString() to ReaderOverride(
                                     theme = overrideTheme,
-                                    measure = overrideMeasure,
+                                    measure = overrideMeasureInput.measure,
                                     font = overrideFont,
                                 )
                                 ),
                         )
                     }
                     overrideFeedId = null
-                }) { Text("Apply") }
+                }, enabled = overrideMeasureInput.canApply) { Text("Apply") }
             },
             dismissButton = { TextButton(onClick = { overrideFeedId = null }) { Text("Cancel") } },
         )
@@ -355,8 +354,8 @@ private fun ReaderFont.label(): String = when (this) {
     ReaderFont.DYSLEXIC -> "Dyslexic"
 }
 
-private fun overrideSummary(subscriptionId: Long, override: ReaderOverride?): String {
-    if (override == null) return "Inherits subscription $subscriptionId"
+private fun overrideSummary(override: ReaderOverride?): String {
+    if (override == null) return "Inherits account settings"
     val parts = mutableListOf<String>()
     override.theme?.let { parts += "theme ${it.name.lowercase()}" }
     override.measure?.let { parts += "measure $it" }

@@ -457,11 +457,6 @@ struct ReaderPreferencesScope: Equatable {
     /// sections on screen and every window refreshes its own list.
     func refresh() async {
         guard loggedIn else { return }
-        // Exact counts are only meaningful in the unread-count reading mode;
-        // river mode never requests them.
-        if readerSettings.readingMode == .unreadCounts {
-            await refreshUnreadCounts()
-        }
         let sections = Set(windows.map(\.section))
         if sections.contains(.today) || sections.contains(.edition) || sections.contains(.feeds) {
             await refreshFeeds()
@@ -474,6 +469,10 @@ struct ReaderPreferencesScope: Equatable {
         if sections.contains(.activity) { await refreshActivity() }
         for window in windows { await window.refreshEntries() }
         rebuildPresentation()
+        // An optional counts endpoint must not delay the primary reading refresh.
+        if readerSettings.readingMode == .unreadCounts {
+            await refreshUnreadCounts()
+        }
     }
 
     func refreshFeeds() async {

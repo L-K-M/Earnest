@@ -1,5 +1,6 @@
 package ch.lkmc.earnest
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -310,6 +311,7 @@ private fun MainScaffold(
                     Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(8.dp))
                 }
                 if (showSettings) {
+                    BackHandler { showSettings = false }
                     SettingsScreen(
                         model = model,
                         state = state,
@@ -799,7 +801,7 @@ private fun FeedsScreen(
                 val text = when {
                     unreadCounts == null -> "Unread counts unavailable"
                     unreadSyncedAt != null -> "Counts as last synced ${unreadSyncedAt.relativeTime()}"
-                    else -> "Counts unavailable"
+                    else -> "Counts as last synced (time unavailable)"
                 }
                 Text(
                     text,

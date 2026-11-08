@@ -25,6 +25,13 @@ extension NetworkTests {
         return try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: TestTokens(), session: session)
     }
 
+    @Test func readerSettingsRejectsNonSettingsSyncObjects() {
+        let other = SyncObject(kind: .mute, id: 1, rev: 7)
+        #expect(APIReaderSettings(other) == nil)
+        let settings = SyncObject(kind: .settings, id: 1, rev: 7)
+        #expect(APIReaderSettings(settings)?.rev == 7)
+    }
+
     @Test func readerDefaultsMatchServerDefaults() {
         let settings = APIReaderSettings()
         #expect(settings.readingMode == .river)

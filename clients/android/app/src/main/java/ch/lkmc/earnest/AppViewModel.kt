@@ -288,10 +288,7 @@ class AppViewModel internal constructor(
                     val expired = repository.expire(Instant.now()).map { it.operation.opId }
                     // The agent-changes cursor must advance under the sync lock:
                     // a concurrent worker cycle outside it could write an older one.
-                    val changes = runCatching { cache.refreshAgentChanges(api, changesSince) }.onFailure {
-                        // Offline metadata may stay cached, not invalid credentials.
-                        if (it is ApiException && it.isUnauthorized) throw it
-                    }
+                    val changes = optionalMetadata { cache.refreshAgentChanges(api, changesSince) }
                     changes.getOrNull()?.let {
                         cache.preferences.edit {
                             putString(SessionCache.KEY_CHANGES_SINCE, sessionStartedAt.toString())
@@ -300,7 +297,7 @@ class AppViewModel internal constructor(
                     Triple(rejected, expired, changes)
                 } ?: return@launch
                 val (rejected, expired, changesResult) = synced
-                val briefs = runCatching { api.todaysBriefs() }.getOrNull()
+                val briefs = optionalMetadata { api.todaysBriefs() }.getOrNull()
                 if (briefs != null) cacheBriefs(cache, briefs)
                 val cached = briefs?.map { BriefEntity(it.principalId, it.value, it.rev) } ?: cache.db.briefs().get()
                 val names = principalNames(api)
@@ -341,6 +338,8 @@ class AppViewModel internal constructor(
                     expireSessionIfCurrent(session)
                 }
                 _state.update { current -> current.copy(error = failureText("Could not refresh", error)) }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
             } catch (error: Exception) {
                 if (currentOrExpired(session, cache)) {
                     _state.update { current -> current.copy(error = failureText("Could not refresh", error)) }
@@ -595,7 +594,11 @@ class AppViewModel internal constructor(
                         readerSettingsUi = settingsUi.copy(
                             saving = false,
                             success = canonical == updated && editedDraft == null,
-                            error = if (needsReload) "Newer settings are active. Reload before saving your draft." else null,
+                            error = when {
+                                needsReload -> "Newer settings are active. Reload before saving your draft."
+                                canonical != updated -> "Newer settings are active. Review them before saving again."
+                                else -> null
+                            },
                             draft = editedDraft,
                             // A stale acknowledgement cannot rebase unsaved
                             // edits over fields changed by a newer writer.
@@ -1046,9 +1049,17 @@ class AppViewModel internal constructor(
     private fun api(): EarnestApi? =
         activeAccount("Still signing in; the action was not saved.")?.let { apiFactory(it.second) }
 
+    /** Cache fallback must not turn cancellation or expired credentials into success. */
+    private inline fun <T> optionalMetadata(fetch: () -> T): Result<T> = try {
+        Result.success(fetch())
+    } catch (error: Exception) {
+        if (error is kotlinx.coroutines.CancellationException || (error is ApiException && error.isUnauthorized)) throw error
+        Result.failure(error)
+    }
+
     /** Maps principal IDs to the names agents chose for themselves. */
     private suspend fun principalNames(api: EarnestApi): Map<Long, String> =
-        runCatching { api.tokens() }.getOrDefault(emptyList())
+        optionalMetadata { api.tokens() }.getOrDefault(emptyList())
             .filter { it.revokedAt == null && it.name.isNotBlank() }
             .associate { it.principalId to it.name }
 

@@ -108,6 +108,7 @@ extension APIReaderSettings {
     /// saves. Missing or legacy fields fall back to the server defaults;
     /// `rev` is the object's change revision.
     public init?(_ object: SyncObject) {
+        guard object.kind == .settings else { return nil }
         var settings = APIReaderSettings()
         settings.rev = object.rev
         if let value = object.fields["reading_mode"]?.stringValue.flatMap(APIReadingMode.init(rawValue:)) {

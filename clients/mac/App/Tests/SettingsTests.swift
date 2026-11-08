@@ -106,11 +106,13 @@ import EarnestKit
         return (api, session)
     }
 
-    private func waitUntil(_ condition: @escaping () -> Bool) async throws {
+    private func waitUntil(file: StaticString = #filePath, line: UInt = #line,
+                           _ condition: @escaping () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(5)
         while !condition() && Date() < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
+        XCTAssertTrue(condition(), "Timed out waiting for settings state", file: file, line: line)
     }
 
     // MARK: - Explicit save and stable retries
@@ -470,6 +472,26 @@ import EarnestKit
     }
 
     // MARK: - Counts gating and errors
+
+    func testPrimaryRefreshDoesNotWaitForOptionalCountsFirst() async throws {
+        let (api, session) = try makeAPI([
+            .init(path: "/v1/subscriptions", body: "[]"),
+            .init(path: "/v1/entries:counts", body: #"{"by_subscription":{},"later":1,"kept":0,"total":3}"#),
+        ])
+        defer { session.invalidateAndCancel() }
+        let engine = SyncEngine(store: MemorySyncStore())
+        let model = makeModel(api: api, engine: engine)
+        try engine.mergeSettings(APIReaderSettings(readingMode: .unreadCounts, rev: 2), generation: "g1")
+        try model.restoreReaderPreferences()
+        model.loggedIn = true
+        let window = WindowModel(app: model)
+        window.section = .feeds
+
+        await model.refresh()
+
+        XCTAssertEqual(model.unreadCounts?.total, 3)
+        SettingsHTTP.assertFinished()
+    }
 
     func testCountsAreOnlyFetchedInUnreadModeAndPersisted() async throws {
         let (api, session) = try makeAPI([
