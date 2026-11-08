@@ -212,8 +212,8 @@ export function whenPresent<T>(find: () => T | null | undefined, apply: (value: 
 }
 
 // useScrollRestoration remembers a scroll container's position per history
-// entry. Back and Forward restore it, a new navigation starts at the top, and
-// a #fragment scrolls its target into view and moves focus there.
+// entry. Back and Forward restore it, a pushed navigation starts at the top,
+// and a #fragment scrolls its target into view and moves focus there.
 export function useScrollRestoration(container: RefObject<HTMLElement | null>, current: Location, scope: string): void {
   useEffect(() => {
     const node = container.current
@@ -242,10 +242,13 @@ export function useScrollRestoration(container: RefObject<HTMLElement | null>, c
         target.focus({preventScroll: true})
       })
     }
-    if (current.action !== 'pop') {
+    // A replaced entry (a changed filter) keeps its place; only a new page
+    // starts at the top.
+    if (current.action === 'push') {
       node.scrollTo?.({top: 0})
       return
     }
+    if (current.action === 'replace') return
     const top = savedScroll()[current.key]
     if (!top) return
     return whenPresent(() => node.scrollHeight - node.clientHeight >= top ? node : null, target => { target.scrollTo?.({top}) }, 30)
