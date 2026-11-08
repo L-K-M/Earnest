@@ -175,6 +175,25 @@ Cancellation sends the notification target ID and a fresh `op_id`; delivered
 notifications cannot be recalled. Revert's accessibility label names the action
 and article. Agent text remains plain SwiftUI text.
 
+## Search and saved views
+
+Open Search in the sidebar, Go menu or command palette (Command+8). Full-text
+search works without a model provider. Hybrid search appears when embeddings
+are enabled and can make an embedding call. Feed, folder and page-size filters
+narrow the search; pagination and Save as new use the submitted query and
+filters, not an unsent draft. Empty pages end pagination.
+
+Publisher matches and agent notes have separate sections. Notes and snippets
+remain literal text. Opening an agent-note match blocks automatic images,
+matching other agent-surfaced articles. Reading commands work on an opened
+match, but single-key commands are disabled while you type in search fields.
+
+You can save, open, rename and delete named searches. Deleting a saved search
+only removes its definition, not articles. Search and saved-search management
+require connectivity; they do not pretend an offline request succeeded. Search
+state is window-local, cleared on sign-out and invalidated after a server
+restore. A failed AI availability check still leaves full-text search usable.
+
 ## Regression checks
 
 The hosted app tests snapshot a WKWebView with dark appearance and assert its

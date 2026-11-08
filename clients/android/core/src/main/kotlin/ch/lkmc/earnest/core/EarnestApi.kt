@@ -52,6 +52,14 @@ class EarnestApi(
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
     private val json = Json { ignoreUnknownKeys = true }
+    // Search bodies always state the mode and omit absent filters; the server
+    // treats a missing mode as lexical, but an explicit one keeps the wire
+    // self-describing.
+    private val encoder = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+        explicitNulls = false
+    }
 
     suspend fun get(url: HttpUrl): JsonElement = request("GET", url, null)
 
@@ -282,6 +290,34 @@ class EarnestApi(
     suspend fun me(): MeResult = get(url("/v1/me")).decode()
 
     suspend fun tokens(): List<Token> = get(url("/v1/tokens")).decode()
+
+    /**
+     * Runs a search page. [filter] carries the mode and optional narrowing;
+     * [cursor] is the exclusive cursor returned by the preceding page.
+     */
+    suspend fun search(query: String, filter: SearchFilter = SearchFilter(), cursor: String? = null): SearchPage {
+        val url = url("/v1/search") {
+            it.addQueryParameter("q", query)
+            it.addQueryParameter("mode", filter.mode.wireName)
+            filter.subscriptionId?.let { value -> it.addQueryParameter("subscription_id", value.toString()) }
+            filter.folderId?.let { value -> it.addQueryParameter("folder_id", value.toString()) }
+            filter.limit?.let { value -> it.addQueryParameter("limit", value.toString()) }
+            cursor?.let { value -> it.addQueryParameter("cursor", value) }
+        }
+        return get(url).decode()
+    }
+
+    suspend fun savedSearches(): List<SavedSearch> = get(url("/v1/saved-searches")).decode()
+
+    suspend fun createSavedSearch(name: String, query: String, filter: SearchFilter): SavedSearch =
+        post(url("/v1/saved-searches"), encoder.encodeToJsonElement(SavedSearchBody.serializer(), SavedSearchBody(name, query, filter))).decode()
+
+    suspend fun renameSavedSearch(id: Long, name: String): Empty =
+        patch(url("/v1/saved-searches/$id"), encoder.encodeToJsonElement(SavedSearchRename.serializer(), SavedSearchRename(name))).decode()
+
+    suspend fun deleteSavedSearch(id: Long): Empty = delete(url("/v1/saved-searches/$id")).decode()
+
+    suspend fun pipelineStatus(): JsonElement = get(url("/v1/pipeline"))
 
     companion object {
         private val JSON_MEDIA_TYPE = "application/json".toMediaType()

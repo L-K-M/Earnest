@@ -69,6 +69,62 @@ it('deletes a saved search from the search panel',async () => {
   fireEvent.click(await screen.findByRole('button',{name:'Delete “Funding view”'}))
   await waitFor(() => expect(request).toHaveBeenCalledWith('/v1/saved-searches/3',{method:'DELETE'}))
   expect(await screen.findByText('Saved search deleted. It is gone from the sidebar.')).toBeTruthy()
+  expect(screen.queryByLabelText('Rename saved search')).toBeNull()
+  expect(screen.getByRole('heading',{name:'Search'})).toBeTruthy()
+  expect((screen.getByLabelText('Search your feeds') as HTMLInputElement).value).toBe('funding')
+})
+it('populates the rename field without renaming until submitted',async () => {
+  mount('enabled',true)
+  expect((await screen.findByLabelText('Rename saved search') as HTMLInputElement).value).toBe('Funding view')
+  expect(vi.mocked(request).mock.calls.some(([path,options]) => path.startsWith('/v1/saved-searches/3') && options?.method === 'PATCH')).toBe(false)
+})
+it('renames the saved search explicitly and invalidates the sidebar cache',async () => {
+  const client = new QueryClient({defaultOptions:{queries:{retry:false}}})
+  client.setQueryData(['saved-searches'],[{id:3,name:'Funding view',query:'funding',filters:{folder_id:7,mode:'hybrid',limit:10}}])
+  vi.mocked(request).mockImplementation(async (path,options) => {
+    if (path === '/v1/pipeline') return {embed:'enabled',classify:'enabled',semantic:'enabled',watch:'enabled'}
+    if (path.startsWith('/v1/search?')) return {matches:[],next_cursor:''}
+    if (path === '/v1/saved-searches/3' && options?.method === 'PATCH') return {}
+    if (path === '/v1/saved-searches') return []
+    return {}
+  })
+  render(<QueryClientProvider client={client}><Search saved={{id:3,name:'Funding view',query:'funding',filters:{folder_id:7,mode:'hybrid',limit:10}}} onOpen={vi.fn()} folders={[{id:7,name:'Work',rev:1,deleted:false}]}/></QueryClientProvider>)
+  const field = await screen.findByLabelText('Rename saved search') as HTMLInputElement
+  expect(field.value).toBe('Funding view')
+  fireEvent.change(field,{target:{value:'  Renamed view  '}})
+  fireEvent.click(screen.getByRole('button',{name:'Rename'}))
+  await waitFor(() => expect(request).toHaveBeenCalledWith('/v1/saved-searches/3',{method:'PATCH',body:JSON.stringify({name:'Renamed view'})}))
+  await waitFor(() => expect(client.getQueryState(['saved-searches'])?.isInvalidated).toBe(true))
+  expect(await screen.findByText('Saved search renamed.')).toBeTruthy()
+  expect(screen.getByRole('heading',{name:'Renamed view'})).toBeTruthy()
+  expect(screen.getByRole('button',{name:'Delete “Renamed view”'})).toBeTruthy()
+  fireEvent.change(field,{target:{value:'Unsaved name'}})
+  expect(screen.queryByText('Saved search renamed.')).toBeNull()
+  expect((screen.getByLabelText('Search your feeds') as HTMLInputElement).value).toBe('funding')
+  expect((screen.getByLabelText('Folder') as HTMLSelectElement).value).toBe('7')
+})
+it('reports a failed rename without invalidating the sidebar',async () => {
+  const client = new QueryClient({defaultOptions:{queries:{retry:false}}})
+  client.setQueryData(['saved-searches'],[{id:3,name:'Funding view',query:'funding',filters:{mode:'fulltext'}}])
+  vi.mocked(request).mockImplementation(async (path,options) => {
+    if (path === '/v1/pipeline') return {embed:'enabled',classify:'enabled',semantic:'enabled',watch:'enabled'}
+    if (path === '/v1/saved-searches/3' && options?.method === 'PATCH') throw new Error('Rename failed')
+    if (path.startsWith('/v1/search?')) return {matches:[],next_cursor:''}
+    return {}
+  })
+  render(<QueryClientProvider client={client}><Search saved={{id:3,name:'Funding view',query:'funding',filters:{mode:'fulltext'}}} onOpen={vi.fn()}/></QueryClientProvider>)
+  fireEvent.change(await screen.findByLabelText('Rename saved search'),{target:{value:'Broken'}})
+  fireEvent.click(screen.getByRole('button',{name:'Rename'}))
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent','Rename failed')
+  expect(client.getQueryState(['saved-searches'])?.isInvalidated).toBe(false)
+  expect((screen.getByLabelText('Rename saved search') as HTMLInputElement).value).toBe('Broken')
+})
+it('rejects a blank rename without sending a request',async () => {
+  mount('enabled',true)
+  fireEvent.change(await screen.findByLabelText('Rename saved search'),{target:{value:'   '}})
+  fireEvent.click(screen.getByRole('button',{name:'Rename'}))
+  expect(await screen.findByText('Enter a name for the saved search.')).toBeTruthy()
+  expect(vi.mocked(request).mock.calls.some(([path,options]) => path.startsWith('/v1/saved-searches/3') && options?.method === 'PATCH')).toBe(false)
 })
 it('preserves saved filters and offers full text when hybrid is paused',async () => {
   mount('enabled',true)
@@ -127,6 +183,15 @@ it('explains a paused embedding budget and keeps full-text search available',asy
   await search()
   expect(request).toHaveBeenCalledWith('/v1/search?q=funding&mode=fulltext',expect.anything())
 })
+it.each([true,false])('renders an enabled similarity page with matches: %s',async hasMatches => {
+  vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {embed:'enabled'} : {matches:hasMatches ? [article] : [],status:'enabled'})
+  render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><MoreLikeThis entryID={4} onOpen={vi.fn()}/></QueryClientProvider>)
+  fireEvent.click(await screen.findByRole('button',{name:'More like this'}))
+  if (hasMatches) expect(await screen.findByRole('button',{name:'Funding news'})).toBeTruthy()
+  else expect(await screen.findByText('No similar articles yet.')).toBeTruthy()
+  expect(screen.queryByText('Similar articles are enabled.')).toBeNull()
+})
+
 it('allows stored-vector similarity while the embedding budget is paused',async () => {
   vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {embed:'paused'} : {matches:[],status:'paused'})
   render(<QueryClientProvider client={new QueryClient()}><MoreLikeThis entryID={4} onOpen={vi.fn()}/></QueryClientProvider>)
