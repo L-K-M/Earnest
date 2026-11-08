@@ -207,6 +207,41 @@ public final class EarnestAPI: Sendable {
     public func settings() async throws -> APIValue {
         try await generated { try adapt(try await client.getSettings(.init()).ok.body.json) }
     }
+    /// The typed reader slice of `/v1/settings`. `settings()` stays raw for sync.
+    public func readerSettings() async throws -> APIReaderSettings {
+        try await generated { try adapt(try await client.getSettings(.init()).ok.body.json) }
+    }
+    /// Replaces the reader slice, deduplicated server-side by `opID`. `rev` is
+    /// read-only and never sent; the returned settings carry the new revision.
+    public func updateReaderSettings(_ settings: APIReaderSettings, opID: String) async throws -> APIReaderSettings {
+        try validateReaderSettings(settings, opID: opID)
+        let body = Components.Schemas.SettingsBody(
+            feedOverrides: .init(additionalProperties: settings.feedOverrides.mapValues {
+                Components.Schemas.ReaderOverride(font: $0.font?.rawValue, measure: $0.measure, theme: $0.theme?.rawValue)
+            }),
+            font: settings.font.rawValue,
+            measure: settings.measure,
+            opId: opID,
+            readingMode: settings.readingMode.rawValue,
+            singleKeyShortcuts: settings.singleKeyShortcuts,
+            theme: settings.theme.rawValue,
+            todayDecayDays: settings.todayDecayDays
+        )
+        return try await generated { try adapt(try await client.putSettings(.init(body: .json(body))).ok.body.json) }
+    }
+    /// Exact unread totals. Callers gate this on the unread-count reading
+    /// mode; river mode must never request it.
+    public func unreadCounts() async throws -> APIUnreadCounts {
+        let counts: Components.Schemas.UnreadCounts = try await generated {
+            try await client.entryCounts(.init()).ok.body.json
+        }
+        return APIUnreadCounts(
+            bySubscription: counts.bySubscription.additionalProperties,
+            later: counts.later,
+            kept: counts.kept,
+            total: counts.total
+        )
+    }
     public func bootstrapCursor() async throws -> APIRevision {
         try await generated { try adapt(try await client.bootstrapCursor(.init()).ok.body.json) }
     }
@@ -310,6 +345,23 @@ public final class EarnestAPI: Sendable {
     }
     public func pipelineStatus() async throws -> APIValue {
         try await generated { try adapt(try await client.pipelineStatus(.init()).ok.body.json, as: APIValue.self) }
+    }
+}
+
+/// The ranges mirror internal/service/settings.go so an out-of-range edit
+/// fails locally instead of as a 400. Keys are canonical positive feed IDs.
+func validateReaderSettings(_ settings: APIReaderSettings, opID: String) throws {
+    guard (62...72).contains(settings.measure) else { throw APIReaderSettingsError(field: "measure") }
+    guard (1...365).contains(settings.todayDecayDays) else { throw APIReaderSettingsError(field: "today_decay_days") }
+    guard !opID.isEmpty, opID.utf8.count <= 1024 else { throw APIReaderSettingsError(field: "op_id") }
+    guard settings.feedOverrides.count <= 512 else { throw APIReaderSettingsError(field: "feed_overrides") }
+    for (key, override) in settings.feedOverrides {
+        guard let id = Int64(key), id > 0, key.utf8.count <= 128, String(id) == key else {
+            throw APIReaderSettingsError(field: "feed_overrides key")
+        }
+        if let measure = override.measure, !(62...72).contains(measure) {
+            throw APIReaderSettingsError(field: "feed_overrides measure")
+        }
     }
 }
 

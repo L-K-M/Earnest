@@ -28,7 +28,14 @@ import AppKit
     @Published private(set) var articleUnavailable = false
     @Published var palette = false
     @Published var editingSearch = false
+    /// Mirrors the account's single-key preference so commands can drop the
+    /// unmodified-letter bindings without disabling the menu actions.
+    @Published private(set) var singleKeyShortcuts = true
+    /// The resolved typography for the open article, including its feed's
+    /// override. Recomputed from the shared settings on every rebuild.
+    @Published private(set) var readerStyle = ReaderStyle.default
     let search: SearchModel
+    let settings: ReaderSettingsModel
     @Published var endTitle = ""
     @Published var endDetail = ""
     @Published var subscribeURL = ""
@@ -43,6 +50,9 @@ import AppKit
     init(app: AppModel) {
         self.app = app
         search = SearchModel(app: app)
+        settings = ReaderSettingsModel(app: app)
+        singleKeyShortcuts = app.readerSettings.singleKeyShortcuts
+        readerStyle = app.readerStyle(for: nil)
         if let sibling = app.windows.first(where: { $0.section == section && !$0.entries.isEmpty }) {
             entries = sibling.entries
             cachedPresentation = sibling.cachedPresentation
@@ -77,6 +87,9 @@ import AppKit
         tasks.values.forEach { $0.cancel() }
         tasks.removeAll()
         search.reset()
+        settings.endSession()
+        singleKeyShortcuts = true
+        readerStyle = .default
         editingSearch = false
         entries = []
         cachedPresentation = false
@@ -123,6 +136,8 @@ import AppKit
             await app.refreshActivity()
         case .search:
             search.loadMetadata()
+        case .settings:
+            break
         }
         guard self.section == expected, app.loggedIn, !Task.isCancelled else { return }
         app.rebuildPresentation()
@@ -191,6 +206,9 @@ import AppKit
 
     func rebuildPresentation() {
         search.invalidateAfterRestore()
+        singleKeyShortcuts = app.readerSettings.singleKeyShortcuts
+        readerStyle = app.readerStyle(for: readingEntry)
+        settings.update(from: app.readerSettings)
         let snapshot = try? app.engine?.snapshot()
         let knownIDs = Set(entries.map(\.id))
         let pendingIDs = Set(snapshot?.outbox.filter { $0.principal == app.principalID }.map(\.entryID) ?? [])
@@ -219,7 +237,7 @@ import AppKit
                     case .later: belongs = state.shelf.value == .text("later")
                     case .kept: belongs = state.kept.value == .flag(true)
                     case .done: belongs = state.shelf.value == .text("done")
-                    case .feeds, .activity, .search: belongs = false
+                    case .feeds, .activity, .search, .settings: belongs = false
                     }
                     return belongs ? try cachedEntry(entry, principal: app.principalID, engine: engine, state: state) : nil
                 }
@@ -271,7 +289,7 @@ import AppKit
         case .kept:
             rows = presented.filter { $0.1.kept.value == .flag(true) }.map { row($0.0, $0.1) }
             editionGroups = []
-        case .feeds, .activity, .search:
+        case .feeds, .activity, .search, .settings:
             rows = []
             editionGroups = []
         }

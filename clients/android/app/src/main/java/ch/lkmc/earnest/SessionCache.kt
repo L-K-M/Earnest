@@ -5,6 +5,9 @@ import androidx.core.content.edit
 import ch.lkmc.earnest.core.Activity
 import ch.lkmc.earnest.core.EarnestApi
 import ch.lkmc.earnest.core.EngineSession
+import ch.lkmc.earnest.core.ReaderSettings
+import ch.lkmc.earnest.core.River
+import ch.lkmc.earnest.core.UnreadCounts
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import ch.lkmc.earnest.core.SyncEngine
@@ -63,6 +66,13 @@ internal class SessionCache(context: Context, val identity: AccountIdentity) {
     val legacyCacheRetained = context.getDatabasePath("earnest.db").exists()
 
     private val json = Json { ignoreUnknownKeys = true }
+    // The snapshot's settings object keeps the server's field names and only
+    // present override members, so a partial override stays partial.
+    private val settingsJson = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+        explicitNulls = false
+    }
 
     val agentChangesStale: Boolean get() = preferences.getBoolean(KEY_AGENT_CHANGES_STALE, false)
 
@@ -94,6 +104,58 @@ internal class SessionCache(context: Context, val identity: AccountIdentity) {
             putBoolean(KEY_AGENT_CHANGES_STALE, false)
         }
         return changes
+    }
+
+    /**
+     * The account's reader settings from the snapshot. The snapshot is the
+     * offline source of truth: no network is needed to read preferences.
+     */
+    fun readerSettings(engine: SyncEngine): ReaderSettings {
+        val raw = engine.snapshot().objects.firstOrNull { it.kind == River.SETTINGS && !it.deleted }?.raw
+            ?: return ReaderSettings()
+        return runCatching { settingsJson.decodeFromString(ReaderSettings.serializer(), raw) }.getOrDefault(ReaderSettings())
+    }
+
+    /** The snapshot revision of the settings object, or 0 when absent. */
+    fun readerSettingsRev(engine: SyncEngine): Long =
+        engine.snapshot().objects.firstOrNull { it.kind == River.SETTINGS && !it.deleted }?.rev ?: 0L
+
+    /**
+     * Merges acknowledged reader settings into the account snapshot only when
+     * the acknowledged revision is not older than the cached one. Mutes and the
+     * cursor are preserved; the snapshot is flushed under the session lock.
+     */
+    suspend fun mergeReaderSettings(settings: ReaderSettings): Boolean = withEngine { engine ->
+        val current = engine.snapshot().objects.firstOrNull { it.kind == River.SETTINGS && !it.deleted }
+        val currentRev = current?.rev ?: 0L
+        if (settings.rev < currentRev) return@withEngine false
+        if (current == null || settings.rev > currentRev) {
+            engine.mergeObject(
+                ch.lkmc.earnest.core.SyncObject(
+                    kind = River.SETTINGS,
+                    id = 1,
+                    rev = settings.rev,
+                    raw = settingsJson.encodeToString(ReaderSettings.serializer(), settings),
+                ),
+            )
+        }
+        true
+    }
+
+    /** The last exact unread counts, or null when none has synced. */
+    fun cachedUnreadCounts(): UnreadCounts? =
+        preferences.getString(KEY_UNREAD_COUNTS, null)?.let {
+            runCatching { json.decodeFromString(UnreadCounts.serializer(), it) }.getOrNull()
+        }
+
+    /** Wall-clock millis of the last successful count fetch, or null. */
+    fun cachedUnreadCountsAt(): Long? = preferences.getLong(KEY_UNREAD_COUNTS_AT, 0L).takeIf { it > 0L }
+
+    fun storeUnreadCounts(counts: UnreadCounts) {
+        preferences.edit {
+            putString(KEY_UNREAD_COUNTS, json.encodeToString(UnreadCounts.serializer(), counts))
+            putLong(KEY_UNREAD_COUNTS_AT, System.currentTimeMillis())
+        }
     }
 
     // Internal so tests can observe engine reuse.
@@ -141,6 +203,8 @@ internal class SessionCache(context: Context, val identity: AccountIdentity) {
         const val KEY_CHANGES_SINCE = "agent_changes_since"
         private const val KEY_AGENT_CHANGES = "agent_changes"
         private const val KEY_AGENT_CHANGES_STALE = "agent_changes_stale"
+        private const val KEY_UNREAD_COUNTS = "unread_counts"
+        private const val KEY_UNREAD_COUNTS_AT = "unread_counts_at"
         private const val AGENT_PAGE_LIMIT = 1000
     }
 

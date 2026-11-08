@@ -166,9 +166,12 @@ public struct SyncSnapshot: Codable, Equatable, Sendable {
     public var labelDefinitions: [LabelDefinition] = []
     public var annotations: [SyncAnnotation] = []
     public var positions: [SyncPosition] = []
+    /// Last successfully fetched `/v1/entries:counts` values. Absence means
+    /// counts were never synced or the last fetch failed; it is never zero.
+    public var unreadCounts: APIUnreadCounts?
     public var outbox: [OutboxItem] = []
     public init() {}
-    private enum CodingKeys: String, CodingKey { case cursor, bootstrapComplete, entries, states, objects, labelDefinitions, annotations, positions, outbox }
+    private enum CodingKeys: String, CodingKey { case cursor, bootstrapComplete, entries, states, objects, labelDefinitions, annotations, positions, unreadCounts, outbox }
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         cursor = try container.decodeIfPresent(Cursor.self, forKey: .cursor)
@@ -179,6 +182,7 @@ public struct SyncSnapshot: Codable, Equatable, Sendable {
         labelDefinitions = try container.decodeIfPresent([LabelDefinition].self, forKey: .labelDefinitions) ?? []
         annotations = try container.decodeIfPresent([SyncAnnotation].self, forKey: .annotations) ?? []
         positions = try container.decodeIfPresent([SyncPosition].self, forKey: .positions) ?? []
+        unreadCounts = try container.decodeIfPresent(APIUnreadCounts.self, forKey: .unreadCounts)
         let values = try container.decodeIfPresent([APIValue].self, forKey: .outbox) ?? []
         outbox = try values.map { value in
             let encoded = try JSONEncoder().encode(value)
@@ -267,6 +271,36 @@ public final class SyncEngine {
         data.objects.removeAll { $0.kind == .mute }
         for object in objects { merge(object: object, into: &data) }
         merge(object: settingsObject, into: &data)
+        try store.save(data)
+    }
+
+    /// The durable snapshot's typed reader settings, or nil before the first
+    /// settings fetch or acknowledged save.
+    public func readerSettings() throws -> APIReaderSettings? {
+        try store.load().objects.first { $0.kind == .settings && !$0.deleted }?.readerSettings
+    }
+
+    /// Merge an acknowledged settings write into the snapshot only when its
+    /// revision is not older than the stored one. Mutes, other objects and the
+    /// cursor are never touched.
+    public func mergeSettings(_ settings: APIReaderSettings) throws {
+        var data = try store.load()
+        let object = SyncObject(settings: settings)
+        guard let index = data.objects.firstIndex(where: { $0.kind == .settings && !$0.deleted }) else {
+            data.objects.append(object)
+            try store.save(data)
+            return
+        }
+        guard object.rev >= data.objects[index].rev else { return }
+        data.objects[index] = object
+        try store.save(data)
+    }
+
+    /// Last successfully fetched counts replace earlier values; a failed fetch
+    /// leaves them untouched so an outage never reads as zero.
+    public func mergeUnreadCounts(_ counts: APIUnreadCounts) throws {
+        var data = try store.load()
+        data.unreadCounts = counts
         try store.save(data)
     }
 

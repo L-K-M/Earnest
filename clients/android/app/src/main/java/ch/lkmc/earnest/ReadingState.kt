@@ -1,10 +1,12 @@
 package ch.lkmc.earnest
 
 import ch.lkmc.earnest.core.CachedEntry
+import ch.lkmc.earnest.core.ReaderSettings
 import ch.lkmc.earnest.core.River
 import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.core.SyncSnapshot
 import ch.lkmc.earnest.core.State
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import java.time.Instant
 
@@ -24,7 +26,19 @@ internal fun restoredState(engine: SyncEngine, principal: Long, now: Instant = I
     val cadences = snapshot.objects.filter { it.kind == SyncEngine.OBJECT_SUBSCRIPTION && !it.deleted }
         .associate { it.id to River.cadence(it) }
     val members = initialRiverIds(snapshot, states, now)
-    return UiState(snapshot = snapshot, principalId = principal, states = states, cadences = cadences, riverEntryIds = members)
+    val settings = snapshot.objects.firstOrNull { it.kind == River.SETTINGS && !it.deleted }
+    val readerSettings = settings?.let {
+        runCatching { Json { ignoreUnknownKeys = true }.decodeFromString(ReaderSettings.serializer(), it.raw) }.getOrNull()
+    } ?: ReaderSettings()
+    return UiState(
+        snapshot = snapshot,
+        principalId = principal,
+        states = states,
+        cadences = cadences,
+        riverEntryIds = members,
+        readerSettings = readerSettings,
+        readerSettingsRev = settings?.rev ?: 0L,
+    )
 }
 
 internal fun initialRiverIds(

@@ -90,19 +90,52 @@ class ReaderTest {
         view.destroy()
     }
 
-    @Test fun readerUrlKeepsSignatureAndAddsTheme() {
-        val themed = readerUrl("https://content.test/content/7?sig=a.b%2Bc", "dark").toUri()
+    @Test fun readerUrlKeepsSignatureAndAddsTypography() {
+        val typography = ch.lkmc.earnest.core.ReaderTypography(
+            ch.lkmc.earnest.core.ReaderTheme.DARK,
+            68,
+            ch.lkmc.earnest.core.ReaderFont.DYSLEXIC,
+        )
+        val themed = readerUrl("https://content.test/content/7?sig=a.b%2Bc", typography, systemDark = false).toUri()
         assertEquals("a.b+c", themed.getQueryParameter("sig"))
         assertEquals("dark", themed.getQueryParameter("theme"))
+        assertEquals("68", themed.getQueryParameter("measure"))
+        assertEquals("dyslexic", themed.getQueryParameter("font"))
     }
 
-    @Test fun contentThemeMapsEverySetting() {
-        assertEquals("light", ThemeSetting.LIGHT.contentTheme(systemDark = true))
-        assertEquals("dark", ThemeSetting.DARK.contentTheme(systemDark = false))
-        assertEquals("black", ThemeSetting.BLACK.contentTheme(systemDark = false))
-        assertEquals("eink", ThemeSetting.E_INK.contentTheme(systemDark = false))
-        assertEquals("dark", ThemeSetting.SYSTEM.contentTheme(systemDark = true))
-        assertEquals("light", ThemeSetting.SYSTEM.contentTheme(systemDark = false))
+    @Test fun articleThemeMapsEverySetting() {
+        assertEquals("light", ch.lkmc.earnest.core.ReaderTheme.LIGHT.contentTheme(systemDark = true))
+        assertEquals("dark", ch.lkmc.earnest.core.ReaderTheme.DARK.contentTheme(systemDark = false))
+        assertEquals("black", ch.lkmc.earnest.core.ReaderTheme.BLACK.contentTheme(systemDark = false))
+        assertEquals("eink", ch.lkmc.earnest.core.ReaderTheme.EINK.contentTheme(systemDark = false))
+        assertEquals("dark", ch.lkmc.earnest.core.ReaderTheme.SYSTEM.contentTheme(systemDark = true))
+        assertEquals("light", ch.lkmc.earnest.core.ReaderTheme.SYSTEM.contentTheme(systemDark = false))
+    }
+
+    @Test fun offlineFallbackAppliesSafeTypography() {
+        val typography = ch.lkmc.earnest.core.ReaderTypography(
+            ch.lkmc.earnest.core.ReaderTheme.BLACK,
+            64,
+            ch.lkmc.earnest.core.ReaderFont.SANS,
+        )
+        val html = offlineReaderHtml("<p>cached</p>", typography, systemDark = false)
+        assertTrue(html.contains("max-width:64ch"))
+        assertTrue(html.contains("system-ui,sans-serif"))
+        assertTrue(html.contains("background:#000"))
+        assertTrue(html.contains("<p>cached</p>"))
+        assertFalse("the fallback must not enable scripts", html.contains("<script"))
+    }
+
+    @Test fun offlineFallbackKeepsPoliciesByNotInjectingRemoteResources() {
+        val typography = ch.lkmc.earnest.core.ReaderTypography(
+            ch.lkmc.earnest.core.ReaderTheme.EINK,
+            72,
+            ch.lkmc.earnest.core.ReaderFont.DYSLEXIC,
+        )
+        val html = offlineReaderHtml("<img src=\"https://tracker.test/pixel\">", typography, systemDark = true)
+        assertTrue(html.contains("max-width:72ch"))
+        assertTrue(html.contains("letter-spacing:.05em"))
+        assertTrue(html.contains("background:#fff"))
     }
 
     @Test fun mainFrameNavigationStaysOnTheArticlePath() {

@@ -2,7 +2,7 @@ import Foundation
 import EarnestKit
 
 enum Section: String, CaseIterable, Identifiable {
-    case today = "Today", edition = "Edition", later = "Later", kept = "Kept", done = "Done", feeds = "Feeds", activity = "Activity", search = "Search"
+    case today = "Today", edition = "Edition", later = "Later", kept = "Kept", done = "Done", feeds = "Feeds", activity = "Activity", search = "Search", settings = "Settings"
 
     var id: String { rawValue }
 
@@ -16,6 +16,7 @@ enum Section: String, CaseIterable, Identifiable {
         case .feeds: return "6"
         case .activity: return "7"
         case .search: return "8"
+        case .settings: return "9"
         }
     }
 
@@ -29,6 +30,7 @@ enum Section: String, CaseIterable, Identifiable {
         case .feeds: return "dot.radiowaves.left.and.right"
         case .activity: return "clock.arrow.circlepath"
         case .search: return "magnifyingglass"
+        case .settings: return "gearshape"
         }
     }
 
@@ -40,7 +42,7 @@ enum Section: String, CaseIterable, Identifiable {
         case .later: return "later"
         case .kept: return "kept"
         case .done: return "done"
-        case .feeds, .activity, .search: return nil
+        case .feeds, .activity, .search, .settings: return nil
         }
     }
 }

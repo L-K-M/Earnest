@@ -28,33 +28,26 @@ private struct ArticleCommands: Commands {
     var body: some Commands {
         CommandMenu("Article") {
             // Unmodified-letter equivalents are suspended while the
-            // palette is open so its filter field can type them.
-            Button("Next Article") { window?.move(1) }
-                .keyboardShortcut("j", modifiers: [])
-                .disabled(window.map { $0.palette || !$0.canBrowse } ?? true)
-            Button("Previous Article") { window?.move(-1) }
-                .keyboardShortcut("k", modifiers: [])
-                .disabled(window.map { $0.palette || !$0.canBrowse } ?? true)
+            // palette is open so its filter field can type them. The
+            // single-key preference removes the bindings, not the actions.
+            shortcut(Button("Next Article") { window?.move(1) }
+                .disabled(window.map { $0.palette || !$0.canBrowse } ?? true), "j")
+            shortcut(Button("Previous Article") { window?.move(-1) }
+                .disabled(window.map { $0.palette || !$0.canBrowse } ?? true), "k")
             Divider()
-            Button("Done") { window?.command(.done) }
-                .keyboardShortcut("e", modifiers: [])
-                .disabled(window.map { !$0.canActOnEntry || $0.palette } ?? true)
-            Button("Later") { window?.command(.later) }
-                .keyboardShortcut("s", modifiers: [])
-                .disabled(window.map { !$0.canActOnEntry || $0.palette } ?? true)
-            Button("Keep") { window?.command(.keep) }
-                .keyboardShortcut("f", modifiers: [])
-                .disabled(window.map { !$0.canActOnEntry || $0.palette } ?? true)
-            Button("Mark Unread") { window?.command(.unread) }
-                .keyboardShortcut("m", modifiers: [])
-                .disabled(window.map { !$0.canActOnEntry || $0.palette } ?? true)
+            shortcut(Button("Done") { window?.command(.done) }
+                .disabled(window.map { !$0.canActOnEntry || $0.palette } ?? true), "e")
+            shortcut(Button("Later") { window?.command(.later) }
+                .disabled(window.map { !$0.canActOnEntry || $0.palette } ?? true), "s")
+            shortcut(Button("Keep") { window?.command(.keep) }
+                .disabled(window.map { !$0.canActOnEntry || $0.palette } ?? true), "f")
+            shortcut(Button("Mark Unread") { window?.command(.unread) }
+                .disabled(window.map { !$0.canActOnEntry || $0.palette } ?? true), "m")
             Divider()
-            Button("Open Original") { window?.openOriginal() }
-                .keyboardShortcut("o", modifiers: [])
-                .disabled(window.map { $0.selected == nil || $0.palette || !$0.canBrowse } ?? true)
-            Button("View Original") { window?.openOriginal() }
-                .keyboardShortcut("v", modifiers: [])
-                .disabled(window.map { $0.selected == nil || $0.palette || !$0.canBrowse } ?? true)
+            shortcut(Button("Open Original") { window?.openOriginal() }
+                .disabled(window.map { $0.selected == nil || $0.palette || !$0.canBrowse } ?? true), "o")
+            shortcut(Button("View Original") { window?.openOriginal() }
+                .disabled(window.map { $0.selected == nil || $0.palette || !$0.canBrowse } ?? true), "v")
             Divider()
             Button("Refresh") { model.scheduleSync() }
                 .keyboardShortcut("r", modifiers: .command)
@@ -62,6 +55,18 @@ private struct ArticleCommands: Commands {
             Button("Command Palette") { window?.palette = true }
                 .keyboardShortcut("k", modifiers: .command)
                 .disabled(window == nil)
+        }
+    }
+
+    /// Apply an unmodified-letter binding only while the account's
+    /// single-key preference is on. The menu action stays clickable either
+    /// way, and the command palette remains available.
+    @ViewBuilder
+    private func shortcut<V: View>(_ view: V, _ key: Character, _ modifiers: EventModifiers = []) -> some View {
+        if window?.singleKeyShortcuts ?? true {
+            view.keyboardShortcut(KeyEquivalent(key), modifiers: modifiers)
+        } else {
+            view
         }
     }
 }
@@ -176,7 +181,7 @@ private struct GoCommands: Commands {
                                                description: Text("Earnest keeps articles you have opened. This one loads when you are back online."))
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
-                        Reader(html: window.html, imageOrigin: window.imageOrigin)
+                        Reader(html: window.html, imageOrigin: window.imageOrigin, style: window.readerStyle)
                     }
                 }
                 .background(Color(nsColor: .textBackgroundColor))
@@ -209,6 +214,10 @@ private struct GoCommands: Commands {
         switch window.section {
         case .today:
             VStack(spacing: 0) {
+                if model.readerSettings.readingMode == .unreadCounts {
+                    UnreadCountsView()
+                    Divider()
+                }
                 if !model.briefs.isEmpty {
                     BriefsView(briefs: model.briefs, names: model.principalNames)
                     Divider()
@@ -247,6 +256,8 @@ private struct GoCommands: Commands {
             ActivityView()
         case .search:
             SearchView(search: window.search)
+        case .settings:
+            SettingsView(settings: window.settings)
         }
     }
 

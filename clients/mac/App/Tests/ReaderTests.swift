@@ -115,7 +115,7 @@ import EarnestKit
             "url": .string("https://example.test/feed"), "cadence": .string("week")
         ])))
         // A 320-point column gives list rows 288 points after their insets.
-        let view = NSHostingView(rootView: FeedRow(feed: feed, setCadence: { _ in }, unsubscribe: {})
+        let view = NSHostingView(rootView: FeedRow(feed: feed, unreadCount: nil, setCadence: { _ in }, unsubscribe: {})
             .padding(8).frame(width: 288).fixedSize(horizontal: false, vertical: true)
             .background(Color(nsColor: .windowBackgroundColor)))
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: view.fittingSize),

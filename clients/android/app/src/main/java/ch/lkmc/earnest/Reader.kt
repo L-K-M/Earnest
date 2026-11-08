@@ -22,6 +22,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.net.toUri
 import androidx.webkit.WebViewAssetLoader
 import ch.lkmc.earnest.core.CachedEntry
+import ch.lkmc.earnest.core.ReaderFont
+import ch.lkmc.earnest.core.ReaderTheme
+import ch.lkmc.earnest.core.ReaderTypography
 import java.io.ByteArrayInputStream
 import java.time.Instant
 import java.time.ZoneId
@@ -64,19 +67,21 @@ internal fun openOriginal(context: Context, url: String): Boolean = try {
 /**
  * The reading view. JavaScript, file access and content access are off. The
  * main frame may load only the signed article URL (or the local asset
- * origin when offline); every other link opens in the browser. [theme]
- * reaches the article page through the content URL's theme parameter.
+ * origin when offline); every other link opens in the browser. [typography]
+ * reaches the article page through the content URL and the offline fallback.
  */
 @Composable
-internal fun Reader(url: String?, cachedHtml: String?, theme: ThemeSetting, modifier: Modifier = Modifier) {
-    val displayUrl = url?.let { readerUrl(it, theme.contentTheme(isSystemInDarkTheme())) }
-    key(url, cachedHtml) {
+internal fun Reader(url: String?, cachedHtml: String?, typography: ReaderTypography, modifier: Modifier = Modifier) {
+    val systemDark = isSystemInDarkTheme()
+    val displayUrl = url?.let { readerUrl(it, typography, systemDark) }
+    val fallbackHtml = cachedHtml?.let { offlineReaderHtml(it, typography, systemDark) }
+    key(url, fallbackHtml) {
         AndroidView(
             modifier = modifier,
-            factory = { context -> createReaderWebView(context, displayUrl, cachedHtml) },
+            factory = { context -> createReaderWebView(context, displayUrl, fallbackHtml) },
             update = { webView ->
-                if (webView.tag != (displayUrl ?: cachedHtml)) {
-                    webView.tag = displayUrl ?: cachedHtml
+                if (webView.tag != (displayUrl ?: fallbackHtml)) {
+                    webView.tag = displayUrl ?: fallbackHtml
                     if (displayUrl != null) webView.loadUrl(displayUrl) else webView.loadUrl(ASSET_URL)
                 }
             },
@@ -86,22 +91,59 @@ internal fun Reader(url: String?, cachedHtml: String?, theme: ThemeSetting, modi
     }
 }
 
-/** Maps the app theme to the content origin's `theme` value (internal/web/content.go). */
-internal fun ThemeSetting.contentTheme(systemDark: Boolean): String = when (this) {
-    ThemeSetting.SYSTEM -> if (systemDark) "dark" else "light"
-    ThemeSetting.LIGHT -> "light"
-    ThemeSetting.DARK -> "dark"
-    ThemeSetting.BLACK -> "black"
-    ThemeSetting.E_INK -> "eink"
+/** Maps the account's article theme to the content origin's `theme` value (internal/web/content.go). */
+internal fun ReaderTheme.contentTheme(systemDark: Boolean): String = when (this) {
+    ReaderTheme.SYSTEM -> if (systemDark) "dark" else "light"
+    ReaderTheme.LIGHT -> "light"
+    ReaderTheme.DARK -> "dark"
+    ReaderTheme.BLACK -> "black"
+    ReaderTheme.EINK -> "eink"
+}
+
+private fun ReaderFont.wireName(): String = when (this) {
+    ReaderFont.SERIF -> "serif"
+    ReaderFont.SANS -> "sans"
+    ReaderFont.DYSLEXIC -> "dyslexic"
 }
 
 /**
  * Adds the display params the content origin reads (internal/web/content.go).
- * The app has no measure or font setting, so only the theme travels and the
- * server's typography defaults apply.
+ * Only safe enum values travel; the server re-validates them.
  */
-internal fun readerUrl(url: String, theme: String): String =
-    url.toUri().buildUpon().appendQueryParameter("theme", theme).toString()
+internal fun readerUrl(url: String, typography: ReaderTypography, systemDark: Boolean): String =
+    url.toUri().buildUpon()
+        .appendQueryParameter("theme", typography.theme.contentTheme(systemDark))
+        .appendQueryParameter("measure", typography.measure.toString())
+        .appendQueryParameter("font", typography.font.wireName())
+        .toString()
+
+/**
+ * Mirrors the content origin's typography CSS for the offline fallback, so a
+ * cached article keeps the account's safe enum-based presentation.
+ */
+internal fun readerCss(typography: ReaderTypography, systemDark: Boolean): String {
+    val (background, foreground) = when (typography.theme.contentTheme(systemDark)) {
+        "dark" -> "#242424" to "#eee"
+        "black" -> "#000" to "#fff"
+        "eink" -> "#fff" to "#000"
+        else -> "#fff" to "#202020"
+    }
+    val family = when (typography.font) {
+        ReaderFont.SERIF -> "Georgia,serif"
+        ReaderFont.SANS -> "system-ui,sans-serif"
+        ReaderFont.DYSLEXIC -> "Verdana,Arial,sans-serif"
+    }
+    val spacing = if (typography.font == ReaderFont.DYSLEXIC) "letter-spacing:.05em;word-spacing:.12em;" else ""
+    return "body{max-width:${typography.measure}ch;margin:2rem auto;padding:0 1rem;font:1.1rem/1.65 $family;" +
+        "background:$background;color:$foreground;${spacing}overflow-wrap:anywhere}" +
+        "img{max-width:100%;height:auto}a{color:inherit}pre{overflow:auto}"
+}
+
+/** Wraps cached article HTML in the same safe document the content origin serves. */
+internal fun offlineReaderHtml(cachedHtml: String, typography: ReaderTypography, systemDark: Boolean): String =
+    "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">" +
+        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
+        "<style>${readerCss(typography, systemDark)}</style></head><body>$cachedHtml</body></html>"
 
 /** State for one selection; cancellation clears the previous load before a new one starts. */
 internal class ReaderLoadState {

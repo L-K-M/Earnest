@@ -8,6 +8,8 @@ import ch.lkmc.earnest.core.Activity
 import ch.lkmc.earnest.core.Annotation
 import ch.lkmc.earnest.core.ApiException
 import ch.lkmc.earnest.core.EarnestApi
+import ch.lkmc.earnest.core.ReaderSettings
+import ch.lkmc.earnest.core.ReadingMode
 import ch.lkmc.earnest.core.RejectedOperation
 import ch.lkmc.earnest.core.Revision
 import ch.lkmc.earnest.core.State
@@ -16,6 +18,7 @@ import ch.lkmc.earnest.core.SubscriptionBody
 import ch.lkmc.earnest.core.SubscriptionPatch
 import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.core.SyncSnapshot
+import ch.lkmc.earnest.core.UnreadCounts
 import ch.lkmc.earnest.db.BriefEntity
 import ch.lkmc.earnest.db.ContentEntity
 import kotlinx.coroutines.Dispatchers
@@ -50,6 +53,31 @@ data class UiState(
     val error: String? = null,
     val rejected: List<RejectedOperation> = emptyList(),
     val expired: List<String> = emptyList(),
+    val readerSettings: ReaderSettings = ReaderSettings(),
+    val readerSettingsRev: Long = 0,
+    val readerSettingsUi: ReaderSettingsUi = ReaderSettingsUi(),
+    val unreadCounts: UnreadCounts? = null,
+    val unreadCountsSyncedAt: Long? = null,
+    val unreadCountsError: String? = null,
+)
+
+/** The reader-preferences screen's draft and save state. */
+data class ReaderSettingsUi(
+    val loading: Boolean = false,
+    val saving: Boolean = false,
+    val error: String? = null,
+    val success: Boolean = false,
+    val draft: ReaderSettings? = null,
+    val loaded: ReaderSettings? = null,
+    val loadedRev: Long = 0,
+    val conflict: ReaderSettings? = null,
+    val frozen: FrozenReaderSettings? = null,
+)
+
+/** A save whose outcome is unknown; a retry must resend the identical body. */
+data class FrozenReaderSettings(
+    val settings: ReaderSettings,
+    val opId: String,
 )
 
 /**
@@ -147,6 +175,12 @@ class AppViewModel internal constructor(
                         principals = cachedPrincipalNames(cache),
                         agentChanges = changes,
                         agentChangesError = if (cache.agentChangesStale) AGENT_CHANGES_STALE_MESSAGE else null,
+                        readerSettingsUi = ReaderSettingsUi(
+                            loaded = restored.readerSettings,
+                            loadedRev = restored.readerSettingsRev,
+                        ),
+                        unreadCounts = cache.cachedUnreadCounts(),
+                        unreadCountsSyncedAt = cache.cachedUnreadCountsAt(),
                     )
                     _loggedIn.value = true
                 }
@@ -190,6 +224,10 @@ class AppViewModel internal constructor(
                     sessionAgentChanges = activitySince(changes, sessionStartedAt),
                     agentChangesError = if (cache.agentChangesStale) AGENT_CHANGES_STALE_MESSAGE else null,
                     briefs = cache.db.briefs().get(),
+                    readerSettings = restored.readerSettings,
+                    readerSettingsRev = restored.readerSettingsRev,
+                    unreadCounts = cache.cachedUnreadCounts(),
+                    unreadCountsSyncedAt = cache.cachedUnreadCountsAt(),
                 ) }
             }
         }
@@ -253,6 +291,7 @@ class AppViewModel internal constructor(
                         expired = expired,
                     ) }
                 }
+                refreshUnreadCounts(cache, session)
                 refreshWidgets(getApplication())
             } catch (error: ApiException) {
                 if (!currentOrExpired(session, cache)) return@launch
@@ -270,6 +309,204 @@ class AppViewModel internal constructor(
             } finally {
                 if (currentOrExpired(session, cache)) _state.update { current -> current.copy(loading = false) }
             }
+        }
+    }
+
+    /**
+     * Explicit load of the account's reader settings. Loading never mutates
+     * the account snapshot; it only refreshes the presentation baseline.
+     */
+    fun loadReaderSettings() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val (cache, session) = activeAccount("Still signing in; settings did not load.") ?: return@launch
+            _state.update { it.copy(readerSettingsUi = it.readerSettingsUi.copy(loading = true, error = null)) }
+            try {
+                val settings = apiFactory(session).readerSettings()
+                if (!currentOrExpired(session, cache)) return@launch
+                _state.update { current ->
+                    current.copy(
+                        readerSettings = settings,
+                        readerSettingsRev = settings.rev,
+                        readerSettingsUi = current.readerSettingsUi.copy(
+                            loading = false,
+                            draft = null,
+                            loaded = settings,
+                            loadedRev = settings.rev,
+                            conflict = null,
+                            frozen = null,
+                            success = false,
+                        ),
+                    )
+                }
+            } catch (error: ApiException) {
+                if (!currentOrExpired(session, cache)) return@launch
+                if (error.isUnauthorized && sessions.current() == session) {
+                    sessions.clearToken()
+                    if (sessions.current() == null) sessionExpired()
+                }
+                _state.update { it.copy(readerSettingsUi = it.readerSettingsUi.copy(loading = false, error = failureText("Could not load settings", error))) }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (currentOrExpired(session, cache)) {
+                    _state.update { it.copy(readerSettingsUi = it.readerSettingsUi.copy(loading = false, error = failureText("Could not load settings", error))) }
+                }
+            }
+        }
+    }
+
+    /** Edits the draft; editing invalidates a frozen retry and keeps the conflict warning. */
+    fun updateReaderSettingsDraft(transform: (ReaderSettings) -> ReaderSettings) {
+        _state.update { current ->
+            val ui = current.readerSettingsUi
+            val base = ui.draft ?: ui.loaded ?: current.readerSettings
+            val next = transform(base)
+            val edited = next != base
+            current.copy(
+                readerSettingsUi = ui.copy(
+                    draft = next,
+                    frozen = if (edited) null else ui.frozen,
+                    error = null,
+                    success = false,
+                ),
+            )
+        }
+    }
+
+    /** Closes the conflict warning without discarding the dirty draft. */
+    fun dismissReaderSettingsConflict() {
+        _state.update { it.copy(readerSettingsUi = it.readerSettingsUi.copy(conflict = null)) }
+    }
+
+    /** Discards the draft and loads the newest known settings (reload, not overwrite). */
+    fun reloadReaderSettings() {
+        _state.update {
+            it.copy(readerSettingsUi = it.readerSettingsUi.copy(
+                loading = true, error = null, draft = null, conflict = null, frozen = null, success = false,
+            ))
+        }
+        loadReaderSettings()
+    }
+
+    /** Retry the ambiguous save with the identical frozen body and op ID. */
+    fun retryReaderSettingsSave() {
+        val frozen = _state.value.readerSettingsUi.frozen ?: return
+        _state.update {
+            it.copy(readerSettingsUi = it.readerSettingsUi.copy(draft = frozen.settings, error = null, success = false))
+        }
+        saveReaderSettings()
+    }
+
+    /**
+     * Saves the draft. A draft older than the account's newest known revision
+     * warns and reloads instead of overwriting. An ambiguous failure freezes
+     * the exact body and op ID so [retryReaderSettingsSave] can resend it.
+     */
+    fun saveReaderSettings() {
+        val ui = _state.value.readerSettingsUi
+        val draft = ui.draft ?: ui.loaded ?: return
+        val frozen = ui.frozen?.takeIf { it.settings == draft }
+        viewModelScope.launch(Dispatchers.IO) {
+            val (cache, session) = activeAccount("Still signing in; settings did not save.") ?: return@launch
+            val newer = cache.withEngine { engine ->
+                val current = cache.readerSettings(engine)
+                if (current.rev > ui.loadedRev) current else null
+            }
+            if (newer != null && currentOrExpired(session, cache)) {
+                _state.update {
+                    it.copy(readerSettingsUi = it.readerSettingsUi.copy(
+                        conflict = newer,
+                        saving = false,
+                        error = null,
+                    ))
+                }
+                return@launch
+            }
+            val opId = frozen?.opId ?: "settings-${java.util.UUID.randomUUID()}"
+            _state.update {
+                it.copy(readerSettingsUi = it.readerSettingsUi.copy(
+                    saving = true, error = null, success = false, conflict = null,
+                    frozen = FrozenReaderSettings(draft, opId),
+                ))
+            }
+            try {
+                val updated = apiFactory(session).updateReaderSettings(draft, opId)
+                if (!currentOrExpired(session, cache)) return@launch
+                cache.mergeReaderSettings(updated)
+                SyncAccess.committed.tryEmit(session.identity.cacheKey)
+                _state.update { current ->
+                    val settingsUi = current.readerSettingsUi
+                    current.copy(
+                        readerSettings = updated,
+                        readerSettingsRev = updated.rev,
+                        readerSettingsUi = settingsUi.copy(
+                            saving = false,
+                            success = true,
+                            error = null,
+                            draft = null,
+                            loaded = updated,
+                            loadedRev = updated.rev,
+                            conflict = null,
+                            frozen = null,
+                        ),
+                    )
+                }
+            } catch (error: ApiException) {
+                if (!currentOrExpired(session, cache)) return@launch
+                // A 401 invalidates the token: never replay or publish the save.
+                if (error.isUnauthorized) {
+                    _state.update {
+                        it.copy(readerSettingsUi = it.readerSettingsUi.copy(saving = false, frozen = null, error = failureText("Could not save settings", error)))
+                    }
+                    if (sessions.current() == session) {
+                        sessions.clearToken()
+                        if (sessions.current() == null) sessionExpired()
+                    }
+                    return@launch
+                }
+                val deterministic = error.status in 400..499
+                _state.update {
+                    it.copy(readerSettingsUi = it.readerSettingsUi.copy(
+                        saving = false,
+                        frozen = if (deterministic) null else it.readerSettingsUi.frozen,
+                        error = failureText("Could not save settings", error),
+                    ))
+                }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (currentOrExpired(session, cache)) {
+                    _state.update {
+                        it.copy(readerSettingsUi = it.readerSettingsUi.copy(
+                            saving = false,
+                            frozen = it.readerSettingsUi.frozen,
+                            error = failureText("Could not save settings", error),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Fetches exact unread counts only in unread-count mode. A failure keeps
+     * the last synced counts (never zero) and reports that they are stale.
+     */
+    private suspend fun refreshUnreadCounts(cache: SessionCache, session: AuthenticatedSession) {
+        val settings = cache.withEngine { cache.readerSettings(it) }
+        if (settings.readingMode != ReadingMode.UNREAD_COUNTS) return
+        try {
+            val counts = apiFactory(session).unreadCounts()
+            if (!currentOrExpired(session, cache)) return
+            cache.storeUnreadCounts(counts)
+            _state.update {
+                it.copy(unreadCounts = counts, unreadCountsSyncedAt = System.currentTimeMillis(), unreadCountsError = null)
+            }
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            if (!currentOrExpired(session, cache)) return
+            _state.update { it.copy(unreadCountsError = failureText("Could not refresh unread counts", error)) }
         }
     }
 

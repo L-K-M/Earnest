@@ -108,6 +108,37 @@ class OpenApiContractTest {
             SavedSearchBody("Stored", "query", SearchFilter(SearchMode.FULLTEXT, 2, 3, 4)),
         ),
         "SavedSearchRename" to encode(SavedSearchRename.serializer(), SavedSearchRename("Renamed")),
+        "ReaderSettings" to encode(
+            ReaderSettings.serializer(),
+            ReaderSettings(
+                ReadingMode.UNREAD_COUNTS,
+                7,
+                false,
+                ReaderTheme.BLACK,
+                72,
+                ReaderFont.DYSLEXIC,
+                mapOf("42" to ReaderOverride(ReaderTheme.EINK, 64, ReaderFont.SANS)),
+                9007199254740993,
+            ),
+        ),
+        "ReaderOverride" to encode(ReaderOverride.serializer(), ReaderOverride(ReaderTheme.EINK, 64, ReaderFont.SANS)),
+        "UnreadCounts" to encode(
+            UnreadCounts.serializer(),
+            UnreadCounts(mapOf(3L to 9007199254740993, Long.MAX_VALUE to 4L), 2, 3, 9007199254740997),
+        ),
+        "SettingsBody" to encode(
+            ReaderSettingsBody.serializer(),
+            ReaderSettingsBody(
+                ReadingMode.RIVER,
+                2,
+                true,
+                ReaderTheme.SYSTEM,
+                66,
+                ReaderFont.SERIF,
+                mapOf("42" to ReaderOverride(ReaderTheme.EINK, 64, ReaderFont.SANS)),
+                "op-1",
+            ),
+        ),
     )
 
     @Test
