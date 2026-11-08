@@ -169,7 +169,7 @@ class PackageClientTests(unittest.TestCase):
 
     def run_package(self, platform="mac", *extra, env=None, tag="v1.2.3"):
         return subprocess.run(
-            ["bash", str(self.repo / "scripts/package-client.sh"), platform, tag, str(self.output), *extra],
+            [str(self.repo / "scripts/package-client.sh"), platform, tag, str(self.output), *extra],
             env={**self.env, **(env or {})}, capture_output=True, text=True, timeout=30,
         )
 
