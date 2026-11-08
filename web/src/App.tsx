@@ -75,15 +75,12 @@ class ScreenBoundary extends Component<{resetKey: string; children: ReactNode}, 
 }
 
 function useMedia(query: string): boolean {
-  return useSyncExternalStore(
-    notify => {
-      const list = window.matchMedia?.(query)
-      list?.addEventListener('change', notify)
-      return () => list?.removeEventListener('change', notify)
-    },
-    () => window.matchMedia?.(query).matches ?? false,
-    () => false,
-  )
+  const subscribe = useCallback((notify: () => void) => {
+    const list = window.matchMedia?.(query)
+    list?.addEventListener('change', notify)
+    return () => list?.removeEventListener('change', notify)
+  }, [query])
+  return useSyncExternalStore(subscribe, () => window.matchMedia?.(query).matches ?? false, () => false)
 }
 
 function actionMessage(register: Register, value: Value): string {
@@ -285,6 +282,8 @@ function Session({onLogout}: {onLogout: () => void}) {
   },[retrySync])
 
   const notify = useCallback((message: string, undo?: () => Promise<void>) => { if (alive.current) setToast({id: Date.now(), message, undo}) }, [])
+  // Stable, so the toast's timer is not restarted by unrelated renders.
+  const dismissToast = useCallback(() => setToast(null), [])
   function count(register: Register, value: Value, delta: number) {
     setSummary(old => ({...old, seen: old.seen + delta * Number(register === 'seen' && value === 'seen'), done: old.done + delta * Number(register === 'shelf' && value === 'done'), later: old.later + delta * Number(register === 'shelf' && value === 'later'), kept: old.kept + delta * Number(register === 'kept' && value === true)}))
   }
@@ -548,7 +547,7 @@ function Session({onLogout}: {onLogout: () => void}) {
       </main>
     </div>
     <Palette ref={palette} commands={commands} shortcuts={shortcuts} triggers={false} />
-    <ToastRegion toast={toast} onDismiss={() => setToast(null)} />
+    <ToastRegion toast={toast} onDismiss={dismissToast} />
   </div>
 }
 
