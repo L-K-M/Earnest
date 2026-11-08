@@ -1,11 +1,14 @@
 name: Android
 
 on:
+  workflow_call:
   pull_request:
     paths:
       - 'clients/android/**'
       - 'testdata/vectors/**'
       - 'api/openapi.json'
+      - 'scripts/android-release-test.sh'
+      - 'scripts/package-client.sh'
       - '.github/workflows/android.yml'
 
 permissions:
@@ -35,3 +38,5 @@ jobs:
         run: sdkmanager 'platforms;android-37.0' 'build-tools;36.1.0'
       - name: Test, assemble and lint
         run: ./gradlew :core:test :app:testDebugUnitTest :app:assembleDebug lint
+      - name: Verify release signing with a disposable test key
+        run: bash ../../scripts/android-release-test.sh

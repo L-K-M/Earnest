@@ -1,11 +1,13 @@
 name: Mac
 
 on:
+  workflow_call:
   pull_request:
     paths:
       - 'clients/mac/**'
       - 'testdata/vectors/**'
       - 'api/openapi.json'
+      - 'scripts/package-client.sh'
       - '.github/workflows/mac.yml'
 
 permissions:
@@ -46,3 +48,14 @@ jobs:
         run: xcodegen generate
       - name: Build and test
         run: xcodebuild build test -project Earnest.xcodeproj -scheme Earnest -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO -skipPackagePluginValidation -jobs 2
+      - name: Check universal archive layout without distribution signing
+        run: |
+          xcodebuild archive -project Earnest.xcodeproj -scheme Earnest -configuration Release \
+            -destination 'generic/platform=macOS' -archivePath "$RUNNER_TEMP/Earnest.xcarchive" \
+            ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO MARKETING_VERSION=0.0.0 \
+            CURRENT_PROJECT_VERSION=1 CODE_SIGNING_ALLOWED=NO -skipPackagePluginValidation -jobs 2
+          app="$RUNNER_TEMP/Earnest.xcarchive/Products/Applications/Earnest.app"
+          architectures=" $(lipo -archs "$app/Contents/MacOS/Earnest") "
+          [[ "$architectures" == *' arm64 '* && "$architectures" == *' x86_64 '* ]]
+          test "$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")" = 0.0.0
+          test "$(plutil -extract CFBundleVersion raw -o - "$app/Contents/Info.plist")" = 1

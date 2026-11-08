@@ -22,6 +22,9 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         PRODUCT_BUNDLE_IDENTIFIER: ch.lkmc.Earnest
         PRODUCT_NAME: Earnest
+        # Development placeholders; package-client.sh stamps the source tag.
+        MARKETING_VERSION: '0.0.0'
+        CURRENT_PROJECT_VERSION: 1
         SWIFT_VERSION: '5.0'
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_ENTITLEMENTS: Sources/Earnest.entitlements
@@ -30,6 +33,8 @@ targets:
     info:
       path: Sources/Info.plist
       properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSLocalNetworkUsageDescription: Connect to the Earnest server you configure on your local network.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true

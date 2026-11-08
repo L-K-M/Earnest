@@ -16,6 +16,16 @@ The debug APK is signed with the local debug key. The phone needs Android 10
 (API 29) or later. USB debugging must be enabled for `adb install`; otherwise
 transfer the APK to the phone and install it there.
 
+## Release packages
+
+From an exact source tag, `scripts/package-client.sh android <tag>` builds and
+verifies an APK using your persistent release key and a tag-derived version.
+Missing signing inputs fail rather than using the debug key. See
+[three-platform releases](releases.md) for credentials, receipts and acceptance.
+The disposable APK built by `scripts/android-release-test.sh` is a fixture,
+not a distribution package. Before replacing a debug installation signed by a
+different key, sync every pending action; uninstalling deletes its local outbox.
+
 ## Connect
 
 The phone must reach your Earnest server, for example over your private
