@@ -33,6 +33,9 @@ import AppKit
     @Published private(set) var offlineCopy = false
     /// The selected article could not be fetched and has no offline copy.
     @Published private(set) var articleUnavailable = false
+    /// Why the selected article failed to load, when it did; the reader
+    /// offers Try Again instead of a spinner that never ends.
+    @Published private(set) var readerFailure: String?
     @Published var palette = false
     /// Mirrors the account's single-key preference so commands can drop the
     /// unmodified-letter bindings without disabling the menu actions.
@@ -82,7 +85,14 @@ import AppKit
     /// An article restored with the window, opened once the account's cache is ready.
     var pendingRestoredSelection: Int64?
     /// An `earnest:` link that arrived before the account's cache was ready.
-    private var pendingDeepLink: Int64?
+    private(set) var pendingDeepLink: Int64?
+
+    /// Keep a pending link across a reconnect, which ends the old session.
+    func deferDeepLink(_ id: Int64) {
+        section = .today
+        imageMode = .click
+        pendingDeepLink = id
+    }
 
     let app: AppModel
     private var tasks: [String: Task<Void, Never>] = [:]
@@ -156,6 +166,9 @@ import AppKit
         singleKeyShortcuts = true
         readerStyle = .default
         subscribing = false
+        subscribeURL = ""
+        subscribeCadence = "today"
+        readerFailure = nil
         unsubscribing = nil
         selectedMatchID = nil
         selectedFeedID = nil
@@ -375,6 +388,8 @@ import AppKit
         if let link = pendingDeepLink, app.engine != nil, app.loggedIn {
             pendingDeepLink = nil
             pendingRestoredSelection = nil
+            // External links never load images automatically.
+            imageMode = .click
             if selected == link { open(link) } else { selected = link }
         } else if let pending = pendingRestoredSelection, app.engine != nil, app.loggedIn {
             pendingRestoredSelection = nil
@@ -748,6 +763,7 @@ import AppKit
         readingEntry = nil
         offlineCopy = false
         articleUnavailable = false
+        readerFailure = nil
         guard let id, app.loggedIn else { return }
         let mode = imageMode
         runTask("open") { [weak self] in
@@ -829,8 +845,17 @@ import AppKit
                     app.rebuildPresentation()
                 }
                 app.report(error)
+                // Say so in the reader too, with Try Again, rather than
+                // leaving a spinner; a sign-out has already cleared it.
+                if app.loggedIn, self.selected == id { self.readerFailure = ErrorPresentation.message(error) }
             }
         }
+    }
+
+    /// Load the open article again after a failure.
+    func retryOpen() {
+        guard let selected else { return }
+        open(selected)
     }
 
     // MARK: - Feeds
@@ -877,7 +902,7 @@ import AppKit
         })
         commands.append(PaletteCommand(title: "Search Articles", key: "⌥⌘F", enabled: app.loggedIn) { self.searchFocusRequest &+= 1 })
         commands.append(PaletteCommand(title: "Settings…", key: "⌘,", enabled: true) { self.app.openSettingsRequest &+= 1 })
-        commands.append(PaletteCommand(title: "Sign Out…", key: "", enabled: app.loggedIn) { self.app.confirmingSignOut = true })
+        commands.append(PaletteCommand(title: "Sign Out…", key: "", enabled: app.loggedIn) { self.app.requestSignOut() })
         return commands
     }
 

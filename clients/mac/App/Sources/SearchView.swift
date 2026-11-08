@@ -137,10 +137,13 @@ extension APISavedSearch: @retroactive Identifiable {}
         if !search.hasResults {
             ContentUnavailableView("Search Your Feeds", systemImage: "magnifyingglass",
                                    description: Text("Type in the search field and press Return. Publisher text and agent notes are searched separately."))
-        } else if search.matches.isEmpty && !search.loading && search.error == nil && search.status == nil {
-            ContentUnavailableView.search(text: search.submittedQuery)
-        } else if search.matches.isEmpty {
+        } else if search.matches.isEmpty && search.loading {
             ProgressView("Searching…").controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if search.matches.isEmpty && (search.error != nil || search.status != nil) {
+            // The message bar below says why and offers the way forward.
+            ContentUnavailableView("Couldn’t Search", systemImage: "exclamationmark.magnifyingglass")
+        } else if search.matches.isEmpty {
+            ContentUnavailableView.search(text: search.submittedQuery)
         } else {
             let table = self.table
             EntryTable(groups: table.groups, selection: Binding(get: {

@@ -177,7 +177,10 @@ struct ReaderPreferencesScope: Equatable {
                 throw APIError.invalidBaseURL
             }
             server = trimmed
+            // A link opened while signed out or launching waits for this session.
+            let links = windows.compactMap { window in window.pendingDeepLink.map { (window, $0) } }
             endSession()
+            for (window, link) in links { window.deferDeepLink(link) }
             api = nil
             tokens = nil
             serverURL = nil
@@ -478,6 +481,24 @@ struct ReaderPreferencesScope: Equatable {
                 self.report(error)
             }
         }
+    }
+
+    /// Ask before signing out. With no reading window open there is nowhere
+    /// to show a sheet, so ask in an alert of its own.
+    func requestSignOut() {
+        guard loggedIn else { return }
+        #if canImport(AppKit)
+        if !windows.contains(where: { $0.nsWindow?.isVisible == true }) {
+            let alert = NSAlert()
+            alert.messageText = "Sign Out of Earnest?"
+            alert.informativeText = "You will need to approve this Mac again to sign in."
+            alert.addButton(withTitle: "Sign Out").hasDestructiveAction = true
+            alert.addButton(withTitle: "Cancel")
+            if alert.runModal() == .alertFirstButtonReturn { signOut() }
+            return
+        }
+        #endif
+        confirmingSignOut = true
     }
 
     /// The device-approval page for the code on screen, if it is a web address.

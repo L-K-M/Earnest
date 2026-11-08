@@ -223,6 +223,14 @@ struct Reader: NSViewRepresentable {
             } else if window.articleUnavailable {
                 ContentUnavailableView("Not Available Offline", systemImage: "wifi.slash",
                                        description: Text("Earnest keeps articles you have opened. This one loads when you are back online."))
+            } else if let failure = window.readerFailure {
+                ContentUnavailableView {
+                    Label("Couldn’t Load Article", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(failure)
+                } actions: {
+                    Button("Try Again") { window.retryOpen() }
+                }
             } else {
                 article
             }

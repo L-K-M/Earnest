@@ -14,7 +14,7 @@ import EarnestKit
         return try JSONDecoder().decode(APIEntry.self, from: Data(json.utf8))
     }
 
-    private func makeModel() throws -> AppModel {
+    private func makeModel(api: EarnestAPI? = nil) throws -> AppModel {
         let engine = SyncEngine(store: MemorySyncStore())
         try engine.bootstrap(Cursor(generation: "g", rev: 1))
         try engine.mergeEntries([try entry(41), try entry(42), try entry(43)], generation: "g")
@@ -23,7 +23,7 @@ import EarnestKit
             "initial_since": .null, "initial_through_seq": .integer(0),
         ])])
         try engine.finishBootstrap()
-        let model = AppModel(engine: engine, principalID: 7)
+        let model = AppModel(api: api, engine: engine, principalID: 7)
         model.loggedIn = true
         return model
     }
@@ -66,6 +66,51 @@ import EarnestKit
         window.command(.done)
         XCTAssertEqual(window.selected, 43)
         XCTAssertEqual(window.rows.map(\.id), [41, 43])
+    }
+
+    func testAFailedArticleSaysSoInsteadOfLoadingForever() async throws {
+        let session = ContentHTTP.install([
+            .init(path: "/v1/entries/42/content-url", status: 500,
+                  body: #"{"type":"about:blank","title":"Server","status":500}"#, mode: "proxied"),
+            .init(path: "/v1/entries/42/content", status: 500,
+                  body: #"{"type":"about:blank","title":"Server","status":500}"#),
+        ])
+        defer { session.invalidateAndCancel() }
+        let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: ContentTokens(), session: session)
+        let model = try makeModel(api: api)
+        defer { model.signOut() }
+        let window = WindowModel(app: model)
+        window.selectFromList(42)
+        let deadline = Date().addingTimeInterval(5)
+        while window.readerFailure == nil && Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertNotNil(window.readerFailure, "The reader explains the failure")
+        XCTAssertTrue(window.html.isEmpty)
+        model.error = nil
+        ContentHTTP.assertFinished()
+    }
+
+    func testADeferredLinkOpensWithImagesBlocked() throws {
+        let model = try makeModel()
+        defer { model.signOut() }
+        let window = WindowModel(app: model)
+        window.go(to: .kept)
+        // A link that waited for sign-in, as a reconnect hands it back.
+        window.deferDeepLink(43)
+        model.rebuildPresentation()
+        XCTAssertEqual(window.section, .today)
+        XCTAssertEqual(window.selected, 43)
+        XCTAssertEqual(window.imageMode, .click, "External links never load images automatically")
+        XCTAssertNil(window.pendingDeepLink)
+    }
+
+    func testSignOutForgetsTheSubscriptionDraft() throws {
+        let model = try makeModel()
+        let window = WindowModel(app: model)
+        window.subscribeURL = "https://private.example/feed"
+        window.subscribeCadence = "week"
+        model.signOut()
+        XCTAssertEqual(window.subscribeURL, "")
+        XCTAssertEqual(window.subscribeCadence, "today")
     }
 
     func testDoneOnTheOpenArticleSelectsTheNextAndUndoBringsItBack() throws {

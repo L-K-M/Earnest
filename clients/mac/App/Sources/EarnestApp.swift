@@ -233,7 +233,7 @@ private struct AccountCommands: Commands {
     var body: some Commands {
         // After Settings…, before Services.
         CommandGroup(before: .systemServices) {
-            Button("Sign Out…") { model.confirmingSignOut = true }
+            Button("Sign Out…") { model.requestSignOut() }
                 .disabled(!model.loggedIn)
             Divider()
         }
