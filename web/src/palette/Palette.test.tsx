@@ -70,3 +70,22 @@ it('shows command errors and does not run disabled actions',async () => {
   expect(await screen.findByRole('alert')).toHaveProperty('textContent','Reading state is not ready.')
   expect(screen.getByRole('dialog',{name:'Command palette'})).toBeTruthy()
 })
+
+it('leaves Enter and arrows to an input method while it composes',async () => {
+  const all = commands()
+  render(<Palette commands={all} shortcuts/>)
+  fireEvent.click(screen.getByRole('button',{name:/Command palette/}))
+  fireEvent.change(screen.getByRole('combobox'),{target:{value:'today'}})
+  fireEvent.keyDown(screen.getByRole('combobox'),{key:'Enter',isComposing:true})
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(all[0].run).not.toHaveBeenCalled()
+  expect(screen.getByRole('dialog',{name:'Command palette'})).toBeTruthy()
+})
+it('closes the shortcut help with a second ? pressed inside it',() => {
+  render(<Palette commands={commands()} shortcuts/>)
+  fireEvent.keyDown(document.body,{key:'?'})
+  const close = screen.getByRole('button',{name:'Close help'})
+  close.focus()
+  fireEvent.keyDown(close,{key:'?'})
+  expect(screen.queryByRole('dialog',{name:'Keyboard shortcuts'})).toBeNull()
+})

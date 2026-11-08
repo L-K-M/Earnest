@@ -67,6 +67,9 @@ export function Palette({commands,shortcuts,enabled=true,helpRef,triggers=true,r
     function keyboard(event: KeyboardEvent) {
       if (!enabled || event.defaultPrevented || event.repeat || event.isComposing) return
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'k') {event.preventDefault();open(dialog.current);return}
+      // Focus sits inside the open help dialog, where single keys are
+      // otherwise ignored; a second ? still closes it.
+      if (event.key === '?' && help.current?.open && event.target instanceof Node && help.current.contains(event.target)) {event.preventDefault();help.current.close();return}
       if (event.ctrlKey || event.metaKey || event.altKey || !shortcutsAllowed(event.target,shortcuts)) return
       if (event.key === '?') {
         // Toggle: a second press closes the dialog instead of calling
@@ -106,6 +109,8 @@ export function Palette({commands,shortcuts,enabled=true,helpRef,triggers=true,r
       <div className="palette-search">
         <label htmlFor={`${ids}-palette-input`} className="sr-only">Find a command</label>
         <input id={`${ids}-palette-input`} ref={input} type="text" role="combobox" autoComplete="off" spellCheck={false} placeholder="Go to a view, feed or action…" aria-autocomplete="list" aria-expanded="true" aria-controls={`${ids}-palette-results`} aria-activedescendant={active ? optionID(active) : undefined} value={query} onChange={event => {setQuery(event.target.value);setIndex(0)}} onKeyDown={event => {
+          // While an input method is composing, Enter and the arrows belong to it.
+          if (event.nativeEvent.isComposing) return
           if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {event.preventDefault();move(event.key === 'ArrowDown' ? 1 : -1)}
           if (event.key === 'Home' && event.ctrlKey) {event.preventDefault();setIndex(0)}
           if (event.key === 'End' && event.ctrlKey) {event.preventDefault();setIndex(Math.max(0, matches.length - 1))}

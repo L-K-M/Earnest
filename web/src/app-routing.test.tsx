@@ -66,16 +66,19 @@ it('opens from the list with a new history entry and goes back to it', async () 
 
 it('explains an article that no longer exists instead of showing a blank pane', async () => {
   await start('/today/articles/77')
-  expect(await screen.findByRole('heading',{name:'This article is no longer available'},{timeout:5000})).toBeTruthy()
+  const problem = await screen.findByRole('heading',{name:'This article is no longer available'},{timeout:5000})
+  await waitFor(() => expect(document.activeElement).toBe(problem))
   await waitFor(() => expect(document.title).toBe('Article unavailable · Today · Earnest'))
 })
 
 it('reports an unknown address and a deleted feed in words', async () => {
   await start('/nowhere')
-  expect(await screen.findByRole('heading',{name:'There is nothing at this address'},{timeout:5000})).toBeTruthy()
+  const heading = await screen.findByRole('heading',{name:'There is nothing at this address'},{timeout:5000})
+  await waitFor(() => expect(document.activeElement).toBe(heading))
   cleanup()
   await start('/feeds/99')
-  expect(await screen.findByRole('heading',{name:'This feed is gone'},{timeout:5000})).toBeTruthy()
+  const gone = await screen.findByRole('heading',{name:'This feed is gone'},{timeout:5000})
+  await waitFor(() => expect(document.activeElement).toBe(gone))
 })
 
 it('offers an undo for a deliberate action and restores the previous value with z', async () => {

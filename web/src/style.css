@@ -286,6 +286,11 @@ dd {margin: 0}
 .search li > button, .notification-list button {justify-content: flex-start; min-height: 0; padding: 0; border: 0; background: none; color: var(--brand); font-weight: 600; text-align: left}
 .search li > button:hover, .notification-list button:hover {text-decoration: underline; background: none}
 .notification-list button[aria-current=true] {color: var(--ink)}
+.notification-list {margin: var(--s3) 0; padding: 0; list-style: none}
+.notification-list > li {border-top: 1px solid var(--line)}
+.notification-list > li:last-child {border-bottom: 1px solid var(--line)}
+.notification-list button, .search li > button {min-height: 2rem; padding: .3rem 0}
+@media (pointer: coarse) { .notification-list button, .search li > button {min-height: 2.75rem} }
 
 .settings-layout {display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: 0 var(--s5); align-items: start}
 .settings-layout > .page-header {grid-column: 1 / -1}

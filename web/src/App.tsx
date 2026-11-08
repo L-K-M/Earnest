@@ -347,7 +347,7 @@ function Session({onLogout}: {onLogout: () => void}) {
   const firstRunShown = route.name === 'river' && route.entry === undefined && !onboarded && subscriptions.isSuccess && subscriptions.data.length === 0 && preferences.isSuccess && preferences.data.rev === 0
   const section = firstRunShown ? 'welcome' : routeSection(route)
   useEffect(() => {
-    if ((route.name === 'river' && section !== 'welcome') || route.name === 'not-found') return
+    if (route.name === 'river' && section !== 'welcome') return
     return whenPresent(() => page.current?.querySelector<HTMLElement>('h2'), heading => {
       if (page.current?.contains(document.activeElement) && document.activeElement !== page.current) return
       if (!heading.hasAttribute('tabindex')) heading.setAttribute('tabindex', '-1')
@@ -357,6 +357,11 @@ function Session({onLogout}: {onLogout: () => void}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [section, identity])
   useScrollRestoration(page, location, section)
+  // A list that no longer exists has no River to take focus; its explanation does.
+  useEffect(() => {
+    if (!resolved.missing) return
+    return whenPresent(() => document.querySelector<HTMLElement>('.list-pane .empty-state h2'), heading => heading.focus())
+  }, [resolved.missing, section])
 
   useEffect(() => { if (!narrow && drawer.current?.open) drawer.current.close() }, [narrow])
   useEffect(() => { if (drawer.current?.open) drawer.current.close() }, [location.href])
@@ -552,7 +557,11 @@ function Session({onLogout}: {onLogout: () => void}) {
 }
 
 function ToastRegion({toast, onDismiss}: {toast: Toast | null; onDismiss: () => void}) {
-  const [paused, setPaused] = useState(false)
+  // Hover and keyboard focus each hold the notice open on their own, so
+  // leaving with one does not restart the timer while the other remains.
+  const [hovered, setHovered] = useState(false)
+  const [focused, setFocused] = useState(false)
+  const paused = hovered || focused
   useEffect(() => {
     if (!toast || paused) return
     const timer = window.setTimeout(onDismiss, TOAST_MS)
@@ -560,7 +569,7 @@ function ToastRegion({toast, onDismiss}: {toast: Toast | null; onDismiss: () => 
   }, [toast, paused, onDismiss])
   // The region exists before any message so screen readers announce changes.
   return <div className="toast-region" role="status" aria-live="polite" aria-atomic="true">
-    {toast && <div key={toast.id} className="toast" onPointerEnter={() => setPaused(true)} onPointerLeave={() => setPaused(false)} onFocus={() => setPaused(true)} onBlur={() => setPaused(false)}>
+    {toast && <div key={toast.id} className="toast" onPointerEnter={() => setHovered(true)} onPointerLeave={() => setHovered(false)} onFocus={() => setFocused(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false) }}>
       <span>{toast.message}</span>
       {toast.undo && <button type="button" className="toast-action" aria-keyshortcuts="z" onClick={() => {void toast.undo?.()}}>Undo <kbd aria-hidden="true">z</kbd></button>}
       <button type="button" className="icon-button toast-close" onClick={onDismiss}><Icon name="close" size={16} /><span className="sr-only">Dismiss</span></button>
@@ -585,9 +594,13 @@ function ReaderSkeleton() {
 
 function ReaderProblem({error, onBack, onRetry}: {error: Error; onBack: () => void; onRetry: () => void}) {
   const gone = error instanceof RequestError && error.status === 404
+  // The article this route names did not open; take focus to why, next to
+  // the way back, instead of leaving it on the page body.
+  const heading = useRef<HTMLHeadingElement>(null)
+  useEffect(() => { heading.current?.focus() }, [])
   return <section className="reader-placeholder" aria-label="Reader">
     <div role="alert" className="problem">
-      <h2>{gone ? 'This article is no longer available' : 'The article did not open'}</h2>
+      <h2 ref={heading} tabIndex={-1}>{gone ? 'This article is no longer available' : 'The article did not open'}</h2>
       <p>{gone ? 'It may have expired from the river or been removed by its publisher.' : `${error.message} Check your connection and try again.`}</p>
       <p className="button-row">{!gone && <button type="button" className="primary" onClick={onRetry}>Try again</button>}<button type="button" onClick={onBack}>Back to the list</button></p>
     </div>

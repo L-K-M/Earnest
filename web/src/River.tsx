@@ -268,7 +268,9 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
         move(next, index, inList)
         return
       }
-      if (event.key === 'o' || event.key === 'Enter') { if (event.target instanceof Element && event.target.closest('button, a')) return; event.preventDefault(); open(entry); return }
+      // Enter belongs to whatever control has focus (a link, a button, the
+      // summary of a brief); it opens the selection only from plain content.
+      if (event.key === 'o' || event.key === 'Enter') { if (event.key === 'Enter' && event.target instanceof Element && event.target.closest('button, a, summary, label, [role="option"]')) return; event.preventDefault(); open(entry); return }
       if (event.key === 'v') { event.preventDefault(); window.open(entry.url, '_blank', 'noopener,noreferrer'); return }
       const state = actions.state(entry)
       const action = event.key === 'e' ? ['shelf', 'done'] as const : event.key === 's' ? ['shelf', state.shelf.value === 'later' ? 'none' : 'later'] as const : event.key === 'f' ? ['kept', state.kept.value !== true] as const : event.key === 'm' ? ['seen', 'unseen'] as const : null

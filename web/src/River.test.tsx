@@ -267,3 +267,18 @@ it('says when the feed being read is failing and links to its settings', async (
   expect(screen.getByRole('link',{name:'Fix it in feed settings'}).getAttribute('href')).toBe('/feeds#subscription-9')
   expect(screen.getByRole('link',{name:'Feed settings'}).getAttribute('href')).toBe('/feeds#subscription-9')
 })
+
+it('leaves Enter on a brief summary to the summary instead of opening the selection', async () => {
+  const {container} = mount()
+  await screen.findByText('Article 1')
+  const details = document.createElement('details')
+  const summary = document.createElement('summary')
+  summary.textContent = 'While you were out'
+  details.append(summary)
+  container.append(details)
+  const onOpenCalls = vi.mocked(request).mock.calls.length
+  const event = new KeyboardEvent('keydown', {key:'Enter', bubbles:true, cancelable:true})
+  summary.dispatchEvent(event)
+  expect(event.defaultPrevented).toBe(false)
+  expect(vi.mocked(request).mock.calls.length).toBe(onOpenCalls)
+})
