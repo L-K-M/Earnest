@@ -29,15 +29,16 @@ internal fun restoredState(engine: SyncEngine, principal: Long, now: Instant = I
     val settings = snapshot.objects.firstOrNull { it.kind == River.SETTINGS && !it.deleted }
     val readerSettings = settings?.let {
         runCatching { Json { ignoreUnknownKeys = true }.decodeFromString(ReaderSettings.serializer(), it.raw) }.getOrNull()
-    } ?: ReaderSettings()
+    }
     return UiState(
         snapshot = snapshot,
         principalId = principal,
         states = states,
         cadences = cadences,
         riverEntryIds = members,
-        readerSettings = readerSettings,
+        readerSettings = readerSettings ?: ReaderSettings(),
         readerSettingsRev = settings?.rev ?: 0L,
+        readerSettingsUi = ReaderSettingsUi(loaded = readerSettings, loadedRev = settings?.rev ?: 0L),
     )
 }
 

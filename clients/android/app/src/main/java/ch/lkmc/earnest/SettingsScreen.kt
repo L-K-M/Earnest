@@ -66,11 +66,11 @@ internal fun SettingsScreen(
     val feeds = state.snapshot.objects
         .filter { it.kind == SyncEngine.OBJECT_SUBSCRIPTION && !it.deleted }
         .mapNotNull { obj -> obj.feedId()?.let { feedId -> Triple(obj.id, feedId, obj.name) } }
-    var addOverride by remember { mutableStateOf(false) }
-    var overrideFeedId by remember { mutableStateOf<Long?>(null) }
-    var overrideTheme by remember { mutableStateOf<ReaderTheme?>(null) }
-    var overrideMeasure by remember { mutableStateOf<Long?>(null) }
-    var overrideFont by remember { mutableStateOf<ReaderFont?>(null) }
+    var addOverride by remember(state.accountKey, ui.epoch) { mutableStateOf(false) }
+    var overrideFeedId by remember(state.accountKey, ui.epoch) { mutableStateOf<Long?>(null) }
+    var overrideTheme by remember(state.accountKey, ui.epoch) { mutableStateOf<ReaderTheme?>(null) }
+    var overrideMeasure by remember(state.accountKey, ui.epoch) { mutableStateOf<Long?>(null) }
+    var overrideFont by remember(state.accountKey, ui.epoch) { mutableStateOf<ReaderFont?>(null) }
 
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -85,12 +85,16 @@ internal fun SettingsScreen(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(onClick = model::loadReaderSettings, enabled = !ui.loading) { Text("Load") }
             val dirty = ui.draft != null
-            TextButton(onClick = model::saveReaderSettings, enabled = dirty && !ui.saving) { Text("Save") }
+            TextButton(onClick = model::saveReaderSettings, enabled = ui.loaded != null && state.snapshot.cursor.generation.isNotEmpty() && dirty && !ui.saving) { Text("Save") }
             TextButton(onClick = model::retryReaderSettingsSave, enabled = ui.frozen != null && !ui.saving) { Text("Retry") }
             TextButton(onClick = model::reloadReaderSettings, enabled = !ui.loading) { Text("Reload") }
         }
         ui.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (ui.success) Text("Saved", color = MaterialTheme.colorScheme.primary)
+        if (ui.loaded == null || state.snapshot.cursor.generation.isEmpty()) {
+            Text("Sync or load your account settings before editing.")
+            return@Column
+        }
 
         Section("Reading mode") {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

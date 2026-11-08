@@ -36,23 +36,37 @@ class AppViewModelTest {
     private val identity = AccountIdentity("https://nas.test", 1, 1)
     private val calls = CopyOnWriteArrayList<String>()
     private val contentUrlQueries = CopyOnWriteArrayList<String?>()
-    private class Sessions(@Volatile var value: AuthenticatedSession?) : SessionStore {
+    private class Sessions(initial: AuthenticatedSession?) : SessionStore {
+        private val stored = java.util.concurrent.atomic.AtomicReference(initial)
+        var value: AuthenticatedSession?
+            get() = stored.get()
+            set(value) { stored.set(value) }
         @Volatile var onRead: (() -> Unit)? = null
         @Volatile var onClear: (() -> Unit)? = null
         override fun current(): AuthenticatedSession? {
             val callback = onRead
             onRead = null
             callback?.invoke()
-            return value
+            return stored.get()
         }
-        override fun clearToken() { value = null; onClear?.invoke() }
+        override fun clearToken() { stored.set(null); onClear?.invoke() }
+        override fun clearToken(expected: AuthenticatedSession): Boolean {
+            while (true) {
+                val current = stored.get()
+                if (current != expected) return false
+                if (stored.compareAndSet(current, null)) {
+                    onClear?.invoke()
+                    return true
+                }
+            }
+        }
     }
     @Before fun setup() {
         Dispatchers.setMain(UnconfinedTestDispatcher())
     }
     @After fun teardown() { Dispatchers.resetMain() }
 
-    private fun api() = EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { chain ->
+    private fun api(agentChangesStatus: Int = 200) = EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { chain ->
         val path = chain.request().url.encodedPath
         calls += path
         if (path.endsWith("/content-url")) contentUrlQueries += chain.request().url.query
@@ -64,7 +78,8 @@ class AppViewModelTest {
             "/v1/entries/2" -> """{"id":2,"subscription_id":3,"feed_id":5,"seq":4,"first_seen_at":"2026-11-03T00:00:00Z","title":"Notification headline","url":"https://news.test/article","author":"Author","rev":2,"deleted":false}"""
             else -> "[]"
         }
-        Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("test")
+        val status = if (path == "/v1/activity/agent-changes") agentChangesStatus else 200
+        Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(status).message("test")
             .body(body.toResponseBody()).build()
     }.build())
 
@@ -295,6 +310,19 @@ class AppViewModelTest {
         withTimeout(15000) { model.loggedIn.first { !it } }
         assertFalse(model.loggedIn.value)
         assertEquals("Your session expired. Sign in again.", model.sessionNotice.value)
+    }
+
+    @Test fun unauthorizedAgentChangesExpiresTheOwningSession() = runBlocking(Dispatchers.IO) {
+        val sessions = Sessions(AuthenticatedSession(identity, "token"))
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        var status = 200
+        val model = AppViewModel(app, sessions) { api(agentChangesStatus = status) }
+        withTimeout(15_000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        status = 401
+        model.refresh()
+        withTimeout(15_000) { model.state.first { !model.loggedIn.value || (!it.loading && it.agentChangesError != null) } }
+        assertNull("an optional metadata fetch must not swallow owning authentication failure", sessions.current())
+        assertFalse(model.loggedIn.value)
     }
 
     @Test fun reLoginDuringExpiryIsNotSignedOut() = runBlocking(Dispatchers.IO) {

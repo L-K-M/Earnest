@@ -6,6 +6,7 @@ import ch.lkmc.earnest.core.Activity
 import ch.lkmc.earnest.core.EarnestApi
 import ch.lkmc.earnest.core.EngineSession
 import ch.lkmc.earnest.core.ReaderSettings
+import ch.lkmc.earnest.core.ReadingMode
 import ch.lkmc.earnest.core.River
 import ch.lkmc.earnest.core.UnreadCounts
 import kotlinx.serialization.builtins.ListSerializer
@@ -17,8 +18,11 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.io.IOException
 import java.net.URI
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 /** Identity comes from /v1/me before any account cache is attached. */
 internal data class AccountIdentity(val server: String, val userId: Long, val principalId: Long) {
@@ -39,9 +43,18 @@ internal data class AccountIdentity(val server: String, val userId: Long, val pr
 
 internal data class AuthenticatedSession(val identity: AccountIdentity, val token: String)
 
+/** Orders foreground and worker count requests within this process. */
+internal class UnreadCountsRequest internal constructor(
+    internal val cacheKey: String,
+    internal val generation: String,
+    internal val serial: Long,
+)
+
 internal interface SessionStore {
     fun current(): AuthenticatedSession?
     fun clearToken()
+    /** Atomically removes only these credentials, never a replacement login. */
+    fun clearToken(expected: AuthenticatedSession): Boolean
 }
 
 internal object SyncAccess {
@@ -121,41 +134,76 @@ internal class SessionCache(context: Context, val identity: AccountIdentity) {
         engine.snapshot().objects.firstOrNull { it.kind == River.SETTINGS && !it.deleted }?.rev ?: 0L
 
     /**
-     * Merges acknowledged reader settings into the account snapshot only when
-     * the acknowledged revision is not older than the cached one. Mutes and the
-     * cursor are preserved; the snapshot is flushed under the session lock.
+     * Merges acknowledged reader settings only while the snapshot still runs
+     * the generation the caller captured before dispatch; a restore makes
+     * revisions incomparable, so a stale acknowledgement is dropped instead of
+     * regressing the new baseline. Returns the canonical stored settings, or
+     * null when the generation moved on. An acknowledgement older than the
+     * cached revision never overwrites it; the caller gets the stored winner.
      */
-    suspend fun mergeReaderSettings(settings: ReaderSettings): Boolean = withEngine { engine ->
-        val current = engine.snapshot().objects.firstOrNull { it.kind == River.SETTINGS && !it.deleted }
-        val currentRev = current?.rev ?: 0L
-        if (settings.rev < currentRev) return@withEngine false
-        if (current == null || settings.rev > currentRev) {
-            engine.mergeObject(
-                ch.lkmc.earnest.core.SyncObject(
-                    kind = River.SETTINGS,
-                    id = 1,
-                    rev = settings.rev,
-                    raw = settingsJson.encodeToString(ReaderSettings.serializer(), settings),
-                ),
-            )
+    suspend fun mergeReaderSettings(
+        expectedGeneration: String,
+        settings: ReaderSettings,
+        owns: () -> Boolean,
+    ): ReaderSettings? =
+        withEngine { engine ->
+            // The owner predicate runs after the lock is acquired: a caller
+            // could lose its scope while suspended waiting for it, so checking
+            // only before waiting (or after committing) leaves a gap.
+            if (expectedGeneration.isEmpty() || engine.snapshot().cursor.generation != expectedGeneration || !owns()) return@withEngine null
+            val current = engine.snapshot().objects.firstOrNull { it.kind == River.SETTINGS && !it.deleted }
+            if (current == null || settings.rev > current.rev) {
+                engine.mergeObject(
+                    ch.lkmc.earnest.core.SyncObject(
+                        kind = River.SETTINGS,
+                        id = 1,
+                        rev = settings.rev,
+                        raw = settingsJson.encodeToString(ReaderSettings.serializer(), settings),
+                    ),
+                )
+                settings
+            } else {
+                readerSettings(engine)
+            }
         }
-        true
-    }
 
     /** The last exact unread counts, or null when none has synced. */
-    fun cachedUnreadCounts(): UnreadCounts? =
-        preferences.getString(KEY_UNREAD_COUNTS, null)?.let {
+    fun cachedUnreadCounts(generation: String): UnreadCounts? {
+        if (generation.isEmpty() || preferences.getString(KEY_UNREAD_COUNTS_GENERATION, null) != generation) return null
+        return preferences.getString(KEY_UNREAD_COUNTS, null)?.let {
             runCatching { json.decodeFromString(UnreadCounts.serializer(), it) }.getOrNull()
         }
+    }
 
-    /** Wall-clock millis of the last successful count fetch, or null. */
-    fun cachedUnreadCountsAt(): Long? = preferences.getLong(KEY_UNREAD_COUNTS_AT, 0L).takeIf { it > 0L }
+    /** Wall-clock millis of a valid last-synced count record, or null. */
+    fun cachedUnreadCountsAt(generation: String): Long? =
+        if (cachedUnreadCounts(generation) == null) null else preferences.getLong(KEY_UNREAD_COUNTS_AT, 0L).takeIf { it > 0L }
 
-    fun storeUnreadCounts(counts: UnreadCounts) {
-        preferences.edit {
-            putString(KEY_UNREAD_COUNTS, json.encodeToString(UnreadCounts.serializer(), counts))
-            putLong(KEY_UNREAD_COUNTS_AT, System.currentTimeMillis())
-        }
+    /** Captures a count intent only after validating its durable account scope. */
+    suspend fun beginUnreadCountsRequest(generation: String, owns: () -> Boolean): UnreadCountsRequest? = withEngine { engine ->
+        if (generation.isEmpty() || engine.snapshot().cursor.generation != generation ||
+            readerSettings(engine).readingMode != ReadingMode.UNREAD_COUNTS || !owns()
+        ) return@withEngine null
+        UnreadCountsRequest(identity.cacheKey, generation, countsSequence.incrementAndGet())
+    }
+
+    /** A later-started successful writer must also fence delayed UI publications. */
+    fun ownsUnreadCounts(request: UnreadCountsRequest): Boolean = request.cacheKey == identity.cacheKey &&
+        (completedCountRequests[identity.cacheKey] ?: 0L) <= request.serial
+
+    /** Counts commit with their generation only for an owning unread-count request. */
+    suspend fun mergeUnreadCounts(request: UnreadCountsRequest, counts: UnreadCounts, owns: () -> Boolean): Boolean = withEngine { engine ->
+        if (!ownsUnreadCounts(request) || engine.snapshot().cursor.generation != request.generation ||
+            readerSettings(engine).readingMode != ReadingMode.UNREAD_COUNTS || !owns()
+        ) return@withEngine false
+        val stored = preferences.edit()
+            .putString(KEY_UNREAD_COUNTS, json.encodeToString(UnreadCounts.serializer(), counts))
+            .putString(KEY_UNREAD_COUNTS_GENERATION, request.generation)
+            .putLong(KEY_UNREAD_COUNTS_AT, System.currentTimeMillis())
+            .commit()
+        if (!stored) throw IOException("Could not store unread counts on this device")
+        completedCountRequests[identity.cacheKey] = request.serial
+        true
     }
 
     // Internal so tests can observe engine reuse.
@@ -203,8 +251,14 @@ internal class SessionCache(context: Context, val identity: AccountIdentity) {
         const val KEY_CHANGES_SINCE = "agent_changes_since"
         private const val KEY_AGENT_CHANGES = "agent_changes"
         private const val KEY_AGENT_CHANGES_STALE = "agent_changes_stale"
+        // Shared across cache instances. Writes hold SyncAccess.mutex; UI
+        // publication reads are concurrent. In-flight requests cannot survive
+        // process death, so their ordering need not be persisted.
+        private val countsSequence = AtomicLong()
+        private val completedCountRequests = ConcurrentHashMap<String, Long>()
         private const val KEY_UNREAD_COUNTS = "unread_counts"
         private const val KEY_UNREAD_COUNTS_AT = "unread_counts_at"
+        private const val KEY_UNREAD_COUNTS_GENERATION = "unread_counts_generation"
         private const val AGENT_PAGE_LIMIT = 1000
     }
 

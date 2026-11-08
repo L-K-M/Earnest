@@ -34,7 +34,7 @@ internal class Secrets(context: Context) : SessionStore {
     val server: String get() = prefs.getString(KEY_SERVER, "").orEmpty()
 
     /** Save identity and encrypted credentials together, after verifying /v1/me. */
-    fun saveSession(server: String, token: String, me: ch.lkmc.earnest.core.MeResult) {
+    fun saveSession(server: String, token: String, me: ch.lkmc.earnest.core.MeResult) = synchronized(sessionLock) {
         require(me.kind == "human") { "Sign in with a human account" }
         val origin = server.trim().trimEnd('/')
         AccountIdentity(origin, me.userId, me.principalId)
@@ -70,11 +70,18 @@ internal class Secrets(context: Context) : SessionStore {
         return decrypt(encoded)?.let { AuthenticatedSession(identity, it) }
     }
 
-    override fun clearToken() {
+    override fun clearToken() = synchronized(sessionLock) {
         prefs.edit(commit = true) { remove(KEY_TOKEN); remove(KEY_USER); remove(KEY_PRINCIPAL) }
     }
 
+    override fun clearToken(expected: AuthenticatedSession): Boolean = synchronized(sessionLock) {
+        if (current() != expected) return@synchronized false
+        prefs.edit().remove(KEY_TOKEN).remove(KEY_USER).remove(KEY_PRINCIPAL).commit()
+    }
+
     companion object {
+        // All Secrets instances share these preferences, including the worker.
+        private val sessionLock = Any()
         private const val PREFS = "connection"
         private const val KEY_SERVER = "server"
         private const val KEY_TOKEN = "token"
