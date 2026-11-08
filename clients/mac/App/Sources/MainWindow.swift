@@ -48,7 +48,12 @@ import EarnestKit
     @SwiftUI.State private var pendingImport: PendingImport?
     @SwiftUI.State private var importReport: AppModel.ImportReport?
 
+    // The body is split so each part type-checks quickly on every toolchain.
     var body: some View {
+        withFiles(withAlerts(base))
+    }
+
+    private var base: some View {
         Group {
             if model.loggedIn { MainView() } else { LoginView() }
         }
@@ -61,86 +66,129 @@ import EarnestKit
             window.refreshSection()
         }
         .onChange(of: undoManager) { window.undoManager = undoManager }
-        // App-wide messages appear once, in the front reading window.
-        .alert("Earnest", isPresented: Binding(get: { model.error != nil && window.presentsAppAlerts },
-                                               set: { if !$0 { model.error = nil } })) {
-            Button("OK", role: .cancel) { model.error = nil }
-        } message: {
-            Text(model.error ?? "")
-        }
-        // The result belongs to the window whose import it was.
-        .alert(importReport?.title ?? "", isPresented: Binding(
-            get: { importReport != nil }, set: { if !$0 { importReport = nil } }),
-               presenting: importReport) { _ in
-            Button("OK", role: .cancel) { importReport = nil }
-        } message: { report in
-            Text(report.detail)
-        }
-        .alert("Sign Out of Earnest?", isPresented: Binding(
-            get: { model.confirmingSignOut && window.presentsAppAlerts },
-            set: { if !$0 { model.confirmingSignOut = false } })) {
-            Button("Sign Out", role: .destructive) {
-                model.confirmingSignOut = false
-                model.signOut()
+    }
+
+    // MARK: Alerts
+
+    /// App-wide messages appear once, in the front reading window.
+    private var showsError: Binding<Bool> {
+        Binding(get: { model.error != nil && window.presentsAppAlerts },
+                set: { if !$0 { model.error = nil } })
+    }
+
+    private var showsSignOut: Binding<Bool> {
+        Binding(get: { model.confirmingSignOut && window.presentsAppAlerts },
+                set: { if !$0 { model.confirmingSignOut = false } })
+    }
+
+    /// The result belongs to the window whose import it was.
+    private var showsImportReport: Binding<Bool> {
+        Binding(get: { importReport != nil }, set: { if !$0 { importReport = nil } })
+    }
+
+    /// A file opened during launch waits until the account is signed in.
+    private var showsImportConfirmation: Binding<Bool> {
+        Binding(get: { pendingImport != nil && model.loggedIn }, set: { if !$0 { pendingImport = nil } })
+    }
+
+    private var signOutMessage: String {
+        let waiting = model.pendingOps
+        guard waiting > 0 else { return "You will need to approve this Mac again to sign in." }
+        let changes = waiting == 1 ? "1 change" : "\(waiting) changes"
+        return "\(changes) waiting to sync will stay on this Mac and sync when you sign in to this account again. "
+            + "You will need to approve this Mac again to sign in."
+    }
+
+    private func withAlerts<Content: View>(_ content: Content) -> some View {
+        content
+            .alert("Earnest", isPresented: showsError) {
+                Button("OK", role: .cancel) { model.error = nil }
+            } message: {
+                Text(model.error ?? "")
             }
-            Button("Cancel", role: .cancel) { model.confirmingSignOut = false }
-        } message: {
-            Text(model.pendingOps > 0
-                 ? "\(model.pendingOps) change\(model.pendingOps == 1 ? "" : "s") waiting to sync will stay on this Mac and sync when you sign in to this account again. You will need to approve this Mac again to sign in."
-                 : "You will need to approve this Mac again to sign in.")
-        }
-        // A file opened during launch waits until the account is signed in.
-        .alert("Import Subscriptions?", isPresented: Binding(
-            get: { pendingImport != nil && model.loggedIn }, set: { if !$0 { pendingImport = nil } }),
-               presenting: pendingImport) { pending in
-            Button("Import") {
-                model.importOPML(pending.data, name: pending.name) { importReport = $0 }
-                pendingImport = nil
+            .alert(importReport?.title ?? "", isPresented: showsImportReport, presenting: importReport) { _ in
+                Button("OK", role: .cancel) { importReport = nil }
+            } message: { report in
+                Text(report.detail)
             }
-            .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) { pendingImport = nil }
-        } message: { pending in
-            Text("Earnest will subscribe to the feeds in “\(pending.name)” and create its folders. Feeds you already follow are skipped.")
-        }
-        .sheet(isPresented: $window.palette) {
-            PaletteView().environmentObject(window)
-        }
-        .sheet(isPresented: Binding(get: { window.subscribing && model.loggedIn },
-                                    set: { window.subscribing = $0 })) {
-            NewSubscriptionSheet().environmentObject(model).environmentObject(window)
-        }
-        .fileImporter(isPresented: $importing,
-                      allowedContentTypes: [.opml, .xml], allowsMultipleSelection: false) { result in
-            guard case .success(let urls) = result, let url = urls.first else { return }
-            stage(url)
-        }
-        .fileExporter(isPresented: Binding(get: { exportDocument != nil }, set: { if !$0 { exportDocument = nil } }),
-                      document: exportDocument, contentType: .opml,
-                      defaultFilename: "Earnest Subscriptions") { result in
-            if case .failure(let error) = result { model.report(error) }
-            exportDocument = nil
-        }
-        .onOpenURL { open($0) }
-        .dropDestination(for: URL.self) { urls, _ in
-            guard model.loggedIn, let url = urls.first else { return false }
-            if url.isFileURL { stage(url); return true }
-            guard ["http", "https", "feed"].contains(url.scheme?.lowercased() ?? "") else { return false }
-            window.subscribeURL = FeedLink.subscriptionURL(url) ?? url.absoluteString
-            window.subscribing = true
-            return true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .earnestImportSubscriptions)) { _ in
-            if window.presentsAppAlerts, model.loggedIn { importing = true }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .earnestExportSubscriptions)) { _ in
-            guard window.presentsAppAlerts, model.loggedIn else { return }
-            Task {
-                do { exportDocument = OPMLDocument(data: try await model.exportOPML()) }
-                catch is CancellationError {}
-                catch { model.report(error) }
+            .alert("Sign Out of Earnest?", isPresented: showsSignOut) {
+                Button("Sign Out", role: .destructive) {
+                    model.confirmingSignOut = false
+                    model.signOut()
+                }
+                Button("Cancel", role: .cancel) { model.confirmingSignOut = false }
+            } message: {
+                Text(signOutMessage)
             }
+            .alert("Import Subscriptions?", isPresented: showsImportConfirmation, presenting: pendingImport) { pending in
+                Button("Import") {
+                    model.importOPML(pending.data, name: pending.name) { importReport = $0 }
+                    pendingImport = nil
+                }
+                .keyboardShortcut(.defaultAction)
+                Button("Cancel", role: .cancel) { pendingImport = nil }
+            } message: { pending in
+                Text("Earnest will subscribe to the feeds in “\(pending.name)” and create its folders. Feeds you already follow are skipped.")
+            }
+    }
+
+    // MARK: Sheets, files and links
+
+    private var showsSubscribe: Binding<Bool> {
+        Binding(get: { window.subscribing && model.loggedIn }, set: { window.subscribing = $0 })
+    }
+
+    private var showsExporter: Binding<Bool> {
+        Binding(get: { exportDocument != nil }, set: { if !$0 { exportDocument = nil } })
+    }
+
+    private func withFiles<Content: View>(_ content: Content) -> some View {
+        content
+            .sheet(isPresented: $window.palette) {
+                PaletteView().environmentObject(window)
+            }
+            .sheet(isPresented: showsSubscribe) {
+                NewSubscriptionSheet().environmentObject(model).environmentObject(window)
+            }
+            .fileImporter(isPresented: $importing, allowedContentTypes: [.opml, .xml],
+                          allowsMultipleSelection: false) { result in
+                guard case .success(let urls) = result, let url = urls.first else { return }
+                stage(url)
+            }
+            .fileExporter(isPresented: showsExporter, document: exportDocument, contentType: .opml,
+                          defaultFilename: "Earnest Subscriptions") { result in
+                if case .failure(let error) = result { model.report(error) }
+                exportDocument = nil
+            }
+            .onOpenURL { open($0) }
+            .dropDestination(for: URL.self) { urls, _ in handleDrop(urls) }
+            .onReceive(NotificationCenter.default.publisher(for: .earnestImportSubscriptions)) { _ in
+                if window.presentsAppAlerts, model.loggedIn { importing = true }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .earnestExportSubscriptions)) { _ in
+                export()
+            }
+            .onChange(of: model.openSettingsRequest) { if window.presentsAppAlerts { openSettings() } }
+    }
+
+    /// A dropped OPML file asks to import; a dropped web address or `feed:`
+    /// link fills in New Subscription.
+    private func handleDrop(_ urls: [URL]) -> Bool {
+        guard model.loggedIn, let url = urls.first else { return false }
+        if url.isFileURL { stage(url); return true }
+        guard ["http", "https", "feed"].contains(url.scheme?.lowercased() ?? "") else { return false }
+        window.subscribeURL = FeedLink.subscriptionURL(url) ?? url.absoluteString
+        window.subscribing = true
+        return true
+    }
+
+    private func export() {
+        guard window.presentsAppAlerts, model.loggedIn else { return }
+        Task {
+            do { exportDocument = OPMLDocument(data: try await model.exportOPML()) }
+            catch is CancellationError {}
+            catch { model.report(error) }
         }
-        .onChange(of: model.openSettingsRequest) { if window.presentsAppAlerts { openSettings() } }
     }
 
     /// Opening an OPML file asks before importing; external `earnest:` links
