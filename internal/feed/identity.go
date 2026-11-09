@@ -3,6 +3,7 @@ package feed
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -68,12 +69,38 @@ func isStableIdentifier(s string) bool {
 }
 
 // canonicalIdentityValue cleans URL-shaped values and leaves opaque
-// identifiers as written.
+// identifiers as written. A URL keeps its fragment: in a link the fragment
+// only scrolls the page, but in a GUID it is part of the identifier, and
+// comment feeds use it to tell the comments on one post apart
+// ("https://example.com/?p=1#comment-7").
 func canonicalIdentityValue(s string) string {
-	if cleaned := CleanURL(s); cleaned != "" {
-		return cleaned
+	cleaned := CleanURL(s)
+	if cleaned == "" {
+		return strings.TrimSpace(s)
 	}
-	return strings.TrimSpace(s)
+	if u, err := url.Parse(strings.TrimSpace(s)); err == nil && u.Fragment != "" {
+		return cleaned + "#" + u.EscapedFragment()
+	}
+	return cleaned
+}
+
+// LegacyIdentityHash returns the identity an entry was stored under before
+// GUID fragments became part of the identity (2026-11-09), or "" when both
+// rules agree. A fetch uses it to adopt such an entry instead of storing the
+// article again under its new identity.
+func LegacyIdentityHash(it Item) string {
+	if !stableGUID(it.GUID, it.guidPermalink) {
+		return ""
+	}
+	cleaned := CleanURL(it.GUID)
+	if cleaned == "" {
+		return ""
+	}
+	legacy := hashHex("guid:" + cleaned)
+	if legacy == IdentityHash(it) {
+		return ""
+	}
+	return legacy
 }
 
 func normalizeTitle(s string) string {

@@ -50,6 +50,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `update.sh`, `Makefile`, `scripts/build.sh`, `scripts/release.sh`
   (tag-only), CI, image verification and automated PR review.
 
+### Fixed
+
+- A feed that lists two items under one identity, such as a WordPress
+  comments feed, no longer stops `earnest serve`: comments on one post
+  keep distinct identities, a repeated item is stored once, and data the
+  server refuses is recorded as that feed's failure.
+
 ### Changed
 
 - The web client gives every view a URL: lists, open articles, searches,

@@ -179,3 +179,29 @@ func TestIdentityHashKnownAnswers(t *testing.T) {
 		t.Fatalf("ContentHash = %s, want pinned digest", got)
 	}
 }
+
+func TestIdentityHashKeepsGUIDFragments(t *testing.T) {
+	first := Item{GUID: "https://example.com/?p=7#comment-1", URL: "https://example.com/post#comment-1"}
+	second := Item{GUID: "https://example.com/?p=7#comment-2", URL: "https://example.com/post#comment-2"}
+	if IdentityHash(first) == IdentityHash(second) {
+		t.Fatal("comments on one post must keep distinct identities")
+	}
+	// A link's fragment still only scrolls the page.
+	if IdentityHash(Item{URL: first.URL}) != IdentityHash(Item{URL: second.URL}) {
+		t.Fatal("link fragments must not change a link identity")
+	}
+	want := hashHex("guid:https://example.com/?p=7")
+	if LegacyIdentityHash(first) != want || LegacyIdentityHash(second) != want {
+		t.Fatalf("legacy = %q, %q, want %q", LegacyIdentityHash(first), LegacyIdentityHash(second), want)
+	}
+	for _, it := range []Item{
+		{GUID: "https://example.com/?p=7"},
+		{GUID: "tag:example.com,2026:7#x"},
+		{GUID: "opaque-id"},
+		{URL: "https://example.com/post#comment-1"},
+	} {
+		if got := LegacyIdentityHash(it); got != "" {
+			t.Errorf("LegacyIdentityHash(%+v) = %q; the rules agree, so none", it, got)
+		}
+	}
+}
