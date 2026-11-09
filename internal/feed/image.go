@@ -140,10 +140,11 @@ func itunesImage(n *node, feedLink, feedURL string) string {
 	return ""
 }
 
-// enclosureImage returns the first image/* enclosure that is a usable URL.
+// enclosureImage returns the first raster image/* enclosure that is a usable
+// URL. Parsers have already resolved enclosure URLs.
 func enclosureImage(enclosures []Enclosure) string {
 	for _, enc := range enclosures {
-		if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(enc.Type)), "image/") {
+		if !isRasterImageType(enc.Type) {
 			continue
 		}
 		if u := validImageURL(enc.URL); u != "" {
@@ -178,7 +179,10 @@ func isMediaNamespace(space string) bool {
 func isImageMediaContent(n *node) bool {
 	medium := strings.ToLower(strings.TrimSpace(n.attrAny("medium")))
 	typ := strings.ToLower(strings.TrimSpace(n.attrAny("type")))
-	if medium == "image" || strings.HasPrefix(typ, "image/") {
+	if strings.HasPrefix(typ, "image/svg") {
+		return false
+	}
+	if medium == "image" || isRasterImageType(typ) {
 		return true
 	}
 	if medium != "" || typ != "" {
@@ -195,6 +199,13 @@ func isImageMediaContent(n *node) bool {
 		}
 	}
 	return false
+}
+
+// isRasterImageType reports whether a declared media type is an image other
+// than SVG, which the reader cannot rasterise. Parameters are ignored.
+func isRasterImageType(typ string) bool {
+	typ = strings.ToLower(strings.TrimSpace(typ))
+	return strings.HasPrefix(typ, "image/") && !strings.HasPrefix(typ, "image/svg")
 }
 
 // validImageURL accepts only absolute http(s) URLs with a host. SVG is

@@ -173,7 +173,7 @@ type imageDecoder func(io.Reader) (image.Image, error)
 func decodeStandard(name string, data []byte, config configDecoder, decode imageDecoder) (img image.Image, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("media: %s decoder panicked: %v", name, r)
+			img, err = nil, fmt.Errorf("media: %s decoder panicked: %v", name, r)
 		}
 	}()
 
@@ -197,7 +197,7 @@ func decodeStandard(name string, data []byte, config configDecoder, decode image
 func decodeICOChecked(data []byte) (img image.Image, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("media: ico decoder panicked: %v", r)
+			img, err = nil, fmt.Errorf("media: ico decoder panicked: %v", r)
 		}
 	}()
 	return decodeICO(data)

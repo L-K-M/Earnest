@@ -60,6 +60,9 @@ type Service struct {
 	// mediaBackfilled records that no pre-thumbnail entries remain in the
 	// backfill window, so later media passes skip that scan.
 	mediaBackfilled atomic.Bool
+	// mediaSeededAt is when a media pass last found every subscribed feed
+	// with an icon row (Unix nanoseconds, 0 before the first such pass).
+	mediaSeededAt atomic.Int64
 	// mediaDecode admits one image decode at a time; see decodeMedia.
 	mediaDecode chan struct{}
 }

@@ -20,6 +20,7 @@ import (
 
 	"github.com/L-K-M/Earnest/internal/outbound"
 	"github.com/L-K-M/Earnest/internal/store/storetest"
+	"github.com/jackc/pgx/v5"
 )
 
 // mediaPublisher serves a home page, an icon and article images, counting
@@ -132,10 +133,10 @@ func loadEntryImage(t *testing.T, f *entriesTestFixture, entry int64) (mediaRow,
 	var r mediaRow
 	var source, kind *string
 	err := f.db.Pool().QueryRow(context.Background(), "SELECT status,candidates,attempts,next_attempt_at,source_url,content_type,body FROM entry_images WHERE entry_id=$1", entry).Scan(&r.status, &r.candidates, &r.attempts, &r.next, &source, &kind, &r.body)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return r, false
+	}
 	if err != nil {
-		if strings.Contains(err.Error(), "no rows") {
-			return r, false
-		}
 		t.Fatal(err)
 	}
 	if source != nil {
@@ -420,6 +421,36 @@ func TestMedia(t *testing.T) {
 		f.runMedia(t)
 		if p.hit("/") != 0 || p.hit("/icon.png") != 0 {
 			t.Fatalf("fetched for an unsubscribed feed: %v", p.hits)
+		}
+	})
+
+	t.Run("a pass does not overwrite icon inputs that changed during it", func(t *testing.T) {
+		p := newMediaPublisher(t)
+		f := mediaTestNew(t, template, p)
+		ctx := context.Background()
+		feed := entriesTestFeed(t, f.db, p.URL+"/feed.xml", 0)
+		entriesTestSub(t, f.db, f.a.UserID, feed, "now")
+		f.record(t, feed, &FeedMeta{Title: "Publisher", SiteURL: p.URL + "/"})
+		jobs, err := f.s.claimFeedIcons(ctx, f.now())
+		if err != nil || len(jobs) != 1 {
+			t.Fatalf("claimed %d icons: %v", len(jobs), err)
+		}
+		// Ingest learns a declared icon while the claimed pass is running.
+		f.record(t, feed, &FeedMeta{Title: "Publisher", SiteURL: p.URL + "/", IconURL: p.URL + "/icon.png"})
+		if err := f.s.resolveFeedIcon(ctx, jobs[0]); err != nil {
+			t.Fatal(err)
+		}
+		var status string
+		var next time.Time
+		if err := f.db.Pool().QueryRow(ctx, "SELECT status,next_attempt_at FROM feed_icons WHERE feed_id=$1", feed).Scan(&status, &next); err != nil {
+			t.Fatal(err)
+		}
+		if status != mediaPending || !next.Equal(f.now()) {
+			t.Fatalf("stale pass overwrote the row: status=%s next=%v", status, next)
+		}
+		f.runMedia(t)
+		if err := f.db.Pool().QueryRow(ctx, "SELECT status FROM feed_icons WHERE feed_id=$1", feed).Scan(&status); err != nil || status != mediaReady {
+			t.Fatalf("next pass status=%q: %v", status, err)
 		}
 	})
 

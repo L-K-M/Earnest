@@ -29,9 +29,11 @@ import (
 
 const (
 	// mediaLease is how long a claimed row waits before another pass may
-	// retry it, should the worker die mid-fetch. It exceeds the worst case
-	// for one item: every candidate timing out in turn.
-	mediaLease        = 10 * time.Minute
+	// retry it, should the worker die mid-fetch. A pass claims its whole
+	// batch up front, so the lease exceeds the worst case for a pass: each
+	// of its two fetchers working through half the batch with every
+	// candidate timing out (at most seven fetches for an icon).
+	mediaLease        = 30 * time.Minute
 	mediaFetchTimeout = 20 * time.Second
 	// mediaPageMax bounds a site's home page read for icon links;
 	// mediaIconMax bounds one icon file.
@@ -52,6 +54,9 @@ const (
 	mediaSeedBatch     = 100
 	mediaConcurrency   = 2
 	mediaBackfillBatch = 200
+	// mediaSeedInterval spaces the scan for subscribed feeds without an icon
+	// row once a scan has found none.
+	mediaSeedInterval = time.Hour
 	// mediaBackfillWindow is how far back entries stored before thumbnails
 	// existed get one. Older entries keep showing only the feed icon.
 	mediaBackfillWindow = 7 * 24 * time.Hour
@@ -119,7 +124,7 @@ func queueEntryImage(ctx context.Context, tx pgx.Tx, entry int64, explicit, html
 func noteFeedIcon(ctx context.Context, tx pgx.Tx, feedID int64, meta *FeedMeta, at time.Time) error {
 	declared := httpURL(meta.IconURL)
 	if _, err := tx.Exec(ctx, `INSERT INTO feed_icons(feed_id,declared_url,site_url,next_attempt_at,updated_at) VALUES($1,nullif($2,''),nullif($3,''),$4,$4)
- ON CONFLICT(feed_id) DO UPDATE SET declared_url=EXCLUDED.declared_url,site_url=EXCLUDED.site_url,next_attempt_at=EXCLUDED.next_attempt_at,attempts=0
+ ON CONFLICT(feed_id) DO UPDATE SET declared_url=EXCLUDED.declared_url,site_url=EXCLUDED.site_url,next_attempt_at=EXCLUDED.next_attempt_at,attempts=0,updated_at=EXCLUDED.updated_at
  WHERE (feed_icons.declared_url,feed_icons.site_url) IS DISTINCT FROM (EXCLUDED.declared_url,EXCLUDED.site_url)`, feedID, declared, meta.SiteURL, at); err != nil {
 		return fmt.Errorf("note feed icon: %w", err)
 	}
@@ -256,9 +261,18 @@ func (s *Service) RunMedia(ctx context.Context, _ int) (int, error) {
 		return 0, nil
 	}
 	now := s.now()
-	seeded, err := s.seedFeedIcons(ctx, now)
-	if err != nil {
-		return 0, err
+	seeded := 0
+	if last := s.mediaSeededAt.Load(); last == 0 || now.Sub(time.Unix(0, last)) >= mediaSeedInterval {
+		n, err := s.seedFeedIcons(ctx, now)
+		if err != nil {
+			return 0, err
+		}
+		// Keep seeding every pass while it finds feeds; afterwards ingest
+		// covers new feeds and a periodic check catches the rest.
+		if n == 0 {
+			s.mediaSeededAt.Store(now.UnixNano())
+		}
+		seeded = n
 	}
 	backfilled, err := s.backfillEntryImages(ctx, now)
 	if err != nil {
@@ -484,6 +498,11 @@ func (s *Service) storeEntryImage(ctx context.Context, job imageJob, status, sou
 	return nil
 }
 
+// iconInputsUnchanged guards a pass's result: when ingest changed the
+// feed's declared image or site during the pass, noteFeedIcon has made the
+// row due again, and the next pass resolves the new inputs instead.
+const iconInputsUnchanged = "feed_id=$1 AND coalesce(declared_url,'')=$2 AND coalesce(site_url,'')=$3"
+
 // resolveFeedIcon looks for an icon in the site's home page links, then at
 // /favicon.ico, then in the feed's own declared image, and stores the first
 // that decodes.
@@ -528,8 +547,8 @@ func (s *Service) resolveFeedIcon(ctx context.Context, job iconJob) error {
 			}
 			continue
 		}
-		_, err = s.store.Pool().Exec(ctx, `UPDATE feed_icons SET status='ready',attempts=0,next_attempt_at=$2,source_url=$3,content_type=$4,body=$5,etag=$6,updated_at=$7 WHERE feed_id=$1`,
-			job.feedID, s.now().Add(iconRefresh), candidate, icon.ContentType, icon.Body, mediaETag(icon.Body), s.now())
+		_, err = s.store.Pool().Exec(ctx, `UPDATE feed_icons SET status='ready',attempts=0,next_attempt_at=$4,source_url=$5,content_type=$6,body=$7,etag=$8,updated_at=$9 WHERE `+iconInputsUnchanged,
+			job.feedID, job.declared, job.siteURL, s.now().Add(iconRefresh), candidate, icon.ContentType, icon.Body, mediaETag(icon.Body), s.now())
 		if err != nil {
 			return fmt.Errorf("store feed icon %d: %w", job.feedID, err)
 		}
@@ -539,7 +558,7 @@ func (s *Service) resolveFeedIcon(ctx context.Context, job iconJob) error {
 		return nil
 	}
 	if transient && job.attempts < mediaMaxAttempts {
-		_, err := s.store.Pool().Exec(ctx, "UPDATE feed_icons SET next_attempt_at=$2,updated_at=$3 WHERE feed_id=$1", job.feedID, s.now().Add(mediaRetryDelay(job.attempts)), s.now())
+		_, err := s.store.Pool().Exec(ctx, "UPDATE feed_icons SET next_attempt_at=$4,updated_at=$5 WHERE "+iconInputsUnchanged, job.feedID, job.declared, job.siteURL, s.now().Add(mediaRetryDelay(job.attempts)), s.now())
 		if err != nil {
 			return fmt.Errorf("reschedule feed icon %d: %w", job.feedID, err)
 		}
@@ -547,8 +566,8 @@ func (s *Service) resolveFeedIcon(ctx context.Context, job iconJob) error {
 	}
 	// Nothing usable: an icon found earlier stays until a later pass finds
 	// a replacement, so a flaky site does not lose its icon.
-	_, err := s.store.Pool().Exec(ctx, `UPDATE feed_icons SET status=CASE WHEN body IS NULL THEN 'none' ELSE status END,attempts=0,next_attempt_at=$2,updated_at=$3 WHERE feed_id=$1`,
-		job.feedID, s.now().Add(iconRetryNone), s.now())
+	_, err := s.store.Pool().Exec(ctx, `UPDATE feed_icons SET status=CASE WHEN body IS NULL THEN 'none' ELSE status END,attempts=0,next_attempt_at=$4,updated_at=$5 WHERE `+iconInputsUnchanged,
+		job.feedID, job.declared, job.siteURL, s.now().Add(iconRetryNone), s.now())
 	if err != nil {
 		return fmt.Errorf("record missing feed icon %d: %w", job.feedID, err)
 	}

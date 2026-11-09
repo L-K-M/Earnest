@@ -371,3 +371,15 @@ func TestImageDoesNotAffectHashes(t *testing.T) {
 		t.Fatal("ContentHash changed with Image")
 	}
 }
+
+// Regression: an SVG declared only by its media type, at a URL without an
+// .svg extension, is skipped like one named by extension.
+func TestItemImageSkipsSVGMediaType(t *testing.T) {
+	t.Parallel()
+	got := parseImageItem(t, `<media:content url="https://cdn.example.com/logo" type="image/svg+xml"/>
+	       <enclosure url="https://cdn.example.com/badge" type="image/svg+xml; charset=utf-8"/>
+	       <enclosure url="https://cdn.example.com/photo" type="image/jpeg"/>`).Image
+	if got != "https://cdn.example.com/photo" {
+		t.Fatalf("Image = %q, want the JPEG enclosure", got)
+	}
+}

@@ -96,7 +96,12 @@ func decodeICOEntry(data []byte, e icoEntry) (image.Image, error) {
 	if bytes.HasPrefix(payload, pngSignature) {
 		return decodeICOPNG(payload)
 	}
-	return decodeICODIB(payload)
+	// Return a nil interface, not a nil *image.NRGBA, on error.
+	img, err := decodeICODIB(payload)
+	if err != nil {
+		return nil, err
+	}
+	return img, nil
 }
 
 // decodeICOPNG decodes a PNG payload embedded in an ICO entry. The pixel

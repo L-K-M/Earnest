@@ -88,6 +88,15 @@ func TestMediaRoutes(t *testing.T) {
 			if conditional.Body.Len() != 0 {
 				t.Fatalf("%s 304 body=%q", tc.path, conditional.Body.String())
 			}
+			if conditional.Header().Get("ETag") != `"`+tc.etag+`"` || conditional.Header().Get("Cache-Control") != revalidatedMedia {
+				t.Fatalf("%s 304 headers=%v", tc.path, conditional.Header())
+			}
+			req.Header.Set("If-None-Match", `"other"`)
+			miss := newRecorder(f, req)
+			requireStatus(t, miss, http.StatusOK)
+			if !bytes.Equal(miss.Body.Bytes(), body.Bytes()) {
+				t.Fatalf("%s revalidation served %d bytes", tc.path, miss.Body.Len())
+			}
 		}
 	})
 
