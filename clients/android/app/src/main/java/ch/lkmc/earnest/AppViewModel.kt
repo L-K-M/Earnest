@@ -296,6 +296,7 @@ class AppViewModel internal constructor(
         sessions.clearToken()
         activeSession = null
         mediaClient = null
+        markedUnread.clear()
         account = null
         keptImportDocument = null
         _state.value = UiState(readerSettingsUi = ReaderSettingsUi(epoch = readerEpoch.incrementAndGet()))
@@ -779,8 +780,9 @@ class AppViewModel internal constructor(
         }
     }
 
-    /** Marks the entry read, as opening an article does. */
+    /** Marks the entry read, as opening an article does, and releases the mark-unread guard. */
     fun markSeen(entryId: Long) {
+        markedUnread -= entryId
         queue(entryId, "seen", SyncEngine.KIND_PASSIVE) { state ->
             listOf(RegisterIntent(SyncEngine.REGISTER_SEEN, JsonPrimitive(SyncEngine.VALUE_SEEN), state.seen.value))
         }
@@ -1181,6 +1183,7 @@ class AppViewModel internal constructor(
         account = null
         activeSession = null
         mediaClient = null
+        markedUnread.clear()
         keptImportDocument = null
         _state.value = UiState(readerSettingsUi = ReaderSettingsUi(epoch = readerEpoch.incrementAndGet()))
         if (_loggedIn.value) _sessionNotice.value = "Your session expired. Sign in again."

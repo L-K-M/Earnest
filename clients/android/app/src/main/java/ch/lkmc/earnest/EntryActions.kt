@@ -29,18 +29,20 @@ internal data class ReversibleAction(
     val written: Map<String, JsonElement>,
 )
 
-/** The current value of one state register. */
+/** The current value of one state register. Unknown registers are a programming error. */
 internal fun valueOf(state: State, register: String): JsonElement = when (register) {
+    SyncEngine.REGISTER_SEEN -> state.seen.value
     SyncEngine.REGISTER_SHELF -> state.shelf.value
     SyncEngine.REGISTER_KEPT -> state.kept.value
-    else -> state.seen.value
+    else -> error("Unknown register: $register")
 }
 
-/** The revision one register's write is based on. */
+/** The revision one register's write is based on. Unknown registers are a programming error. */
 internal fun revOf(state: State, register: String): Long = when (register) {
+    SyncEngine.REGISTER_SEEN -> state.seen.rev
     SyncEngine.REGISTER_SHELF -> state.shelf.rev
     SyncEngine.REGISTER_KEPT -> state.kept.rev
-    else -> state.seen.rev
+    else -> error("Unknown register: $register")
 }
 
 /**

@@ -279,6 +279,30 @@ class AppViewModelTest {
         withTimeout(15000) {
             while (SessionCache(app, identity).withEngine { it.state(1, 2) }.seen.value != kotlinx.serialization.json.JsonPrimitive("seen")) delay(10)
         }
+
+        // Opening released the guard: after another writer leaves the row
+        // unread again, scrolling past it marks it read.
+        SessionCache(app, identity).withEngine {
+            it.queue(StateWrite("external-unread", 1, 2, SyncEngine.REGISTER_SEEN, kotlinx.serialization.json.JsonPrimitive("unseen"), Revision("g1", 0), "2026-11-03T00:00:00Z", "explicit"))
+        }
+        withTimeout(15000) {
+            while (SessionCache(app, identity).withEngine { it.state(1, 2) }.seen.value != kotlinx.serialization.json.JsonPrimitive("unseen")) delay(10)
+        }
+        assertTrue(model.markScrolledPast(2))
+        withTimeout(15000) {
+            while (SessionCache(app, identity).withEngine { it.state(1, 2) }.seen.value != kotlinx.serialization.json.JsonPrimitive("seen")) delay(10)
+        }
+    }
+
+    @Test fun signingOutClearsTheMarkUnreadGuard() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadEntry(2)
+        val action = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
+        model.markUnread(2) { action.set(it) }
+        withTimeout(15000) { while (action.get() == null) delay(10) }
+        assertFalse(model.markScrolledPast(2))
+        model.logout()
+        assertTrue(model.markScrolledPast(2))
     }
 
     @Test fun scrollingPastMarksUnseenRowsRead() = runBlocking(Dispatchers.IO) {
