@@ -523,7 +523,7 @@ func storeEntryVersion(ctx context.Context, tx pgx.Tx, p ingestChange, at time.T
 	if _, err := tx.Exec(ctx, `UPDATE entries SET guid=$2,url=$3,title=$4,author=$5,published_at=$6,updated_at=$7,content_hash=$8,language=$9,enclosures=$10 WHERE id=$1`, p.id, p.item.GUID, p.item.URL, p.item.Title, p.item.Author, p.item.PublishedAt, p.item.UpdatedAt, p.content, p.item.Language, body); err != nil {
 		return fmt.Errorf("update ingested entry: %w", err)
 	}
-	return nil
+	return queueEntryImage(ctx, tx, p.id, p.item.Image, p.item.ContentHTML, at)
 }
 
 // announceEntry emits p's change to one subscriber at the allocated rev and
@@ -619,6 +619,9 @@ func (s *Service) fetchHealth(ctx context.Context, tx pgx.Tx, o FetchOutcome, re
 		}
 		if _, err := tx.Exec(ctx, "UPDATE feeds SET title=$2,site_url=$3,language=$4 WHERE id=$1", o.FeedID, o.Feed.Title, o.Feed.SiteURL, language); err != nil {
 			return fmt.Errorf("update feed metadata: %w", err)
+		}
+		if err := noteFeedIcon(ctx, tx, o.FeedID, o.Feed, receipt); err != nil {
+			return err
 		}
 	}
 	if o.Status == FetchOK {

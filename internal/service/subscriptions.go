@@ -45,6 +45,8 @@ type FeedHealth struct {
 }
 
 // Subscription projects user settings without revealing credentials.
+// IconURL is the API path of the feed's stored icon, or "" while none is
+// stored; it is decoration and does not change the revision.
 type Subscription struct {
 	InitialSince        *time.Time  `json:"initial_since,omitempty"`
 	InitialThroughSeq   uint64      `json:"initial_through_seq"`
@@ -54,6 +56,7 @@ type Subscription struct {
 	Title               string      `json:"title"`
 	URL                 string      `json:"url"`
 	SiteURL             string      `json:"site_url"`
+	IconURL             string      `json:"icon_url,omitempty"`
 	FolderID            int64       `json:"folder_id"`
 	Cadence             Cadence     `json:"cadence"`
 	Extract             ExtractMode `json:"extract"`
@@ -139,14 +142,20 @@ func readExtract(mode string) ExtractMode {
 }
 
 const subscriptionColumns = `s.id,s.feed_id,coalesce(s.title_override,f.title),f.url,coalesce(f.site_url,''),coalesce(s.folder_id,0),s.cadence,s.full_text_mode,s.rev,s.deleted_at IS NOT NULL,f.owner_user_id IS NOT NULL,
- f.last_success_at,f.last_attempt_at,f.next_fetch_at,coalesce(f.error_class,''),coalesce(f.error_message,''),f.consecutive_failures,coalesce(f.last_http_status,0),f.posts_per_day,CASE WHEN isfinite(s.initial_since) THEN s.initial_since ELSE NULL END,s.initial_through_seq,s.initial_fetch_pending`
+ f.last_success_at,f.last_attempt_at,f.next_fetch_at,coalesce(f.error_class,''),coalesce(f.error_message,''),f.consecutive_failures,coalesce(f.last_http_status,0),f.posts_per_day,CASE WHEN isfinite(s.initial_since) THEN s.initial_since ELSE NULL END,s.initial_through_seq,s.initial_fetch_pending,
+ (SELECT i.etag FROM feed_icons i WHERE i.feed_id=s.feed_id AND i.body IS NOT NULL)`
 
 func scanSubscription(row pgx.Row) (Subscription, error) {
 	var sub Subscription
 	var extract string
+	var iconETag *string
 	err := row.Scan(&sub.ID, &sub.FeedID, &sub.Title, &sub.URL, &sub.SiteURL, &sub.FolderID, &sub.Cadence, &extract, &sub.Rev, &sub.Deleted, &sub.Private,
-		&sub.Health.LastSuccessAt, &sub.Health.LastAttemptAt, &sub.Health.NextFetchAt, &sub.Health.ErrorClass, &sub.Health.ErrorMessage, &sub.Health.ConsecutiveFailures, &sub.Health.HTTPStatus, &sub.Health.PostsPerDay, &sub.InitialSince, &sub.InitialThroughSeq, &sub.InitialFetchPending)
+		&sub.Health.LastSuccessAt, &sub.Health.LastAttemptAt, &sub.Health.NextFetchAt, &sub.Health.ErrorClass, &sub.Health.ErrorMessage, &sub.Health.ConsecutiveFailures, &sub.Health.HTTPStatus, &sub.Health.PostsPerDay, &sub.InitialSince, &sub.InitialThroughSeq, &sub.InitialFetchPending,
+		&iconETag)
 	sub.Extract = readExtract(extract)
+	if iconETag != nil {
+		sub.IconURL = iconPath(sub.ID, *iconETag)
+	}
 	sub.Health.Firehose = sub.Health.PostsPerDay > firehoseThreshold
 	return sub, err
 }

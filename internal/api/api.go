@@ -109,6 +109,7 @@ func build(svc *service.Service, auth *service.Auth, logger *slog.Logger, baseUR
 	s.webhookRoutes()
 	s.searchRoutes()
 	s.contentURLRoutes()
+	s.mediaRoutes()
 	s.ruleRoutes()
 	s.settingsRoutes()
 	s.embedRoutes()

@@ -57,9 +57,12 @@ public struct APIEntry: Codable, Sendable, Identifiable {
     public let rev: Int64
     public let deleted: Bool
     public let state: APIState
+    /// Server path of the thumbnail stored at ingest; the app does not show it yet.
+    public let thumbnailURL: String?
     enum CodingKeys: String, CodingKey {
         case id, subscriptionID = "subscription_id", feedID = "feed_id", seq, firstSeenAt = "first_seen_at"
         case title, url, author, publishedAt = "published_at", updatedAt = "updated_at", blurb, rev, deleted, state
+        case thumbnailURL = "thumbnail_url"
     }
 }
 public struct EntriesPage: Codable, Sendable {

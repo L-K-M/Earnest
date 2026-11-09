@@ -406,6 +406,15 @@ func DeleteContents(ctx context.Context, tx pgx.Tx, entry int64) error {
 	return nil
 }
 
+// DeleteEntryImage drops an entry's thumbnail and its fetch state with the
+// body it illustrated.
+func DeleteEntryImage(ctx context.Context, tx pgx.Tx, entry int64) error {
+	if _, err := tx.Exec(ctx, "DELETE FROM entry_images WHERE entry_id = $1", entry); err != nil {
+		return fmt.Errorf("delete entry image: %w", err)
+	}
+	return nil
+}
+
 // StampEntryRevision records a user's last change revision for a shared entry.
 func StampEntryRevision(ctx context.Context, tx pgx.Tx, user, entry, rev int64) error {
 	if _, err := tx.Exec(ctx, `INSERT INTO entry_revisions (user_id, entry_id, rev) VALUES ($1, $2, $3)
