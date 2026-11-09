@@ -75,6 +75,10 @@ private struct FileCommands: Commands {
                 NotificationCenter.default.post(name: .earnestImportSubscriptions, object: nil)
             }
             .disabled(window == nil || !model.loggedIn)
+            Button("Import Starred Articles…") {
+                NotificationCenter.default.post(name: .earnestImportStarredArticles, object: nil)
+            }
+            .disabled(window == nil || !model.loggedIn)
             Button("Export Subscriptions…") {
                 NotificationCenter.default.post(name: .earnestExportSubscriptions, object: nil)
             }

@@ -20,7 +20,10 @@ struct APITransport: ClientTransport {
         if operationID != "device-start", operationID != "device-poll", let token = try tokenStore.load() {
             outgoing.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        if let body { outgoing.httpBody = try await Data(collecting: body, upTo: 8 * 1024 * 1024) }
+        // The kept import accepts a 64 MiB export; every other route keeps the
+        // default 8 MiB bound, which the server also enforces.
+        let bodyLimit = operationID == "import-kept" ? 64 * 1024 * 1024 : 8 * 1024 * 1024
+        if let body { outgoing.httpBody = try await Data(collecting: body, upTo: bodyLimit) }
         let (data, response) = try await session.data(for: outgoing)
         guard let response = response as? HTTPURLResponse else { throw APIError.invalidResponse }
         try validateHTTP(response, data: data)

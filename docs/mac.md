@@ -222,6 +222,11 @@ Import Subscriptions… reads an OPML file through the open panel. You can also
 drop an OPML file on a window or open one with Earnest from the Finder; Earnest
 asks before importing and then reports new subscriptions, feeds you already
 follow, folders, feeds still to be checked and any entries it could not import.
+Import Starred Articles… reads a Google Reader JSON export of starred articles
+through the open panel. Earnest asks before importing, can also subscribe to
+feeds you do not follow, and then reports what it added to Kept, what was
+already in Earnest, what you had removed from Kept, what retention removed, and
+any articles it could not import. Importing the same file again is safe.
 Export Subscriptions… saves the account's OPML through the save panel.
 Dropping a web address on a window, or opening a `feed:` link, fills in New
 Subscription for you to confirm.
