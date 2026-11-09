@@ -359,6 +359,16 @@ export class ReaderSync {
     });
   }
 
+  // newestSeq is the highest sequence of a live entry in this device's
+  // cache: the newest article it knows of, or 0 before anything arrives.
+  newestSeq(): bigint {
+    let newest = 0n;
+    for (const e of this.client.entriesAll()) {
+      if (!e.deleted && e.seq > newest) newest = e.seq;
+    }
+    return newest;
+  }
+
   // state is server state plus the pending overlay for one principal/entry.
   state(principal: bigint, entryId: bigint): State {
     return this.client.state(principal, entryId);

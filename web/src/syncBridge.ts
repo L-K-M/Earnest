@@ -83,6 +83,11 @@ export function useReaderSync(identity: {user_id: number; principal_id: number} 
       await sync.queueRange({kind:scope.kind, ids:scope.ids.map(id => BigInt(id))}, {throughSeq:BigInt(throughSeq)})
       sync.kick()
     },
+    // The newest article this device has synced, or 0 while sync is closed.
+    newestSeq:():number => {
+      const sync=runtime.current
+      return sync ? safeNumber(sync.newestSeq()) : 0
+    },
     retry:() => {setError('');if(runtime.current)runtime.current.kick();else setAttempt(old=>old+1)},
   }
 }

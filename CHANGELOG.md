@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Context menus in the web client. Right-click, long-press or press
+  Shift+F10 on Today, a folder or a feed for "Mark all as read", a
+  refresh and its settings, or on an article for its reading actions and
+  "Mark read up to here". Shift with a right click keeps the browser's
+  menu.
+- The Earnest logo in the web client's sidebar goes to Today.
 - Import starred articles into Kept from another reader's Google Reader
   JSON export (FreshRSS, Inoreader, Google Takeout), with its labels, in
   Manage feeds, with `earnest entries import` or `POST /v1/kept:import`.
@@ -52,6 +58,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The web reader scrolls an article in one place. The article frame now
+  takes the article's height instead of the pane's, so Space, Page Down
+  and the arrow keys move through the whole article, also after a click
+  inside it.
 - A feed that lists two items under one identity, such as a WordPress
   comments feed, no longer stops `earnest serve`: comments on one post
   keep distinct identities, a repeated item is stored once, and data the

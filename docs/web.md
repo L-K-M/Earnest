@@ -32,8 +32,10 @@ placeholder until the web bundle has been copied into `internal/web/dist`.
    explicit earlier/later pagination and an independent resume position per view.
    Edition groups by subscription ID, then sequence, for deterministic order.
 4. Open an article to read its publisher title, source, date and original link,
-   followed by the existing sandboxed content iframe, sized to the reading pane
-   so the article scrolls in one place. The pane takes the article's theme.
+   followed by the existing sandboxed content iframe, sized to the article so
+   the pane scrolls it in one place. Space, Page Down and the arrow keys move
+   through the whole article, and after a click inside it the frame passes
+   those keys and the single-key shortcuts back to the reader. The pane takes the article's theme.
    Settings control palette, font and a 62–72 character measure; the reader's
    Typography popover saves a per-feed override keyed by feed ID.
 5. Use Done (`e`), Later (`s`), Keep (`f`) or unread (`m`). Unread clears Done.
@@ -51,6 +53,14 @@ placeholder until the web bundle has been copied into `internal/web/dist`.
    In Today, a feed or a folder, the palette's "Mark the rest of ... read"
    marks everything up to the newest loaded article after a confirmation;
    articles that arrive later stay unread. There is no toolbar button for it.
+   Right-click, long-press or press Shift+F10 (or the Menu key) for context
+   menus. Today, a folder or a feed in the sidebar offers "Mark all as read",
+   which marks through the newest article this browser knows of after a
+   confirmation, and a feed adds Refresh feed and Feed settings. An article
+   in a list offers its reading actions, Open in new tab, "Mark read up to
+   here" (in Today, a feed or a folder) and Copy link to the original. Hold
+   Shift while right-clicking for the browser's own menu. The Earnest logo
+   goes to Today.
 6. Read the written session end. Its numbers describe local reading choices;
    sync status separately reports pending actions and rejected/expired intent.
    Refresh articles explicitly to rebuild the current list. Marking an article

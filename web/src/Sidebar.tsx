@@ -1,9 +1,10 @@
-import {useState} from 'react'
+import {useState, type MouseEvent as ReactMouseEvent} from 'react'
 import type {components} from './api.generated'
 import {Brand} from './Brand'
+import {MENU_ATTRIBUTE} from './ContextMenu'
 import {explainHealth, groupByFolder} from './feeds'
 import {Icon, type IconName} from './Icon'
-import type {Subscription} from './reader'
+import type {Subscription, View} from './reader'
 import {Link} from './router'
 import {routeSection, viewHref, type Route, type ViewRef} from './routes'
 import type {UnreadCounts} from './counts'
@@ -58,9 +59,12 @@ type Props = {
   onHelp: () => void
   onSignOut: () => void
   prefetch: (screen: 'feeds' | 'settings' | 'rules') => void
+  // Opens the actions for Today, a folder or a feed (a right click, a long
+  // press, Shift+F10 or the Menu key).
+  onMenu?: (event: ReactMouseEvent<HTMLElement>, view: View) => void
 }
 
-export function Sidebar({route, subscriptions, folders, labels, savedSearches, counts, askEnabled, sync, onNavigate, onPalette, onHelp, onSignOut, prefetch}: Props) {
+export function Sidebar({route, subscriptions, folders, labels, savedSearches, counts, askEnabled, sync, onNavigate, onPalette, onHelp, onSignOut, prefetch, onMenu}: Props) {
   const [collapsed, setCollapsed] = useState(readCollapsed)
   const section = routeSection(route)
   const current = (key: string) => section === key ? 'page' as const : undefined
@@ -75,19 +79,21 @@ export function Sidebar({route, subscriptions, folders, labels, savedSearches, c
   const groups = groupByFolder(subscriptions, folders)
   const filed = groups.filter(group => group.folder !== null)
   const unfiled = groups.find(group => group.folder === null)?.subscriptions ?? []
-  const nav = (props: {to: string; icon?: IconName; label: string; current?: 'page'; count?: number; intent?: () => void; mark?: string; warning?: string | null}) =>
-    <Link to={props.to} className="nav-link" aria-current={props.current} onClick={onNavigate} onIntent={props.intent}>
+  const nav = (props: {to: string; icon?: IconName; label: string; current?: 'page'; count?: number; intent?: () => void; mark?: string; warning?: string | null; menu?: View}) => {
+    const {menu} = props
+    return <Link to={props.to} className="nav-link" aria-current={props.current} onClick={onNavigate} onIntent={props.intent} onContextMenu={menu && onMenu ? event => onMenu(event, menu) : undefined} {...(menu && onMenu ? {[MENU_ATTRIBUTE]: ''} : {})}>
       {props.mark !== undefined ? <FeedMark title={props.mark} /> : props.icon && <Icon name={props.icon} />}
       <span className="nav-label">{props.label}</span>
       {props.warning && <span className="nav-warning" title={props.warning}><Icon name="warning" size={14} /><span className="sr-only">, failing: {props.warning}</span></span>}
       {props.count ? ' ' : null}<Count value={props.count} />
     </Link>
-  const feedLink = (sub: Subscription) => <li key={sub.id}>{nav({to:viewHref({kind:'feed', id:sub.id}), label:sub.title || sub.url, mark:sub.title || sub.url, current:current(`river:feed:${sub.id}`), count:feedCount(sub), warning:explainHealth(sub.health)})}</li>
+  }
+  const feedLink = (sub: Subscription) => <li key={sub.id}>{nav({to:viewHref({kind:'feed', id:sub.id}), label:sub.title || sub.url, mark:sub.title || sub.url, current:current(`river:feed:${sub.id}`), count:feedCount(sub), warning:explainHealth(sub.health), menu:{kind:'feed', id:sub.id, title:sub.title || sub.url}})}</li>
   const activeLabels = labels.filter(label => !label.deleted)
 
   return <nav className="sidebar" aria-label="Earnest">
     <div className="sidebar-head">
-      <Brand />
+      <Brand home onNavigate={onNavigate} />
       <div className="sidebar-quick">
         <Link to="/search" className="quick-search" aria-current={current('search')} onClick={onNavigate}><Icon name="search" /><span>Search</span><kbd aria-hidden="true">/</kbd></Link>
         <button type="button" className="icon-button" onClick={onPalette} title="Command palette (Ctrl+K / ⌘K)" aria-keyshortcuts="Control+K Meta+K"><Icon name="command" /><span className="sr-only">Command palette</span></button>
@@ -96,7 +102,7 @@ export function Sidebar({route, subscriptions, folders, labels, savedSearches, c
     <div className="sidebar-body">
       <div role="group" aria-labelledby="nav-reading">
         <h2 id="nav-reading" className="nav-heading sr-only">Reading</h2>
-        <ul className="nav-list">{READING_VIEWS.map(item => <li key={item.kind}>{nav({to:viewHref({kind:item.kind}), icon:item.icon, label:item.title, current:current(`river:${item.kind}:`), count:item.kind === 'later' ? counts?.later : item.kind === 'kept' ? counts?.kept : undefined})}</li>)}</ul>
+        <ul className="nav-list">{READING_VIEWS.map(item => <li key={item.kind}>{nav({to:viewHref({kind:item.kind}), icon:item.icon, label:item.title, current:current(`river:${item.kind}:`), count:item.kind === 'later' ? counts?.later : item.kind === 'kept' ? counts?.kept : undefined, menu:item.kind === 'today' ? {kind:'today', title:item.title} : undefined})}</li>)}</ul>
       </div>
       {subscriptions.some(sub => !sub.deleted) && <div role="group" aria-labelledby="nav-feeds">
         <h2 id="nav-feeds" className="nav-heading">Feeds</h2>
@@ -108,7 +114,7 @@ export function Sidebar({route, subscriptions, folders, labels, savedSearches, c
             return <li key={`folder-${folder.id}`} className="nav-folder">
               <div className="nav-folder-row">
                 <button type="button" className="disclosure" aria-expanded={open} onClick={() => toggle(folder.id)}><Icon name="chevron" size={14} /><span className="sr-only">{open ? 'Collapse' : 'Expand'} {folder.name}</span></button>
-                {nav({to:viewHref({kind:'folder', id:folder.id}), icon:'folder', label:folder.name, current:current(`river:folder:${folder.id}`), count:total})}
+                {nav({to:viewHref({kind:'folder', id:folder.id}), icon:'folder', label:folder.name, current:current(`river:folder:${folder.id}`), count:total, menu:{kind:'folder', id:folder.id, title:folder.name}})}
               </div>
               {open && members.length > 0 && <ul className="nav-list nested">{members.map(feedLink)}</ul>}
             </li>

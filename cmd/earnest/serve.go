@@ -124,7 +124,7 @@ func serve() error {
 	if err != nil {
 		return fmt.Errorf("image proxy: %w", err)
 	}
-	content, err := web.NewContent(svc, auth, proxy, cfg.ContentOrigin, cfg.SecretKey)
+	content, err := web.NewContent(svc, auth, proxy, cfg.ContentOrigin, cfg.BaseURL, cfg.SecretKey)
 	if err != nil {
 		return fmt.Errorf("content: %w", err)
 	}

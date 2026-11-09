@@ -122,18 +122,44 @@ type Content struct {
 	auth   *service.Auth
 	proxy  *imageproxy.Proxy
 	signer *TicketSigner
+	// appOrigin is the only origin the article page reports to. Without
+	// it the page carries no script and scrolls inside its own frame.
+	appOrigin string
 }
 
 // NewContent prepares the isolated article handler and its signing key.
-func NewContent(svc *service.Service, auth *service.Auth, proxy *imageproxy.Proxy, origin string, secret []byte) (*Content, error) {
+// appOrigin is the web app's origin, the frame's only message recipient.
+func NewContent(svc *service.Service, auth *service.Auth, proxy *imageproxy.Proxy, origin, appOrigin string, secret []byte) (*Content, error) {
 	if svc == nil || auth == nil || proxy == nil {
 		return nil, fmt.Errorf("content: missing service, auth or proxy")
+	}
+	if appOrigin == "" || appOrigin == origin {
+		return nil, fmt.Errorf("content: the app origin must be set and differ from the content origin")
 	}
 	signer, err := NewTicketSigner(secret, origin)
 	if err != nil {
 		return nil, err
 	}
-	return &Content{svc: svc, auth: auth, proxy: proxy, signer: signer}, nil
+	return &Content{svc: svc, auth: auth, proxy: proxy, signer: signer, appOrigin: appOrigin}, nil
+}
+
+// frameScript is the article page's only script; the page's CSP admits it
+// by hash, so sanitised article HTML still cannot run any. It lets the web
+// reader scroll the article in one place instead of a scrolling frame
+// inside a scrolling pane. The page reports its height, so the reader can
+// size the frame to the article, and forwards scrolling and single-key
+// presses made while focus is in the frame, so Space and the reading
+// shortcuts work after a click in the article. Messages go only to the app
+// origin, and only when the page is framed; native clients run no script.
+func frameScript(appOrigin string) string {
+	target, _ := json.Marshal(appOrigin)
+	return `(()=>{if(parent===self)return;const app=` + string(target) + `;let last=-1;` +
+		`const send=()=>{const h=Math.ceil(document.documentElement.getBoundingClientRect().height);if(h!==last){last=h;parent.postMessage({earnest:"height",height:h},app)}};` +
+		`new ResizeObserver(send).observe(document.documentElement);addEventListener("load",send);` +
+		`const scroll=new Set([" ","PageDown","PageUp","Home","End","ArrowDown","ArrowUp"]);` +
+		`addEventListener("keydown",e=>{if(e.defaultPrevented||e.ctrlKey||e.metaKey||e.altKey||e.isComposing)return;const k=e.key;` +
+		`if(scroll.has(k))e.preventDefault();else if(k!=="Escape"&&k.length!==1)return;` +
+		`parent.postMessage({earnest:"key",key:k,shift:e.shiftKey},app)})})()`
 }
 
 // Signer exposes the signing half so another surface, such as the native API,
@@ -179,8 +205,8 @@ func (c *Content) URLHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // expiredPage renders a small explanation for an expired or invalid ticket.
-// The iframe is sandboxed without scripts, so the page can only tell the
-// reader to reopen the article; it cannot refresh the ticket itself.
+// The page carries no script, so it can only tell the reader to reopen the
+// article; it cannot refresh the ticket itself.
 func (c *Content) expiredPage(w http.ResponseWriter) {
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -269,7 +295,15 @@ func (c *Content) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"hr{border:0;border-top:1px solid %s;margin:2em 0}",
 		measure, font, bg, fg, spacing, codeBg, muted, muted, muted, muted)
 	hash := sha256.Sum256([]byte(css))
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src "+c.signer.origin+"; style-src 'sha256-"+base64.StdEncoding.EncodeToString(hash[:])+"'; base-uri 'none'; form-action 'none'")
+	policy := "default-src 'none'; img-src " + c.signer.origin + "; style-src 'sha256-" + base64.StdEncoding.EncodeToString(hash[:]) + "'"
+	script := ""
+	if c.appOrigin != "" {
+		js := frameScript(c.appOrigin)
+		sum := sha256.Sum256([]byte(js))
+		policy += "; script-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+		script = "<script>" + js + "</script>"
+	}
+	w.Header().Set("Content-Security-Policy", policy+"; base-uri 'none'; form-action 'none'")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><style>%s</style></head><body>%s</body></html>", css, fragment)
+	fmt.Fprintf(w, "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><style>%s</style>%s</head><body>%s</body></html>", css, script, fragment)
 }

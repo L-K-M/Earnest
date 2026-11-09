@@ -67,7 +67,7 @@ func newContentRecorder(t *testing.T, query string) *httptest.ResponseRecorder {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &Content{svc: fakeContent{}, proxy: proxy, signer: &TicketSigner{key: []byte(strings.Repeat("x", 32)), origin: "https://content.example", now: func() time.Time { return time.Unix(100, 0) }}}
+	c := &Content{svc: fakeContent{}, proxy: proxy, appOrigin: "https://app.example", signer: &TicketSigner{key: []byte(strings.Repeat("x", 32)), origin: "https://content.example", now: func() time.Time { return time.Unix(100, 0) }}}
 	sig := c.signer.Sign(Ticket{UserID: 1, PrincipalID: 2, Kind: service.PrincipalHuman, EntryID: 3, Expires: 101, Mode: ImageProxied})
 	w := httptest.NewRecorder()
 	c.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/content/3?sig="+sig+query, nil))
@@ -118,7 +118,7 @@ func TestContentPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &Content{svc: fakeContent{}, proxy: proxy, signer: &TicketSigner{key: []byte(strings.Repeat("x", 32)), origin: "https://content.example", now: func() time.Time { return time.Unix(100, 0) }}}
+	c := &Content{svc: fakeContent{}, proxy: proxy, appOrigin: "https://app.example", signer: &TicketSigner{key: []byte(strings.Repeat("x", 32)), origin: "https://content.example", now: func() time.Time { return time.Unix(100, 0) }}}
 	sig := c.signer.Sign(Ticket{UserID: 1, PrincipalID: 2, Kind: service.PrincipalHuman, EntryID: 3, Expires: 101, Mode: ImageProxied})
 	w := httptest.NewRecorder()
 	c.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/content/3?sig="+sig, nil))
@@ -126,17 +126,74 @@ func TestContentPolicy(t *testing.T) {
 		t.Fatalf("status = %d", w.Code)
 	}
 	policy := w.Header().Get("Content-Security-Policy")
-	if !strings.Contains(policy, "default-src 'none'") || !strings.Contains(policy, "img-src https://content.example") || !strings.Contains(policy, "style-src 'sha256-") || strings.Contains(policy, "script-src") {
+	if !strings.Contains(policy, "default-src 'none'") || !strings.Contains(policy, "img-src https://content.example") || !strings.Contains(policy, "style-src 'sha256-") {
 		t.Fatalf("CSP = %q", policy)
+	}
+	// The page's own script is the only one allowed: one hash, no
+	// 'unsafe-inline', no host or scheme sources, no handler attributes.
+	var scriptSrc string
+	for _, directive := range strings.Split(policy, ";") {
+		if fields := strings.Fields(directive); len(fields) > 0 && fields[0] == "script-src" {
+			scriptSrc = strings.TrimSpace(directive)
+		}
+	}
+	if fields := strings.Fields(scriptSrc); len(fields) != 2 || !strings.HasPrefix(fields[1], "'sha256-") {
+		t.Fatalf("script-src = %q, want exactly one hash", scriptSrc)
 	}
 }
 
-func TestReaderIframeSandbox(t *testing.T) {
-	source, err := os.ReadFile("../../web/src/App.tsx")
+// The article page's script must be admitted by its hash and nothing else,
+// and it reports only to the configured app origin.
+func TestContentScriptHashMatchesScript(t *testing.T) {
+	w := newContentRecorder(t, "")
+	body := w.Body.String()
+	start := strings.Index(body, "<script>")
+	end := strings.Index(body, "</script>")
+	if start < 0 || end < start {
+		t.Fatalf("script element not found in %q", body)
+	}
+	if head := strings.Index(body, "</head>"); head < end {
+		t.Fatal("the script must sit in the head, before any article markup")
+	}
+	script := body[start+len("<script>") : end]
+	sum := sha256.Sum256([]byte(script))
+	want := "script-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+	if policy := w.Header().Get("Content-Security-Policy"); !strings.Contains(policy, want) {
+		t.Fatalf("CSP = %q, want %q", policy, want)
+	}
+	if !strings.Contains(script, `const app="https://app.example"`) || strings.Count(script, "postMessage(") != 2 || strings.Count(script, ",app)") != 2 {
+		t.Fatalf("script must post only to the app origin: %q", script)
+	}
+}
+
+// Without an app origin the page stays script-free and scrolls in its frame.
+func TestContentWithoutAppOriginHasNoScript(t *testing.T) {
+	egress, err := outbound.New(outbound.Config{Version: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(source), `sandbox="allow-popups allow-popups-to-escape-sandbox"`) {
+	proxy, err := imageproxy.New([]byte(strings.Repeat("x", 32)), egress, "https://content.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Content{svc: fakeContent{}, proxy: proxy, signer: &TicketSigner{key: []byte(strings.Repeat("x", 32)), origin: "https://content.example", now: func() time.Time { return time.Unix(100, 0) }}}
+	sig := c.signer.Sign(Ticket{UserID: 1, PrincipalID: 2, Kind: service.PrincipalHuman, EntryID: 3, Expires: 101, Mode: ImageProxied})
+	w := httptest.NewRecorder()
+	c.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/content/3?sig="+sig, nil))
+	if strings.Contains(w.Header().Get("Content-Security-Policy"), "script-src") || strings.Contains(w.Body.String(), "<script") {
+		t.Fatalf("CSP = %q, body = %q", w.Header().Get("Content-Security-Policy"), w.Body.String())
+	}
+}
+
+// The frame may run the page's hashed script, but it must never share an
+// origin with anything: allow-same-origin would hand the article the
+// content origin's storage.
+func TestReaderIframeSandbox(t *testing.T) {
+	source, err := os.ReadFile("../../web/src/ArticleFrame.tsx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(source), `sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"`) || strings.Contains(string(source), "allow-same-origin") {
 		t.Fatal("reader iframe sandbox changed")
 	}
 }

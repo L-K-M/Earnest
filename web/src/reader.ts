@@ -39,7 +39,8 @@ export function orderEntries(entries: Entry[], view: View, subscriptions: Subscr
 }
 export function shortcutsAllowed(target: EventTarget | null, enabled: boolean): boolean {
   if (!enabled || !(target instanceof Element)) return false
-  return !target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], dialog[open]')
+  // Keys pressed in an open menu belong to the menu.
+  return !target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="menu"], dialog[open]')
 }
 export function readerURL(raw: string, settings: {theme: string; measure: number; font: string}, dark: boolean): string {
   const url = new URL(raw)

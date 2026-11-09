@@ -1,0 +1,77 @@
+import {SEPARATOR, tidy, type MenuAction, type MenuItem} from './ContextMenu'
+import {viewScope, type Entry, type EntryState, type RangeScope, type Register, type Subscription, type Value, type View} from './reader'
+import {viewHref} from './routes'
+
+export type MarkRange = (scope: RangeScope, throughSeq: number) => Promise<void>
+
+export type ListMenuServices = {
+  // The newest article this device knows for the list, read when the item
+  // runs: the boundary "Mark all as read" marks through.
+  newest: () => number
+  markRange: MarkRange
+  confirm: (message: string) => boolean
+  notify: (message: string) => void
+  go: (to: string) => void
+  openTab: (href: string) => void
+  refreshFeed: (id: number) => Promise<void>
+}
+
+// Actions for Today, a feed or a folder in the sidebar. "Mark all as read"
+// covers what the list held when you chose it; articles that arrive later
+// stay unread, as with the palette's "Mark the rest read".
+export function listMenu(view: View, subscriptions: Subscription[], services: ListMenuServices): MenuItem[] {
+  const scope = viewScope(view, subscriptions)
+  const feedID = view.kind === 'feed' ? view.id : undefined
+  return tidy([
+    scope && {id: 'mark-all-read', label: 'Mark all as read', icon: 'check', disabled: services.newest() <= 0, run: async () => {
+      if (!services.confirm(`Mark every article in ${view.title} read? Articles that arrive later stay unread.`)) return
+      await services.markRange(scope, services.newest())
+      services.notify(`Marked everything in ${view.title} read.`)
+    }},
+    SEPARATOR,
+    feedID !== undefined && {id: 'refresh-feed', label: 'Refresh feed', icon: 'refresh', run: async () => {
+      await services.refreshFeed(feedID)
+      services.notify('Refresh requested.')
+    }},
+    feedID !== undefined && {id: 'feed-settings', label: 'Feed settings', icon: 'settings', run: () => services.go(`/feeds#subscription-${feedID}`)},
+    {id: 'open-tab', label: 'Open in new tab', icon: 'external', run: () => services.openTab(viewHref({kind: view.kind, id: view.id}))},
+  ])
+}
+
+export type ArticleMenuServices = {
+  open: () => void
+  openTab: () => void
+  openOriginal: () => void
+  act: (register: Register, value: Value) => Promise<void>
+}
+
+// Actions for one article row, matching its keyboard shortcuts. Each toggle
+// names what it will do to this article.
+export function articleMenu(state: EntryState, services: ArticleMenuServices): MenuItem[] {
+  const done = state.shelf.value === 'done'
+  const later = state.shelf.value === 'later'
+  const kept = state.kept.value === true
+  const unread = state.seen.value !== 'seen' && !done
+  return [
+    {id: 'open', label: 'Open', hint: 'o', run: services.open},
+    {id: 'open-tab', label: 'Open in new tab', run: services.openTab},
+    {id: 'open-original', label: 'Open original', icon: 'external', hint: 'v', run: services.openOriginal},
+    SEPARATOR,
+    {id: 'done', label: done ? 'Remove from Done' : 'Done', icon: 'done', hint: done ? undefined : 'e', run: () => services.act('shelf', done ? 'none' : 'done')},
+    {id: 'later', label: later ? 'Remove from Later' : 'Later', icon: 'later', hint: 's', run: () => services.act('shelf', later ? 'none' : 'later')},
+    {id: 'keep', label: kept ? 'Stop keeping' : 'Keep', icon: 'keep', hint: 'f', run: () => services.act('kept', !kept)},
+    {id: 'read', label: unread ? 'Mark read' : 'Mark unread', icon: 'unread', hint: unread ? undefined : 'm', run: () => services.act('seen', unread ? 'seen' : 'unseen')},
+  ]
+}
+
+// Marks a list read from its start through one article, for clearing what
+// you have skimmed past. Only lists with a range scope offer it.
+export function markUpToHere(entry: Entry, view: View, subscriptions: Subscription[], services: {markRange: MarkRange; confirm: (message: string) => boolean; notify: (message: string) => void}): MenuAction | null {
+  const scope = viewScope(view, subscriptions)
+  if (!scope) return null
+  return {id: 'mark-up-to-here', label: 'Mark read up to here', icon: 'check', run: async () => {
+    if (!services.confirm(`Mark this article and everything before it in ${view.title} read?`)) return
+    await services.markRange(scope, entry.seq)
+    services.notify(`Marked ${view.title} read up to this article.`)
+  }}
+}

@@ -8,6 +8,11 @@ describe('reader rules', () => {
     if (selector.includes('role=')) element.setAttribute('role', 'textbox')
     expect(shortcutsAllowed(element, true)).toBe(false)
   })
+  it('leaves keys pressed in an open menu to the menu', () => {
+    const menu = document.createElement('div'); menu.setAttribute('role', 'menu')
+    const item = menu.appendChild(document.createElement('button'))
+    expect(shortcutsAllowed(item, true)).toBe(false)
+  })
   it('respects shortcut opt-out and nested editable targets', () => {
     const parent = document.createElement('div'); parent.contentEditable = 'true'; parent.setAttribute('contenteditable', 'true')
     const child = parent.appendChild(document.createElement('span'))

@@ -84,6 +84,25 @@ describe('river interactions', () => {
     await new Promise(resolve => window.setTimeout(resolve, 1300))
     expect(act).not.toHaveBeenCalledWith(entries[0],'seen','seen','passive')
   })
+  it('offers a row\'s actions in its context menu, dropping a queued passive seen as m does', async () => {
+    const act = vi.fn().mockResolvedValue(undefined)
+    const onMenu = vi.fn()
+    const read = {...entries[0], state:{...entries[0].state, seen:{value:'seen',rev:1}}} as Entry
+    const rows = [read, entries[1], entries[2]]
+    vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {blurb:'disabled'} : path.startsWith('/v1/positions') ? {seq:0} : {entries:rows})
+    render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'feed',id:1,title:'Rust'}} subscriptions={[]} actions={{act,state:entry=>entry.state}} selected={null} onSelect={vi.fn()} onOpen={vi.fn()} onMenu={onMenu} shortcuts counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>)
+    const row = (await screen.findByText('Article 1')).closest('a')!
+    scrollPast(1)
+    fireEvent.contextMenu(row)
+    expect(onMenu).toHaveBeenCalledWith(expect.anything(), read, expect.any(Array))
+    const items = onMenu.mock.calls[0][2] as {id: string; label: string; run: () => Promise<void>}[]
+    const unread = items.find(item => item.id === 'read')!
+    expect(unread.label).toBe('Mark unread')
+    await unread.run()
+    expect(act).toHaveBeenCalledWith(read,'seen','unseen')
+    await new Promise(resolve => window.setTimeout(resolve, 1300))
+    expect(act).not.toHaveBeenCalledWith(read,'seen','seen','passive')
+  })
   it('marks a row seen when it is opened', async () => {
     const {act}=mount()
     await screen.findByText('Article 1')

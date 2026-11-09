@@ -28,7 +28,7 @@ export function fuzzyCommands(commands: Command[], query: string): Command[] {
 export const shortcutGroups: readonly {title: string; keys: readonly (readonly [string, string])[]}[] = [
   {title:'Moving around', keys:[['j / k','Next or previous article; while reading, open it'], ['↓ / ↑','Next or previous article in the list'], ['o / Enter','Open article'], ['Esc / u','Close the article'], ['g then t, e, l, k, d','Today, Edition, Later, Kept, Done'], ['g then f, s','Manage feeds, Settings'], ['g then a, n, r','Activity, Notifications, Rules']]},
   {title:'Article', keys:[['e','Done'], ['s','Toggle Later'], ['f','Toggle Keep'], ['m','Mark unread, clearing Done'], ['z','Undo the last action'], ['v','Open original']]},
-  {title:'Everywhere', keys:[['/','Search'], ['Ctrl+K / ⌘K','Command palette'], ['?','Keyboard shortcuts']]},
+  {title:'Everywhere', keys:[['/','Search'], ['Ctrl+K / ⌘K','Command palette'], ['Shift+F10','Actions for the focused article, feed or folder'], ['?','Keyboard shortcuts']]},
 ]
 export const shortcutHelp = shortcutGroups.flatMap(group => group.keys)
 
