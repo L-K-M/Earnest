@@ -129,7 +129,9 @@ final class ArticleScheme: NSObject, WKURLSchemeHandler {
         webView?.window?.makeFirstResponder(webView)
     }
 
-    /// Two private-use characters, which article text does not contain.
+    /// Two private-use characters in a row, which article text is very
+    /// unlikely to contain; an article that had them would show them
+    /// highlighted instead.
     static let unmatchable = "\u{E000}\u{E001}"
 
     /// WebKit keeps its yellow match indicator up after the find bar closes,
