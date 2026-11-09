@@ -27,6 +27,13 @@ export function Onboarding({onComplete}: {onComplete: () => void}) {
   const [settings, setSettings] = useState<ReadingSettings>(defaultReadingSettings())
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // Each step replaces the buttons that led to it; take focus to its heading.
+  const heading = useRef<HTMLHeadingElement>(null)
+  const firstStep = useRef(true)
+  useEffect(() => {
+    if (firstStep.current) { firstStep.current = false; return }
+    heading.current?.focus()
+  }, [step])
 
   async function measure() {
     setChecking(true)
@@ -93,7 +100,7 @@ export function Onboarding({onComplete}: {onComplete: () => void}) {
   }
 
   if (step === 'import') {
-    return <section aria-labelledby="onboarding-title"><h2 id="onboarding-title">Welcome to Earnest</h2>
+    return <section className="card" aria-labelledby="onboarding-title"><p className="step muted">Step 1 of 3</p><h2 id="onboarding-title" ref={heading} tabIndex={-1}>Welcome to Earnest</h2>
       <p>Bring your subscriptions from another reader, or start empty.</p>
       <form onSubmit={upload}>
         <label>OPML subscription file<input type="file" accept=".opml,.xml,text/x-opml,application/xml,text/xml" onChange={e => setFile(e.target.files?.[0] ?? null)} /></label>
@@ -108,7 +115,7 @@ export function Onboarding({onComplete}: {onComplete: () => void}) {
     const summary = summarizeImport(results)
     const firehoses = subs.filter(isFirehose)
     const pending = subs.filter(healthPending).length
-    return <section aria-labelledby="report-title"><h2 id="report-title">Import complete</h2>
+    return <section className="card" aria-labelledby="report-title"><p className="step muted">Step 2 of 3</p><h2 id="report-title" ref={heading} tabIndex={-1}>Import complete</h2>
       <p>Found {summary.feeds} {summary.feeds === 1 ? 'feed' : 'feeds'}{summary.folders > 0 && ` in ${summary.folders} ${summary.folders === 1 ? 'folder' : 'folders'}`}. Nothing is marked read.</p>
       {summary.failed.length > 0 && <p role="alert">{summary.failed.length} could not be imported: {summary.failed.join('; ')}</p>}
       {checking && <p role="status">Measuring how busy your feeds are…</p>}
@@ -122,7 +129,7 @@ export function Onboarding({onComplete}: {onComplete: () => void}) {
     </section>
   }
 
-  return <section aria-labelledby="mode-title"><h2 id="mode-title">How do you like to read?</h2>
+  return <section className="card" aria-labelledby="mode-title"><p className="step muted">Step 3 of 3</p><h2 id="mode-title" ref={heading} tabIndex={-1}>How do you like to read?</h2>
     <form onSubmit={start}>
       <fieldset><legend>Reading mode</legend>
         <label><input type="radio" name="reading_mode" checked={settings.reading_mode === 'river'} onChange={() => setSettings({...settings, reading_mode: 'river'})} /> A river that ends: resume where you left off; what you skip stays searchable.</label>

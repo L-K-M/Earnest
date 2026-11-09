@@ -1,9 +1,10 @@
-import {useEffect,useState} from 'react'
+import {useEffect,useRef,useState} from 'react'
 import {useInfiniteQuery, useQuery, useQueryClient} from '@tanstack/react-query'
 import type {components} from '../api.generated'
 import type {Entry, Subscription} from '../reader'
 import {request} from '../request'
 import {usePipeline} from './pipeline'
+import {searchHref, type SearchRoute} from '../routes'
 
 export type SavedSearch = components['schemas']['SavedSearch']
 type Match = components['schemas']['SearchMatch']
@@ -34,15 +35,34 @@ function Matches({matches, onOpen}: {matches: Match[]; onOpen: (entry: Entry) =>
   </li>)}</ul></section>)}{error && <p role="alert">{error}</p>}</>
 }
 
-export function Search({saved, onOpen, subscriptions = [], folders = []}: {saved?: SavedSearch; onOpen: (entry: Entry) => void; subscriptions?: Subscription[]; folders?: components['schemas']['Folder'][]}) {
+// Search takes its query and filters from `route` when one is given, and
+// reports every change through onRoute so the address bar, Back and Forward
+// and a refresh all show the same search. A saved search keeps its own
+// stored query and filters instead.
+export function Search({saved, route, onRoute, onDeleted, onOpen, subscriptions = [], folders = []}: {saved?: SavedSearch; route?: SearchRoute; onRoute?: (search: SearchRoute, replace: boolean) => void; onDeleted?: () => void; onOpen: (entry: Entry) => void; subscriptions?: Subscription[]; folders?: components['schemas']['Folder'][]}) {
   const cache = useQueryClient()
   const pipeline = usePipeline()
-  const [input,setInput] = useState(saved?.query ?? '')
-  const [query,setQuery] = useState(saved?.query ?? '')
-  const [mode,setMode] = useState(saved?.filters.mode === 'hybrid' ? 'hybrid' : 'fulltext')
-  const [subscriptionID,setSubscriptionID] = useState(saved?.filters.subscription_id ?? 0)
-  const [folderID,setFolderID] = useState(saved?.filters.folder_id ?? 0)
-  const [limit,setLimit] = useState(saved?.filters.limit ?? 0)
+  const field = useRef<HTMLInputElement>(null)
+  const initial: SearchRoute = route ?? {q:saved?.query ?? '', ...(saved?.filters.mode === 'hybrid' ? {mode:'hybrid' as const} : {}), feed:saved?.filters.subscription_id, folder:saved?.filters.folder_id, limit:saved?.filters.limit}
+  const [input,setInput] = useState(initial.q)
+  const [query,setQuery] = useState(initial.q)
+  const [mode,setMode] = useState(initial.mode === 'hybrid' ? 'hybrid' : 'fulltext')
+  const [subscriptionID,setSubscriptionID] = useState(initial.feed ?? 0)
+  const [folderID,setFolderID] = useState(initial.folder ?? 0)
+  const [limit,setLimit] = useState(initial.limit ?? 0)
+  // Back and Forward change the route under a mounted search; adopt it.
+  const routeKey = route ? searchHref(route) : ''
+  const [adopted,setAdopted] = useState(routeKey)
+  if (route && routeKey !== adopted) {
+    setAdopted(routeKey);setInput(route.q);setQuery(route.q);setMode(route.mode === 'hybrid' ? 'hybrid' : 'fulltext')
+    setSubscriptionID(route.feed ?? 0);setFolderID(route.folder ?? 0);setLimit(route.limit ?? 0)
+  }
+  function publish(change: {q?: string; mode?: string; feed?: number; folder?: number; limit?: number}, replace: boolean) {
+    const next = {q:change.q ?? query, mode:change.mode ?? mode, feed:change.feed ?? subscriptionID, folder:change.folder ?? folderID, limit:change.limit ?? limit}
+    onRoute?.({q:next.q, ...(next.mode === 'hybrid' ? {mode:'hybrid' as const} : {}), ...(next.feed ? {feed:next.feed} : {}), ...(next.folder ? {folder:next.folder} : {}), ...(next.limit ? {limit:next.limit} : {})}, replace)
+  }
+  // Arriving with nothing to search for puts the cursor in the field.
+  useEffect(() => { if (!initial.q) field.current?.focus() }, [initial.q])
   const [name,setName] = useState('')
   const [renameName,setRenameName] = useState(saved?.name ?? '')
   const [savedTitle,setSavedTitle] = useState(saved?.name ?? '')
@@ -84,7 +104,7 @@ export function Search({saved, onOpen, subscriptions = [], folders = []}: {saved
   async function remove() {
     if (!saved || removed) return
     setSaving(true);setError('');setSavedMessage('')
-    try {await request(`/v1/saved-searches/${encodeURIComponent(saved.id)}`,{method:'DELETE'});setRemoved(true);setRenameError('');setRenameMessage('');setSavedMessage('Saved search deleted. It is gone from the sidebar.');await cache.invalidateQueries({queryKey:['saved-searches']})}
+    try {await request(`/v1/saved-searches/${encodeURIComponent(saved.id)}`,{method:'DELETE'});setRemoved(true);setRenameError('');setRenameMessage('');setSavedMessage('Saved search deleted. It is gone from the sidebar.');await cache.invalidateQueries({queryKey:['saved-searches']});onDeleted?.()}
     catch(error) {setError(error instanceof Error ? error.message : 'Could not delete the saved search.')}
     finally {setSaving(false)}
   }
@@ -101,30 +121,32 @@ export function Search({saved, onOpen, subscriptions = [], folders = []}: {saved
     } catch(error) {setRenameError(error instanceof Error ? error.message : 'Could not rename the saved search.')}
     finally {setRenaming(false)}
   }
-  return <main aria-label="Search"><h2>{activeSaved ? savedTitle : 'Search'}</h2>
+  return <section className="search" aria-label="Search"><div className="page-header"><h2>{activeSaved ? savedTitle : 'Search'}</h2></div>
     {activeSaved && <p><button disabled={saving || renaming} onClick={() => {if (window.confirm(`Delete the saved search “${savedTitle}”?`)) void remove()}}>Delete “{savedTitle}”</button></p>}
     {activeSaved && <form onSubmit={event => {void rename(event)}}><label>Rename saved search<input value={renameName} onChange={event => {setRenameName(event.target.value);setRenameError('');setRenameMessage('')}}/></label><button disabled={renaming || saving}>{renaming ? 'Renaming…' : 'Rename'}</button></form>}
     {activeSaved && renameError && <p role="alert">{renameError}</p>}
     {activeSaved && renameMessage && <p role="status">{renameMessage}</p>}
-    <form onSubmit={event => {event.preventDefault();setQuery(input.trim());setSavedMessage('')}}><label>Search your feeds<input type="search" required value={input} onChange={event => setInput(event.target.value)}/></label>
-      {pipeline.status.embed === 'enabled' && <label>Search mode<select value={mode} onChange={event => setMode(event.target.value)}><option value="fulltext">Full text</option><option value="hybrid">Hybrid: full text and meaning</option></select></label>}
-      <label>Feed<select value={subscriptionID} onChange={event => setSubscriptionID(Number(event.target.value))}><option value={0}>All feeds</option>{subscriptions.filter(sub => !sub.deleted).map(sub => <option key={sub.id} value={sub.id}>{sub.title || sub.url}</option>)}</select></label>
-      <label>Folder<select value={folderID} onChange={event => setFolderID(Number(event.target.value))}><option value={0}>All folders</option>{folders.filter(folder => !folder.deleted).map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
-      <label>Results per page<select value={limit} onChange={event => setLimit(Number(event.target.value))}><option value={0}>Server default</option>{limitChoices.map(value => <option key={value} value={value}>{value}</option>)}</select></label>
-      <button>Search</button>
+    <form className="search-form" role="search" onSubmit={event => {event.preventDefault();setQuery(input.trim());setSavedMessage('');publish({q:input.trim()},false)}}>
+      <div className="search-row"><label className="grow">Search your feeds<input ref={field} type="search" enterKeyHint="search" autoComplete="off" required value={input} onChange={event => setInput(event.target.value)}/></label><button className="primary">Search</button></div>
+      <div className="filter-row">
+      {pipeline.status.embed === 'enabled' && <label>Search mode<select value={mode} onChange={event => {setMode(event.target.value);publish({mode:event.target.value},true)}}><option value="fulltext">Full text</option><option value="hybrid">Hybrid: full text and meaning</option></select></label>}
+      <label>Feed<select value={subscriptionID} onChange={event => {setSubscriptionID(Number(event.target.value));publish({feed:Number(event.target.value)},true)}}><option value={0}>All feeds</option>{subscriptions.filter(sub => !sub.deleted).map(sub => <option key={sub.id} value={sub.id}>{sub.title || sub.url}</option>)}</select></label>
+      <label>Folder<select value={folderID} onChange={event => {setFolderID(Number(event.target.value));publish({folder:Number(event.target.value)},true)}}><option value={0}>All folders</option>{folders.filter(folder => !folder.deleted).map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
+      <label>Results per page<select value={limit} onChange={event => {setLimit(Number(event.target.value));publish({limit:Number(event.target.value)},true)}}><option value={0}>Server default</option>{limitChoices.map(value => <option key={value} value={value}>{value}</option>)}</select></label>
+      </div>
     </form>
     {pipeline.status.embed === 'paused' && <p role="status">Hybrid search is paused. Full-text search is available.</p>}
     {pipeline.error && <p role="alert">Could not check whether AI search features are available.</p>}
     {effectiveMode === 'hybrid' && <p>Hybrid search can make an embedding call and searches a bounded retrieval window. Use Full text to page further.</p>}
     {(error || results.error) && <p role="alert">{error || results.error?.message}</p>}
     {results.isFetching && <p role="status">Searching…</p>}
-    {(status === 'disabled' || status === 'paused') && <p role="status">Hybrid search is {status}. <button onClick={() => setMode('fulltext')}>Use full-text search</button></p>}
+    {(status === 'disabled' || status === 'paused') && <p role="status">Hybrid search is {status}. <button onClick={() => {setMode('fulltext');publish({mode:'fulltext'},true)}}>Use full-text search</button></p>}
     {results.isSuccess && !unavailable && !matches.length && <p>No matches.</p>}
     {results.isSuccess && <Matches matches={matches} onOpen={onOpen}/>}
     {results.hasNextPage && <button disabled={results.isFetchingNextPage} onClick={() => {void results.fetchNextPage()}}>More search results</button>}
     {query && <form onSubmit={event => {void save(event)}}><label>Saved search name<input required value={name} onChange={event => setName(event.target.value)}/></label><button disabled={saving}>Save search as a view</button></form>}
     {savedMessage && <p role="status">{savedMessage}</p>}
-  </main>
+  </section>
 }
 
 export function MoreLikeThis({entryID,onOpen}: {entryID: number; onOpen: (entry: Entry) => void}) {

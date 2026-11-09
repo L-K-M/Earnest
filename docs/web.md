@@ -26,16 +26,28 @@ placeholder until the web bundle has been copied into `internal/web/dist`.
    for firehoses and offers one action to put them in This week. Deferred fetches
    can finish later; the Feeds screen also shows their volume and cadence.
 3. Open Today for Now and Today feeds, Edition for This week grouped by feed, or
-   Later, Kept, Done, a feed, folder or label. Lists use ingest sequence, with
+   Later, Kept, Done, a feed, folder or label. Every view has a URL (see
+   [Addresses](#addresses)), so refresh, Back and Forward and bookmarks keep
+   your place. Lists use ingest sequence, with
    explicit earlier/later pagination and an independent resume position per view.
    Edition groups by subscription ID, then sequence, for deterministic order.
 4. Open an article to read its publisher title, source, date and original link,
-   followed by the existing sandboxed content iframe. Settings control palette,
-   font and a 62–72 character measure; feed overrides use feed IDs.
+   followed by the existing sandboxed content iframe, sized to the reading pane
+   so the article scrolls in one place. The pane takes the article's theme.
+   Settings control palette, font and a 62–72 character measure; the reader's
+   Typography popover saves a per-feed override keyed by feed ID.
 5. Use Done (`e`), Later (`s`), Keep (`f`) or unread (`m`). Unread clears Done.
-   `j` and `k` select, `o` or Enter opens, `v` opens the original, `?` shows help,
-   and Ctrl+K or Command+K opens view navigation. Single-key commands ignore text
-   fields, editable regions and dialogs, and respect the account off switch.
+   Each of these applies at once and offers Undo (`z`) in a short notice that
+   restores the registers it changed. `j` and `k` select, and while an article
+   is open they open the next or previous one in place, so Back still returns
+   to the list. Arrow keys, Home and End move through the list whether or not
+   single-key shortcuts are on. `o` or Enter opens, Escape or `u` closes, `v`
+   opens the original, `g` then `t`, `e`, `l`, `k` or `d` goes to Today,
+   Edition, Later, Kept or Done (`f`, `s`, `a`, `n` and `r` reach the other
+   screens), `/` searches, `?` shows help, and Ctrl+K or Command+K opens the
+   command palette. Single-key commands ignore text fields, editable regions
+   and dialogs, and respect the account off switch. Rows are links, so an
+   article opens in a new tab with the usual modifier click.
    In Today, a feed or a folder, the palette's "Mark the rest of ... read"
    marks everything up to the newest loaded article after a confirmation;
    articles that arrive later stay unread. There is no toolbar button for it.
@@ -65,6 +77,31 @@ from one grouped server query (`/v1/entries:counts`), so totals stay exact
 without paging unread entries through the entry list. The list's separate count
 says explicitly that it covers loaded articles. Today excludes This week on the client because the
 existing river API includes all three cadences.
+
+## Addresses
+
+| Path | Screen |
+|---|---|
+| `/`, `/today`, `/edition`, `/later`, `/kept`, `/done` | A reading list |
+| `/feeds/:id`, `/folders/:id`, `/labels/:id` | A subscription, folder or label (IDs as in `/v1`) |
+| `<list>/articles/:entry` | The list with that article open |
+| `/search?q=&mode=hybrid&feed=&folder=&limit=`, `/search/saved/:id` | Search and saved searches |
+| `/ask`, `/rules`, `/rules/new`, `/rules/:id` | Ask my feeds and the rule editor |
+| `/activity?agent=&action=&since=`, `/notifications/:id` | Activity filters and one notification |
+| `/feeds`, `/settings`, `/settings#push`, `/device?user_code=` | Feed management, settings sections, device approval |
+
+The server answers every other path with the app, which shows a plain
+not-found page for addresses it does not know. The offline worker serves the
+cached app for these paths when the network is down, and an article link opened
+offline falls back to the cached list. Signing out returns to `/`, so the next
+account does not start on the previous account's article. The rule editor and
+reading settings ask before leaving with unsaved changes; the question drafts
+for Ask my feeds and the subscribe form are kept for the session.
+
+Below 1100 px wide the sidebar becomes a drawer behind a top bar; below 760 px
+the list and the reader share one pane. Rarely used screens (feed management,
+settings, rules, onboarding) load on demand, and fingerprinted assets are
+served precompressed when the browser accepts Brotli or gzip.
 
 ## Native labels
 

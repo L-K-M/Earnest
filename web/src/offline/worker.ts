@@ -1,5 +1,5 @@
 /// <reference lib="webworker" />
-import {brandImages, cacheKind, contentLimit, evictionKeys, maxResponseBytes, readingCache, responseLimit, shellCache, warmContentPaths} from './policy'
+import {appNavigation, brandImages, cacheKind, contentLimit, evictionKeys, maxResponseBytes, readingCache, responseLimit, shellCache, warmContentPaths} from './policy'
 
 const worker = self as unknown as ServiceWorkerGlobalScope
 const generationKey = new URL('/__earnest_offline_generation',worker.location.origin).href
@@ -79,6 +79,27 @@ worker.addEventListener('fetch',event => {
   if (url.origin !== worker.location.origin) return
   if (url.pathname === '/v1/session/logout' || url.pathname === '/v1/session/login') {
     event.respondWith((async () => {const response = await fetch(request);if(response.ok) await purge();return response})())
+    return
+  }
+  // Deep links such as /feeds/3/articles/9 are the same app shell. Online, the
+  // fresh shell also refreshes the cached one; offline, the cached one opens
+  // the route and the app reads its data from the reading cache.
+  if (request.mode === 'navigate' && request.method === 'GET' && appNavigation(url.href,worker.location.origin)) {
+    event.respondWith((async () => {
+      try {
+        const response = await fetch(request)
+        const html = (response.headers.get('Content-Type') ?? '').includes('text/html')
+        if (response.ok && html && !response.redirected) {
+          const copy = response.clone()
+          event.waitUntil(serialize(async () => {await (await caches.open(shellCache)).put('/',copy)}).catch(() => undefined))
+        }
+        return response
+      } catch (error) {
+        const shell = await (await caches.open(shellCache)).match('/')
+        if (shell) return shell
+        throw error
+      }
+    })())
     return
   }
   const kind = cacheKind(url.href,worker.location.origin,request.method)

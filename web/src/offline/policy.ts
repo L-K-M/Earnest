@@ -21,8 +21,22 @@ export function cacheKind(raw: string, origin: string, method='GET'): 'shell' | 
   if (url.pathname === '/' || brandImages.includes(url.pathname) || /^\/assets\/[^/]+\.(js|css|woff2?)$/.test(url.pathname)) return 'shell'
   if (/^\/v1\/entries\/[1-9]\d*\/content$/.test(url.pathname)) return 'content'
   if (/^\/v1\/(me|subscriptions|folders|labels|settings|saved-searches|pipeline)$/.test(url.pathname)) return 'resource'
-  if (url.pathname === '/v1/entries' || /^\/v1\/positions\/[^/]+$/.test(url.pathname)) return 'reading'
+  // A single article's metadata lets an article link reopen offline.
+  if (url.pathname === '/v1/entries' || /^\/v1\/entries\/[1-9]\d*$/.test(url.pathname) || /^\/v1\/positions\/[^/]+$/.test(url.pathname)) return 'reading'
   return null
+}
+
+// Server-owned paths. Everything else that a browser navigates to is a
+// client route served by the same index.html, so offline it can be served
+// from the cached shell.
+const SERVER_PATHS = /^\/(v1|api|web|mcp|push|content|img|openapi\.json|llms\.txt|metrics|healthz)(\/|$)/
+
+export function appNavigation(raw: string, origin: string): boolean {
+  const url = new URL(raw,origin)
+  if (url.origin !== origin || url.pathname === '/') return false
+  if (SERVER_PATHS.test(url.pathname)) return false
+  // A path ending in a file name is a static file, not a route.
+  return !/\.[a-z0-9]+$/i.test(url.pathname)
 }
 
 // Cache keys are in insertion order. Updating a key moves it to the end.
