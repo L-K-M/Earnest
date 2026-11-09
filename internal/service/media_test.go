@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"image"
 	"image/color"
@@ -386,6 +387,120 @@ func TestMedia(t *testing.T) {
 		f.record(t, feed, nil, mediaItem("swap", p.URL+"/photo.jpg", ""))
 		if r, ok := loadEntryImage(t, f, id); !ok || r.status != mediaPending {
 			t.Fatalf("recreated=%+v ok=%v", r, ok)
+		}
+	})
+
+	t.Run("stored media reaches sync clients", func(t *testing.T) {
+		p := newMediaPublisher(t)
+		f := mediaTestNew(t, template, p)
+		ctx := context.Background()
+		feed := entriesTestFeed(t, f.db, p.URL+"/feed.xml", 0)
+		sub := entriesTestSub(t, f.db, f.a.UserID, feed, "now")
+		f.record(t, feed, &FeedMeta{Title: "Publisher", SiteURL: p.URL + "/"}, mediaItem("synced", p.URL+"/photo.jpg", ""), mediaItem("textonly", "", ""))
+		id, plain := f.entryID(t, feed, "synced"), f.entryID(t, feed, "textonly")
+		type change struct {
+			rev     int64
+			kind    string
+			payload map[string]any
+		}
+		changesSince := func(after int64) []change {
+			rows, err := f.db.Pool().Query(ctx, "SELECT rev,type,payload FROM changes WHERE user_id=$1 AND rev>$2 ORDER BY rev", f.a.UserID, after)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+			var out []change
+			for rows.Next() {
+				var c change
+				if err := rows.Scan(&c.rev, &c.kind, &c.payload); err != nil {
+					t.Fatal(err)
+				}
+				out = append(out, c)
+			}
+			return out
+		}
+		var last int64
+		if err := f.db.Pool().QueryRow(ctx, "SELECT coalesce(max(rev),0) FROM changes WHERE user_id=$1", f.a.UserID).Scan(&last); err != nil {
+			t.Fatal(err)
+		}
+		f.runMedia(t)
+
+		got := changesSince(last)
+		var entryChange, subChange *change
+		for i := range got {
+			switch got[i].kind {
+			case "entry.updated":
+				entryChange = &got[i]
+			case "subscription.updated":
+				subChange = &got[i]
+			}
+		}
+		if len(got) != 2 || entryChange == nil || subChange == nil {
+			t.Fatalf("changes after the media pass: %+v", got)
+		}
+		if e := entryChange.payload["entry"].(map[string]any); e["id"] != strconv.FormatInt(id, 10) && e["id"] != float64(id) {
+			t.Fatalf("entry change for %v, want %d", e["id"], id)
+		}
+		var stamped int64
+		if err := f.db.Pool().QueryRow(ctx, "SELECT rev FROM entry_revisions WHERE user_id=$1 AND entry_id=$2", f.a.UserID, id).Scan(&stamped); err != nil || stamped != entryChange.rev {
+			t.Fatalf("entry revision %d, want %d: %v", stamped, entryChange.rev, err)
+		}
+		subPayload := subChange.payload["subscription"].(map[string]any)
+		if url, _ := subPayload["icon_url"].(string); !strings.HasPrefix(url, "/v1/subscriptions/"+strconv.FormatInt(sub, 10)+"/icon?v=") {
+			t.Fatalf("subscription change icon_url=%v", subPayload["icon_url"])
+		}
+		var subRev int64
+		if err := f.db.Pool().QueryRow(ctx, "SELECT rev FROM subscriptions WHERE id=$1", sub).Scan(&subRev); err != nil || subRev != subChange.rev {
+			t.Fatalf("subscription revision %d, want %d: %v", subRev, subChange.rev, err)
+		}
+
+		// Bootstrap carries the same paths as REST, and none where nothing
+		// is stored.
+		one, err := f.s.Entry(ctx, f.a, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries, err := f.s.Bootstrap(ctx, f.a, BootstrapRequest{Kind: BootstrapEntries, Since: f.now().Add(-time.Hour)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		thumbs := map[int64]any{}
+		for _, raw := range entries.Items {
+			var item map[string]any
+			if err := json.Unmarshal(raw, &item); err != nil {
+				t.Fatal(err)
+			}
+			if v, ok := item["thumbnail_url"]; ok {
+				thumbs[int64(item["id"].(float64))] = v
+			}
+		}
+		if len(thumbs) != 1 || thumbs[id] != one.ThumbnailURL || thumbs[plain] != nil {
+			t.Fatalf("bootstrap thumbnails=%v, want only %q", thumbs, one.ThumbnailURL)
+		}
+		subs, err := f.s.Subscriptions(ctx, f.a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		page, err := f.s.Bootstrap(ctx, f.a, BootstrapRequest{Kind: BootstrapSubscriptions})
+		if err != nil || len(page.Items) != 1 {
+			t.Fatalf("bootstrap subscriptions=%v: %v", page.Items, err)
+		}
+		var item map[string]any
+		if err := json.Unmarshal(page.Items[0], &item); err != nil || item["icon_url"] != subs[0].IconURL {
+			t.Fatalf("bootstrap icon_url=%v, want %q: %v", item["icon_url"], subs[0].IconURL, err)
+		}
+
+		// A refresh that stores the same bytes announces nothing.
+		last = subChange.rev
+		if entryChange.rev > last {
+			last = entryChange.rev
+		}
+		if _, err := f.db.Pool().Exec(ctx, "UPDATE feed_icons SET next_attempt_at=$2 WHERE feed_id=$1", feed, f.now()); err != nil {
+			t.Fatal(err)
+		}
+		f.runMedia(t)
+		if again := changesSince(last); len(again) != 0 {
+			t.Fatalf("unchanged icon announced: %+v", again)
 		}
 	})
 

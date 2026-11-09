@@ -18,6 +18,7 @@ import (
 	"github.com/L-K-M/Earnest/internal/media"
 	"github.com/L-K-M/Earnest/internal/outbound"
 	"github.com/L-K-M/Earnest/internal/store"
+	"github.com/L-K-M/Earnest/internal/syncmodel"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -162,8 +163,8 @@ func httpURL(raw string) string {
 }
 
 // attachThumbnails sets ThumbnailURL on live entries that have a stored
-// thumbnail. Like blurbs, it is a list-time decoration and does not change an
-// entry's revision.
+// thumbnail. Storing or replacing one raises the entry's revision; see
+// announceEntryMedia.
 func (s *Service) attachThumbnails(ctx context.Context, entries []Entry) error {
 	ids := make([]int64, 0, len(entries))
 	for _, e := range entries {
@@ -491,8 +492,29 @@ func (s *Service) storeEntryImage(ctx context.Context, job imageJob, status, sou
 	var err error
 	switch {
 	case thumb != nil:
-		_, err = s.store.Pool().Exec(ctx, `UPDATE entry_images SET status=$3,attempts=0,source_url=$4,content_type=$5,body=$6,etag=$7,updated_at=$8 WHERE entry_id=$1 AND candidates=$2`,
-			job.entryID, job.candidates, status, source, thumb.ContentType, thumb.Body, mediaETag(thumb.Body), now)
+		etag := mediaETag(thumb.Body)
+		err = s.withEvents(ctx, func(tx pgx.Tx) error {
+			// The core lock comes first, as in ingest, which writes the same row.
+			if err := store.LockCore(ctx, tx); err != nil {
+				return err
+			}
+			var old *string
+			err := tx.QueryRow(ctx, "SELECT etag FROM entry_images WHERE entry_id=$1 AND candidates=$2 FOR UPDATE", job.entryID, job.candidates).Scan(&old)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE entry_images SET status=$2,attempts=0,source_url=$3,content_type=$4,body=$5,etag=$6,updated_at=$7 WHERE entry_id=$1`,
+				job.entryID, status, source, thumb.ContentType, thumb.Body, etag, now); err != nil {
+				return err
+			}
+			if old != nil && *old == etag {
+				return nil
+			}
+			return s.announceEntryMedia(ctx, tx, job.entryID)
+		})
 	case status == mediaPending:
 		_, err = s.store.Pool().Exec(ctx, `UPDATE entry_images SET status=$3,next_attempt_at=$4,updated_at=$5 WHERE entry_id=$1 AND candidates=$2`,
 			job.entryID, job.candidates, status, retryAt, now)
@@ -503,6 +525,98 @@ func (s *Service) storeEntryImage(ctx context.Context, job imageJob, status, sou
 	}
 	if err != nil {
 		return fmt.Errorf("store entry image %d: %w", job.entryID, err)
+	}
+	return nil
+}
+
+// announceEntryMedia tells every subscriber that an entry's thumbnail
+// changed, with an entry.updated at a new revision. Native clients keep
+// entries from sync and refresh one when its revision rises, so a thumbnail
+// stored after the entry was announced would otherwise never reach them.
+func (s *Service) announceEntryMedia(ctx context.Context, tx pgx.Tx, entryID int64) error {
+	var seq int64
+	var firstSeen time.Time
+	var published *time.Time
+	var deleted bool
+	if err := tx.QueryRow(ctx, "SELECT seq,first_seen_at,published_at,deleted_at IS NOT NULL FROM entries WHERE id=$1", entryID).Scan(&seq, &firstSeen, &published, &deleted); err != nil {
+		return fmt.Errorf("load entry for media change: %w", err)
+	}
+	if deleted {
+		return nil
+	}
+	subscribers, err := store.SubscribersForEntries(ctx, tx, []int64{entryID})
+	if err != nil {
+		return err
+	}
+	counts := map[int64]int64{}
+	for _, sub := range subscribers[entryID] {
+		counts[sub.UserID]++
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	allocation, err := store.AllocateCounters(ctx, tx, 0, counts)
+	if err != nil {
+		return err
+	}
+	next := map[int64]int64{}
+	for user, r := range allocation.Revs {
+		next[user] = r.First
+	}
+	for _, sub := range subscribers[entryID] {
+		rev := next[sub.UserID]
+		next[sub.UserID]++
+		entry := syncmodel.Entry{ID: syncmodel.ID(entryID), SubscriptionID: syncmodel.ID(sub.SubscriptionID), Seq: uint64(seq), FirstSeenAt: firstSeen.UTC(), Rev: uint64(rev)}
+		if published != nil {
+			entry.PublishedAt = published.UTC()
+		}
+		if err := s.emitChange(ctx, tx, sub.UserID, rev, syncmodel.EntryUpdated, "entry", entry); err != nil {
+			return err
+		}
+		if err := store.StampEntryRevision(ctx, tx, sub.UserID, entryID, rev); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// announceFeedIcon bumps every active subscription to a feed whose icon
+// changed and sends its subscription.updated, which carries the new
+// icon_url, so sync clients see icons stored after they subscribed.
+func (s *Service) announceFeedIcon(ctx context.Context, tx pgx.Tx, feedID int64) error {
+	rows, err := tx.Query(ctx, "SELECT user_id,id FROM subscriptions WHERE feed_id=$1 AND deleted_at IS NULL ORDER BY user_id,id", feedID)
+	if err != nil {
+		return fmt.Errorf("feed icon subscribers: %w", err)
+	}
+	type subscriber struct{ user, id int64 }
+	var subscribers []subscriber
+	for rows.Next() {
+		var sub subscriber
+		if err := rows.Scan(&sub.user, &sub.id); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan feed icon subscriber: %w", err)
+		}
+		subscribers = append(subscribers, sub)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("feed icon subscribers: %w", err)
+	}
+	for _, sub := range subscribers {
+		rev, err := changeRev(ctx, tx, sub.user)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, "UPDATE subscriptions SET rev=$2 WHERE id=$1", sub.id, rev); err != nil {
+			return fmt.Errorf("subscription icon revision: %w", err)
+		}
+		subscription, err := subscriptionTx(ctx, tx, sub.user, sub.id)
+		if err != nil {
+			return err
+		}
+		if err := s.emitChange(ctx, tx, sub.user, rev, syncmodel.SubscriptionUpdated, "subscription", subscription); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -556,8 +670,28 @@ func (s *Service) resolveFeedIcon(ctx context.Context, job iconJob) error {
 			}
 			continue
 		}
-		_, err = s.store.Pool().Exec(ctx, `UPDATE feed_icons SET status='ready',attempts=0,next_attempt_at=$4,source_url=$5,content_type=$6,body=$7,etag=$8,updated_at=$9 WHERE `+iconInputsUnchanged,
-			job.feedID, job.declared, job.siteURL, s.now().Add(iconRefresh), candidate, icon.ContentType, icon.Body, mediaETag(icon.Body), s.now())
+		etag := mediaETag(icon.Body)
+		err = s.withEvents(ctx, func(tx pgx.Tx) error {
+			if err := store.LockCore(ctx, tx); err != nil {
+				return err
+			}
+			var old *string
+			err := tx.QueryRow(ctx, "SELECT etag FROM feed_icons WHERE "+iconInputsUnchanged+" FOR UPDATE", job.feedID, job.declared, job.siteURL).Scan(&old)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE feed_icons SET status='ready',attempts=0,next_attempt_at=$2,source_url=$3,content_type=$4,body=$5,etag=$6,updated_at=$7 WHERE feed_id=$1`,
+				job.feedID, s.now().Add(iconRefresh), candidate, icon.ContentType, icon.Body, etag, s.now()); err != nil {
+				return err
+			}
+			if old != nil && *old == etag {
+				return nil
+			}
+			return s.announceFeedIcon(ctx, tx, job.feedID)
+		})
 		if err != nil {
 			return fmt.Errorf("store feed icon %d: %w", job.feedID, err)
 		}
