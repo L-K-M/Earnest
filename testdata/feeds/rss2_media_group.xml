@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>Media group</title>
+    <link>https://example.com/</link>
+    <item>
+      <title>Widest thumbnail wins</title>
+      <link>https://example.com/wide</link>
+      <guid>wide-1</guid>
+      <media:group>
+        <media:thumbnail url="https://cdn.example.com/small.jpg" width="120"/>
+        <media:thumbnail url="https://cdn.example.com/large.jpg" width="640"/>
+        <media:thumbnail url="https://cdn.example.com/medium.jpg" width="300"/>
+      </media:group>
+    </item>
+    <item>
+      <title>Ties keep document order</title>
+      <link>https://example.com/tie</link>
+      <guid>tie-1</guid>
+      <media:group>
+        <media:thumbnail url="https://cdn.example.com/first.jpg" width="640"/>
+        <media:thumbnail url="https://cdn.example.com/second.jpg" width="640"/>
+      </media:group>
+    </item>
+    <item>
+      <title>Invalid width counts as zero</title>
+      <link>https://example.com/invalid</link>
+      <guid>invalid-1</guid>
+      <media:thumbnail url="https://cdn.example.com/huge.jpg" width="huge"/>
+      <media:thumbnail url="https://cdn.example.com/tiny.jpg" width="10"/>
+    </item>
+    <item>
+      <title>Group order is document order</title>
+      <link>https://example.com/order</link>
+      <guid>order-1</guid>
+      <media:group>
+        <media:thumbnail url="https://cdn.example.com/group.jpg" width="200"/>
+      </media:group>
+      <media:thumbnail url="https://cdn.example.com/direct.jpg" width="200"/>
+    </item>
+  </channel>
+</rss>

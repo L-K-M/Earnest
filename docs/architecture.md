@@ -35,6 +35,7 @@ Each layer talks only to the layer below it. HTTP handlers, the Google Reader ad
 | `internal/feed` | RSS, Atom and JSON Feed parsing into Earnest's types, entry identity, URL cleaning, autodiscovery, OPML |
 | `internal/sanitize` | The stored HTML subset, versioned |
 | `internal/extract` | Full-text extraction from fetched pages |
+| `internal/media` | Decodes publisher images and re-encodes feed icons and article thumbnails; picks thumbnail and icon candidates from HTML |
 | `internal/fetcher` | Scheduling, polite fetching, ingest, feed health |
 | `internal/api` | `/v1` handlers, OpenAPI, SSE |
 | `internal/compat/greader` | Google Reader subset |

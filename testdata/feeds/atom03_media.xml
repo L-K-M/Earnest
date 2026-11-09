@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed version="0.3" xmlns="http://purl.org/atom/ns#" xmlns:media="http://search.yahoo.com/mrss/">
+  <title>Atom 0.3 media</title>
+  <entry>
+    <title>Old media</title>
+    <id>tag:example.com,2006:media</id>
+    <link rel="alternate" type="text/html" href="https://example.com/old"/>
+    <media:thumbnail url="https://cdn.example.com/old.jpg" width="320"/>
+  </entry>
+</feed>

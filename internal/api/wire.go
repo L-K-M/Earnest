@@ -23,6 +23,7 @@ type entry struct {
 	Rev            uint64          `json:"rev"`
 	Deleted        bool            `json:"deleted"`
 	State          syncmodel.State `json:"state"`
+	ThumbnailURL   string          `json:"thumbnail_url,omitempty" doc:"Path of a small square thumbnail stored when the article arrived; absent until one is stored."`
 }
 type content struct {
 	EntryID          int64                 `json:"entry_id"`
@@ -50,7 +51,7 @@ type tokenSecret struct {
 }
 
 func toEntry(e service.Entry) entry {
-	return entry{ID: e.ID, SubscriptionID: e.SubscriptionID, FeedID: e.FeedID, Seq: e.Seq, FirstSeenAt: e.FirstSeenAt, PublishedAt: e.PublishedAt, UpdatedAt: e.UpdatedAt, Title: e.Title, Blurb: e.Blurb, URL: e.URL, Author: e.Author, Rev: e.Rev, Deleted: e.Deleted, State: e.State}
+	return entry{ID: e.ID, SubscriptionID: e.SubscriptionID, FeedID: e.FeedID, Seq: e.Seq, FirstSeenAt: e.FirstSeenAt, PublishedAt: e.PublishedAt, UpdatedAt: e.UpdatedAt, Title: e.Title, Blurb: e.Blurb, URL: e.URL, Author: e.Author, Rev: e.Rev, Deleted: e.Deleted, State: e.State, ThumbnailURL: e.ThumbnailURL}
 }
 func toEntries(items []service.Entry) []entry {
 	result := make([]entry, 0, len(items))

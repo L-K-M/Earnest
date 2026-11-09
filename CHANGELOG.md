@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The web article list shows each feed's icon and a thumbnail of the
+  article's image. Earnest downloads and shrinks them when feeds and
+  articles arrive and serves its own copies, so lists never contact
+  publishers. Entries carry `thumbnail_url` and subscriptions `icon_url`,
+  served by `GET /v1/entries/{id}/thumbnail` and
+  `GET /v1/subscriptions/{id}/icon`.
 - Import starred articles into Kept from another reader's Google Reader
   JSON export (FreshRSS, Inoreader, Google Takeout), with its labels, in
   Manage feeds, with `earnest entries import` or `POST /v1/kept:import`.

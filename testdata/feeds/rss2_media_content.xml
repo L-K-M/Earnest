@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>Media content</title>
+    <link>https://example.com/</link>
+    <item>
+      <title>Ghost style</title>
+      <link>https://example.com/ghost</link>
+      <guid>ghost-1</guid>
+      <media:content url="https://cdn.example.com/ghost-cover.jpg" medium="image" width="1200" height="630"/>
+    </item>
+    <item>
+      <title>Typed content</title>
+      <link>https://example.com/typed</link>
+      <guid>typed-1</guid>
+      <media:content url="https://cdn.example.com/typed.png" type="image/png" width="800"/>
+    </item>
+    <item>
+      <title>Extension only</title>
+      <link>https://example.com/ext</link>
+      <guid>ext-1</guid>
+      <media:content url="https://cdn.example.com/photo.WEBP" width="640"/>
+    </item>
+    <item>
+      <title>Video is not an image</title>
+      <link>https://example.com/video</link>
+      <guid>video-1</guid>
+      <media:content url="https://cdn.example.com/clip.mp4" medium="video" type="video/mp4" width="1920"/>
+    </item>
+  </channel>
+</rss>

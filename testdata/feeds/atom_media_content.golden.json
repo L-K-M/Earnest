@@ -1,0 +1,23 @@
+{
+  "feed": {
+    "title": "Atom media content",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "tag:example.com,2026:3",
+      "url": "https://example.com/post",
+      "title": "Body plus image",
+      "author": "",
+      "summary_html": "",
+      "content_html": "\u003cp\u003eArticle body\u003c/p\u003e",
+      "image": "https://cdn.example.com/cover.jpg",
+      "language": "",
+      "identity": "8a471c14e4634b345f0627610a8ac25f5d4f74dbcb9d3379375f0e14a724e7d7",
+      "content_hash": "8d200d5b0ac950f1085f79fbad40b0328be7755c5400f231023be94cae1b0c6d"
+    }
+  ]
+}

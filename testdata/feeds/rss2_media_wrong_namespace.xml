@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/" xmlns:mrss="http://search.yahoo.com/mrss" xmlns:notmedia="http://example.com/not-mrss" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <channel>
+    <title>Wrong namespace</title>
+    <link>https://example.com/</link>
+    <item>
+      <title>Wrong namespace ignored</title>
+      <link>https://example.com/one</link>
+      <guid>ns-1</guid>
+      <notmedia:thumbnail url="https://cdn.example.com/wrong.jpg" width="9999"/>
+      <notmedia:content url="https://cdn.example.com/wrong-content.jpg" medium="image" width="9999"/>
+      <notmedia:group>
+        <media:thumbnail url="https://cdn.example.com/wrong-group.jpg" width="9999"/>
+      </notmedia:group>
+      <itunes:image href="https://cdn.example.com/right.jpg"/>
+    </item>
+    <item>
+      <title>Namespace without slash accepted</title>
+      <link>https://example.com/two</link>
+      <guid>ns-2</guid>
+      <mrss:thumbnail url="https://cdn.example.com/slash.jpg" width="100"/>
+    </item>
+  </channel>
+</rss>

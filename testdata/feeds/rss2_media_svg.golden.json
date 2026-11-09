@@ -1,0 +1,53 @@
+{
+  "feed": {
+    "title": "SVG skipped",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "svg-1",
+      "url": "https://example.com/one",
+      "title": "SVG thumbnail falls through to content",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "image": "https://cdn.example.com/cover.png",
+      "language": "",
+      "identity": "20e7d1cca260a18d55b3c2db165c38524d178c4361f8cd7121273c0bc676ea55",
+      "content_hash": "82ee1a43f6c78917a947b42ca1b94c11d746ae11edede139fcd64121e2df7fbe"
+    },
+    {
+      "guid": "svg-2",
+      "url": "https://example.com/two",
+      "title": "SVG thumbnail falls through to iTunes",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "image": "https://cdn.example.com/itunes.jpg",
+      "language": "",
+      "identity": "45e4ea2381d05d7343de0631805d57be9ab0b2e5e01eff4a422a095c7628a733",
+      "content_hash": "cba2dd6eb97fcd3a46648ff676736d12d196f050ebe0c0606bea5cd72380b557"
+    },
+    {
+      "guid": "svg-3",
+      "url": "https://example.com/three",
+      "title": "SVG thumbnail falls through to enclosure",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "enclosures": [
+        {
+          "url": "https://cdn.example.com/enclosure.jpg",
+          "type": "image/jpeg"
+        }
+      ],
+      "image": "https://cdn.example.com/enclosure.jpg",
+      "language": "",
+      "identity": "e66c6aea8cbaf17714dd355beb736ab9b283a9cf6735035039a13020f36fe8ef",
+      "content_hash": "94ec0356349078ed93d5d95c8e9a9c982a20ca4c88e76ef4c3b9144cba5dd8a9"
+    }
+  ]
+}

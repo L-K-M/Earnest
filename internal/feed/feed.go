@@ -24,7 +24,10 @@ type Feed struct {
 // Item is one entry. Published and Updated are nil when the source gave no
 // usable date; they are never zero times. SummaryHTML and ContentHTML hold
 // HTML markup (text sources are escaped into HTML). Language falls back to
-// the feed language when the item does not declare one.
+// the feed language when the item does not declare one. Image is the
+// publisher's declared image for the item (Media RSS, iTunes, JSON Feed or an
+// image enclosure), an absolute http(s) URL or ""; images in the body are not
+// considered.
 type Item struct {
 	GUID        string      `json:"guid"`
 	URL         string      `json:"url"`
@@ -37,6 +40,7 @@ type Item struct {
 	Enclosures  []Enclosure `json:"enclosures,omitempty"`
 	Categories  []string    `json:"categories,omitempty"`
 	Language    string      `json:"language"`
+	Image       string      `json:"image,omitempty"`
 
 	// guidPermalink records an explicit RSS isPermaLink attribute. nil means
 	// unspecified, which RSS treats as true. It is unexported because it only

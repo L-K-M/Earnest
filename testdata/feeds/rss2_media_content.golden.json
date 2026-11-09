@@ -1,0 +1,58 @@
+{
+  "feed": {
+    "title": "Media content",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "ghost-1",
+      "url": "https://example.com/ghost",
+      "title": "Ghost style",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "image": "https://cdn.example.com/ghost-cover.jpg",
+      "language": "",
+      "identity": "5f7e49df310430d4b63673444af033d8c2edfe567b8f5342780bd905b6e0ef6b",
+      "content_hash": "e63f01e5a52b2cbbdde98a06f9d39004273d8666439d2482612a730bf8da32ac"
+    },
+    {
+      "guid": "typed-1",
+      "url": "https://example.com/typed",
+      "title": "Typed content",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "image": "https://cdn.example.com/typed.png",
+      "language": "",
+      "identity": "e1b3f90108c14de52eb9a53ba3654d55f4f7caf13c67284570fb7d85ee640f1c",
+      "content_hash": "011d29ef69b29f2a1bcf69d55765a289a0c870a6885985d066c21d7657a25698"
+    },
+    {
+      "guid": "ext-1",
+      "url": "https://example.com/ext",
+      "title": "Extension only",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "image": "https://cdn.example.com/photo.WEBP",
+      "language": "",
+      "identity": "81970129ae689644384c5beb65fa5840a0f6cae4feb632a7cea57193be3f348b",
+      "content_hash": "f8855665a58ae608165b4b764f43ae10c61be69a9a3f1081a0f1e0961b998d88"
+    },
+    {
+      "guid": "video-1",
+      "url": "https://example.com/video",
+      "title": "Video is not an image",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "language": "",
+      "identity": "68044e5eb311aed57a8930cd59d5beeba0a48057d054d6f680b0f9f5b2cf79d0",
+      "content_hash": "1b4d9621f09a5a1da4e221887f5887b7a69043c857b4853bc10b27a29e9569c6"
+    }
+  ]
+}

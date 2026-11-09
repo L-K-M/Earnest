@@ -1,0 +1,35 @@
+{
+  "feed": {
+    "title": "RDF media",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "https://example.com/1",
+      "url": "https://example.com/1",
+      "title": "RDF item image",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "image": "https://cdn.example.com/rdf.jpg",
+      "language": "",
+      "identity": "a30961ceb834d247a3b1366d7ed87de632689a19ffb37045dff4e4dff80c9694",
+      "content_hash": "e45355fb51e9c42cb90c034759a97eef9732ff169b2b3f0834c1d1e9853ad410"
+    },
+    {
+      "guid": "https://example.com/2",
+      "url": "https://example.com/2",
+      "title": "RDF item iTunes image",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "image": "https://cdn.example.com/rdf-itunes.png",
+      "language": "",
+      "identity": "aa779216b9a035acc94e9e9a6768f2d688d4636826949b4ef266b4ec1b6c2651",
+      "content_hash": "931bde3601c9baf4383d09148b6ed92b14b6d4a5f409e799d72d45041858d8a8"
+    }
+  ]
+}

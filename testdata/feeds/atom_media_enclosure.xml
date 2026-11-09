@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Atom enclosure image</title>
+  <link rel="alternate" type="text/html" href="https://example.com/"/>
+  <entry>
+    <title>Enclosure image</title>
+    <id>tag:example.com,2026:enc</id>
+    <link rel="alternate" type="text/html" href="https://example.com/enc"/>
+    <link rel="enclosure" href="https://cdn.example.com/enc.jpg" type="image/jpeg" length="10"/>
+  </entry>
+</feed>

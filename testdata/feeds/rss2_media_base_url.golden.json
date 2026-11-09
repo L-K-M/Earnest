@@ -1,0 +1,23 @@
+{
+  "feed": {
+    "title": "Relative media against the feed URL",
+    "site_url": "",
+    "feed_url": "https://example.com/feeds/rss.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "base-url-1",
+      "url": "https://example.com/post",
+      "title": "Feed URL fallback",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "image": "https://example.com/feeds/media/cover.jpg",
+      "language": "",
+      "identity": "310a434c18387b94cddd7c52e793a3977d8571c717e3b4e55b6e11c2084da374",
+      "content_hash": "864fcf7510bc35e5c2ccfb2dfc4776548d593a80413060f89e05135cd9b8db30"
+    }
+  ]
+}

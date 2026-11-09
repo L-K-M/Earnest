@@ -462,7 +462,7 @@ func (f *Fetcher) items(ctx context.Context, claim service.FeedToFetch, list []f
 			// repeats, not in list.
 			jobs = append(jobs, extractJob{index: len(result), link: link})
 		}
-		entry := service.IngestItem{IdentityHash: identity, LegacyIdentityHash: feed.LegacyIdentityHash(it), GUID: it.GUID, URL: link, Title: it.Title, Author: it.Author, PublishedAt: it.Published, UpdatedAt: it.Updated, ContentHash: feed.ContentHash(it), Language: it.Language, ContentHTML: doc.HTML, ContentText: sanitize.Text(doc.HTML), SanitizerVersion: int(doc.Version), ContentSource: source}
+		entry := service.IngestItem{IdentityHash: identity, LegacyIdentityHash: feed.LegacyIdentityHash(it), GUID: it.GUID, URL: link, Title: it.Title, Author: it.Author, PublishedAt: it.Published, UpdatedAt: it.Updated, ContentHash: feed.ContentHash(it), Language: it.Language, ContentHTML: doc.HTML, ContentText: sanitize.Text(doc.HTML), SanitizerVersion: int(doc.Version), ContentSource: source, Image: it.Image}
 		for _, enc := range it.Enclosures {
 			entry.Enclosures = append(entry.Enclosures, service.Enclosure{URL: enc.URL, Type: enc.Type, Length: enc.Length})
 		}

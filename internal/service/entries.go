@@ -95,6 +95,8 @@ type Entry struct {
 	Deleted        bool
 	State          syncmodel.State
 	Content        *EntryContent `json:"content,omitempty"`
+	// ThumbnailURL is the API path of the stored thumbnail, or "".
+	ThumbnailURL string
 }
 
 // EntryFilter selects and bounds an entry page. The zero value lists the
@@ -193,6 +195,9 @@ func (s *Service) Entries(ctx context.Context, a Actor, f EntryFilter) ([]Entry,
 	if err := s.attachBlurbs(ctx, a.UserID, page); err != nil {
 		return nil, err
 	}
+	if err := s.attachThumbnails(ctx, page); err != nil {
+		return nil, err
+	}
 	if err := s.attachStates(ctx, principal, page); err != nil {
 		return nil, err
 	}
@@ -224,7 +229,11 @@ func (s *Service) Entry(ctx context.Context, a Actor, id int64) (Entry, error) {
 		return Entry{}, err
 	}
 	e.State = states[id]
-	return e, nil
+	one := []Entry{e}
+	if err := s.attachThumbnails(ctx, one); err != nil {
+		return Entry{}, err
+	}
+	return one[0], nil
 }
 
 // GetByIDs returns the visible entries among ids in request order, silently
@@ -299,6 +308,9 @@ func (s *Service) getByIDs(ctx context.Context, a Actor, ids []int64, withConten
 		out = append(out, e)
 	}
 	if err := s.attachBlurbs(ctx, a.UserID, out); err != nil {
+		return nil, err
+	}
+	if err := s.attachThumbnails(ctx, out); err != nil {
 		return nil, err
 	}
 	return out, nil

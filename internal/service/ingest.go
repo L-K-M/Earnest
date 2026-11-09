@@ -85,6 +85,9 @@ type IngestItem struct {
 	SanitizerVersion int
 	ContentSource    ContentSource
 	Enclosures       []Enclosure
+	// Image is the item's declared image (feed.Item.Image), the first
+	// thumbnail candidate ahead of images in the body.
+	Image string
 
 	// LegacyIdentityHash is feed.LegacyIdentityHash: the identity an earlier
 	// rule stored this article under, or "" when the rules agree.

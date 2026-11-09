@@ -1,0 +1,47 @@
+{
+  "feed": {
+    "title": "Relative media",
+    "site_url": "https://example.com/blog/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "base-1",
+      "url": "https://example.com/base",
+      "title": "xml:base wins",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "image": "https://cdn.example.com/img/photo.jpg",
+      "language": "",
+      "identity": "c829e224c071d73f6575a51a7cea4d127a5e23aa4240a62900bbba3ba656605c",
+      "content_hash": "7eaae749548ed7120e64a8f985b386bbccf04bfc0e8f7192e0dc8a6469d36498"
+    },
+    {
+      "guid": "link-1",
+      "url": "https://example.com/link",
+      "title": "Feed link",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "image": "https://example.com/thumb.png",
+      "language": "",
+      "identity": "cdbff690bcadbe9f8843d695894d39d140c241c93ec5f246fa399270f10a129c",
+      "content_hash": "78885a22a4a79f6c8da14148d3beba7e103ac7271000e294a3a53b1634caefcb"
+    },
+    {
+      "guid": "proto-1",
+      "url": "https://example.com/proto",
+      "title": "Protocol relative",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "image": "https://cdn.example.com/proto.jpg",
+      "language": "",
+      "identity": "96e54d02fc3a1d899de747b25932a7da4745963ff82324eee82809ede1e4777d",
+      "content_hash": "92c85c511138b1bafcd0bccf4d7200bafa4a5c1405c4e44e6dcf1582be66061a"
+    }
+  ]
+}

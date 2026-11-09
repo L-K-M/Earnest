@@ -1,0 +1,30 @@
+{
+  "feed": {
+    "title": "Atom enclosure image",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "tag:example.com,2026:enc",
+      "url": "https://example.com/enc",
+      "title": "Enclosure image",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "enclosures": [
+        {
+          "url": "https://cdn.example.com/enc.jpg",
+          "type": "image/jpeg",
+          "length": 10
+        }
+      ],
+      "image": "https://cdn.example.com/enc.jpg",
+      "language": "",
+      "identity": "1418c6e2019f0cbb89d98892713b96f649ce79b974add059e9fb374cd2d462fb",
+      "content_hash": "615cd29d5a85b82a29f504cdec466a491117522d36da1f78229a2f121936d1ed"
+    }
+  ]
+}
