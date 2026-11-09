@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   publishers. Entries carry `thumbnail_url` and subscriptions `icon_url`,
   served by `GET /v1/entries/{id}/thumbnail` and
   `GET /v1/subscriptions/{id}/icon`.
+- The web sidebar's feed list shows feed icons too. A thumbnail is
+  fetched again when a publisher swaps an article's image without
+  changing its text. Storing an icon or thumbnail now raises the
+  subscription's or entry's revision with `subscription.updated` or
+  `entry.updated`, and bootstrap carries `icon_url` and
+  `thumbnail_url`, so sync clients pick them up.
 - Import starred articles into Kept from another reader's Google Reader
   JSON export (FreshRSS, Inoreader, Google Takeout), with its labels, in
   Manage feeds, with `earnest entries import` or `POST /v1/kept:import`.

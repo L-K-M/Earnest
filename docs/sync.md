@@ -141,6 +141,13 @@ The event vocabulary includes `entry.created`, `entry.updated`, `entry.deleted`,
 and `token.revoked`. Entry-created events can carry IDs and sequence metadata;
 fetch bodies on demand. Treat a body fetch returning 404 as a tombstone.
 
+Feed icons and article thumbnails are stored after the feed or article
+arrives. When one is stored or replaced, the server raises the revision and
+sends `entry.updated` (refetch the entry for its `thumbnail_url`) or
+`subscription.updated` (whose payload carries `icon_url`). Bootstrap entries
+and subscriptions carry the same `thumbnail_url` and `icon_url` as REST, and
+leave them out while nothing is stored.
+
 Labels are native revisioned objects. A label ID identifies one entry-label
 membership; names are not IDs. Removal leaves a tombstone (24). Positions are
 per principal and view, last committed writer wins, including backward moves.

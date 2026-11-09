@@ -46,7 +46,7 @@ type FeedHealth struct {
 
 // Subscription projects user settings without revealing credentials.
 // IconURL is the API path of the feed's stored icon, or "" while none is
-// stored; it is decoration and does not change the revision.
+// stored; storing a new icon raises the revision (see announceFeedIcon).
 type Subscription struct {
 	InitialSince        *time.Time  `json:"initial_since,omitempty"`
 	InitialThroughSeq   uint64      `json:"initial_through_seq"`
