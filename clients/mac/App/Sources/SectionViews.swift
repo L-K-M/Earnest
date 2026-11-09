@@ -156,21 +156,26 @@ extension FeedInfo {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var window: WindowModel
 
+    // From macOS 27, menus hide item icons unless the labels ask for them.
     var body: some View {
-        Button("Open Website") { if let site = feed.website { NSWorkspace.shared.open(site) } }
+        Group { items }.labelStyle(.titleAndIcon)
+    }
+
+    @ViewBuilder private var items: some View {
+        Button("Open Website", systemImage: "safari") { if let site = feed.website { NSWorkspace.shared.open(site) } }
             .disabled(feed.website == nil)
-        Button("Copy Feed Address") {
+        Button("Copy Feed Address", systemImage: "doc.on.doc") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(feed.url, forType: .string)
         }
         Divider()
-        Picker("Cadence", selection: Binding(get: { Cadence(server: feed.cadence) },
+        Picker("Cadence", systemImage: "timer", selection: Binding(get: { Cadence(server: feed.cadence) },
                                              set: { window.setCadence(feed, $0.rawValue) })) {
             ForEach(Cadence.allCases) { Text($0.title).tag($0) }
         }
-        Button("Refresh Feed") { model.refreshFeed(feed.id) }
+        Button("Refresh Feed", systemImage: "arrow.clockwise") { model.refreshFeed(feed.id) }
         Divider()
-        Button("Unsubscribe…", role: .destructive) { window.unsubscribing = feed }
+        Button("Unsubscribe…", systemImage: "minus.circle", role: .destructive) { window.unsubscribing = feed }
     }
 }
 
@@ -371,12 +376,15 @@ extension FeedInfo {
         }
         .padding(.vertical, 2)
         .contextMenu {
-            if item.nextAction == "revert" {
-                Button("Revert") { model.revert(item) }.disabled(model.activityActionPending)
+            Group {
+                if item.nextAction == "revert" {
+                    Button("Revert", systemImage: "arrow.uturn.backward") { model.revert(item) }.disabled(model.activityActionPending)
+                }
+                if item.nextAction == "cancel" {
+                    Button("Cancel Notification", systemImage: "bell.slash") { model.cancelNotification(item) }.disabled(model.activityActionPending)
+                }
             }
-            if item.nextAction == "cancel" {
-                Button("Cancel Notification") { model.cancelNotification(item) }.disabled(model.activityActionPending)
-            }
+            .labelStyle(.titleAndIcon)
         }
     }
 

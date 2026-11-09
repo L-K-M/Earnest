@@ -243,29 +243,38 @@ struct EntryTable: NSViewRepresentable {
             menu.removeAllItems()
             guard let table, let row = items[safe: table.clickedRow]?.row else { return }
             let canAct = parent.actions.canAct && parent.actions.canActOn(row.id)
-            func item(_ title: String, enabled: Bool = true, _ action: @escaping () -> Void) {
+            func item(_ title: String, _ symbol: String, enabled: Bool = true, _ action: @escaping () -> Void) {
                 let menuItem = ClosureMenuItem(title: title, action: action)
+                menuItem.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
                 menuItem.isEnabled = enabled
-                menu.addItem(menuItem)
+                menu.addItem(menuItem.showingImage())
             }
             let id = row.id
-            item("Open in Browser", enabled: row.url != nil) { [weak self] in self?.parent.actions.openInBrowser(id) }
+            item("Open in Browser", "safari", enabled: row.url != nil) { [weak self] in self?.parent.actions.openInBrowser(id) }
             menu.addItem(.separator())
-            item("Move to Done", enabled: canAct) { [weak self] in self?.parent.actions.perform(.done, id) }
-            item(row.later ? "Remove from Later" : "Move to Later", enabled: canAct) { [weak self] in self?.parent.actions.perform(.later, id) }
-            item(row.kept ? "Unkeep" : "Keep", enabled: canAct) { [weak self] in self?.parent.actions.perform(.keep, id) }
-            item("Mark as Unread", enabled: canAct && !row.unread) { [weak self] in self?.parent.actions.perform(.unread, id) }
+            item("Move to Done", "checkmark.circle", enabled: canAct) { [weak self] in self?.parent.actions.perform(.done, id) }
+            item(row.later ? "Remove from Later" : "Move to Later", row.later ? "clock.badge.xmark" : "clock", enabled: canAct) { [weak self] in self?.parent.actions.perform(.later, id) }
+            item(row.kept ? "Unkeep" : "Keep", row.kept ? "bookmark.slash" : "bookmark", enabled: canAct) { [weak self] in self?.parent.actions.perform(.keep, id) }
+            item("Mark as Unread", "circle.fill", enabled: canAct && !row.unread) { [weak self] in self?.parent.actions.perform(.unread, id) }
             menu.addItem(.separator())
-            item("Copy Link", enabled: row.url != nil) { [weak self] in self?.write(row, to: .general) }
+            item("Copy Link", "link", enabled: row.url != nil) { [weak self] in self?.write(row, to: .general) }
             if let url = row.url {
-                let share = NSSharingServicePicker(items: [url]).standardShareMenuItem
-                // Match the other items, which are text only in context menus.
-                share.image = nil
-                menu.addItem(share)
+                menu.addItem(NSSharingServicePicker(items: [url]).standardShareMenuItem.showingImage())
             }
         }
 
         weak var table: NSTableView?
+    }
+}
+
+extension NSMenuItem {
+    /// Context-menu icons help tell the reading actions apart at a glance.
+    /// From macOS 27, AppKit hides menu item images unless an item asks to
+    /// show them (`preferredImageVisibility`, macOS 27 and later); on macOS
+    /// 26 they are shown already.
+    func showingImage() -> NSMenuItem {
+        if #available(macOS 27, *) { preferredImageVisibility = .visible }
+        return self
     }
 }
 

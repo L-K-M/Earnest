@@ -51,8 +51,11 @@ import EarnestKit
                         }
                         .tag(Item.saved(saved.id))
                         .contextMenu {
-                            Button("Rename…") { renaming = saved }
-                            Button("Delete…", role: .destructive) { deleting = saved }
+                            Group {
+                                Button("Rename…", systemImage: "pencil") { renaming = saved }
+                                Button("Delete…", systemImage: "trash", role: .destructive) { deleting = saved }
+                            }
+                            .labelStyle(.titleAndIcon)
                         }
                         .disabled(window.search.saving)
                     }
