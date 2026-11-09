@@ -130,6 +130,7 @@ class AppViewModel internal constructor(
     @Volatile private var activeSession: AuthenticatedSession? = null
     @Volatile private var keptImportDocument: ByteArray? = null
     private val mediaCache = MediaCache(getApplication())
+    @Volatile private var mediaClient: Pair<AuthenticatedSession, EarnestApi>? = null
     private var sessionStartedAt = Instant.now()
     private var changesSince = Instant.EPOCH.toString()
     private val json = Json { ignoreUnknownKeys = true }
@@ -1143,8 +1144,18 @@ class AppViewModel internal constructor(
         val cache = account ?: return null
         val session = activeSession ?: return null
         if (!isCurrent(session, cache)) return null
-        val api = apiFactory(session)
+        val api = mediaApi(session)
         return mediaCache.load(session.identity.cacheKey, path) { api.media(it) }
+    }
+
+    /**
+     * One API client for a session's images: each EarnestApi builds its own
+     * HTTP client, and a list shows dozens of images, which should share
+     * pooled connections rather than open one each.
+     */
+    private fun mediaApi(session: AuthenticatedSession): EarnestApi {
+        mediaClient?.let { (owner, api) -> if (owner === session) return api }
+        return apiFactory(session).also { mediaClient = session to it }
     }
 
     /** Cache fallback must not turn cancellation or expired credentials into success. */
