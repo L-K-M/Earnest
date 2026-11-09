@@ -9,8 +9,9 @@ swift build
 swift test
 ```
 
-The native app requires macOS 26 (Tahoe) or later, Xcode 26 or later, and XcodeGen. Generate the
-project and build and test the unsigned app:
+The native app requires macOS 26 (Tahoe) or later, Xcode 26 or later, and XcodeGen. Build
+releases with Xcode 27: the article list asks macOS 27 to show its context-menu icons only in
+builds made with the macOS 27 SDK. Generate the project and build and test the unsigned app:
 
 ```sh
 cd clients/mac/App
