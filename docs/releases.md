@@ -36,9 +36,10 @@ or CI logs. The scripts do not generate production signing identities.
 
 ### Mac
 
-Use macOS, Xcode, XcodeGen and an unlocked signing Keychain containing a
-**Developer ID Application** certificate and its private key. An Apple
-Development or ad-hoc identity is not a distribution identity.
+Use macOS, Xcode 27 or later (see [Mac](mac.md)), XcodeGen and an unlocked
+signing Keychain containing a **Developer ID Application** certificate and its
+private key. An Apple Development or ad-hoc identity is not a distribution
+identity.
 
 Set these non-secret selectors in your release shell:
 

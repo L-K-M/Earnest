@@ -271,12 +271,9 @@ extension NSMenuItem {
     /// Context-menu icons help tell the reading actions apart at a glance.
     /// From macOS 27, AppKit hides menu item images unless an item asks to
     /// show them (`preferredImageVisibility`, macOS 27 and later); on macOS
-    /// 26 they are shown already. The property is in the macOS 27 SDK, which
-    /// Xcode 27 (Swift 6.4) brings; Xcode 26 builds, such as CI's, skip it.
+    /// 26 they are shown already.
     func showingImage() -> NSMenuItem {
-        #if compiler(>=6.4)
         if #available(macOS 27, *) { preferredImageVisibility = .visible }
-        #endif
         return self
     }
 }
