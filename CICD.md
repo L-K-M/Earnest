@@ -9,7 +9,7 @@
 | `mac.yml` | relevant PRs, reusable call | Portable package tests and macOS app build/tests |
 | `android.yml` | relevant PRs, reusable call | Core/app tests, debug build, lint and signed-release fixture validation |
 | `release.yml` | `v*` tags, manual validation | Calls every platform gate; only a tag push prepares a draft release |
-| `zai-code-review.yml` | PRs | automated GLM review: deep tier `glm-5.3`, fast tier StepFun `step-5-preview`, MiMo outage fallback |
+| `zai-code-review.yml` | PRs | automated GLM review: deep tier `glm-5.3`, fast tier MiMo `mimo-v2.6-pro`, StepFun `step-5-preview` last-resort fallback |
 
 All workflows use least-privilege `permissions`, `timeout-minutes` on every
 job, and `concurrency` that cancels superseded PR runs but never an
@@ -20,8 +20,8 @@ in-progress `main` run. Third-party actions are pinned to commit SHAs.
 | Secret | Used by |
 |---|---|
 | `ZAI_API_KEY` | `zai-code-review.yml` — Z.ai coding-plan key for the review tiers |
-| `STEPFUN_API_KEY` | `zai-code-review.yml` — fast-tier provider (step-5-preview) |
-| `MIMO_API_KEY` | `zai-code-review.yml` — outage fallback provider |
+| `MIMO_API_KEY` | `zai-code-review.yml` — fast-tier provider (mimo-v2.6-pro) |
+| `STEPFUN_API_KEY` | `zai-code-review.yml` — last-resort fallback provider (step-5-preview) |
 
 Server builds and deployments need no registry credentials: the image is
 built locally on the deployment host. Native signing credentials stay in the
