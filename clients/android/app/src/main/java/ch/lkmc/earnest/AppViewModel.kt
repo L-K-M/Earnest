@@ -348,7 +348,6 @@ class AppViewModel internal constructor(
                 refreshUnreadCounts(cache, session)
                 refreshWidgets(getApplication())
             } catch (error: ApiException) {
-                keptImportDocument = null
                 if (!currentOrExpired(session, cache)) return@launch
                 if (error.isUnauthorized && sessions.current() == session) {
                     // Clear only the session that failed: a login that completed
@@ -691,6 +690,8 @@ class AppViewModel internal constructor(
                     current.copy(keptImport = current.keptImport.copy(busy = false, report = report))
                 }
             } catch (error: ApiException) {
+                // A failed import shows an error, not a retry, so its file goes.
+                keptImportDocument = null
                 if (!currentOrExpired(session, cache)) return@launch
                 _state.update { current ->
                     current.copy(keptImport = current.keptImport.copy(busy = false, error = failureText("Could not import that file", error)))

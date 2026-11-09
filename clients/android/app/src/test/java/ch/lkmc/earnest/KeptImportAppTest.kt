@@ -44,6 +44,7 @@ class KeptImportAppTest {
     private val importCalls = CopyOnWriteArrayList<ImportCall>()
     private val paths = CopyOnWriteArrayList<String>()
     private var importStatus = 200
+    private var changesStatus = 200
     private var importBody = """{"results":null,"subscribed":null}"""
 
     private class Sessions(initial: AuthenticatedSession?) : SessionStore {
@@ -79,7 +80,11 @@ class KeptImportAppTest {
             "/v1/kept:import" -> importBody
             else -> "[]"
         }
-        val status = if (path == "/v1/kept:import") importStatus else 200
+        val status = when (path) {
+            "/v1/kept:import" -> importStatus
+            "/v1/changes" -> changesStatus
+            else -> 200
+        }
         Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(status).message("test")
             .body(body.toResponseBody()).build()
     }.build())
@@ -163,5 +168,21 @@ class KeptImportAppTest {
         model.keptImportReadFailed("Could not read that file.")
         withTimeout(15000) { model.state.first { it.keptImport.error != null } }
         assertNull(model.state.value.keptImport.report)
+    }
+
+    @Test fun aFailedRefreshKeepsTheFileForTheRetry() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        importBody = """{"results":[{"index":0,"status":"not_subscribed","feed_url":"https://b.test/rss"}],"subscribed":[]}"""
+        model.importKept("""{"items":[]}""".toByteArray(), subscribeMissing = false)
+        withTimeout(15000) { model.state.first { it.keptImport.report != null && !it.keptImport.busy } }
+        // An unrelated refresh fails; the report still offers its retry.
+        changesStatus = 500
+        val before = paths.count { it == "/v1/changes" }
+        model.refresh()
+        withTimeout(15000) { model.state.first { !it.loading && paths.count { path -> path == "/v1/changes" } > before } }
+        changesStatus = 200
+        model.importKeptAgain()
+        withTimeout(15000) { model.state.first { importCalls.size == 2 && !it.keptImport.busy } }
+        assertEquals("missing_feeds=subscribe", importCalls[1].query)
     }
 }
