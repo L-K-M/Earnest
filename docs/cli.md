@@ -78,8 +78,9 @@ earnest briefing
 `import` posts the file to `/v1/kept:import` and reports each article: created
 (stored from the export), matched (already in Earnest), unchanged, unkept (you
 removed it from Kept, so it stays out), not subscribed, gone (removed by
-retention) or failed. It never subscribes to feeds unless you pass
-`--subscribe-missing`. Importing the same file again is safe.
+retention) or failed, then how many articles got the export's labels. It never
+subscribes to feeds unless you pass `--subscribe-missing`. Importing the same
+file again is safe.
 
 `--view today` is the API's `river`: the undecided flow with today decay.
 `--unread` adds `unread_only`, `--feed` filters by subscription id, and

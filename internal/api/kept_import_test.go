@@ -21,7 +21,7 @@ func TestKeptImportAPI(t *testing.T) {
 	f := newAPIFixture(t, template)
 	export := []byte(`{"title": "Starred", "items": [
 		{"title": "Kept here", "guid": "https://example.org/kept", "canonical": [{"href": "https://example.org/kept"}],
-		 "categories": ["user/-/state/com.google/read", "user/-/state/com.google/starred"],
+		 "categories": ["user/-/state/com.google/read", "user/-/state/com.google/starred", "user/-/label/Saved"],
 		 "origin": {"streamId": "feed/16", "feedUrl": "https://example.org/feed", "title": "Example"},
 		 "crawlTimeMsec": "1700000000000", "published": 1699999000, "content": {"content": "<p>Body</p>"}},
 		{"title": "Elsewhere", "guid": "tag:elsewhere.example,2026:1",
@@ -59,6 +59,9 @@ func TestKeptImportAPI(t *testing.T) {
 	first := report(upload(export, "application/json", "", f.session()))
 	if got := statuses(first); got != "created,not_subscribed" {
 		t.Fatalf("raw JSON import = %s: %+v", got, first.Results)
+	}
+	if len(first.Results[0].Labels) != 1 || first.Results[0].Labels[0] != "Saved" {
+		t.Fatalf("labels = %v", first.Results[0].Labels)
 	}
 	if first.Results[1].FeedURL != "https://elsewhere.example/feed" || first.Results[1].Title != "Elsewhere" || len(first.Subscribed) != 0 {
 		t.Fatalf("skipped result = %+v, subscribed = %+v", first.Results[1], first.Subscribed)
@@ -113,6 +116,15 @@ func TestKeptImportAPI(t *testing.T) {
 		})
 	}
 	requireStatus(t, upload(export, "application/json", "", requestCredentials{}), http.StatusUnauthorized)
+
+	// Uploads over a route's limit are refused before parsing, as documented.
+	oversized := httptest.NewRequest(http.MethodPost, "/v1/opml:import", bytes.NewReader(bytes.Repeat([]byte("x"), maxOPMLBytes+1)))
+	oversized.Header.Set("Content-Type", "text/x-opml")
+	oversized.Header.Set(csrfHeader, f.csrf)
+	oversized.AddCookie(f.cookie)
+	rec = httptest.NewRecorder()
+	f.handler.ServeHTTP(rec, oversized)
+	requireStatus(t, rec, http.StatusRequestEntityTooLarge)
 }
 
 func TestUploadBody(t *testing.T) {

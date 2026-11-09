@@ -79,7 +79,7 @@ describe('feed rules', () => {
   it('summarizes a kept import by status', () => {
     const report: KeptImportReport = {
       results: [
-        {index: 0, status: 'created', title: 'New'},
+        {index: 0, status: 'created', title: 'New', labels: ['Tech']},
         {index: 1, status: 'matched', title: 'Found'},
         {index: 2, status: 'unchanged', title: 'Kept'},
         {index: 3, status: 'unkept', title: 'Removed'},
@@ -105,12 +105,13 @@ describe('feed rules', () => {
       ],
       failed: ['Article 10: could not be imported', 'Broken: no link'],
       subscribed: 3,
+      labelled: 1,
     })
   })
 
   it('treats null lists as empty in a kept import', () => {
     expect(summarizeKeptImport({results: null, subscribed: null})).toEqual({
-      added: 0, existing: 0, unkept: 0, gone: 0, skipped: [], failed: [], subscribed: 0,
+      added: 0, existing: 0, unkept: 0, gone: 0, skipped: [], failed: [], subscribed: 0, labelled: 0,
     })
   })
 
@@ -295,7 +296,7 @@ describe('Feeds', () => {
       '/v1/mutes': [],
       '/v1/kept:import': {
         results: [
-          {index: 0, status: 'created', title: 'New'},
+          {index: 0, status: 'created', title: 'New', labels: ['Tech']},
           {index: 1, status: 'matched', title: 'Found'},
           {index: 2, status: 'not_subscribed', feed_url: 'https://b.example/rss', title: 'Skipped'},
           {index: 3, status: 'failed', title: 'Broken', error: 'no link'},
@@ -308,6 +309,7 @@ describe('Feeds', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Import starred'}))
     await screen.findByText(/2 articles in Kept: 1 added from the export, 1 already in Earnest/)
     await screen.findByText(/Subscribed to 1 feed/)
+    await screen.findByText("Added the export's labels to 1 article.")
     await screen.findByText(/1 skipped because you don/)
     expect(screen.getByText('https://b.example/rss (1)')).toBeTruthy()
     await screen.findByText(/1 could not be imported: Broken: no link/)

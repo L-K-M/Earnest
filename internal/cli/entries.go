@@ -182,6 +182,19 @@ func (a *app) printKeptImport(report keptImportReport, subscribeMissing bool) {
 		}
 		fmt.Fprintf(a.out, "summary: %s\n", strings.Join(parts, ", "))
 	}
+	labelled := 0
+	for _, result := range report.Results {
+		if len(result.Labels) > 0 {
+			labelled++
+		}
+	}
+	if labelled > 0 {
+		noun := "articles"
+		if labelled == 1 {
+			noun = "article"
+		}
+		fmt.Fprintf(a.out, "labels: added the export's labels to %d %s\n", labelled, noun)
+	}
 	if !subscribeMissing && counts["not_subscribed"] > 0 {
 		fmt.Fprintf(a.out, "%d skipped because you don't follow their feed; run again with --subscribe-missing to subscribe and import them\n", counts["not_subscribed"])
 	}

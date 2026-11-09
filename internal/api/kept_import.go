@@ -40,7 +40,7 @@ func (s *server) keptImportRoutes() {
 	})
 	op := s.api.OpenAPI().Paths[path].Post
 	op.Summary = "Import starred articles into Kept"
-	op.Description = "Keeps the articles of a Google Reader JSON export, such as the starred-articles export of FreshRSS, Inoreader or Google Takeout. Articles Earnest already has are kept; others are stored from the export. The import never rewrites existing articles, never overrides an article you un-kept, and keeps imported articles out of the river."
+	op.Description = "Keeps the articles of a Google Reader JSON export, such as the starred-articles export of FreshRSS, Inoreader or Google Takeout, up to 64 MiB and 10,000 articles. Articles Earnest already has are kept; others are stored from the export. The export's labels are added to each article. The import never rewrites existing articles, never brings back an article you un-kept, a label you deleted or a label you removed from an article, and keeps imported articles out of the river."
 	op.RequestBody.Content = map[string]*huma.MediaType{
 		"application/json":    {Schema: &huma.Schema{Type: "object", Description: "Google Reader stream contents: an object with an items array."}},
 		"multipart/form-data": {Schema: &huma.Schema{Type: "object", Properties: map[string]*huma.Schema{"file": {Type: "string", Format: "binary"}}, Required: []string{"file"}}},
@@ -75,7 +75,7 @@ func toKeptImportItems(items []feed.ReaderItem) []service.KeptImportItem {
 			GUID: it.Item.GUID, URL: it.Item.URL, Title: it.Item.Title, Author: it.Item.Author,
 			PublishedAt: it.Item.Published, UpdatedAt: it.Item.Updated,
 			ContentHTML: it.Item.ContentHTML, SummaryHTML: it.Item.SummaryHTML,
-			Enclosures: enclosures, Read: it.Read, CrawledAt: it.Crawled,
+			Enclosures: enclosures, Read: it.Read, CrawledAt: it.Crawled, Labels: it.Labels,
 		}
 	}
 	return out

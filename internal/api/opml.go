@@ -24,7 +24,7 @@ type opmlOutput struct {
 }
 
 func (s *server) opmlRoutes() {
-	route(s, http.MethodPost, "/v1/opml:import", "import-opml", func(ctx context.Context, in *opmlInput) ([]service.OPMLResult, error) {
+	routeUpload(s, http.MethodPost, "/v1/opml:import", "import-opml", maxOPMLBytes, func(ctx context.Context, in *opmlInput) ([]service.OPMLResult, error) {
 		body, err := uploadBody(ctx, in.RawBody, maxOPMLBytes, "file", "opml")
 		if err != nil {
 			return nil, err

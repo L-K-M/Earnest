@@ -126,11 +126,14 @@ export type KeptImportSummary = {
   skipped: {feedURL: string; count: number}[]
   failed: string[]
   subscribed: number
+  // Articles the import added at least one of the export's labels to.
+  labelled: number
 }
 export function summarizeKeptImport(report: KeptImportReport): KeptImportSummary {
-  const summary: KeptImportSummary = {added: 0, existing: 0, unkept: 0, gone: 0, skipped: [], failed: [], subscribed: 0}
+  const summary: KeptImportSummary = {added: 0, existing: 0, unkept: 0, gone: 0, skipped: [], failed: [], subscribed: 0, labelled: 0}
   const skipped = new Map<string, number>()
   for (const result of report.results ?? []) {
+    if ((result.labels ?? []).length > 0) summary.labelled++
     if (result.status === 'created') {
       summary.added++
     } else if (result.status === 'matched' || result.status === 'unchanged') {
