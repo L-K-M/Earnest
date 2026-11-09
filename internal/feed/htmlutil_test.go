@@ -28,6 +28,8 @@ func TestPlainTitle(t *testing.T) {
 		// Regression: a legacy name that only starts the reference is not
 		// decoded on its own.
 		{"Mom&nottoday; and &copy2026;", "Mom&nottoday; and &copy2026;"},
+		// Encoded line breaks become spaces; other controls stay as written.
+		{"Two&#10;lines&#9;and&#1;a bell", "Two lines and&#1;a bell"},
 	}
 	for _, tt := range tests {
 		if got := plainTitle(tt.in); got != tt.want {

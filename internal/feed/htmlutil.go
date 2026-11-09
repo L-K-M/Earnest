@@ -4,6 +4,7 @@ import (
 	"html"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	xhtml "golang.org/x/net/html"
@@ -43,6 +44,16 @@ func decodeCharRefs(s string) string {
 		decoded := html.UnescapeString(ref)
 		if decoded == ref || utf8.RuneCountInString(decoded) > 2 {
 			return ref
+		}
+		// A title is one line of text: an encoded tab or line break becomes
+		// a space, and other control characters stay as written.
+		for _, r := range decoded {
+			if unicode.IsSpace(r) {
+				return " "
+			}
+			if unicode.IsControl(r) {
+				return ref
+			}
 		}
 		return decoded
 	})
