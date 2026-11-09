@@ -52,6 +52,29 @@ func TestRecordFetchAdoptsLegacyIdentities(t *testing.T) {
 		coreCheckGapless(t, f.db, f.a.UserID)
 	})
 
+	t.Run("a_comment_never_takes_over_its_posts_entry", func(t *testing.T) {
+		f := newCoreFixture(t, template)
+		ctx := context.Background()
+		// A feed listing a post and a comment on it: the comment's legacy
+		// identity is the post's current one.
+		postGUID := "https://example.test/?p=7"
+		post := IngestItem{IdentityHash: feed.IdentityHash(feed.Item{GUID: postGUID}), GUID: postGUID, Title: "Post", ContentHash: coreHash("post"), SanitizerVersion: 1, ContentSource: ContentFromFeed}
+		if _, err := f.s.RecordFetch(ctx, FetchOutcome{FeedID: f.feed, Status: FetchOK, Items: []IngestItem{post}}); err != nil {
+			t.Fatal(err)
+		}
+		summary, err := f.s.RecordFetch(ctx, FetchOutcome{FeedID: f.feed, Status: FetchOK, Items: []IngestItem{comment("1"), post}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if summary.Created != 1 || summary.Updated != 0 {
+			t.Fatalf("summary = %+v; the comment is new and the post unchanged", summary)
+		}
+		var title string
+		if err := f.db.Pool().QueryRow(ctx, "SELECT title FROM entries WHERE feed_id=$1 AND guid=$2", f.feed, postGUID).Scan(&title); err != nil || title != "Post" {
+			t.Fatalf("post entry title = %q, %v", title, err)
+		}
+	})
+
 	t.Run("a_legacy_tombstone_is_never_resurrected", func(t *testing.T) {
 		f := newCoreFixture(t, template)
 		ctx := context.Background()

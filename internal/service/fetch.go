@@ -487,8 +487,11 @@ func adoptImported(ctx context.Context, tx pgx.Tx, feedID int64, p *ingestChange
 // and is never resurrected.
 func adoptLegacy(ctx context.Context, tx pgx.Tx, feedID int64, p *ingestChange, adopted []int64, receipt time.Time) (found, deleted bool, err error) {
 	var imported bool
+	// The stored GUID must be the same text: a fetch of this very item stored
+	// it. Otherwise a comment ("?p=7#comment-1"), whose legacy identity is its
+	// post's current one, would take over the post's entry.
 	err = tx.QueryRow(ctx, `SELECT id,seq,first_seen_at,deleted_at IS NOT NULL,imported FROM entries
- WHERE feed_id=$1 AND identity_hash=$2 AND NOT id=ANY($3)`, feedID, p.legacy, adopted).Scan(&p.id, &p.seq, &p.firstSeen, &deleted, &imported)
+ WHERE feed_id=$1 AND identity_hash=$2 AND guid=$4 AND NOT id=ANY($3)`, feedID, p.legacy, adopted, p.item.GUID).Scan(&p.id, &p.seq, &p.firstSeen, &deleted, &imported)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, false, nil
 	}
