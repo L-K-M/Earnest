@@ -306,7 +306,9 @@ Open Earnest > Settings… (⌘,). Changes apply as you make them, as in other M
 settings windows: the window edits a draft over the account's synced reader
 settings and saves it shortly after each change, after any save in flight. If
 the account's revision moved elsewhere, saving stops and Settings offers Use
-Latest instead of overwriting. An ambiguous save failure freezes its exact
+Latest instead of overwriting. The server keeps the last write, so a change made
+elsewhere while a save is already in flight is replaced by it; Settings then
+keeps the conflict flagged and says so instead of reporting a plain save. An ambiguous save failure freezes its exact
 body and operation ID, so Try Again resends them unchanged; editing the draft
 or losing the account or server scope ends the frozen request. A dirty draft
 survives sync updates and is flagged as a conflict rather than replaced. Saving

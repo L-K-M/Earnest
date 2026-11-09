@@ -178,10 +178,16 @@ struct ReaderPreferencesScope: Equatable {
                 throw APIError.invalidBaseURL
             }
             server = trimmed
-            // A link opened while signed out or launching waits for this session.
+            // A link opened while signed out or launching waits for this session,
+            // and so does a feed: link's New Subscription offer.
             let links = windows.compactMap { window in window.pendingDeepLink.map { (window, $0) } }
+            let offers = windows.filter(\.subscribing).map { ($0, $0.subscribeURL) }
             endSession()
             for (window, link) in links { window.deferDeepLink(link) }
+            for (window, address) in offers {
+                window.subscribeURL = address
+                window.subscribing = true
+            }
             api = nil
             tokens = nil
             serverURL = nil
@@ -894,6 +900,10 @@ struct ReaderPreferencesScope: Equatable {
     /// Fetch the account's subscriptions as OPML for a save panel.
     func exportOPML() async throws -> Data {
         guard let api, loggedIn else { throw APIError.invalidResponse }
+        guard transfer == nil else {
+            error = "Wait for the current subscription transfer to finish, then export again."
+            throw CancellationError()
+        }
         let expectedSession = session
         transfer = "Exporting subscriptions…"
         defer { if session == expectedSession { transfer = nil } }

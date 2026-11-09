@@ -807,7 +807,9 @@ import AppKit
                           (try? engine.snapshot().cursor?.generation) == generation else { return }
                     try engine.mergeEntries([entry], generation: generation)
                     // A shared rebuild may have supplied it while the request waited.
-                    if !self.entries.contains(where: { $0.id == id }) { self.entries.append(entry) }
+                    if !self.entries.contains(where: { $0.id == id }) {
+                        self.entries.insert(entry, at: self.entries.firstIndex { $0.seq > entry.seq } ?? self.entries.endIndex)
+                    }
                 }
                 let entry = self.entries.first(where: { $0.id == id })
                 self.readingEntry = entry

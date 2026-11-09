@@ -604,6 +604,37 @@ import EarnestKit
         SettingsHTTP.assertFinished()
     }
 
+    func testAConflictRaisedDuringASaveIsNotHidden() async throws {
+        let requested = expectation(description: "Save in flight")
+        let resume = DispatchSemaphore(value: 0)
+        let (api, session) = try makeAPI([
+            .init(method: "PUT", path: "/v1/settings", body: settingsJSON(theme: "dark", rev: 7), beforeResponse: {
+                requested.fulfill()
+                XCTAssertEqual(resume.wait(timeout: .now() + 10), .success)
+            }),
+        ])
+        let engine = SyncEngine(store: MemorySyncStore())
+        let model = makeModel(api: api, engine: engine)
+        model.loggedIn = true
+        let settings = ReaderSettingsModel(app: model)
+        defer { resume.signal(); session.invalidateAndCancel() }
+        settings.draft.theme = .dark
+        settings.save()
+        await fulfillment(of: [requested], timeout: 5)
+        // Another device saves while this request is in flight.
+        let generation = try XCTUnwrap(engine.snapshot().cursor?.generation)
+        try engine.mergeSettings(APIReaderSettings(theme: .light, rev: 6), generation: generation)
+        try model.restoreReaderPreferences()
+        model.rebuildPresentation()
+        XCTAssertTrue(settings.conflict)
+        resume.signal()
+        try await waitUntil { !settings.busy }
+        XCTAssertTrue(settings.conflict, "The change made elsewhere is still flagged")
+        XCTAssertFalse(settings.confirmed, "Saved is not claimed over a conflict")
+        XCTAssertNotNil(settings.error)
+        SettingsHTTP.assertFinished()
+    }
+
     func testAutosaveWaitsForReloadAfterAConflict() async throws {
         let engine = SyncEngine(store: MemorySyncStore())
         let model = makeModel(engine: engine)

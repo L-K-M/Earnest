@@ -128,6 +128,10 @@ import EarnestKit
                 guard self.current(requestID, scope: scope) else { return }
                 let latestDraft = self.draft
                 let edited = latestDraft != pending.body
+                // Save refuses to start over a conflict, so one flagged now was
+                // raised by a sync while this request was in flight. Read it
+                // before adopting the result, which updates this draft too.
+                let changedElsewhere = self.conflict
                 let effective: APIReaderSettings?
                 do {
                     effective = try self.app.adoptReaderSettings(saved, scope: scope)
@@ -158,6 +162,14 @@ import EarnestKit
                     measure: latestDraft.measure, font: latestDraft.font,
                     feedOverrides: latestDraft.feedOverrides, rev: effective.rev
                 ) : effective
+                if changedElsewhere {
+                    // The server keeps the last write, so this save replaced a
+                    // change made elsewhere meanwhile. Keep the flag and say so.
+                    self.conflict = true
+                    self.confirmed = false
+                    self.error = "Settings also changed on another device while this change was saving. This change was saved last; review the settings."
+                    return
+                }
                 self.conflict = false
                 self.confirmed = !edited
             } catch is CancellationError {

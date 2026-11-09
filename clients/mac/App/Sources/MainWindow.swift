@@ -66,6 +66,13 @@ import EarnestKit
             window.refreshSection()
         }
         .onChange(of: undoManager) { window.undoManager = undoManager }
+        // A file staged before signing out never imports into the next account.
+        .onChange(of: model.loggedIn) { wasSignedIn, signedIn in
+            if wasSignedIn && !signedIn {
+                pendingImport = nil
+                importReport = nil
+            }
+        }
     }
 
     // MARK: Alerts
