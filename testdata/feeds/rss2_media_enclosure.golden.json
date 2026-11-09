@@ -1,0 +1,72 @@
+{
+  "feed": {
+    "title": "Image enclosure",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "jpg-1",
+      "url": "https://example.com/jpg",
+      "title": "JPEG enclosure",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "enclosures": [
+        {
+          "url": "https://cdn.example.com/photo.jpg",
+          "type": "image/jpeg",
+          "length": 10
+        }
+      ],
+      "image": "https://cdn.example.com/photo.jpg",
+      "language": "",
+      "identity": "b5e7bef82315fccf7c0143500770ad019a0f3f098535fcc2d49f7e2a87568d78",
+      "content_hash": "a77500be0cb7fc6490aca36986c63d7288aa686c8f4525d5fcd6c6a84820448a"
+    },
+    {
+      "guid": "audio-1",
+      "url": "https://example.com/audio",
+      "title": "Audio enclosure is not an image",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "enclosures": [
+        {
+          "url": "https://cdn.example.com/audio.mp3",
+          "type": "audio/mpeg",
+          "length": 10
+        }
+      ],
+      "language": "",
+      "identity": "811eea3f6387bf409b4ed11ba99cccbdfa47ba587cb8895495f6c773b84f491d",
+      "content_hash": "6759ef97e12dec572f9d383feb52548ebf6536bbb48ae2a1e9ab9c37a4e8508c"
+    },
+    {
+      "guid": "first-1",
+      "url": "https://example.com/first",
+      "title": "First valid image enclosure wins",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "enclosures": [
+        {
+          "url": "https://cdn.example.com/pic.svg",
+          "type": "image/svg+xml",
+          "length": 1
+        },
+        {
+          "url": "https://cdn.example.com/pic.png",
+          "type": "image/png",
+          "length": 1
+        }
+      ],
+      "image": "https://cdn.example.com/pic.png",
+      "language": "",
+      "identity": "396e4160a1aa77065959662454cc6e6c4b060cee100c33060a7ba3d3afbeb4fa",
+      "content_hash": "f436353949cff2fa943d8e047fcae629f1853453f234ae349fa2d93674bc871b"
+    }
+  ]
+}

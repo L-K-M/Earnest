@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <channel>
+    <title>SVG skipped</title>
+    <link>https://example.com/</link>
+    <item>
+      <title>SVG thumbnail falls through to content</title>
+      <link>https://example.com/one</link>
+      <guid>svg-1</guid>
+      <media:thumbnail url="https://cdn.example.com/cover.svg" width="9999"/>
+      <media:content url="https://cdn.example.com/cover.png" medium="image" width="100"/>
+    </item>
+    <item>
+      <title>SVG thumbnail falls through to iTunes</title>
+      <link>https://example.com/two</link>
+      <guid>svg-2</guid>
+      <media:thumbnail url="https://cdn.example.com/cover.SVGZ" width="9999"/>
+      <itunes:image href="https://cdn.example.com/itunes.jpg"/>
+    </item>
+    <item>
+      <title>SVG thumbnail falls through to enclosure</title>
+      <link>https://example.com/three</link>
+      <guid>svg-3</guid>
+      <media:thumbnail url="https://cdn.example.com/cover.svg" width="9999"/>
+      <enclosure url="https://cdn.example.com/enclosure.jpg" type="image/jpeg"/>
+    </item>
+  </channel>
+</rss>

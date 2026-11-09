@@ -1,0 +1,59 @@
+{
+  "feed": {
+    "title": "Media group",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "wide-1",
+      "url": "https://example.com/wide",
+      "title": "Widest thumbnail wins",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "image": "https://cdn.example.com/large.jpg",
+      "language": "",
+      "identity": "e92c270911e5873e044cb6d772e5e219b99a5edd3527e154d1754a55601e032b",
+      "content_hash": "6841292aa47016d8fbdec5d49e702582459575ce86c5e7e3032b696900c6c41f"
+    },
+    {
+      "guid": "tie-1",
+      "url": "https://example.com/tie",
+      "title": "Ties keep document order",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "image": "https://cdn.example.com/first.jpg",
+      "language": "",
+      "identity": "38ac4ba0a4d1f95d94ba6cf70d727cebba1ab02d1fd5949a1c92621701a91aa7",
+      "content_hash": "06461e8a2f1e2e436448169803ea6de1b9c2a02f92710715848b1bbe21c5c540"
+    },
+    {
+      "guid": "invalid-1",
+      "url": "https://example.com/invalid",
+      "title": "Invalid width counts as zero",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "image": "https://cdn.example.com/tiny.jpg",
+      "language": "",
+      "identity": "eda445601f72030b1764b8aa47c2054fef8f79c3b365b6d7e364178f3a9f6081",
+      "content_hash": "25dc502fce07f9f01a255370922513fdafcd67039d9b31d0d16c0f2d6695d6c4"
+    },
+    {
+      "guid": "order-1",
+      "url": "https://example.com/order",
+      "title": "Group order is document order",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "image": "https://cdn.example.com/group.jpg",
+      "language": "",
+      "identity": "abbc3af15660dc095f9f162c85f8a8ee9394cb774052fb4f5bd64f48f076b7ce",
+      "content_hash": "b2695b99fbcb6574454fae399c50f3afcec0e67e5e6b0d796330ddd37c463a77"
+    }
+  ]
+}

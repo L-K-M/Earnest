@@ -62,6 +62,7 @@ type goldenItem struct {
 	SummaryHTML string            `json:"summary_html"`
 	ContentHTML string            `json:"content_html"`
 	Enclosures  []goldenEnclosure `json:"enclosures,omitempty"`
+	Image       string            `json:"image,omitempty"`
 	Categories  []string          `json:"categories,omitempty"`
 	Language    string            `json:"language"`
 	Identity    string            `json:"identity"`
@@ -188,6 +189,7 @@ func buildGolden(f *Feed, parseErr error) goldenFile {
 			Updated:     goldenTime(it.Updated),
 			SummaryHTML: it.SummaryHTML,
 			ContentHTML: it.ContentHTML,
+			Image:       it.Image,
 			Language:    it.Language,
 			Identity:    IdentityHash(it),
 			ContentHash: ContentHash(it),

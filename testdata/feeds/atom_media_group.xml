@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/">
+  <title>Atom media group</title>
+  <link rel="alternate" type="text/html" href="https://example.com/"/>
+  <entry>
+    <title>YouTube style</title>
+    <id>tag:example.com,2026:1</id>
+    <link rel="alternate" type="text/html" href="https://example.com/watch?v=1"/>
+    <media:group>
+      <media:content url="https://cdn.example.com/video.mp4" type="video/mp4" medium="video" width="1280"/>
+      <media:thumbnail url="https://cdn.example.com/maxres.jpg" width="1280"/>
+      <media:thumbnail url="https://cdn.example.com/mq.jpg" width="320"/>
+    </media:group>
+  </entry>
+  <entry>
+    <title>Thumbnail on video content</title>
+    <id>tag:example.com,2026:2</id>
+    <link rel="alternate" type="text/html" href="https://example.com/watch?v=2"/>
+    <media:content url="https://cdn.example.com/clip.mp4" type="video/mp4">
+      <media:thumbnail url="https://cdn.example.com/clip-thumb.jpg" width="480"/>
+    </media:content>
+  </entry>
+</feed>

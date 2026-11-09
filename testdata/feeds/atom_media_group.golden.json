@@ -1,0 +1,35 @@
+{
+  "feed": {
+    "title": "Atom media group",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "tag:example.com,2026:1",
+      "url": "https://example.com/watch?v=1",
+      "title": "YouTube style",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "image": "https://cdn.example.com/maxres.jpg",
+      "language": "",
+      "identity": "edefc9a59e72dd51b0d1ded2d9685d019feb539809904717558456015df03d67",
+      "content_hash": "8446fae3b585c3c233a6611fc30b749137c2496c12c14e2a0acd558de95b4e72"
+    },
+    {
+      "guid": "tag:example.com,2026:2",
+      "url": "https://example.com/watch?v=2",
+      "title": "Thumbnail on video content",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "image": "https://cdn.example.com/clip-thumb.jpg",
+      "language": "",
+      "identity": "75bc0677f5da8bfbd69e08382056ae7117fc2ca6877be94d58065490b1a2f455",
+      "content_hash": "5a1ba9ca47d13ffa4dc9c1604e86997811a0864cf572db87b38e9b9d1d1df58a"
+    }
+  ]
+}

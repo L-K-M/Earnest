@@ -1,0 +1,77 @@
+{
+  "feed": {
+    "title": "JSON images",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "1",
+      "url": "https://example.com/1",
+      "title": "Image wins",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "image": "https://cdn.example.com/one.jpg",
+      "language": "",
+      "identity": "bc7cfe6caf392f99f3c7493efe65b63cc62bf9bae84c6891e84e2bd0aab52182",
+      "content_hash": "cafe98d353f19d538883de6ec180bf05b4e5556bb7068c2f8b598f3fc38ee9d9"
+    },
+    {
+      "guid": "2",
+      "url": "https://example.com/2",
+      "title": "Banner only",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "image": "https://cdn.example.com/two-banner.png",
+      "language": "",
+      "identity": "1bc95bcd03f2bf8ecbef03e527f643e067297eee7abd4555131dac1a8064dd6a",
+      "content_hash": "64bfeb7d6b84effc1a181b6cd3aeaf682e6cc003e2007c12861b976783b6dc06"
+    },
+    {
+      "guid": "3",
+      "url": "https://example.com/3",
+      "title": "Relative image",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "image": "https://example.com/img/three.jpg",
+      "language": "",
+      "identity": "e484326165288e271642e16922e5b2bdc6af272aa83859a2df8cfc11df98fdee",
+      "content_hash": "34ff038bf8a2e92c7701175296df05d0386f42fdd71155f8ead7cd98733fcf80"
+    },
+    {
+      "guid": "4",
+      "url": "https://example.com/4",
+      "title": "Attachment fallback",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "enclosures": [
+        {
+          "url": "https://cdn.example.com/four.jpeg",
+          "type": "image/jpeg"
+        }
+      ],
+      "image": "https://cdn.example.com/four.jpeg",
+      "language": "",
+      "identity": "00002dfb8f8ef02d99646412a0ada062feeb8bc47796ca007e43ff284e5c1134",
+      "content_hash": "b2945f5012cb8a3262a75fb45216ca71e3f73292291fce7c4915755332b4802f"
+    },
+    {
+      "guid": "5",
+      "url": "https://example.com/5",
+      "title": "SVG skipped",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "image": "https://cdn.example.com/five-fallback.webp",
+      "language": "",
+      "identity": "ebe2fcad42448d660dcee808c40c8553e57d258904e58eb97619e52a42013a28",
+      "content_hash": "c7743d92f094fee6ed85bf1ec9faa0bb5c40edc11eae6d93db2b4e772c557b9c"
+    }
+  ]
+}

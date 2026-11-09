@@ -170,6 +170,7 @@ func jsonFeedItem(m map[string]any, base, feedLang string) Item {
 			Length: coerceInt(obj["size_in_bytes"]),
 		})
 	}
+	it.Image = jsonFeedItemImage(m, base, it.Enclosures)
 
 	seen := make(map[string]bool)
 	for _, t := range coerceSlice(m["tags"]) {

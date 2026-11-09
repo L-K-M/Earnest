@@ -119,6 +119,7 @@ func parseRSSItem(n *node, feedLang string, rdf bool, feedLink, feedURL string) 
 			Length: length,
 		})
 	}
+	it.Image = itemImage(n, it.Enclosures, feedLink, feedURL)
 
 	seen := make(map[string]bool)
 	addCategory := func(s string) {

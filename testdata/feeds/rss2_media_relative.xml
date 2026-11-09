@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>Relative media</title>
+    <link>https://example.com/blog/</link>
+    <item xml:base="https://cdn.example.com/img/">
+      <title>xml:base wins</title>
+      <link>https://example.com/base</link>
+      <guid>base-1</guid>
+      <media:content url="photo.jpg" medium="image" width="100"/>
+    </item>
+    <item>
+      <title>Feed link</title>
+      <link>https://example.com/link</link>
+      <guid>link-1</guid>
+      <media:thumbnail url="../thumb.png" width="100"/>
+    </item>
+    <item>
+      <title>Protocol relative</title>
+      <link>https://example.com/proto</link>
+      <guid>proto-1</guid>
+      <media:content url="//cdn.example.com/proto.jpg" type="image/jpeg"/>
+    </item>
+  </channel>
+</rss>

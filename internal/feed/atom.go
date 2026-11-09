@@ -77,6 +77,7 @@ func parseAtomEntry(n *node, feedLang string, is03 bool, feedLink, feedURL strin
 			Length: length,
 		})
 	}
+	it.Image = itemImage(n, it.Enclosures, feedLink, feedURL)
 
 	seen := make(map[string]bool)
 	addCategory := func(s string) {
