@@ -339,6 +339,56 @@ func TestMedia(t *testing.T) {
 		}
 	})
 
+	t.Run("an image swapped without a text change is fetched again", func(t *testing.T) {
+		p := newMediaPublisher(t)
+		f := mediaTestNew(t, template, p)
+		ctx := context.Background()
+		feed := entriesTestFeed(t, f.db, p.URL+"/feed.xml", 0)
+		entriesTestSub(t, f.db, f.a.UserID, feed, "now")
+		f.record(t, feed, nil, mediaItem("swap", p.URL+"/photo.jpg", ""))
+		id := f.entryID(t, feed, "swap")
+		f.runMedia(t)
+		before, _ := loadEntryImage(t, f, id)
+		var changes int
+		count := func() int {
+			var n int
+			if err := f.db.Pool().QueryRow(ctx, "SELECT count(*) FROM changes").Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+			return n
+		}
+		changes = count()
+
+		// Same text, title and dates; only the declared image differs.
+		f.record(t, feed, nil, mediaItem("swap", p.URL+"/second.jpg", ""))
+		r, _ := loadEntryImage(t, f, id)
+		if r.status != mediaPending || len(r.candidates) != 1 || r.candidates[0] != p.URL+"/second.jpg" || !bytes.Equal(r.body, before.body) {
+			t.Fatalf("after swap=%+v", r)
+		}
+		if count() != changes {
+			t.Fatal("a requeued image announced an entry change")
+		}
+		f.runMedia(t)
+		if r, _ := loadEntryImage(t, f, id); r.status != mediaReady || r.source != p.URL+"/second.jpg" || bytes.Equal(r.body, before.body) {
+			t.Fatalf("after refetch=%+v", r)
+		}
+
+		// An image that disappears keeps the stored thumbnail.
+		f.record(t, feed, nil, mediaItem("swap", "", ""))
+		if r, _ := loadEntryImage(t, f, id); r.status != mediaReady || len(r.candidates) != 1 {
+			t.Fatalf("after removal=%+v", r)
+		}
+
+		// A row lost before the upgrade is recreated by the next fetch.
+		if _, err := f.db.Pool().Exec(ctx, "DELETE FROM entry_images WHERE entry_id=$1", id); err != nil {
+			t.Fatal(err)
+		}
+		f.record(t, feed, nil, mediaItem("swap", p.URL+"/photo.jpg", ""))
+		if r, ok := loadEntryImage(t, f, id); !ok || r.status != mediaPending {
+			t.Fatalf("recreated=%+v ok=%v", r, ok)
+		}
+	})
+
 	t.Run("transient failures retry with backoff, then give up", func(t *testing.T) {
 		p := newMediaPublisher(t)
 		f := mediaTestNew(t, template, p)

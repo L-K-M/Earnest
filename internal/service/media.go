@@ -95,11 +95,20 @@ func mediaETag(body []byte) string {
 	return hex.EncodeToString(sum[:8])
 }
 
+// thumbnailCandidates chooses an ingested item's thumbnail image URLs, best
+// first: its declared image, then images in its body.
+func thumbnailCandidates(item IngestItem) []string {
+	candidates := media.ThumbnailCandidates(item.Image, item.ContentHTML)
+	if candidates == nil {
+		return []string{}
+	}
+	return candidates
+}
+
 // queueEntryImage records the thumbnail candidates for an entry's current
 // version inside the ingest transaction. An unchanged candidate list leaves
 // the row, and any stored thumbnail, alone; a changed one starts over.
-func queueEntryImage(ctx context.Context, tx pgx.Tx, entry int64, explicit, html string, at time.Time) error {
-	candidates := media.ThumbnailCandidates(explicit, html)
+func queueEntryImage(ctx context.Context, tx pgx.Tx, entry int64, candidates []string, at time.Time) error {
 	if candidates == nil {
 		candidates = []string{}
 	}

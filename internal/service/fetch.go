@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"math"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -164,6 +165,9 @@ type ingestChange struct {
 	// legacy is the identity an earlier rule stored the article under, nil
 	// when the rules agree.
 	legacy []byte
+	// candidates are the item's thumbnail image URLs, best first, chosen
+	// before the transaction so HTML is not parsed under the core lock.
+	candidates []string
 }
 
 // RecordFetch commits identity/content versions, user events and health together.
@@ -233,10 +237,14 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 				legacy = nil
 			}
 		}
-		prepared = append(prepared, ingestChange{item: item, excerptOnly: excerptOnly, identity: identity, legacy: legacy, content: content})
+		prepared = append(prepared, ingestChange{item: item, excerptOnly: excerptOnly, identity: identity, legacy: legacy, content: content, candidates: thumbnailCandidates(item)})
 	}
 	summary := IngestSummary{}
 	var newEntries []int64
+	// requeue holds unchanged entries whose thumbnail candidates are new or
+	// changed: a publisher can swap an article's image without touching its
+	// text, which the content hash does not see.
+	var requeue []ingestChange
 	err := s.withEvents(ctx, func(tx pgx.Tx) error {
 		if err := store.LockCore(ctx, tx); err != nil {
 			return err
@@ -265,10 +273,12 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 			var pub, updated *time.Time
 			var enclosures []byte
 			var deleted, hasVersion bool
-			var imported bool
+			var imported, hasImageRow bool
+			var storedCandidates []string
 			err := tx.QueryRow(ctx, `SELECT e.id,e.seq,e.first_seen_at,e.content_hash,coalesce(e.guid,''),coalesce(e.url,''),e.title,e.author,e.language,e.published_at,e.updated_at,e.enclosures,e.deleted_at IS NOT NULL,
-    EXISTS(SELECT 1 FROM contents c WHERE c.entry_id=e.id AND c.content_hash=$3 AND c.sanitizer_version=$4 AND c.source=$5 AND c.excerpt_only=$6),e.imported
-    FROM entries e WHERE e.feed_id=$1 AND e.identity_hash=$2`, outcome.FeedID, p.identity, p.content, p.item.SanitizerVersion, string(p.item.ContentSource), p.excerptOnly).Scan(&p.id, &p.seq, &p.firstSeen, &oldHash, &guid, &rawURL, &title, &author, &language, &pub, &updated, &enclosures, &deleted, &hasVersion, &imported)
+    EXISTS(SELECT 1 FROM contents c WHERE c.entry_id=e.id AND c.content_hash=$3 AND c.sanitizer_version=$4 AND c.source=$5 AND c.excerpt_only=$6),e.imported,
+    i.entry_id IS NOT NULL,coalesce(i.candidates,'{}')
+    FROM entries e LEFT JOIN entry_images i ON i.entry_id=e.id WHERE e.feed_id=$1 AND e.identity_hash=$2`, outcome.FeedID, p.identity, p.content, p.item.SanitizerVersion, string(p.item.ContentSource), p.excerptOnly).Scan(&p.id, &p.seq, &p.firstSeen, &oldHash, &guid, &rawURL, &title, &author, &language, &pub, &updated, &enclosures, &deleted, &hasVersion, &imported, &hasImageRow, &storedCandidates)
 			if errors.Is(err, pgx.ErrNoRows) && hasImported {
 				found, deleted, err := adoptImported(ctx, tx, outcome.FeedID, &p, adopted)
 				if err != nil {
@@ -336,6 +346,11 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 				}
 			}
 			if bytes.Equal(oldHash, p.content) && guid == p.item.GUID && rawURL == p.item.URL && title == p.item.Title && author == p.item.Author && language == p.item.Language && timePtrEqual(pub, p.item.PublishedAt) && timePtrEqual(updated, p.item.UpdatedAt) && sameEnclosures && hasVersion {
+				// The article is unchanged, but its image may not be. An
+				// image that disappeared keeps the stored thumbnail.
+				if !hasImageRow || (len(p.candidates) > 0 && !slices.Equal(storedCandidates, p.candidates)) {
+					requeue = append(requeue, p)
+				}
 				continue
 			}
 			p.kind = syncmodel.EntryUpdated
@@ -404,6 +419,11 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 			}
 		}
 
+		for _, p := range requeue {
+			if err := queueEntryImage(ctx, tx, p.id, p.candidates, receipt); err != nil {
+				return err
+			}
+		}
 		if len(newEntries) > 0 {
 			if err := enqueueRuleJobs(ctx, tx, outcome.FeedID, newEntries, receipt); err != nil {
 				return err
@@ -523,7 +543,7 @@ func storeEntryVersion(ctx context.Context, tx pgx.Tx, p ingestChange, at time.T
 	if _, err := tx.Exec(ctx, `UPDATE entries SET guid=$2,url=$3,title=$4,author=$5,published_at=$6,updated_at=$7,content_hash=$8,language=$9,enclosures=$10 WHERE id=$1`, p.id, p.item.GUID, p.item.URL, p.item.Title, p.item.Author, p.item.PublishedAt, p.item.UpdatedAt, p.content, p.item.Language, body); err != nil {
 		return fmt.Errorf("update ingested entry: %w", err)
 	}
-	return queueEntryImage(ctx, tx, p.id, p.item.Image, p.item.ContentHTML, at)
+	return queueEntryImage(ctx, tx, p.id, p.candidates, at)
 }
 
 // announceEntry emits p's change to one subscriber at the allocated rev and
