@@ -31,7 +31,9 @@ jobs:
       - run: swift test -j 2
 
   app:
-    runs-on: macos-latest
+    # Xcode 27 and its macOS 27 SDK, which the app needs and releases are
+    # built with. The image is a GitHub public preview and may queue longer.
+    runs-on: xcode-27
     timeout-minutes: 30
     defaults:
       run:
