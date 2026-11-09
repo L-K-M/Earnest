@@ -13,7 +13,7 @@ import {shortcutsAllowed, viewKey, type Entry, type EntryState, type RangeScope,
 import {Search, useSavedSearches} from './search/Search'
 import {markRestCommand} from './markRest'
 import {ContextMenu, menuRequest, SEPARATOR, tidy, useContextMenuKey, type MenuItem, type MenuRequest} from './ContextMenu'
-import {listMenu, markUpToHere} from './menus'
+import {listMenu, markUpToHere, newestListed} from './menus'
 import {refreshSubscription} from './feeds'
 import {Palette, type Command, type PaletteHandle} from './palette/Palette'
 import {OfflineStatus, clearOffline, useOnline} from './offline/Offline'
@@ -447,13 +447,13 @@ function Session({onLogout}: {onLogout: () => void}) {
     setMenu(menuRequest(event, label, items))
   }
   const markRange = (scope: RangeScope, throughSeq: number) => sync.actRange(scope, throughSeq)
-  // Bulk marks run through the newest article this device knows for a list:
-  // what sync has delivered, or what the open list loaded if that is newer.
-  const newestKnown = (target: View) => Math.max(sync.newestSeq(), newestLoaded.key === viewKey(target) ? newestLoaded.seq : 0)
+  // Bulk marks run through the newest article this browser knows of: what
+  // sync has delivered, or what any list loaded if sync has not caught up.
+  const newestKnown = () => Math.max(sync.newestSeq(), newestListed(queryClient.getQueriesData({queryKey: ['river']}).map(([, data]) => data)))
   const confirmAction = (message: string) => window.confirm(message)
   function showListMenu(event: ReactMouseEvent<HTMLElement>, target: View) {
     showMenu(event, `${target.title} actions`, listMenu(target, subs, {
-      newest: () => newestKnown(target), markRange, confirm: confirmAction, notify,
+      newest: newestKnown, markRange, confirm: confirmAction, notify,
       go: to => {go(to)}, openTab: href => {window.open(href, '_blank', 'noopener')},
       refreshFeed: async id => {await refreshSubscription(id)},
     }))

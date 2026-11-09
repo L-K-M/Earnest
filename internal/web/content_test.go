@@ -53,7 +53,10 @@ func TestAppPolicyAndFallback(t *testing.T) {
 
 type fakeContent struct{}
 
-func (fakeContent) Content(_ context.Context, _ service.Actor, _ int64) (service.EntryContent, error) {
+func (fakeContent) Content(_ context.Context, _ service.Actor, id int64) (service.EntryContent, error) {
+	if id == 404 {
+		return service.EntryContent{}, service.ErrNotFound
+	}
 	return service.EntryContent{HTML: "<p>Article</p>"}, nil
 }
 
@@ -234,5 +237,44 @@ func TestExpiredTicketPage(t *testing.T) {
 	c.ServeHTTP(w3, httptest.NewRequest(http.MethodGet, "/content/3?sig=garbage", nil))
 	if !strings.Contains(w3.Body.String(), "This article link has expired") {
 		t.Fatalf("bad sig body = %q", w3.Body.String())
+	}
+}
+
+// Every page the reader's frame can show reports its height, so a notice
+// never inherits the previous article's height.
+func TestContentNoticesCarryTheFrameScript(t *testing.T) {
+	egress, err := outbound.New(outbound.Config{Version: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy, err := imageproxy.New([]byte(strings.Repeat("x", 32)), egress, "https://content.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Content{svc: fakeContent{}, proxy: proxy, appOrigin: "https://app.example", signer: &TicketSigner{key: []byte(strings.Repeat("x", 32)), origin: "https://content.example", now: func() time.Time { return time.Unix(100, 0) }}}
+	for _, tc := range []struct {
+		name, path string
+		status     int
+		heading    string
+	}{
+		{"expired", "/content/3?sig=bogus", http.StatusGone, "This article link has expired"},
+		{"gone", "/content/404?sig=" + c.signer.Sign(Ticket{UserID: 1, PrincipalID: 2, Kind: service.PrincipalHuman, EntryID: 404, Expires: 101, Mode: ImageProxied}), http.StatusNotFound, "This article is not available"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			c.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tc.path, nil))
+			body := w.Body.String()
+			if w.Code != tc.status || !strings.Contains(body, tc.heading) {
+				t.Fatalf("status = %d, body = %q", w.Code, body)
+			}
+			start, end := strings.Index(body, "<script>"), strings.Index(body, "</script>")
+			if start < 0 || end < start {
+				t.Fatalf("no frame script in %q", body)
+			}
+			sum := sha256.Sum256([]byte(body[start+len("<script>") : end]))
+			if want := "script-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"; !strings.Contains(w.Header().Get("Content-Security-Policy"), want) {
+				t.Fatalf("CSP = %q, want %q", w.Header().Get("Content-Security-Policy"), want)
+			}
+		})
 	}
 }

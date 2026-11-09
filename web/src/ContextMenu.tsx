@@ -112,7 +112,10 @@ export function ContextMenu({request, onClose, onError}: {request: MenuRequest |
     const items = [...(menu.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])]
     const index = items.findIndex(item => item === document.activeElement)
     const focus = (next: number) => items[(next + items.length) % items.length]?.focus({preventScroll: true})
-    if (event.key === 'Escape' || event.key === 'Tab') { event.preventDefault(); close(); return }
+    if (event.key === 'Escape') { event.preventDefault(); close(); return }
+    // Tab leaves the menu as if from the element it was opened from, so focus
+    // moves on to the next control instead of staying put.
+    if (event.key === 'Tab') { close(); return }
     if (event.key === 'ArrowDown') { event.preventDefault(); focus(index + 1); return }
     if (event.key === 'ArrowUp') { event.preventDefault(); focus(index < 0 ? -1 : index - 1); return }
     if (event.key === 'Home') { event.preventDefault(); focus(0); return }

@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -146,17 +147,18 @@ func NewContent(svc *service.Service, auth *service.Auth, proxy *imageproxy.Prox
 // frameScript is the article page's only script; the page's CSP admits it
 // by hash, so sanitised article HTML still cannot run any. It lets the web
 // reader scroll the article in one place instead of a scrolling frame
-// inside a scrolling pane. The page reports its height, so the reader can
-// size the frame to the article, and forwards scrolling and single-key
-// presses made while focus is in the frame, so Space and the reading
-// shortcuts work after a click in the article; Space on a focused summary
-// still opens its details. Messages go only to the app
-// origin, and only when the page is framed; native clients run no script.
+// inside a scrolling pane. The page reports its height, including any
+// horizontal scrollbar, so the reader can size the frame to the article. It
+// forwards scrolling and single-key presses made while focus is in the
+// frame, so Space and the reading shortcuts work after a click in the
+// article; Space on a focused summary still opens its details. Messages go
+// only to the app origin, and only when the page is framed; native clients
+// run no script.
 func frameScript(appOrigin string) string {
 	target, _ := json.Marshal(appOrigin)
 	return `(()=>{if(parent===self)return;const app=` + string(target) + `;let last=-1;` +
-		`const send=()=>{const h=Math.ceil(document.documentElement.getBoundingClientRect().height);if(h!==last){last=h;parent.postMessage({earnest:"height",height:h},app)}};` +
-		`new ResizeObserver(send).observe(document.documentElement);addEventListener("load",send);` +
+		`const send=()=>{const d=document.documentElement;const h=Math.ceil(d.getBoundingClientRect().height+innerHeight-d.clientHeight);if(h!==last){last=h;parent.postMessage({earnest:"height",height:h},app)}};` +
+		`new ResizeObserver(send).observe(document.documentElement);addEventListener("load",send);addEventListener("resize",send);` +
 		`const scroll=new Set([" ","PageDown","PageUp","Home","End","ArrowDown","ArrowUp"]);` +
 		`addEventListener("keydown",e=>{if(e.defaultPrevented||e.ctrlKey||e.metaKey||e.altKey||e.isComposing)return;const k=e.key;` +
 		`if(k===" "&&e.target instanceof Element&&e.target.closest("summary"))return;` +
@@ -206,16 +208,30 @@ func (c *Content) URLHandler(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"url": u})
 }
 
-// expiredPage renders a small explanation for an expired or invalid ticket.
-// The page carries no script, so it can only tell the reader to reopen the
-// article; it cannot refresh the ticket itself.
-func (c *Content) expiredPage(w http.ResponseWriter) {
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'")
+// framePolicy returns the CSP directive and element for frameScript, or
+// nothing when no app origin is configured. Every page the frame can show
+// carries it, so the reader never keeps an earlier article's height.
+func (c *Content) framePolicy() (directive, element string) {
+	if c.appOrigin == "" {
+		return "", ""
+	}
+	js := frameScript(c.appOrigin)
+	sum := sha256.Sum256([]byte(js))
+	return "; script-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'", "<script>" + js + "</script>"
+}
+
+// notice renders a short explanation in place of an article: an expired or
+// invalid ticket, an article that is gone, or one that could not be shown.
+// A bare error inside the reader's iframe looks like a broken article.
+// The status stays honest for monitors and prefetchers; the browser still
+// renders the body inside the frame. Its only script is frameScript, so it
+// can tell the reader what to do but cannot refresh the ticket itself.
+func (c *Content) notice(w http.ResponseWriter, status int, heading, text string) {
+	directive, script := c.framePolicy()
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'"+directive+"; base-uri 'none'; form-action 'none'")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	// 410 keeps the status contract honest for monitors and prefetchers; the
-	// browser still renders the body inside the reader's iframe.
-	w.WriteHeader(http.StatusGone)
-	_, _ = io.WriteString(w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font:1rem/1.6 system-ui,sans-serif;color:#202020;background:#fff;max-width:34ch;margin:4rem auto;padding:0 1rem}h1{font-size:1.2rem}</style></head><body><h1>This article link has expired</h1><p>Close the article and open it again in Earnest.</p></body></html>`)
+	w.WriteHeader(status)
+	_, _ = io.WriteString(w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font:1rem/1.6 system-ui,sans-serif;color:#202020;background:#fff;max-width:34ch;margin:4rem auto;padding:0 1rem}h1{font-size:1.2rem}</style>`+script+`</head><body><h1>`+html.EscapeString(heading)+`</h1><p>`+html.EscapeString(text)+`</p></body></html>`)
 }
 
 // ServeHTTP serves a signed article without depending on browser cookies.
@@ -230,10 +246,8 @@ func (c *Content) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	t, ok := c.signer.Verify(r.URL.Query().Get("sig"))
 	id, err := strconv.ParseInt(strings.TrimPrefix(r.URL.Path, "/content/"), 10, 64)
 	if !ok || err != nil || id != t.EntryID {
-		// A bare 404 inside the reader's iframe looks like a broken article.
-		// Explain the expiry instead; reopening the article fetches a fresh
-		// ticket from the app.
-		c.expiredPage(w)
+		// Reopening the article fetches a fresh ticket from the app.
+		c.notice(w, http.StatusGone, "This article link has expired", "Close the article and open it again in Earnest.")
 		return
 	}
 	// The content origin only reads stored bodies, so an agent ticket gets
@@ -245,7 +259,7 @@ func (c *Content) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	actor := service.Actor{UserID: t.UserID, PrincipalID: t.PrincipalID, Kind: t.Kind, Via: service.CredentialSession, Scopes: scopes}
 	body, err := c.svc.Content(r.Context(), actor, id)
 	if err != nil {
-		http.NotFound(w, r)
+		c.notice(w, http.StatusNotFound, "This article is not available", "It may have been removed, or you may no longer follow its feed.")
 		return
 	}
 	mode := imageproxy.Proxied
@@ -254,7 +268,7 @@ func (c *Content) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	fragment, err := c.proxy.Rewrite(body.HTML, mode)
 	if err != nil {
-		http.Error(w, "content unavailable", http.StatusInternalServerError)
+		c.notice(w, http.StatusInternalServerError, "This article could not be shown", "Close the article and try again.")
 		return
 	}
 	measure := 68
@@ -297,15 +311,8 @@ func (c *Content) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"hr{border:0;border-top:1px solid %s;margin:2em 0}",
 		measure, font, bg, fg, spacing, codeBg, muted, muted, muted, muted)
 	hash := sha256.Sum256([]byte(css))
-	policy := "default-src 'none'; img-src " + c.signer.origin + "; style-src 'sha256-" + base64.StdEncoding.EncodeToString(hash[:]) + "'"
-	script := ""
-	if c.appOrigin != "" {
-		js := frameScript(c.appOrigin)
-		sum := sha256.Sum256([]byte(js))
-		policy += "; script-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
-		script = "<script>" + js + "</script>"
-	}
-	w.Header().Set("Content-Security-Policy", policy+"; base-uri 'none'; form-action 'none'")
+	directive, script := c.framePolicy()
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src "+c.signer.origin+"; style-src 'sha256-"+base64.StdEncoding.EncodeToString(hash[:])+"'"+directive+"; base-uri 'none'; form-action 'none'")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><style>%s</style>%s</head><body>%s</body></html>", css, script, fragment)
 }

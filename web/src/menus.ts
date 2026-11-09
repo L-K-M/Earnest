@@ -4,6 +4,21 @@ import {viewHref} from './routes'
 
 export type MarkRange = (scope: RangeScope, throughSeq: number) => Promise<void>
 
+// The highest sequence in cached list pages (react-query's infinite data for
+// each list). Sequences are global, so any loaded list bounds every scope.
+export function newestListed(lists: unknown[]): number {
+  let newest = 0
+  for (const list of lists) {
+    const pages = (list as {pages?: {entries?: {seq?: unknown}[]}[]} | undefined)?.pages ?? []
+    for (const page of pages) {
+      for (const entry of page.entries ?? []) {
+        if (typeof entry.seq === 'number' && entry.seq > newest) newest = entry.seq
+      }
+    }
+  }
+  return newest
+}
+
 export type ListMenuServices = {
   // The newest article this device knows for the list, read when the item
   // runs: the boundary "Mark all as read" marks through.

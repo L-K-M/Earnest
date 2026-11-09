@@ -82,6 +82,16 @@ describe('ContextMenu', () => {
     expect(document.activeElement).toBe(invoker)
   })
 
+  it('lets Tab leave the menu from the element it was opened from', () => {
+    render(<Harness items={items()} />)
+    const invoker = screen.getByRole('button', {name: 'Rust'})
+    fireEvent.contextMenu(invoker, {clientX: 40, clientY: 50})
+    // Not cancelled, so the browser moves focus on from the invoker.
+    expect(fireEvent.keyDown(screen.getByRole('menu'), {key: 'Tab'})).toBe(true)
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(document.activeElement).toBe(invoker)
+  })
+
   it('closes when the pointer goes elsewhere', () => {
     render(<Harness items={items()} />)
     fireEvent.contextMenu(screen.getByRole('button', {name: 'Rust'}), {clientX: 40, clientY: 50})

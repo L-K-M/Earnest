@@ -1,6 +1,6 @@
 import {describe, expect, it, vi} from 'vitest'
 import {SEPARATOR, type MenuAction, type MenuItem} from './ContextMenu'
-import {articleMenu, listMenu, markUpToHere, type ListMenuServices} from './menus'
+import {articleMenu, listMenu, markUpToHere, newestListed, type ListMenuServices} from './menus'
 import type {Entry, EntryState, Subscription} from './reader'
 
 const subscriptions = [
@@ -112,5 +112,12 @@ describe('markUpToHere', () => {
     const deps = {markRange: vi.fn(), confirm: vi.fn(), notify: vi.fn()}
     expect(markUpToHere(entry, {kind: 'kept', title: 'Kept'}, subscriptions, deps)).toBeNull()
     expect(markUpToHere(entry, {kind: 'edition', title: 'Edition'}, subscriptions, deps)).toBeNull()
+  })
+})
+
+describe('newestListed', () => {
+  it('finds the newest article in any cached list, ignoring empty or odd data', () => {
+    expect(newestListed([undefined, {pages: [{entries: [{seq: 40}, {seq: 90}]}, {}]}, {pages: [{entries: [{seq: 120}, {seq: 'x'}]}]}, {}])).toBe(120)
+    expect(newestListed([])).toBe(0)
   })
 })
