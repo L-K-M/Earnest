@@ -2,7 +2,41 @@ package service
 
 import (
 	"testing"
+
+	"github.com/L-K-M/Earnest/internal/syncmodel"
 )
+
+func TestKeptOutcome(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		status   KeptImportStatus
+		register syncmodel.RegisterName
+		write    syncmodel.Status
+		want     KeptImportStatus
+	}{
+		{"an applied write matches an unchanged article", KeptImportUnchanged, syncmodel.Kept, syncmodel.Applied, KeptImportMatched},
+		{"a created article stays created", KeptImportCreated, syncmodel.Seen, syncmodel.Applied, KeptImportCreated},
+		{"an un-kept article stays unkept when marked read", KeptImportUnkept, syncmodel.Seen, syncmodel.Applied, KeptImportUnkept},
+		{"a later seen write cannot hide a failed keep", KeptImportFailed, syncmodel.Seen, syncmodel.Applied, KeptImportFailed},
+		{"an outranked keep fails", KeptImportUnchanged, syncmodel.Kept, syncmodel.Superseded, KeptImportFailed},
+		{"an outranked read changes nothing", KeptImportMatched, syncmodel.Seen, syncmodel.Superseded, KeptImportMatched},
+		{"a vanished entry is gone", KeptImportUnchanged, syncmodel.Kept, syncmodel.Gone, KeptImportGone},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, message := tc.status, ""
+			if status == KeptImportFailed {
+				message = "not kept: superseded"
+			}
+			got, gotMessage := keptOutcome(status, message, tc.register, tc.write)
+			if got != tc.want {
+				t.Fatalf("status = %s, want %s", got, tc.want)
+			}
+			if got == KeptImportFailed && gotMessage == "" {
+				t.Fatal("a failed article must keep an error")
+			}
+		})
+	}
+}
 
 func TestMatchKept(t *testing.T) {
 	primary, link := []byte("primary-identity"), []byte("link-identity")

@@ -89,7 +89,7 @@ func TestKeptImportAPI(t *testing.T) {
 
 	rec := f.do(t, http.MethodGet, "/v1/entries?view=kept", nil, f.session())
 	requireStatus(t, rec, http.StatusOK)
-	for _, result := range append(first.Results[:1], second.Results[1]) {
+	for _, result := range []service.KeptImportResult{first.Results[0], second.Results[1]} {
 		if !strings.Contains(rec.Body.String(), fmt.Sprintf(`"id":%d`, result.EntryID)) {
 			t.Fatalf("kept view lacks entry %d: %s", result.EntryID, rec.Body.String())
 		}

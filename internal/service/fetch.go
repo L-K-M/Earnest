@@ -433,12 +433,12 @@ func adoptImported(ctx context.Context, tx pgx.Tx, feedID int64, p *ingestChange
 			return false, false, err
 		}
 	}
-	err = tx.QueryRow(ctx, `SELECT id,seq,first_seen_at,deleted_at IS NOT NULL FROM entries
+	err = tx.QueryRow(ctx, `SELECT id,seq,deleted_at IS NOT NULL FROM entries
  WHERE feed_id=$1 AND imported AND NOT id=ANY($6)
  AND (($3<>'' AND (identity_hash=$2 OR guid=$3))
   OR ($4<>'' AND $5<>'' AND url=$4 AND title=$5 AND ($3='' OR coalesce(guid,'')='')))
  ORDER BY coalesce(guid=$3,false) DESC,id LIMIT 1`,
-		feedID, byGUID, p.item.GUID, p.item.URL, p.item.Title, adopted).Scan(&p.id, &p.seq, &p.firstSeen, &deleted)
+		feedID, byGUID, p.item.GUID, p.item.URL, p.item.Title, adopted).Scan(&p.id, &p.seq, &deleted)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, false, nil
 	}

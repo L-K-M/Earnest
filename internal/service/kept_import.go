@@ -706,21 +706,29 @@ func (s *Service) keepImported(ctx context.Context, tx pgx.Tx, a Actor, generati
 		return err
 	}
 	for i, r := range applied {
-		ref := refs[i]
-		result := &results[ref.target.result]
-		switch {
-		case r.Status == syncmodel.Applied && !ref.target.created && result.Status != KeptImportUnkept:
-			result.Status = KeptImportMatched
-		case r.Status == syncmodel.Applied:
-		case r.Status == syncmodel.Gone:
-			result.Status = KeptImportGone
-		case ref.register == syncmodel.Kept:
-			// A newer change in Earnest outranked the import.
-			result.Status = KeptImportFailed
-			result.Error = fmt.Sprintf("not kept: %s", r.Status)
-		}
+		result := &results[refs[i].target.result]
+		result.Status, result.Error = keptOutcome(result.Status, result.Error, refs[i].register, r.Status)
 	}
 	return nil
+}
+
+// keptOutcome folds one state write's result into an article's status. Only
+// an unchanged article becomes matched, so a seen write applied after a kept
+// write that failed cannot report the article as kept, and an un-kept or
+// created article keeps its status.
+func keptOutcome(status KeptImportStatus, message string, register syncmodel.RegisterName, write syncmodel.Status) (KeptImportStatus, string) {
+	switch {
+	case write == syncmodel.Applied && status == KeptImportUnchanged:
+		return KeptImportMatched, message
+	case write == syncmodel.Applied:
+		return status, message
+	case write == syncmodel.Gone:
+		return KeptImportGone, ""
+	case register == syncmodel.Kept:
+		// A newer change in Earnest outranked the import.
+		return KeptImportFailed, fmt.Sprintf("not kept: %s", write)
+	}
+	return status, message
 }
 
 // httpBase returns raw as a base URL when it is an absolute http(s) URL,

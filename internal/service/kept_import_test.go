@@ -483,6 +483,9 @@ func TestImportKept(t *testing.T) {
 			previous = seen
 			n++
 		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
 		if n != total {
 			t.Fatalf("stored %d entries, want %d", n, total)
 		}

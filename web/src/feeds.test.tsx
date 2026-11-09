@@ -297,11 +297,31 @@ describe('Feeds', () => {
     fireEvent.click(button)
     await waitFor(() => expect(calls('/v1/kept:import', 'POST')).toHaveLength(1))
     expect((button as HTMLButtonElement).disabled).toBe(true)
+    expect((input as HTMLInputElement).disabled).toBe(true)
     await act(async () => { finish({results: [{index: 0, status: 'not_subscribed', feed_url: 'https://b.example/rss'}], subscribed: []}) })
     await screen.findByRole('button', {name: 'Subscribe to these feeds and import again'})
     expect(calls('/v1/kept:import', 'POST')).toHaveLength(1)
     fireEvent.change(input, {target: {files: [new window.File(['{"items":[{}]}'], 'other.json', {type: 'application/json'})]}})
     expect(screen.queryByRole('button', {name: 'Subscribe to these feeds and import again'})).toBeNull()
+    expect(screen.queryByText(/skipped because you don/)).toBeNull()
+  })
+
+  it('replaces an earlier report when a retry fails', async () => {
+    let attempt = 0
+    api({
+      '/v1/subscriptions': [],
+      '/v1/folders': [],
+      '/v1/mutes': [],
+      '/v1/kept:import': () => {
+        attempt++
+        return attempt === 1 ? {results: [{index: 0, status: 'not_subscribed', feed_url: 'https://b.example/rss'}], subscribed: []} : Promise.reject(new Error('Server unavailable.'))
+      },
+    })
+    render(<Feeds onChanged={() => {}} />)
+    fireEvent.change(await screen.findByLabelText('Import starred articles'), {target: {files: [new window.File(['{"items":[]}'], 'starred.json', {type: 'application/json'})]}})
+    fireEvent.click(screen.getByRole('button', {name: 'Import starred'}))
+    fireEvent.click(await screen.findByRole('button', {name: 'Subscribe to these feeds and import again'}))
+    await screen.findByText('Server unavailable.')
     expect(screen.queryByText(/skipped because you don/)).toBeNull()
   })
 

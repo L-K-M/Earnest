@@ -211,6 +211,7 @@ function KeptImportTools({busy, act}: {busy: boolean; act: Act}) {
   async function run(read: () => Promise<string>, missing: MissingFeeds) {
     setWorking(true)
     setError('')
+    setReport(null)
     try {
       const contents = await read()
       setText(contents)
@@ -235,8 +236,8 @@ function KeptImportTools({busy, act}: {busy: boolean; act: Act}) {
   const skippedTotal = summary?.skipped.reduce((total, group) => total + group.count, 0) ?? 0
   return <section aria-labelledby="kept-import-heading"><h3 id="kept-import-heading">Starred articles</h3>
     <p>Bring starred articles from another reader into Kept. Export them as Google Reader JSON, for example from FreshRSS or Inoreader.</p>
-    <label>Import starred articles<input type="file" accept=".json,application/json" onChange={e => choose(e.target.files?.[0] ?? null)} /></label>
-    <label><input type="checkbox" checked={subscribe} onChange={e => setSubscribe(e.target.checked)} /> Also subscribe to feeds you don't follow</label>
+    <label>Import starred articles<input type="file" accept=".json,application/json" disabled={working} onChange={e => choose(e.target.files?.[0] ?? null)} /></label>
+    <label><input type="checkbox" checked={subscribe} disabled={working} onChange={e => setSubscribe(e.target.checked)} /> Also subscribe to feeds you don't follow</label>
     <button disabled={busy || working || !file} onClick={() => { if (file) void run(() => readFileText(file), subscribe ? 'subscribe' : 'skip') }}>Import starred</button>
     {error && <p role="alert">{error}</p>}
     {summary && <div role="status">

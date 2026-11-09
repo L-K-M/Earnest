@@ -412,3 +412,20 @@ func TestBriefingJSON(t *testing.T) {
 		t.Fatalf("decoded = %v", decoded)
 	}
 }
+
+func TestKeptResultCell(t *testing.T) {
+	for _, tc := range []struct {
+		result keptImportResult
+		want   string
+	}{
+		{keptImportResult{Status: "failed", Error: "no link"}, "failed: no link"},
+		{keptImportResult{Status: "failed"}, "failed"},
+		{keptImportResult{Status: "not_subscribed", FeedURL: "https://b.example/rss"}, "not subscribed: https://b.example/rss"},
+		{keptImportResult{Status: "not_subscribed"}, "not subscribed"},
+		{keptImportResult{Status: "unkept"}, "unkept"},
+	} {
+		if got := keptResultCell(tc.result); got != tc.want {
+			t.Errorf("keptResultCell(%+v) = %q, want %q", tc.result, got, tc.want)
+		}
+	}
+}

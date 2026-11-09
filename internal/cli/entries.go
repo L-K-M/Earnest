@@ -192,6 +192,9 @@ func (a *app) printKeptImport(report keptImportReport, subscribeMissing bool) {
 func keptResultCell(result keptImportResult) string {
 	switch result.Status {
 	case "failed":
+		if result.Error == "" {
+			return "failed"
+		}
 		return "failed: " + result.Error
 	case "not_subscribed":
 		if result.FeedURL != "" {
