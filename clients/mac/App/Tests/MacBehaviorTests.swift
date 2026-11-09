@@ -335,6 +335,35 @@ import EarnestKit
         XCTAssertEqual(IntegerField.clamp(80, to: 62...72), 72)
     }
 
+    func testIntegerFieldKeepsAStepperChangeMadeWhileFocused() {
+        var editing = IntegerEditing(value: 68)
+        // The stepper moves the value while the field has focus.
+        editing.valueChanged(to: 69, focused: true)
+        var value: Int64 = 69
+        editing.commit(&value, in: 62...72)
+        XCTAssertEqual(value, 69, "An untouched field does not write its old text back")
+        XCTAssertEqual(editing.text, "69")
+        editing.typed("7")
+        editing.valueChanged(to: 70, focused: true)
+        XCTAssertEqual(editing.text, "7", "Typing in progress is not replaced")
+        editing.commit(&value, in: 62...72)
+        XCTAssertEqual(value, 62, "A committed 7 clamps to the range")
+    }
+
+    func testAStaleListFocusRequestDoesNotStealTheNextSearch() throws {
+        let model = try makeModel()
+        defer { model.signOut() }
+        let window = WindowModel(app: model)
+        window.go(to: .later)
+        window.search.query = "garden"
+        window.submitSearch()
+        window.endSearch()
+        // Later has no list to take the request; then a new search starts.
+        window.search.query = "frost"
+        window.submitSearch()
+        XCTAssertFalse(window.takeListFocusRequest(), "The search field keeps the keyboard")
+    }
+
     func testArticleRowsCarryMarkersAndLinks() throws {
         let model = try makeModel()
         defer { model.signOut() }

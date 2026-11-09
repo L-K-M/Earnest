@@ -679,6 +679,8 @@ import AppKit
     /// the current section, remembering where to return.
     func submitSearch() {
         guard search.canSearch else { return }
+        // A new search keeps the keyboard in the search field.
+        listFocusPending = false
         if section != .search {
             sectionBeforeSearch = section
             selectFromList(nil)
@@ -690,6 +692,7 @@ import AppKit
 
     /// Open a saved search from the sidebar.
     func openSavedSearch(_ saved: APISavedSearch) {
+        listFocusPending = false
         if section != .search {
             sectionBeforeSearch = section
             selectFromList(nil)

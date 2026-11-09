@@ -152,16 +152,48 @@ import EarnestKit
     }
 }
 
-/// A whole number typed or stepped within a range. The text is yours while
-/// you type, so incomplete values like "6" on the way to "68" are fine; it
-/// commits on Return or when focus leaves, clamped to the range, and Escape
-/// puts back the current value. The stepper applies at once.
+/// The text of a number field while it is edited. Text you type is kept,
+/// even incomplete, until it is committed; a value changed by the stepper or
+/// a sync replaces the text unless you have typed since the last commit, and
+/// committing untouched text never writes an old value back.
+struct IntegerEditing: Equatable {
+    private(set) var text: String
+    private(set) var edited = false
+
+    init(value: Int64) { text = String(value) }
+
+    mutating func typed(_ text: String) {
+        self.text = text
+        edited = true
+    }
+
+    mutating func valueChanged(to value: Int64, focused: Bool) {
+        guard !(focused && edited) else { return }
+        text = String(value)
+    }
+
+    mutating func commit(_ value: inout Int64, in range: ClosedRange<Int64>) {
+        if edited, let number = IntegerField.parse(text, in: range), number != value { value = number }
+        edited = false
+        text = String(value)
+    }
+
+    mutating func revert(to value: Int64) {
+        edited = false
+        text = String(value)
+    }
+}
+
+/// A whole number typed or stepped within a range. Typing can pass through
+/// incomplete values like "6" on the way to "68"; the field commits on
+/// Return, Tab or when focus leaves, clamped to the range, and Escape puts
+/// back the current value. The stepper applies at once.
 struct IntegerField: View {
     let title: String
     @Binding var value: Int64
     let range: ClosedRange<Int64>
     let unit: String
-    @SwiftUI.State private var text = ""
+    @SwiftUI.State private var editing = IntegerEditing(value: 0)
     @FocusState private var focused: Bool
 
     init(_ title: String, value: Binding<Int64>, in range: ClosedRange<Int64>, unit: String) {
@@ -184,7 +216,7 @@ struct IntegerField: View {
     var body: some View {
         LabeledContent(title) {
             HStack(spacing: 6) {
-                TextField(title, text: $text)
+                TextField(title, text: Binding(get: { editing.text }, set: { editing.typed($0) }))
                     .labelsHidden()
                     .multilineTextAlignment(.trailing)
                     .frame(width: 52)
@@ -196,7 +228,7 @@ struct IntegerField: View {
                         return .ignored
                     }
                     .onKeyPress(.escape) {
-                        text = String(value)
+                        editing.revert(to: value)
                         return .handled
                     }
                 Stepper(title, value: Binding(get: { value }, set: { value = Self.clamp($0, to: range) }), in: range)
@@ -204,14 +236,14 @@ struct IntegerField: View {
                 Text(unit).foregroundStyle(.secondary)
             }
         }
-        .onAppear { text = String(value) }
+        .onAppear { editing.revert(to: value) }
         .onChange(of: focused) { if !focused { commit() } }
-        // Values from the stepper or a sync replace the text unless you are typing.
-        .onChange(of: value) { if !focused { text = String(value) } }
+        .onChange(of: value) { editing.valueChanged(to: value, focused: focused) }
     }
 
     private func commit() {
-        if let number = Self.parse(text, in: range), number != value { value = number }
-        text = String(value)
+        var committed = value
+        editing.commit(&committed, in: range)
+        if committed != value { value = committed }
     }
 }
