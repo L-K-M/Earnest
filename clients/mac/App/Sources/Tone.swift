@@ -15,5 +15,10 @@ enum Tone: String {
 
     var color: Color { Color(rawValue) }
 
-    var nsColor: NSColor { NSColor(named: rawValue)! }
+    var nsColor: NSColor {
+        guard let color = NSColor(named: rawValue) else {
+            fatalError("Missing colour set \(rawValue) in the asset catalog")
+        }
+        return color
+    }
 }

@@ -96,7 +96,7 @@ export function Reader({entry, subscription, settings, actions, onClose, onSetti
     <div className="reader-scroll">
       <header className="article-header">
         <h2 id={`${ids}-title`} ref={title} tabIndex={-1} dir="auto">{entry.title || 'Untitled'}</h2>
-        <p className="article-meta"><span dir="auto">{subscription?.title || 'Feed'}</span>{entry.author && <> · <span dir="auto">{entry.author}</span></>}{date && <> · <time dateTime={date}>{longDate(date)}</time></>}{shelf && <> · <span className="chip" data-tone={shelf === 'Done' ? 'green' : 'amber'}>{shelf}</span></>}{state.kept.value === true && <> · <span className="chip" data-tone="plum">Kept</span></>}</p>
+        <p className="article-meta"><span dir="auto">{subscription?.title || 'Feed'}</span>{entry.author && <> · <span dir="auto">{entry.author}</span></>}{date && <> · <time dateTime={date}>{longDate(date)}</time></>}{shelf && <> · <span className="chip" data-tone={state.shelf.value === 'done' ? 'green' : 'amber'}>{shelf}</span></>}{state.kept.value === true && <> · <span className="chip" data-tone="plum">Kept</span></>}</p>
       </header>
       <Summary entryID={entry.id}/>
       {error && <p role="alert" className="banner problem inline">{error} <button type="button" className="quiet" onClick={() => setError('')}>Dismiss</button></p>}

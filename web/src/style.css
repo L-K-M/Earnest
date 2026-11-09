@@ -162,7 +162,9 @@ dd {margin: 0}
 .login .wordmark {height: 2.67rem}
 
 /* Sign in */
-.login {max-width: 25rem; margin: 0 auto; padding: max(8vh, var(--s6)) var(--s4) var(--s6)}
+/* The glow sits behind the sign-in column, which isolates it so a page
+   background can never paint over it. */
+.login {isolation: isolate; max-width: 25rem; margin: 0 auto; padding: max(8vh, var(--s6)) var(--s4) var(--s6)}
 .login::before {content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none; background: radial-gradient(60rem 32rem at 50% -8rem, var(--glow), transparent 70%)}
 .login form {position: relative; overflow: hidden; padding: var(--s5); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r3); box-shadow: var(--shadow)}
 .login form::before {content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; background: var(--ribbon)}

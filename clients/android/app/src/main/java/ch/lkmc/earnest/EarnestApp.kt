@@ -306,6 +306,7 @@ private fun MainScaffold(
                 selectedContainerColor = indicator,
                 selectedIconColor = tone,
                 unselectedIconColor = tone,
+                selectedTextColor = scheme.onSurface,
             ),
         )
     }.toMap()

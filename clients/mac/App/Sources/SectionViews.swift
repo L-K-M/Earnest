@@ -71,7 +71,11 @@ extension FeedInfo {
         Group {
             if model.feeds.isEmpty {
                 ContentUnavailableView {
-                    Label("No Subscriptions", systemImage: Section.feeds.icon)
+                    Label {
+                        Text("No Subscriptions")
+                    } icon: {
+                        Image(systemName: Section.feeds.icon).foregroundStyle(Tone.blue.color)
+                    }
                 } description: {
                     Text("Subscribe to a feed by its address, or import an OPML file from another reader.")
                 } actions: {
@@ -236,8 +240,15 @@ extension FeedInfo {
             }
             .formStyle(.grouped)
         } else {
-            ContentUnavailableView("No Feed Selected", systemImage: Section.feeds.icon,
-                                   description: Text("Select a subscription to see its details."))
+            ContentUnavailableView {
+                Label {
+                    Text("No Feed Selected")
+                } icon: {
+                    Image(systemName: Section.feeds.icon).foregroundStyle(Tone.blue.color)
+                }
+            } description: {
+                Text("Select a subscription to see its details.")
+            }
         }
     }
 
@@ -313,8 +324,15 @@ extension FeedInfo {
 
     var body: some View {
         if model.activityGroups.isEmpty {
-            ContentUnavailableView("No Agent Activity", systemImage: Section.activity.icon,
-                                   description: Text("Changes your agents make, and the notifications they send, appear here."))
+            ContentUnavailableView {
+                Label {
+                    Text("No Agent Activity")
+                } icon: {
+                    Image(systemName: Section.activity.icon).foregroundStyle(Tone.plum.color)
+                }
+            } description: {
+                Text("Changes your agents make, and the notifications they send, appear here.")
+            }
         } else {
             List(selection: Binding(get: { window.selectedActivityID }, set: { id in
                 window.selectActivity(model.activityGroups.flatMap(\.items).first { $0.id == id })
