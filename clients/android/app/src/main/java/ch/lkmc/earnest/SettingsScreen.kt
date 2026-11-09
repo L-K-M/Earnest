@@ -373,7 +373,9 @@ private fun KeptImportReportView(report: KeptImportReport, busy: Boolean, onRetr
         if (summary.labelled > 0) {
             Text("Added the export's labels to ${summary.labelled} ${if (summary.labelled == 1) "article" else "articles"}.")
         }
-        if (summary.unkept > 0) Text("${summary.unkept} left out because you removed them from Kept.")
+        if (summary.unkept > 0) {
+            Text("${summary.unkept} left out because you removed ${if (summary.unkept == 1) "it" else "them"} from Kept.")
+        }
         if (summary.gone > 0) Text("${summary.gone} no longer available in Earnest.")
         if (summary.skipped.isNotEmpty()) {
             val skippedTotal = summary.skipped.sumOf { it.count }
