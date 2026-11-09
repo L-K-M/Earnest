@@ -317,17 +317,19 @@ func prepareKept(index int, in KeptImportItem, receipt time.Time) (keptWork, err
 	if len(in.FeedTitle) <= 1024 {
 		feedMeta.Title = in.FeedTitle
 	}
+	ingested := IngestItem{
+		IdentityHash: hex.EncodeToString(identities[0]), GUID: guid, URL: link, Title: in.Title, Author: in.Author,
+		PublishedAt: in.PublishedAt, UpdatedAt: in.UpdatedAt, ContentHash: hex.EncodeToString(content), Language: "simple",
+		ContentHTML: doc.HTML, ContentText: sanitize.Text(doc.HTML), SanitizerVersion: int(doc.Version), ContentSource: source,
+		Enclosures: enclosures, Image: imageEnclosure(enclosures),
+	}
 	return keptWork{
 		index:    index,
 		feedURL:  feedURL,
 		feedMeta: feedMeta,
 		change: ingestChange{
-			item: IngestItem{
-				IdentityHash: hex.EncodeToString(identities[0]), GUID: guid, URL: link, Title: in.Title, Author: in.Author,
-				PublishedAt: in.PublishedAt, UpdatedAt: in.UpdatedAt, ContentHash: hex.EncodeToString(content), Language: "simple",
-				ContentHTML: doc.HTML, ContentText: sanitize.Text(doc.HTML), SanitizerVersion: int(doc.Version), ContentSource: source,
-				Enclosures: enclosures, Image: imageEnclosure(enclosures),
-			},
+			item:        ingested,
+			candidates:  thumbnailCandidates(ingested),
 			excerptOnly: excerptOnly,
 			identity:    identities[0],
 			content:     content,

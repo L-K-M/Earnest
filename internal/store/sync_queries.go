@@ -115,7 +115,9 @@ func jsonText(body json.RawMessage, key string) string {
 // PageSubscriptions pages a user's subscription objects including tombstones.
 // The feed projection never includes credentials.
 func PageSubscriptions(ctx context.Context, tx pgx.Tx, user, afterID int64, limit int) (Page, error) {
-	return collectPage(ctx, tx, `SELECT to_jsonb(s) FROM (
+	// icon_url matches the REST projection (service iconPath) and is left out
+	// while no icon is stored, as there.
+	return collectPage(ctx, tx, `SELECT CASE WHEN s.icon_url IS NULL THEN to_jsonb(s) - 'icon_url' ELSE to_jsonb(s) END FROM (
   SELECT s.id, s.feed_id, coalesce(s.title_override,f.title) AS title,
     f.url, coalesce(f.site_url,'') AS site_url, coalesce(s.folder_id,0) AS folder_id, s.cadence,
     CASE s.full_text_mode WHEN 'always' THEN 'always' WHEN 'never' THEN 'none' ELSE '' END AS extract,
@@ -125,7 +127,8 @@ func PageSubscriptions(ctx context.Context, tx pgx.Tx, user, afterID int64, limi
     jsonb_build_object('last_success_at',f.last_success_at,'last_attempt_at',f.last_attempt_at,
       'next_fetch_at',f.next_fetch_at,'error_class',coalesce(f.error_class,''),'error_message',coalesce(f.error_message,''),
       'consecutive_failures',f.consecutive_failures,'http_status',coalesce(f.last_http_status,0),
-      'posts_per_day',f.posts_per_day,'firehose',f.posts_per_day>20) AS health
+      'posts_per_day',f.posts_per_day,'firehose',f.posts_per_day>20) AS health,
+    (SELECT '/v1/subscriptions/' || s.id || '/icon?v=' || i.etag FROM feed_icons i WHERE i.feed_id = s.feed_id AND i.body IS NOT NULL) AS icon_url
   FROM subscriptions s JOIN feeds f ON f.id = s.feed_id
   WHERE s.user_id = $1 AND s.id > $2 ORDER BY s.id LIMIT $3) s`,
 		[]any{user, afterID, limit + 1}, limit,
@@ -184,10 +187,14 @@ func PagePositions(ctx context.Context, tx pgx.Tx, user, afterPrincipal int64, a
 // subscriptions first seen since the cutoff, including retention tombstones.
 // Each carries this user's entry_revisions stamp and no body columns.
 func PageEntries(ctx context.Context, tx pgx.Tx, user int64, since time.Time, afterID int64, limit int) (Page, error) {
-	return collectPage(ctx, tx, `SELECT to_jsonb(e) FROM (
+	// thumbnail_url matches the REST projection (service thumbnailPath) and
+	// is left out while no thumbnail is stored, as there.
+	return collectPage(ctx, tx, `SELECT CASE WHEN e.thumbnail_url IS NULL THEN to_jsonb(e) - 'thumbnail_url' ELSE to_jsonb(e) END FROM (
   SELECT e.id, s.id AS subscription_id, e.feed_id, e.seq, e.guid, e.url, e.title, e.author,
     e.published_at, e.updated_at, e.first_seen_at, e.language, e.enclosures,
-    COALESCE(r.rev, 0) AS rev, (e.deleted_at IS NOT NULL) AS deleted
+    COALESCE(r.rev, 0) AS rev, (e.deleted_at IS NOT NULL) AS deleted,
+    (SELECT '/v1/entries/' || i.entry_id || '/thumbnail?v=' || i.etag FROM entry_images i
+      WHERE i.entry_id = e.id AND i.body IS NOT NULL AND e.deleted_at IS NULL) AS thumbnail_url
   FROM entries e
     JOIN subscriptions s ON s.feed_id = e.feed_id AND s.user_id = $1 AND s.deleted_at IS NULL
     LEFT JOIN entry_revisions r ON r.user_id = $1 AND r.entry_id = e.id

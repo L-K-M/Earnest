@@ -743,6 +743,11 @@ public final class SyncEngine {
                 var incoming = object
                 incoming.fields = data.objects[index].fields.merging(object.fields) { _, value in value }
                 data.objects[index] = incoming
+            } else if object.rev == data.objects[index].rev {
+                // A change carries a protocol object and a native projection
+                // at one revision, and the object merges first; the
+                // projection's extra fields, such as icon_url, still apply.
+                data.objects[index].fields.merge(object.fields) { _, value in value }
             }
         } else {
             data.objects.append(object)

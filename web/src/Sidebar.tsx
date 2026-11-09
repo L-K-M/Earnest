@@ -2,6 +2,7 @@ import {useState, type MouseEvent as ReactMouseEvent} from 'react'
 import type {components} from './api.generated'
 import {Brand} from './Brand'
 import {MENU_ATTRIBUTE} from './ContextMenu'
+import {FeedIcon} from './EntryMedia'
 import {explainHealth, groupByFolder} from './feeds'
 import {Icon, type IconName} from './Icon'
 import type {Subscription, View} from './reader'
@@ -31,20 +32,6 @@ function readCollapsed(): Set<number> {
   } catch {
     return new Set()
   }
-}
-
-// A letter mark for a feed. The swatch index comes from the title so a feed
-// keeps the same mark everywhere; the letter carries the meaning, not the
-// colour.
-export function feedSwatch(title: string): number {
-  let hash = 0
-  for (const char of title) hash = (hash * 31 + (char.codePointAt(0) ?? 0)) % 7
-  return hash
-}
-
-export function FeedMark({title}: {title: string}) {
-  const letter = Array.from(title.trim())[0]?.toLocaleUpperCase() ?? '?'
-  return <span className="feed-mark" aria-hidden="true" data-swatch={feedSwatch(title)}>{letter}</span>
 }
 
 function Count({value}: {value?: number}) {
@@ -86,16 +73,16 @@ export function Sidebar({route, subscriptions, folders, labels, savedSearches, c
   const groups = groupByFolder(subscriptions, folders)
   const filed = groups.filter(group => group.folder !== null)
   const unfiled = groups.find(group => group.folder === null)?.subscriptions ?? []
-  const nav = (props: {to: string; icon?: IconName; label: string; current?: 'page'; count?: number; intent?: () => void; mark?: string; warning?: string | null; tone?: Tone; menu?: View}) => {
+  const nav = (props: {to: string; icon?: IconName; label: string; current?: 'page'; count?: number; intent?: () => void; feed?: Subscription; warning?: string | null; tone?: Tone; menu?: View}) => {
     const {menu} = props
     return <Link to={props.to} className="nav-link" aria-current={props.current} data-tone={props.tone} onClick={onNavigate} onIntent={props.intent} onContextMenu={menu && onMenu ? event => onMenu(event, menu) : undefined} {...(menu && onMenu ? {[MENU_ATTRIBUTE]: ''} : {})}>
-      {props.mark !== undefined ? <FeedMark title={props.mark} /> : props.icon && <Icon name={props.icon} />}
+      {props.feed ? <FeedIcon subscription={props.feed} title={props.label} /> : props.icon && <Icon name={props.icon} />}
       <span className="nav-label">{props.label}</span>
       {props.warning && <span className="nav-warning" title={props.warning}><Icon name="warning" size={14} /><span className="sr-only">, failing: {props.warning}</span></span>}
       {props.count ? ' ' : null}<Count value={props.count} />
     </Link>
   }
-  const feedLink = (sub: Subscription) => <li key={sub.id}>{nav({to:viewHref({kind:'feed', id:sub.id}), label:sub.title || sub.url, mark:sub.title || sub.url, current:current(`river:feed:${sub.id}`), count:feedCount(sub), warning:explainHealth(sub.health), menu:{kind:'feed', id:sub.id, title:sub.title || sub.url}})}</li>
+  const feedLink = (sub: Subscription) => <li key={sub.id}>{nav({to:viewHref({kind:'feed', id:sub.id}), label:sub.title || sub.url, feed:sub, current:current(`river:feed:${sub.id}`), count:feedCount(sub), warning:explainHealth(sub.health), menu:{kind:'feed', id:sub.id, title:sub.title || sub.url}})}</li>
   const activeLabels = labels.filter(label => !label.deleted)
 
   return <nav className="sidebar" aria-label="Earnest">

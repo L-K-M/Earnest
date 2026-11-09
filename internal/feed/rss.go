@@ -82,7 +82,10 @@ func parseRSSItem(n *node, feedLang string, rdf bool, feedLink, feedURL string) 
 		it.Language = lang
 	}
 
-	it.Title = plainTitle(nodeText(n.child("title")))
+	it.Title, it.identityTitle = titleTexts(nodeText(n.child("title")))
+	if it.identityTitle == it.Title {
+		it.identityTitle = ""
+	}
 
 	if guid := n.child("guid"); guid != nil {
 		it.GUID = cleanText(textContent(guid))
