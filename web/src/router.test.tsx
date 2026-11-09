@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import {afterEach, beforeEach, expect, it, vi} from 'vitest'
+import {useRef} from 'react'
 import {act, cleanup, fireEvent, render, screen} from '@testing-library/react'
-import {initializeHistory, Link, navigate, openedFrom, returnTo, useBlocker, useLocation} from './router'
+import {initializeHistory, Link, navigate, openedFrom, returnTo, useBlocker, useLocation, useScrollRestoration} from './router'
 
 function Where() {
   const location = useLocation()
@@ -10,6 +11,15 @@ function Where() {
 function Guarded({active}: {active: boolean}) {
   const release = useBlocker(active, 'Discard changes?')
   return <button onClick={release}>Release</button>
+}
+function ScrollBox() {
+  const location = useLocation()
+  const ref = useRef<HTMLDivElement>(null)
+  useScrollRestoration(ref, location, 'test')
+  return <div ref={ref} data-testid="scroll" />
+}
+async function frames(count = 2) {
+  await act(async () => { for (let i = 0; i < count; i++) await new Promise(resolve => requestAnimationFrame(() => resolve(null))) })
 }
 // history.go is asynchronous; wait for the popstate it produces.
 async function popTo(steps: number) {
@@ -80,6 +90,23 @@ it('undoes a Back the reader declines to take', async () => {
   await act(async () => {await new Promise(resolve => window.setTimeout(resolve, 20))})
   expect(location.pathname).toBe('/rules/new')
   rerender(<Guarded active={false} />)
+})
+
+it('restores a saved scroll position of zero', async () => {
+  render(<ScrollBox />)
+  const node = screen.getByTestId('scroll')
+  const scrollTo = vi.fn()
+  Object.defineProperty(node, 'scrollTo', {value: scrollTo, writable: true})
+  act(() => { navigate('/a') })
+  act(() => { node.scrollTop = 0; node.dispatchEvent(new Event('scroll')) })
+  await frames()
+  act(() => { navigate('/b') })
+  act(() => { node.scrollTop = 800; node.dispatchEvent(new Event('scroll')) })
+  await frames()
+  scrollTo.mockClear()
+  await popTo(-1)
+  await frames(3)
+  expect(scrollTo).toHaveBeenCalledWith({top: 0})
 })
 
 it('refuses to navigate anywhere but http and https', () => {

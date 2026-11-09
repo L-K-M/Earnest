@@ -70,6 +70,18 @@ it('blocks saving an invalid time zone and shows how to fix it', async () => {
   fireEvent.click(screen.getByText('Save push settings'))
   expect(vi.mocked(request).mock.calls.filter(([path, options]) => path === '/v1/push-settings' && options?.method === 'PUT')).toHaveLength(0)
 })
+it('clears a saved status when an invalid time zone blocks the next save', async () => {
+  vi.mocked(request).mockImplementation(async (path, options) => options?.method ? {} : path === '/v1/push-settings' ? {timezone:'UTC',show_text:false,token_set:false,rev:1} : [])
+  mount(<Push />)
+  await screen.findByLabelText('Timezone')
+  fireEvent.change(screen.getByLabelText('ntfy topic'), {target:{value:'news'}})
+  fireEvent.click(screen.getByText('Save push settings'))
+  await screen.findByText('Push settings saved.')
+  fireEvent.change(screen.getByLabelText('Timezone'), {target:{value:'Not/AZone'}})
+  fireEvent.click(screen.getByText('Save push settings'))
+  expect(screen.queryByText('Push settings saved.')).toBeNull()
+  expect(vi.mocked(request).mock.calls.filter(([path, options]) => path === '/v1/push-settings' && options?.method === 'PUT')).toHaveLength(1)
+})
 it('shows an empty state when there are no devices', async () => {
   vi.mocked(request).mockImplementation(async (path, options) => options?.method ? {} : path === '/v1/push-settings' ? {timezone:'UTC',show_text:false,token_set:false,rev:1} : [])
   mount(<Push />)

@@ -198,3 +198,20 @@ it('allows stored-vector similarity while the embedding budget is paused',async 
   fireEvent.click(await screen.findByRole('button',{name:'More like this'}))
   expect(await screen.findByText('Similar articles are paused.')).toBeTruthy()
 })
+
+it('keeps unsubmitted search text when a filter changes',() => {
+  const onRoute = vi.fn()
+  const client = new QueryClient({defaultOptions:{queries:{retry:false}}})
+  vi.mocked(request).mockImplementation(async path => {
+    if (path === '/v1/pipeline') return {embed:'disabled',classify:'disabled',semantic:'disabled',watch:'disabled'}
+    return {matches:[]}
+  })
+  const subscriptions = [{id:5,feed_id:1,title:'Publisher',url:'https://a.example',deleted:false} as never]
+  const element = <Search route={{q:'funding'}} onRoute={onRoute} onOpen={vi.fn()} subscriptions={subscriptions}/>
+  const {rerender} = render(<QueryClientProvider client={client}>{element}</QueryClientProvider>)
+  fireEvent.change(screen.getByLabelText('Search your feeds'),{target:{value:'newer'}})
+  fireEvent.change(screen.getByLabelText('Feed'),{target:{value:'5'}})
+  expect(onRoute).toHaveBeenCalledWith({q:'funding',feed:5},true)
+  rerender(<QueryClientProvider client={client}><Search route={{q:'funding',feed:5}} onRoute={onRoute} onOpen={vi.fn()} subscriptions={subscriptions}/></QueryClientProvider>)
+  expect((screen.getByLabelText('Search your feeds') as HTMLInputElement).value).toBe('newer')
+})

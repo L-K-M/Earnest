@@ -253,7 +253,8 @@ export function useScrollRestoration(container: RefObject<HTMLElement | null>, c
     }
     if (current.action === 'replace') return
     const top = savedScroll()[current.key]
-    if (!top) return
+    // A stored 0 is a real position (the top of the page), not an absent one.
+    if (top === undefined) return
     return whenPresent(() => node.scrollHeight - node.clientHeight >= top ? node : null, target => { target.scrollTo?.({top}) }, 30)
   }, [container, current.key, current.hash, current.action, scope])
 }

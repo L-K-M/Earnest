@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import {afterEach,beforeEach,expect,it,vi} from 'vitest'
-import {cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react'
+import {cleanup,fireEvent,render,screen,waitFor,act} from '@testing-library/react'
 import {fuzzyCommands,Palette,type Command} from './Palette'
 
 beforeEach(() => {
@@ -81,6 +81,23 @@ it('leaves Enter and arrows to an input method while it composes',async () => {
   expect(all[0].run).not.toHaveBeenCalled()
   expect(screen.getByRole('dialog',{name:'Command palette'})).toBeTruthy()
 })
+it('returns focus to the help trigger after closing stacked dialogs',() => {
+  render(<Palette commands={commands()} shortcuts/>)
+  const trigger = screen.getByRole('button',{name:/Keyboard help/})
+  trigger.focus()
+  fireEvent.keyDown(document.body,{key:'?'})
+  expect(screen.getByRole('dialog',{name:'Keyboard shortcuts'})).toBeTruthy()
+  // A real modal dialog takes focus when it opens; the polyfill does not.
+  screen.getByRole('button',{name:'Close help'}).focus()
+  fireEvent.keyDown(document.body,{key:'k',ctrlKey:true})
+  expect(screen.getByRole('dialog',{name:'Command palette'})).toBeTruthy()
+  const palette = screen.getByRole('dialog',{name:'Command palette'}) as HTMLDialogElement
+  act(() => { palette.close() })
+  const help = screen.getByRole('dialog',{name:'Keyboard shortcuts'}) as HTMLDialogElement
+  act(() => { help.close() })
+  expect(document.activeElement).toBe(trigger)
+})
+
 it('closes the shortcut help with a second ? pressed inside it',() => {
   render(<Palette commands={commands()} shortcuts/>)
   fireEvent.keyDown(document.body,{key:'?'})
