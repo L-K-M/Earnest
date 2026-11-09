@@ -3,7 +3,9 @@ import GRDB
 import EarnestKit
 
 // SQLite transactions make a cache snapshot and its cursor durable together.
-final class Cache: SyncStore {
+// The database queue serializes every access and the identity key never
+// changes, so the cache may be used off the main actor.
+final class Cache: SyncStore, @unchecked Sendable {
     static let articleLimit = 200
     static let mediaLimit = 2000
     private let db: DatabaseQueue

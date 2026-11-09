@@ -53,6 +53,30 @@ import GRDB
         ContentHTTP.assertFinished()
     }
 
+    // Regression: a load that fails (here a 500 and a dropped connection)
+    // waits before it is retried, so a broken image does not cost a request
+    // each time its row scrolls past; a 404 is remembered for the session.
+    func testFailedLoadsWaitBeforeRetryAndMissesAreRemembered() async throws {
+        let session = ContentHTTP.install([
+            .init(path: "/v1/entries/9/thumbnail", status: 500, body: "{}"),
+            .init(path: "/v1/entries/10/thumbnail", status: 404, body: "{}"),
+        ])
+        defer { session.invalidateAndCancel() }
+        let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: ContentTokens(), session: session)
+        let store = MediaStore(identity: "account", api: api)
+        let broken = await store.image(for: "/v1/entries/9/thumbnail")
+        XCTAssertNil(broken)
+        let again = await store.image(for: "/v1/entries/9/thumbnail")
+        XCTAssertNil(again)
+        let absent = await store.image(for: "/v1/entries/10/thumbnail")
+        XCTAssertNil(absent)
+        let absentAgain = await store.image(for: "/v1/entries/10/thumbnail")
+        XCTAssertNil(absentAgain)
+        XCTAssertNil(store.cachedImage(for: "/v1/entries/9/thumbnail"))
+        // Each path was requested once; a second request would fail the stub.
+        ContentHTTP.assertFinished()
+    }
+
     func testEntryCellHeightGrowsOnlyForAThumbnailRow() throws {
         let plain = EntryRow(id: 1, title: "Title", subtitle: "Feed", unread: true)
         let plainHeight = EntryCell.height(for: plain, width: 300)

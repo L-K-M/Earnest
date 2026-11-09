@@ -124,7 +124,7 @@ public struct SyncEntry: Codable, Equatable, Sendable {
     public var rev: Int64
     public var deleted: Bool
     public var hasBody: Bool
-    /// Whether the row can be listed: it has a body, or kept the title and
+    /// Whether the row can be listed: it has a body, or kept the title or
     /// link of an earlier one when a bodyless change, such as a new
     /// thumbnail, raised its revision. Such a row stays listed while it
     /// waits for the REST refresh that restores its body.

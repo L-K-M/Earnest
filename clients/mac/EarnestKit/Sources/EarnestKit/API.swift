@@ -197,7 +197,7 @@ private let opmlDocumentLimit = 16 * 1024 * 1024
 let keptImportLimit = 64 * 1024 * 1024
 
 /// The largest icon or thumbnail body accepted.
-private let mediaLimit = 2 * 1024 * 1024
+private let mediaBodyLimit = 2 * 1024 * 1024
 
 private final class RejectRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
@@ -336,7 +336,7 @@ public final class EarnestAPI: Sendable {
         let type = response.value(forHTTPHeaderField: "Content-Type")?.split(separator: ";").first?
             .trimmingCharacters(in: .whitespaces).lowercased()
         guard type == "image/png" || type == "image/jpeg",
-              !data.isEmpty, data.count <= mediaLimit else { throw APIError.invalidResponse }
+              !data.isEmpty, data.count <= mediaBodyLimit else { throw APIError.invalidResponse }
         return data
     }
     public func mutes() async throws -> [APIValue] {

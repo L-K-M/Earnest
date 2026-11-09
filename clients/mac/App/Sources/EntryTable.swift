@@ -387,8 +387,8 @@ final class EntryCell: NSTableCellView {
         updateMarks()
         iconPath = row.icon
         thumbPath = row.thumbnail
-        feedIcon.image = nil
-        thumb.image = nil
+        feedIcon.image = row.icon.flatMap { media?.cachedImage(for: $0) }
+        thumb.image = row.thumbnail.flatMap { media?.cachedImage(for: $0) }
         feedIcon.isHidden = row.icon == nil
         thumb.isHidden = row.thumbnail == nil
         loadImages(media)
@@ -405,14 +405,14 @@ final class EntryCell: NSTableCellView {
     /// applies a result only while it still shows the path it asked for.
     private func loadImages(_ media: MediaStore?) {
         guard let media else { return }
-        if let path = iconPath {
+        if let path = iconPath, feedIcon.image == nil {
             Task { [weak self] in
                 let image = await media.image(for: path)
                 guard let self, self.iconPath == path else { return }
                 self.feedIcon.image = image
             }
         }
-        if let path = thumbPath {
+        if let path = thumbPath, thumb.image == nil {
             Task { [weak self] in
                 let image = await media.image(for: path)
                 guard let self, self.thumbPath == path else { return }
@@ -437,8 +437,9 @@ final class EntryCell: NSTableCellView {
                                 width: textWidth - iconSpace, height: subtitleHeight)
         feedIcon.frame = NSRect(x: inset.left, y: subtitle.frame.minY + (subtitleHeight - Self.iconSize) / 2,
                                 width: Self.iconSize, height: Self.iconSize)
-        // Top-aligned with the title, to the left of the marks column.
-        thumb.frame = NSRect(x: bounds.width - inset.right - Self.markWidth - Self.thumbSpace,
+        // Top-aligned with the title, centred in its slot so it keeps a gap
+        // from both the title and the marks column.
+        thumb.frame = NSRect(x: bounds.width - inset.right - Self.markWidth - Self.thumbSpace + (Self.thumbSpace - Self.thumbSize) / 2,
                              y: top - Self.thumbSize, width: Self.thumbSize, height: Self.thumbSize)
         let lineHeight = ceil(Self.titleFont.ascender - Self.titleFont.descender)
         dot.frame = NSRect(x: 5, y: top - lineHeight / 2 - 4, width: 8, height: 8)
