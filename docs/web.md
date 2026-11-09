@@ -31,6 +31,10 @@ placeholder until the web bundle has been copied into `internal/web/dist`.
    your place. Lists use ingest sequence, with
    explicit earlier/later pagination and an independent resume position per view.
    Edition groups by subscription ID, then sequence, for deterministic order.
+   Each row shows the feed's icon, or its letter mark when the site has none,
+   and a square thumbnail when the article has an image. Earnest downloads
+   and shrinks both when the feed and the article arrive and serves its own
+   copies, so showing a list never contacts a publisher.
 4. Open an article to read its publisher title, source, date and original link,
    followed by the existing sandboxed content iframe, sized to the reading pane
    so the article scrolls in one place. The pane takes the article's theme.
