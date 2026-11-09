@@ -10,7 +10,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalView
@@ -40,19 +42,22 @@ fun Context.setThemeSetting(setting: ThemeSetting) {
 
 // Earnest's reading palette: a warm paper surface with ink text and the
 // wordmark's teal accent in light mode, and a dark ink surface with the cool
-// brand highlight in dark mode. The stock Material 3 purple scheme is not
-// used anywhere.
+// brand highlight in dark mode. The warm secondary and tertiary roles come
+// from the app icon, so the stock Material 3 purple scheme is not used
+// anywhere.
 internal val LightColors = lightColorScheme(
     primary = Color(0xFF07566E),
     onPrimary = Color(0xFFFFFFFF),
     primaryContainer = Color(0xFFD3E4EA),
     onPrimaryContainer = Color(0xFF0A2A33),
-    secondary = Color(0xFF526050),
+    secondary = Color(0xFFAF4303),
     onSecondary = Color(0xFFFFFFFF),
-    secondaryContainer = Color(0xFFD5E5D3),
-    onSecondaryContainer = Color(0xFF1F2B1F),
-    tertiary = Color(0xFF7A5A34),
+    secondaryContainer = Color(0xFFFFDCC8),
+    onSecondaryContainer = Color(0xFF3A1500),
+    tertiary = Color(0xFF8E3B68),
     onTertiary = Color(0xFFFFFFFF),
+    tertiaryContainer = Color(0xFFFFD8EA),
+    onTertiaryContainer = Color(0xFF3A0A24),
     background = Color(0xFFF8F6EF),
     onBackground = Color(0xFF282620),
     surface = Color(0xFFF8F6EF),
@@ -63,6 +68,16 @@ internal val LightColors = lightColorScheme(
     outlineVariant = Color(0xFFD8D3C5),
     error = Color(0xFFB3261E),
     onError = Color(0xFFFFFFFF),
+    surfaceContainerLowest = Color(0xFFFFFFFF),
+    surfaceContainerLow = Color(0xFFF5F1E8),
+    surfaceContainer = Color(0xFFF1ECE1),
+    surfaceContainerHigh = Color(0xFFECE6DA),
+    surfaceContainerHighest = Color(0xFFE6E0D3),
+    surfaceBright = Color(0xFFF8F6EF),
+    surfaceDim = Color(0xFFDDD8CC),
+    inverseSurface = Color(0xFF32302A),
+    inverseOnSurface = Color(0xFFF4F0E6),
+    inversePrimary = Color(0xFF8BD0EF),
 )
 
 internal val DarkColors = darkColorScheme(
@@ -70,12 +85,14 @@ internal val DarkColors = darkColorScheme(
     onPrimary = Color(0xFF0A2A33),
     primaryContainer = Color(0xFF07566E),
     onPrimaryContainer = Color(0xFFD3E4EA),
-    secondary = Color(0xFFB9C8B4),
-    onSecondary = Color(0xFF1F2B1F),
-    secondaryContainer = Color(0xFF3A4739),
-    onSecondaryContainer = Color(0xFFD5E5D3),
-    tertiary = Color(0xFFE8C9A0),
-    onTertiary = Color(0xFF3A2A14),
+    secondary = Color(0xFFFFB68E),
+    onSecondary = Color(0xFF552000),
+    secondaryContainer = Color(0xFF6E2E07),
+    onSecondaryContainer = Color(0xFFFFDCC8),
+    tertiary = Color(0xFFDA7FAD),
+    onTertiary = Color(0xFF3A0A24),
+    tertiaryContainer = Color(0xFF5E2246),
+    onTertiaryContainer = Color(0xFFFFD8EA),
     background = Color(0xFF141413),
     onBackground = Color(0xFFE8E4DA),
     surface = Color(0xFF141413),
@@ -86,7 +103,70 @@ internal val DarkColors = darkColorScheme(
     outlineVariant = Color(0xFF3A3A36),
     error = Color(0xFFFFB4AB),
     onError = Color(0xFF4E1410),
+    surfaceContainerLowest = Color(0xFF0E0E0D),
+    surfaceContainerLow = Color(0xFF1A1A18),
+    surfaceContainer = Color(0xFF1E1E1C),
+    surfaceContainerHigh = Color(0xFF282826),
+    surfaceContainerHighest = Color(0xFF33332F),
+    surfaceBright = Color(0xFF3A3A36),
+    surfaceDim = Color(0xFF141413),
+    inverseSurface = Color(0xFFE8E4DA),
+    inverseOnSurface = Color(0xFF32302A),
+    inversePrimary = Color(0xFF07566E),
 )
+
+/**
+ * The icon's colours, tuned per theme so each tone reaches the graphics
+ * contrast floor on its surfaces. Never used for body text.
+ */
+internal data class Tones(
+    val orange: Color,
+    val amber: Color,
+    val plum: Color,
+    val purple: Color,
+    val blue: Color,
+    val green: Color,
+)
+
+internal val LightTones = Tones(
+    orange = Color(0xFFDD5602),
+    amber = Color(0xFFAE7705),
+    plum = Color(0xFF8E3B68),
+    purple = Color(0xFF916E9D),
+    blue = Color(0xFF3E8AAB),
+    green = Color(0xFF428E87),
+)
+
+internal val DarkTones = Tones(
+    orange = Color(0xFFFE712E),
+    amber = Color(0xFFFFB428),
+    plum = Color(0xFFDA7FAD),
+    purple = Color(0xFFB38FC0),
+    blue = Color(0xFF5AA5C7),
+    green = Color(0xFF5EA9A2),
+)
+
+/** E-ink resolves every tone to black so the theme stays monochrome. */
+private val EInkTones = Tones(
+    orange = Color.Black,
+    amber = Color.Black,
+    plum = Color.Black,
+    purple = Color.Black,
+    blue = Color.Black,
+    green = Color.Black,
+)
+
+/** The tones for a setting, falling back to the system when it is SYSTEM. */
+internal fun tones(setting: ThemeSetting, systemDark: Boolean): Tones =
+    when (setting) {
+        ThemeSetting.SYSTEM -> if (systemDark) DarkTones else LightTones
+        ThemeSetting.LIGHT -> LightTones
+        ThemeSetting.DARK -> DarkTones
+        ThemeSetting.BLACK -> DarkTones
+        ThemeSetting.E_INK -> EInkTones
+    }
+
+internal val LocalTones = staticCompositionLocalOf { LightTones }
 
 /** The bar icon contrast: DARK icons on a light background, LIGHT on a dark one. */
 internal enum class BarIcons { DARK, LIGHT }
@@ -105,6 +185,13 @@ internal fun colorScheme(setting: ThemeSetting, systemDark: Boolean): ColorSchem
             surfaceVariant = Color(0xFF111111),
             onBackground = Color(0xFFE8E4DA),
             onSurface = Color(0xFFE8E4DA),
+            surfaceContainerLowest = Color.Black,
+            surfaceContainerLow = Color(0xFF0A0A0A),
+            surfaceContainer = Color(0xFF111111),
+            surfaceContainerHigh = Color(0xFF1A1A1A),
+            surfaceContainerHighest = Color(0xFF222222),
+            surfaceDim = Color.Black,
+            surfaceBright = Color(0xFF2A2A2A),
         )
         // E-ink is deliberately monochrome and high contrast.
         ThemeSetting.E_INK -> LightColors.copy(
@@ -118,6 +205,8 @@ internal fun colorScheme(setting: ThemeSetting, systemDark: Boolean): ColorSchem
             onSecondaryContainer = Color.Black,
             tertiary = Color.Black,
             onTertiary = Color.White,
+            tertiaryContainer = Color(0xFFE8E8E8),
+            onTertiaryContainer = Color.Black,
             background = Color.White,
             onBackground = Color.Black,
             surface = Color.White,
@@ -126,12 +215,31 @@ internal fun colorScheme(setting: ThemeSetting, systemDark: Boolean): ColorSchem
             onSurfaceVariant = Color.Black,
             outline = Color.Black,
             outlineVariant = Color(0xFFD0D0D0),
+            surfaceContainerLowest = Color.White,
+            surfaceContainerLow = Color.White,
+            surfaceContainer = Color.White,
+            surfaceContainerHigh = Color(0xFFF2F2F2),
+            surfaceContainerHighest = Color(0xFFE8E8E8),
+            surfaceDim = Color(0xFFE8E8E8),
+            surfaceBright = Color.White,
+            inverseSurface = Color.Black,
+            inverseOnSurface = Color.White,
+            inversePrimary = Color.Black,
         )
     }
 
 /** Bar icons must contrast with the background the app draws under the bars. */
 internal fun barIcons(scheme: ColorScheme): BarIcons =
     if (scheme.background.luminance() >= LIGHT_BACKGROUND_LUMINANCE) BarIcons.DARK else BarIcons.LIGHT
+
+/**
+ * How much of a destination's tone tints its selected navigation indicator.
+ * The light tones sit just above 3:1 on the light containers, so more than
+ * 8% would push the selected icon below that floor; the dark tones have room
+ * for a stronger tint.
+ */
+internal fun indicatorBlend(scheme: ColorScheme): Float =
+    if (scheme.background.luminance() >= LIGHT_BACKGROUND_LUMINANCE) 0.08f else 0.18f
 
 internal fun ComponentActivity.applyBarIcons(icons: BarIcons) {
     // Before Android 15, the manifest theme leaves opaque bars. Use the same
@@ -144,7 +252,9 @@ internal fun ComponentActivity.applyBarIcons(icons: BarIcons) {
 
 @Composable
 fun EarnestTheme(setting: ThemeSetting, content: @Composable () -> Unit) {
-    val scheme = colorScheme(setting, isSystemInDarkTheme())
+    val systemDark = isSystemInDarkTheme()
+    val scheme = colorScheme(setting, systemDark)
+    val tone = tones(setting, systemDark)
     val view = LocalView.current
     // The app draws edge to edge, and the in-app theme can differ from the
     // system's, so the bars must follow the effective scheme.
@@ -153,5 +263,7 @@ fun EarnestTheme(setting: ThemeSetting, content: @Composable () -> Unit) {
         val activity = view.context as? ComponentActivity ?: return@SideEffect
         activity.applyBarIcons(barIcons(scheme))
     }
-    MaterialTheme(colorScheme = scheme, content = content)
+    CompositionLocalProvider(LocalTones provides tone) {
+        MaterialTheme(colorScheme = scheme, content = content)
+    }
 }

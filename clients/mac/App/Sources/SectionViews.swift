@@ -21,6 +21,7 @@ struct BriefsView: View {
                             Text(names[brief.principalID] ?? "Agent #\(brief.principalID) (name unavailable)")
                         } icon: {
                             Image(systemName: "text.bubble")
+                                .foregroundStyle(Tone.purple.color)
                         }
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -39,7 +40,7 @@ struct BriefsView: View {
         }
         .frame(height: min(contentHeight, maximumHeight))
         .scrollBounceBehavior(.basedOnSize)
-        .background(Color.accentColor.opacity(0.06))
+        .background(Tone.purple.color.opacity(0.08))
         .accessibilityLabel("Agent briefs")
     }
 }
@@ -331,8 +332,9 @@ extension FeedInfo {
 
     private func row(_ item: ActivityItem) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: icon(item))
-                .foregroundStyle(.secondary)
+            let mark = mark(for: item)
+            Image(systemName: mark.symbol)
+                .foregroundStyle(mark.tone?.color ?? Color.secondary)
                 .frame(width: 16)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
@@ -388,13 +390,16 @@ extension FeedInfo {
         }
     }
 
-    private func icon(_ item: ActivityItem) -> String {
+    /// The symbol that stands for an action and the tone it is drawn in,
+    /// decided together so the two never drift apart. Actions without a tone
+    /// keep the secondary label colour.
+    private func mark(for item: ActivityItem) -> (symbol: String, tone: Tone?) {
         switch item.action {
-        case "state.updated": return "checkmark.circle"
-        case "annotation.updated", "annotation.deleted", "annotation.reverted": return "text.bubble"
-        case "position.updated": return "bookmark"
-        case "notification.created", "notification.cancelled": return "bell"
-        default: return "circle.dashed"
+        case "state.updated": return ("checkmark.circle", .green)
+        case "annotation.updated", "annotation.deleted", "annotation.reverted": return ("text.bubble", .purple)
+        case "position.updated": return ("bookmark", .plum)
+        case "notification.created", "notification.cancelled": return ("bell", .orange)
+        default: return ("circle.dashed", nil)
         }
     }
 

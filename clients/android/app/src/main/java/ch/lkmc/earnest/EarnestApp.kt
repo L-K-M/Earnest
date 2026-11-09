@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -40,6 +41,9 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.NavigationDrawerItemDefaults
+import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
@@ -55,6 +59,7 @@ import androidx.compose.material3.adaptive.layout.AnimatedPane
 import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldRole
 import androidx.compose.material3.adaptive.navigation.NavigableListDetailPaneScaffold
 import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteDefaults
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -74,6 +79,8 @@ import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -111,16 +118,19 @@ import kotlin.math.roundToInt
  */
 private const val FOREGROUND_REFRESH_MS = 3L * 60 * 1000
 
-private enum class View(val label: String, val icon: ImageVector) {
-    TODAY("Today", Icons.Filled.DateRange),
-    EDITION("Edition", Icons.AutoMirrored.Filled.List),
-    LATER("Later", Icons.Filled.Notifications),
-    KEPT("Kept", Icons.Filled.Star),
-    DONE("Done", Icons.Filled.CheckCircle),
-    FEEDS("Feeds", Icons.Filled.Home),
-    ACTIVITY("Activity", Icons.Filled.Info),
-    SEARCH("Search", Icons.Filled.Search),
+private enum class View(val label: String, val icon: ImageVector, val tone: ((Tones) -> Color)?) {
+    TODAY("Today", Icons.Filled.DateRange, { it.orange }),
+    EDITION("Edition", Icons.AutoMirrored.Filled.List, { it.blue }),
+    LATER("Later", Icons.Filled.Notifications, { it.amber }),
+    KEPT("Kept", Icons.Filled.Star, { it.plum }),
+    DONE("Done", Icons.Filled.CheckCircle, { it.green }),
+    FEEDS("Feeds", Icons.Filled.Home, { it.blue }),
+    ACTIVITY("Activity", Icons.Filled.Info, { it.plum }),
+    SEARCH("Search", Icons.Filled.Search, null),
 }
+
+/** The destination's tone for a theme; SEARCH is not in the navigation suite and has none. */
+private fun View.toneColor(tones: Tones): Color? = tone?.invoke(tones)
 
 @Composable
 internal fun EarnestApp(initialEntry: Long?, notificationId: Long?) {
@@ -271,6 +281,35 @@ private fun MainScaffold(
         }
     }
 
+    // Every destination draws its icon in its own tone. Labels stay ink: the
+    // Material default for a selected label is `secondary`, now orange, which
+    // would clash with every destination but Today.
+    val tones = LocalTones.current
+    val scheme = MaterialTheme.colorScheme
+    val suiteItemColors = View.entries.mapNotNull { destination ->
+        val tone = destination.toneColor(tones) ?: return@mapNotNull null
+        val indicator = lerp(scheme.surfaceContainer, tone, indicatorBlend(scheme))
+        destination to NavigationSuiteDefaults.itemColors(
+            navigationBarItemColors = NavigationBarItemDefaults.colors(
+                selectedIconColor = tone,
+                unselectedIconColor = tone,
+                selectedTextColor = scheme.onSurface,
+                indicatorColor = indicator,
+            ),
+            navigationRailItemColors = NavigationRailItemDefaults.colors(
+                selectedIconColor = tone,
+                unselectedIconColor = tone,
+                selectedTextColor = scheme.onSurface,
+                indicatorColor = indicator,
+            ),
+            navigationDrawerItemColors = NavigationDrawerItemDefaults.colors(
+                selectedContainerColor = indicator,
+                selectedIconColor = tone,
+                unselectedIconColor = tone,
+            ),
+        )
+    }.toMap()
+
     NavigationSuiteScaffold(
         navigationSuiteItems = {
             View.entries.filter { it != View.SEARCH }.forEach { destination ->
@@ -282,6 +321,7 @@ private fun MainScaffold(
                     },
                     icon = { Icon(destination.icon, contentDescription = null) },
                     label = { Text(destination.label) },
+                    colors = suiteItemColors.getValue(destination),
                 )
             }
         },
@@ -640,11 +680,17 @@ private fun EntryListScreen(
             }
             if (effective.kept.value == kotlinx.serialization.json.JsonPrimitive(true)) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                    TextButton(onClick = { onUnkeep(entry.id) }) { Text("Unkeep") }
+                    TextButton(
+                        onClick = { onUnkeep(entry.id) },
+                        colors = ButtonDefaults.textButtonColors(contentColor = LocalTones.current.plum),
+                    ) { Text("Unkeep") }
                 }
             } else {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                    TextButton(onClick = { onKeep(entry.id) }) { Text("Keep") }
+                    TextButton(
+                        onClick = { onKeep(entry.id) },
+                        colors = ButtonDefaults.textButtonColors(contentColor = LocalTones.current.plum),
+                    ) { Text("Keep") }
                 }
             }
         }
@@ -712,7 +758,7 @@ private fun EntryRow(
                     Modifier
                         .width(8.dp)
                         .height(8.dp)
-                        .background(MaterialTheme.colorScheme.primary, MaterialTheme.shapes.small),
+                        .background(LocalTones.current.orange, MaterialTheme.shapes.small),
                 )
                 Spacer(Modifier.width(8.dp))
             }
@@ -741,13 +787,20 @@ private fun SwipeActionRow(
     var offset by remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
     val scope = rememberCoroutineScope()
     Box(Modifier.fillMaxWidth()) {
+        val target = swipeTargetFor(-offset, laterThreshold, doneThreshold)
+        // Below the Later threshold the reveal already promises Later, so it
+        // keeps the Later tone rather than fading to neutral.
+        val reveal = lerp(
+            MaterialTheme.colorScheme.surface,
+            if (target == SwipeTarget.DONE) LocalTones.current.green else LocalTones.current.amber,
+            0.18f,
+        )
         Box(
             Modifier
                 .matchParentSize()
-                .background(MaterialTheme.colorScheme.surfaceVariant),
+                .background(reveal),
             contentAlignment = Alignment.CenterEnd,
         ) {
-            val target = swipeTargetFor(-offset, laterThreshold, doneThreshold)
             Text(
                 target?.label ?: SwipeTarget.LATER.label,
                 color = MaterialTheme.colorScheme.onSurface,

@@ -448,14 +448,30 @@ struct WindowAccessor: NSViewRepresentable {
             TodayColumn(selection: entrySelection)
         case .edition:
             if window.editionGroups.isEmpty {
-                ContentUnavailableView("Nothing in This Week’s Edition", systemImage: "newspaper",
-                                       description: Text("Feeds set to This Week collect here."))
+                ContentUnavailableView {
+                    Label {
+                        Text("Nothing in This Week’s Edition")
+                    } icon: {
+                        Image(systemName: "newspaper").foregroundStyle(Tone.blue.color)
+                    }
+                } description: {
+                    Text("Feeds set to This Week collect here.")
+                }
             } else {
                 EntryTable(groups: window.editionGroups, selection: entrySelection, actions: window.tableActions, takeFocusRequest: window.takeListFocusRequest)
             }
         case .later, .kept, .done:
             if window.rows.isEmpty {
-                ContentUnavailableView(emptyTitle, systemImage: window.section.icon, description: Text(emptyDetail))
+                ContentUnavailableView {
+                    Label {
+                        Text(verbatim: emptyTitle)
+                    } icon: {
+                        Image(systemName: window.section.icon)
+                            .foregroundStyle(window.section.tone?.color ?? Color.primary)
+                    }
+                } description: {
+                    Text(emptyDetail)
+                }
             } else {
                 EntryTable(entries: window.rows, selection: entrySelection, actions: window.tableActions, takeFocusRequest: window.takeListFocusRequest)
             }
@@ -586,7 +602,11 @@ struct WindowAccessor: NSViewRepresentable {
             }
             if window.rows.isEmpty {
                 ContentUnavailableView {
-                    Label(window.endTitle.isEmpty ? "Nothing New" : window.endTitle, systemImage: "sun.max")
+                    Label {
+                        Text(verbatim: window.endTitle.isEmpty ? "Nothing New" : window.endTitle)
+                    } icon: {
+                        Image(systemName: "sun.max").foregroundStyle(Tone.orange.color)
+                    }
                 } description: {
                     if !window.endDetail.isEmpty { Text(window.endDetail) }
                 }

@@ -83,9 +83,9 @@ export function Reader({entry, subscription, settings, actions, onClose, onSetti
     <div className="reader-toolbar" role="group" aria-label="Article actions">
       <button type="button" className="tool back" onClick={onClose} title="Back (Esc)" aria-keyshortcuts="Escape"><Icon name="back" /><span className="label">Back</span></button>
       <span className="tool-divider" aria-hidden="true" />
-      <button type="button" className="tool" onClick={() => act('shelf', 'done')} title="Done (e)" aria-keyshortcuts="e"><Icon name="done" /><span className="label">Done</span></button>
-      <button type="button" className="tool" aria-pressed={state.shelf.value === 'later'} onClick={() => act('shelf', state.shelf.value === 'later' ? 'none' : 'later')} title="Later (s)" aria-keyshortcuts="s"><Icon name="later" /><span className="label">Later</span></button>
-      <button type="button" className="tool" aria-pressed={state.kept.value === true} onClick={() => act('kept', state.kept.value !== true)} title="Keep (f)" aria-keyshortcuts="f"><Icon name="keep" /><span className="label">Keep</span></button>
+      <button type="button" className="tool" data-tone="green" onClick={() => act('shelf', 'done')} title="Done (e)" aria-keyshortcuts="e"><Icon name="done" /><span className="label">Done</span></button>
+      <button type="button" className="tool" data-tone="amber" aria-pressed={state.shelf.value === 'later'} onClick={() => act('shelf', state.shelf.value === 'later' ? 'none' : 'later')} title="Later (s)" aria-keyshortcuts="s"><Icon name="later" /><span className="label">Later</span></button>
+      <button type="button" className="tool" data-tone="plum" aria-pressed={state.kept.value === true} onClick={() => act('kept', state.kept.value !== true)} title="Keep (f)" aria-keyshortcuts="f"><Icon name="keep" /><span className="label">Keep</span></button>
       <button type="button" className="tool" onClick={() => act('seen', 'unseen')} title="Mark unread (m)" aria-keyshortcuts="m"><Icon name="unread" /><span className="label">Mark unread</span></button>
       <span className="tool-spacer" />
       <a className="tool secondary" href={entry.url} target="_blank" rel="noopener noreferrer" title="Open original (v)" aria-keyshortcuts="v"><Icon name="external" /><span className="label">Open original</span></a>
@@ -96,7 +96,7 @@ export function Reader({entry, subscription, settings, actions, onClose, onSetti
     <div className="reader-scroll">
       <header className="article-header">
         <h2 id={`${ids}-title`} ref={title} tabIndex={-1} dir="auto">{entry.title || 'Untitled'}</h2>
-        <p className="article-meta"><span dir="auto">{subscription?.title || 'Feed'}</span>{entry.author && <> · <span dir="auto">{entry.author}</span></>}{date && <> · <time dateTime={date}>{longDate(date)}</time></>}{shelf && <> · <span className="chip">{shelf}</span></>}{state.kept.value === true && <> · <span className="chip">Kept</span></>}</p>
+        <p className="article-meta"><span dir="auto">{subscription?.title || 'Feed'}</span>{entry.author && <> · <span dir="auto">{entry.author}</span></>}{date && <> · <time dateTime={date}>{longDate(date)}</time></>}{shelf && <> · <span className="chip" data-tone={shelf === 'Done' ? 'green' : 'amber'}>{shelf}</span></>}{state.kept.value === true && <> · <span className="chip" data-tone="plum">Kept</span></>}</p>
       </header>
       <Summary entryID={entry.id}/>
       {error && <p role="alert" className="banner problem inline">{error} <button type="button" className="quiet" onClick={() => setError('')}>Dismiss</button></p>}

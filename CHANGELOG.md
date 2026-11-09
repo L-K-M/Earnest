@@ -59,6 +59,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The web, Android and Mac clients take their colours from the app icon:
+  each place has its own tone (orange Today, blue Edition, amber Later,
+  plum Kept, green Done), unread dots are orange, selection is a warm
+  cream, feed marks use the icon's colours, and the sign-in screens carry
+  a ribbon of them. Android no longer shows Material's stock lavender.
+  Article text stays neutral and e-ink stays black and white. See
+  `media-sources/README.md`.
 - The web client gives every view a URL: lists, open articles, searches,
   rules, notifications, feed management and settings survive refresh,
   Back and Forward, and can be bookmarked. Rows are links, `j`/`k` open
