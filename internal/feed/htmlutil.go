@@ -23,6 +23,21 @@ const (
 // is not mistaken for markup.
 var tagStartRE = regexp.MustCompile(`<[a-zA-Z/!]`)
 
+// charRefRE matches a complete character reference. The semicolon is
+// required so text such as "Mom&nottoday" or "&copy2026" is not read as
+// HTML's legacy references.
+var charRefRE = regexp.MustCompile(`&(?:#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[a-zA-Z][a-zA-Z0-9]{1,31});`)
+
+// decodeCharRefs decodes complete character references once. Publishers often
+// escape titles twice, so after XML decoding a title still reads
+// "Pomera&#8217;s". Unknown names stay as written.
+func decodeCharRefs(s string) string {
+	if !strings.Contains(s, "&") {
+		return s
+	}
+	return charRefRE.ReplaceAllStringFunc(s, html.UnescapeString)
+}
+
 // looksLikeHTML reports whether s contains something that could be a tag.
 func looksLikeHTML(s string) bool {
 	return tagStartRE.MatchString(s)
@@ -41,14 +56,24 @@ func escapeText(s string) string {
 // plainTitle turns a title that may carry escaped or literal markup into
 // display text.
 func plainTitle(s string) string {
+	display, _ := titleTexts(s)
+	return display
+}
+
+// titleTexts returns a title's display text and the text the frozen identity
+// rule hashes for items without a GUID or link. They differ only when the
+// title holds character references outside markup, which earlier versions
+// left undecoded; keeping that form keeps such items' identities stable.
+func titleTexts(s string) (display, identity string) {
 	s = strings.TrimSpace(s)
 	if s == "" {
-		return ""
+		return "", ""
 	}
 	if !looksLikeHTML(s) {
-		return collapseWS(s)
+		return collapseWS(decodeCharRefs(s)), collapseWS(s)
 	}
-	return htmlText(s)
+	text := htmlText(s)
+	return text, text
 }
 
 // htmlText extracts the text content of an HTML fragment. Entities are

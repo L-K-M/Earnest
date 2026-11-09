@@ -100,7 +100,7 @@ func parseJSONFeed(data []byte, opts ParseOptions) (*Feed, error) {
 	}
 
 	feed := &Feed{
-		Title:    cleanText(coerceString(values["title"])),
+		Title:    decodeCharRefs(cleanText(coerceString(values["title"]))),
 		FeedURL:  opts.BaseURL,
 		SiteURL:  absURL(opts.BaseURL, coerceString(values["home_page_url"])),
 		Language: cleanText(coerceString(values["language"])),
@@ -138,7 +138,14 @@ func jsonFeedItem(m map[string]any, base, feedLang string) Item {
 
 	it.GUID = coerceString(m["id"])
 	it.URL = absURL(base, coerceString(m["url"]))
-	it.Title = cleanText(coerceString(m["title"]))
+	// JSON Feed titles are plain text, so markup is kept as written; only
+	// doubly escaped character references are decoded. Identity keeps the
+	// title as earlier versions read it.
+	title := cleanText(coerceString(m["title"]))
+	it.Title = decodeCharRefs(title)
+	if it.Title != title {
+		it.identityTitle = title
+	}
 	it.Author = jsonFeedAuthor(m)
 	it.Published = parseDate(coerceString(m["date_published"]))
 	it.Updated = parseDate(coerceString(m["date_modified"]))

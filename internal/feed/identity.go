@@ -23,7 +23,11 @@ func IdentityHash(it Item) string {
 		if u := CleanURL(it.URL); u != "" {
 			source = "url:" + u
 		} else {
-			source = "title:" + normalizeTitle(it.Title) + "\npublished:" + publishedKey(it.Published)
+			title := it.Title
+			if it.identityTitle != "" {
+				title = it.identityTitle
+			}
+			source = "title:" + normalizeTitle(title) + "\npublished:" + publishedKey(it.Published)
 		}
 	}
 	return hashHex(source)
