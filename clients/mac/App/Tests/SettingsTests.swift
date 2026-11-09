@@ -245,13 +245,13 @@ import EarnestKit
         let app = makeModel(api: api, engine: engine)
         app.loggedIn = true
         try app.restoreReaderPreferences()
-        let window = WindowModel(app: app)
-        window.settings.draft.theme = .dark
-        window.settings.save()
-        try await waitUntil { !window.settings.busy }
+        let settings = ReaderSettingsModel(app: app)
+        settings.draft.theme = .dark
+        settings.save()
+        try await waitUntil { !settings.busy }
         XCTAssertFalse(app.loggedIn)
-        XCTAssertFalse(window.settings.confirmed)
-        XCTAssertFalse(window.settings.isDirty)
+        XCTAssertFalse(settings.confirmed)
+        XCTAssertFalse(settings.isDirty)
         SettingsHTTP.assertFinished()
     }
 
@@ -261,17 +261,17 @@ import EarnestKit
         try engine.mergeSettings(APIReaderSettings(theme: .dark, rev: 100), generation: "g1")
         let app = makeModel(engine: engine)
         try app.restoreReaderPreferences()
-        let window = WindowModel(app: app)
-        window.settings.draft.theme = .black
+        let settings = ReaderSettingsModel(app: app)
+        settings.draft.theme = .black
         try engine.bootstrap(Cursor(generation: "g2", rev: 0))
         try engine.mergeSettings(APIReaderSettings(theme: .light, rev: 2), generation: "g2")
         try app.restoreReaderPreferences()
         app.rebuildPresentation()
         XCTAssertEqual(app.readerSettings.rev, 2)
         XCTAssertEqual(app.readerSettings.theme, .light)
-        XCTAssertEqual(window.settings.draft.theme, .light)
-        XCTAssertFalse(window.settings.isDirty)
-        XCTAssertFalse(window.settings.conflict)
+        XCTAssertEqual(settings.draft.theme, .light)
+        XCTAssertFalse(settings.isDirty)
+        XCTAssertFalse(settings.conflict)
     }
 
     func testPreRestoreSaveCannotPoisonTheNewSnapshot() async throws {
@@ -290,10 +290,10 @@ import EarnestKit
         let app = makeModel(api: api, engine: engine)
         app.loggedIn = true
         try app.restoreReaderPreferences()
-        let window = WindowModel(app: app)
+        let settings = ReaderSettingsModel(app: app)
         defer { resume.signal(); app.signOut(); session.invalidateAndCancel() }
-        window.settings.draft.theme = .dark
-        window.settings.save()
+        settings.draft.theme = .dark
+        settings.save()
         await fulfillment(of: [requested], timeout: 5)
         try engine.bootstrap(Cursor(generation: "g2", rev: 0))
         try engine.mergeSettings(APIReaderSettings(theme: .light, rev: 2), generation: "g2")
@@ -308,7 +308,7 @@ import EarnestKit
         await fulfillment(of: [forbidden], timeout: 0.2)
         XCTAssertEqual(try engine.readerSettings()?.rev, 2)
         XCTAssertEqual(app.readerSettings.rev, 2)
-        XCTAssertFalse(window.settings.confirmed)
+        XCTAssertFalse(settings.confirmed)
     }
 
     func testCacheWriteFailureDoesNotConfirmAndRetriesTheSameOperation() async throws {
@@ -579,6 +579,82 @@ import EarnestKit
                        "a failed fetch must not masquerade as zero")
         XCTAssertNotNil(model.unreadCountsError)
         SettingsHTTP.assertFinished()
+    }
+
+    // MARK: - Settings window autosave
+
+    func testAutosaveCoalescesEditsIntoOneSave() async throws {
+        let (api, session) = try makeAPI([
+            .init(method: "PUT", path: "/v1/settings", body: #"{"reading_mode":"river","today_decay_days":2,"single_key_shortcuts":true,"theme":"black","measure":70,"font":"serif","feed_overrides":{},"rev":2}"#),
+        ])
+        defer { session.invalidateAndCancel() }
+        let model = makeModel(api: api)
+        model.loggedIn = true
+        let settings = ReaderSettingsModel(app: model)
+        settings.autosaves = true
+        settings.draft.theme = .dark
+        settings.draft.theme = .black
+        settings.draft.measure = 70
+        try await waitUntil { settings.confirmed }
+        XCTAssertFalse(settings.isDirty)
+        XCTAssertEqual(model.readerSettings.theme, .black)
+        XCTAssertEqual(model.readerSettings.measure, 70)
+        let body = try JSONDecoder().decode(APIValue.self, from: XCTUnwrap(SettingsHTTP.body(at: 0)))
+        XCTAssertEqual(body["theme"]?.stringValue, "black")
+        SettingsHTTP.assertFinished()
+    }
+
+    func testAConflictRaisedDuringASaveIsNotHidden() async throws {
+        let requested = expectation(description: "Save in flight")
+        let resume = DispatchSemaphore(value: 0)
+        let (api, session) = try makeAPI([
+            .init(method: "PUT", path: "/v1/settings", body: settingsJSON(theme: "dark", rev: 7), beforeResponse: {
+                requested.fulfill()
+                XCTAssertEqual(resume.wait(timeout: .now() + 10), .success)
+            }),
+        ])
+        let engine = SyncEngine(store: MemorySyncStore())
+        let model = makeModel(api: api, engine: engine)
+        model.loggedIn = true
+        let settings = ReaderSettingsModel(app: model)
+        defer { resume.signal(); session.invalidateAndCancel() }
+        settings.draft.theme = .dark
+        settings.save()
+        await fulfillment(of: [requested], timeout: 5)
+        // Another device saves while this request is in flight.
+        let generation = try XCTUnwrap(engine.snapshot().cursor?.generation)
+        try engine.mergeSettings(APIReaderSettings(theme: .light, rev: 6), generation: generation)
+        try model.restoreReaderPreferences()
+        model.rebuildPresentation()
+        XCTAssertTrue(settings.conflict)
+        resume.signal()
+        try await waitUntil { !settings.busy }
+        XCTAssertTrue(settings.conflict, "The change made elsewhere is still flagged")
+        XCTAssertFalse(settings.confirmed, "Saved is not claimed over a conflict")
+        XCTAssertNotNil(settings.error)
+        SettingsHTTP.assertFinished()
+    }
+
+    func testAutosaveWaitsForReloadAfterAConflict() async throws {
+        let engine = SyncEngine(store: MemorySyncStore())
+        let model = makeModel(engine: engine)
+        model.loggedIn = true
+        let settings = ReaderSettingsModel(app: model)
+        settings.autosaves = true
+        settings.draft.theme = .dark
+        // Another device saved first; the draft is now in conflict.
+        let generation = try XCTUnwrap(engine.snapshot().cursor?.generation)
+        try engine.mergeSettings(APIReaderSettings(theme: .light, rev: 5), generation: generation)
+        try model.restoreReaderPreferences()
+        model.rebuildPresentation()
+        XCTAssertTrue(settings.conflict)
+        try await Task.sleep(for: .milliseconds(700))
+        XCTAssertFalse(settings.busy, "A conflicting draft is never sent")
+        XCTAssertNil(settings.error, "Autosave did not attempt a save")
+        XCTAssertTrue(settings.isDirty)
+        settings.load()
+        XCTAssertEqual(settings.draft.theme, .light)
+        XCTAssertFalse(settings.conflict)
     }
 }
 

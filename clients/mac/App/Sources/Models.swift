@@ -2,11 +2,17 @@ import Foundation
 import EarnestKit
 
 enum Section: String, CaseIterable, Identifiable {
-    case today = "Today", edition = "Edition", later = "Later", kept = "Kept", done = "Done", feeds = "Feeds", activity = "Activity", search = "Search", settings = "Settings"
+    case today = "Today", edition = "Edition", later = "Later", kept = "Kept", done = "Done", feeds = "Feeds", activity = "Activity", search = "Search"
 
     var id: String { rawValue }
 
-    var keyEquivalent: String {
+    /// The places a window can navigate to from the sidebar, the Go menu and
+    /// the palette. Search is entered from the toolbar search field instead.
+    static let places: [Section] = [.today, .edition, .later, .kept, .done, .feeds, .activity]
+
+    var title: String { rawValue }
+
+    var keyEquivalent: String? {
         switch self {
         case .today: return "1"
         case .edition: return "2"
@@ -15,8 +21,7 @@ enum Section: String, CaseIterable, Identifiable {
         case .done: return "5"
         case .feeds: return "6"
         case .activity: return "7"
-        case .search: return "8"
-        case .settings: return "9"
+        case .search: return nil
         }
     }
 
@@ -30,7 +35,6 @@ enum Section: String, CaseIterable, Identifiable {
         case .feeds: return "dot.radiowaves.left.and.right"
         case .activity: return "clock.arrow.circlepath"
         case .search: return "magnifyingglass"
-        case .settings: return "gearshape"
         }
     }
 
@@ -42,13 +46,34 @@ enum Section: String, CaseIterable, Identifiable {
         case .later: return "later"
         case .kept: return "kept"
         case .done: return "done"
-        case .feeds, .activity, .search, .settings: return nil
+        case .feeds, .activity, .search: return nil
         }
     }
+
+    /// Sections whose detail column is the article reader.
+    var showsReader: Bool { self != .feeds }
 }
 
 enum EntryCommand {
     case done, later, keep, unread
+}
+
+/// The cadences a subscription can declare, in menu order.
+enum Cadence: String, CaseIterable, Identifiable {
+    case now, today, week
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .now: return "Now"
+        case .today: return "Today"
+        case .week: return "This Week"
+        }
+    }
+
+    /// Unknown server values display as Today, the server default.
+    init(server value: String) { self = Cadence(rawValue: value) ?? .today }
 }
 
 struct EntryRow: Identifiable, Equatable {
@@ -56,6 +81,11 @@ struct EntryRow: Identifiable, Equatable {
     let title: String
     let subtitle: String
     let unread: Bool
+    var kept = false
+    var later = false
+    /// The article's web address, when it is HTTP(S): for dragging, copying
+    /// and opening in the browser.
+    var url: URL? = nil
 }
 
 struct EditionGroup: Identifiable, Equatable {
@@ -208,6 +238,16 @@ struct SessionCounts: Equatable {
         case .unread: unread += 1
         }
     }
+
+    /// Undo takes an action back out of the session summary.
+    mutating func unrecord(_ command: EntryCommand, unkeep: Bool = false) {
+        switch command {
+        case .done: done = max(0, done - 1)
+        case .later: later = max(0, later - 1)
+        case .keep: if !unkeep { kept = max(0, kept - 1) }
+        case .unread: unread = max(0, unread - 1)
+        }
+    }
 }
 
 struct PaletteCommand: Identifiable {
@@ -216,4 +256,47 @@ struct PaletteCommand: Identifiable {
     let key: String
     let enabled: Bool
     let action: () -> Void
+}
+
+/// Server addresses as people type them. A bare host name gets a scheme:
+/// HTTPS for a fully qualified name, HTTP for localhost, an IP literal or an
+/// unqualified name, which the local-network ATS exception permits.
+enum ServerAddress {
+    static func normalize(_ text: String) -> String? {
+        var trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if !trimmed.contains("://") {
+            let host = trimmed.split(separator: "/", maxSplits: 1).first.map(String.init) ?? trimmed
+            let name = host.split(separator: ":").first.map(String.init)?.lowercased() ?? host
+            let local = name == "localhost" || !name.contains(".") || name.hasSuffix(".local")
+                || name.allSatisfy { $0.isNumber || $0 == "." } || host.hasPrefix("[")
+            trimmed = (local ? "http://" : "https://") + trimmed
+        }
+        while trimmed.hasSuffix("/") { trimmed.removeLast() }
+        guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(),
+              ["http", "https"].contains(scheme), let host = url.host, !host.isEmpty,
+              url.user == nil, url.password == nil else { return nil }
+        return trimmed
+    }
+}
+
+/// `feed:` links from browsers: `feed://host/path` means HTTP, and
+/// `feed:https://host/path` wraps an explicit URL. Only HTTP(S) results are
+/// accepted; the subscribe sheet still asks before subscribing.
+enum FeedLink {
+    static func subscriptionURL(_ url: URL) -> String? {
+        guard url.scheme?.lowercased() == "feed" else { return nil }
+        let text = url.absoluteString
+        let rest = String(text.dropFirst("feed:".count))
+        let candidate: String
+        if rest.hasPrefix("//") {
+            candidate = "http:" + rest
+        } else {
+            candidate = rest
+        }
+        guard let parsed = URL(string: candidate), let scheme = parsed.scheme?.lowercased(),
+              ["http", "https"].contains(scheme), parsed.host?.isEmpty == false,
+              parsed.user == nil, parsed.password == nil else { return nil }
+        return parsed.absoluteString
+    }
 }

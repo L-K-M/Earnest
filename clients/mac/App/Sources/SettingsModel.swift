@@ -10,9 +10,15 @@ import EarnestKit
     @Published var draft: APIReaderSettings {
         didSet {
             confirmed = false
-            if draft != oldValue { pending = nil }
+            if draft != oldValue {
+                pending = nil
+                if autosaves { scheduleAutosave() }
+            }
         }
     }
+    /// Apply changes as they are made, the Mac Settings convention. The
+    /// Settings window turns this on; the model's tests drive save() directly.
+    var autosaves = false
     @Published private(set) var baseline: APIReaderSettings
     @Published private(set) var busy = false
     @Published private(set) var error: String?
@@ -23,6 +29,7 @@ import EarnestKit
     private let app: AppModel
     private var pending: PendingSave?
     private var task: Task<Void, Never>?
+    private var autosaveTask: Task<Void, Never>?
     private var scope: ReaderPreferencesScope?
     private var requestID = 0
 
@@ -37,6 +44,22 @@ import EarnestKit
         baseline = app.readerSettings
         scope = app.readerPreferencesScope()
         ready = scope != nil
+        app.register(preferences: self)
+    }
+
+    /// Save shortly after the last edit. A save already in flight finishes
+    /// first; edits made meanwhile are saved after it. A conflict waits for
+    /// Reload, and a failure waits for the next edit or Save.
+    private func scheduleAutosave() {
+        autosaveTask?.cancel()
+        autosaveTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            while let self, self.busy, !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            guard let self, !Task.isCancelled, self.ready, self.isDirty, !self.conflict else { return }
+            self.save()
+        }
     }
 
     var isDirty: Bool { draft != baseline }
@@ -105,6 +128,10 @@ import EarnestKit
                 guard self.current(requestID, scope: scope) else { return }
                 let latestDraft = self.draft
                 let edited = latestDraft != pending.body
+                // Save refuses to start over a conflict, so one flagged now was
+                // raised by a sync while this request was in flight. Read it
+                // before adopting the result, which updates this draft too.
+                let changedElsewhere = self.conflict
                 let effective: APIReaderSettings?
                 do {
                     effective = try self.app.adoptReaderSettings(saved, scope: scope)
@@ -135,6 +162,14 @@ import EarnestKit
                     measure: latestDraft.measure, font: latestDraft.font,
                     feedOverrides: latestDraft.feedOverrides, rev: effective.rev
                 ) : effective
+                if changedElsewhere {
+                    // The server keeps the last write, so this save replaced a
+                    // change made elsewhere meanwhile. Keep the flag and say so.
+                    self.conflict = true
+                    self.confirmed = false
+                    self.error = "Settings also changed on another device while this change was saving. This change was saved last; review the settings."
+                    return
+                }
                 self.conflict = false
                 self.confirmed = !edited
             } catch is CancellationError {
@@ -198,6 +233,8 @@ import EarnestKit
         requestID &+= 1
         task?.cancel()
         task = nil
+        autosaveTask?.cancel()
+        autosaveTask = nil
         pending = nil
         busy = false
         error = nil

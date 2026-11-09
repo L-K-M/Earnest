@@ -4,322 +4,263 @@ import SwiftUI
 import EarnestKit
 
 @MainActor @main struct EarnestApp: App {
-    @StateObject private var model = AppModel()
+    @StateObject private var model: AppModel
+    /// The account's reading preferences, edited by Settings and the feed
+    /// detail; changes apply as they are made.
+    @StateObject private var preferences: ReaderSettingsModel
+
+    init() {
+        let model = AppModel()
+        let preferences = ReaderSettingsModel(app: model)
+        preferences.autosaves = true
+        _model = StateObject(wrappedValue: model)
+        _preferences = StateObject(wrappedValue: preferences)
+    }
 
     var body: some Scene {
-        WindowGroup {
+        // A stable identifier keeps window frames and restored state across
+        // builds; the default derives one from the view's type.
+        WindowGroup("Earnest", id: "main") {
             WindowRootView(model: model)
+                .environmentObject(preferences)
                 .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
         }
-            .handlesExternalEvents(matching: ["*"])
-            .commands {
-                ArticleCommands(model: model)
-                GoCommands(model: model)
-            }
+        .handlesExternalEvents(matching: ["*"])
+        .defaultSize(width: 1180, height: 760)
+        .commands {
+            FileCommands(model: model)
+            EditCommands()
+            ViewCommands(model: model)
+            GoCommands(model: model)
+            ArticleCommands(model: model)
+            AccountCommands(model: model)
+            HelpCommands()
+        }
+
+        Settings {
+            SettingsWindow(settings: preferences)
+                .environmentObject(model)
+        }
+
+        Window("Keyboard Shortcuts", id: "shortcuts") {
+            KeyboardShortcutsView()
+        }
+        .windowResizability(.contentSize)
+        .handlesExternalEvents(matching: [])
+        .restorationBehavior(.disabled)
     }
 }
 
-/// Article and palette commands act on the key window's WindowModel;
-/// app-wide actions use the shared AppModel.
-private struct ArticleCommands: Commands {
-    let model: AppModel
+// MARK: - Menus
+//
+// Commands act on the key window's WindowModel; app-wide actions use the
+// shared AppModel. Unmodified-letter key equivalents are attached only while
+// the account's single-key preference is on and no text field has focus, so
+// the menu always lists the shortcut but never steals typing.
+
+private struct FileCommands: Commands {
+    @ObservedObject var model: AppModel
+    @FocusedObject private var window: WindowModel?
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        CommandGroup(replacing: .newItem) {
+            Button("New Subscription…") { window?.subscribing = true }
+                .keyboardShortcut("n", modifiers: .command)
+                .disabled(window == nil || !model.loggedIn)
+            Button("New Window") { openWindow(id: "main") }
+                .keyboardShortcut("n", modifiers: [.command, .option])
+            Divider()
+            Button("Import Subscriptions…") {
+                NotificationCenter.default.post(name: .earnestImportSubscriptions, object: nil)
+            }
+            .disabled(window == nil || !model.loggedIn)
+            Button("Export Subscriptions…") {
+                NotificationCenter.default.post(name: .earnestExportSubscriptions, object: nil)
+            }
+            .disabled(window == nil || !model.loggedIn)
+        }
+    }
+}
+
+private struct EditCommands: Commands {
     @FocusedObject private var window: WindowModel?
 
     var body: some Commands {
-        CommandMenu("Article") {
-            // Unmodified-letter equivalents are suspended while the
-            // palette is open so its filter field can type them. The
-            // single-key preference removes the bindings, not the actions.
-            shortcut(Button("Next Article") { window?.move(1) }
-                .disabled(window.map { $0.palette || !$0.canBrowse } ?? true), "j")
-            shortcut(Button("Previous Article") { window?.move(-1) }
-                .disabled(window.map { $0.palette || !$0.canBrowse } ?? true), "k")
+        CommandGroup(after: .pasteboard) {
             Divider()
-            shortcut(Button("Done") { window?.command(.done) }
-                .disabled(window.map { !$0.canActOnEntry || $0.palette } ?? true), "e")
-            shortcut(Button("Later") { window?.command(.later) }
-                .disabled(window.map { !$0.canActOnEntry || $0.palette } ?? true), "s")
-            shortcut(Button("Keep") { window?.command(.keep) }
-                .disabled(window.map { !$0.canActOnEntry || $0.palette } ?? true), "f")
-            shortcut(Button("Mark Unread") { window?.command(.unread) }
-                .disabled(window.map { !$0.canActOnEntry || $0.palette } ?? true), "m")
-            Divider()
-            shortcut(Button("Open Original") { window?.openOriginal() }
-                .disabled(window.map { $0.selected == nil || $0.palette || !$0.canBrowse } ?? true), "o")
-            shortcut(Button("View Original") { window?.openOriginal() }
-                .disabled(window.map { $0.selected == nil || $0.palette || !$0.canBrowse } ?? true), "v")
-            Divider()
-            Button("Refresh") { model.scheduleSync() }
-                .keyboardShortcut("r", modifiers: .command)
-                .disabled(!model.loggedIn)
-            Button("Command Palette") { window?.palette = true }
-                .keyboardShortcut("k", modifiers: .command)
-                .disabled(window == nil)
+            Menu("Find") {
+                Button("Search Articles") { window?.searchFocusRequest &+= 1 }
+                    .keyboardShortcut("f", modifiers: [.command, .option])
+                    .disabled(window == nil || !(window?.app.loggedIn ?? false))
+                Divider()
+                Button("Find in Article…") { window?.reader.showFind() }
+                    .keyboardShortcut("f", modifiers: .command)
+                    .disabled(!canFind)
+                Button("Find Next") { window?.reader.findNext() }
+                    .keyboardShortcut("g", modifiers: .command)
+                    .disabled(!canFind)
+                Button("Find Previous") { window?.reader.findPrevious() }
+                    .keyboardShortcut("g", modifiers: [.command, .shift])
+                    .disabled(!canFind)
+            }
         }
     }
 
-    /// Apply an unmodified-letter binding only while the account's
-    /// single-key preference is on. The menu action stays clickable either
-    /// way, and the command palette remains available.
+    private var canFind: Bool {
+        guard let window else { return false }
+        return window.section.showsReader && window.selected != nil && !window.html.isEmpty
+    }
+}
+
+private struct ViewCommands: Commands {
+    @ObservedObject var model: AppModel
+    @FocusedObject private var window: WindowModel?
+    @AppStorage(ReaderController.zoomKey) private var zoom = 1.0
+
+    var body: some Commands {
+        SidebarCommands()
+        ToolbarCommands()
+        CommandGroup(after: .toolbar) {
+            Divider()
+            Button("Refresh") { model.scheduleSync() }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(!model.loggedIn || model.syncing)
+            Divider()
+            Button("Actual Size") { ReaderController.resetZoom() }
+                .keyboardShortcut("0", modifiers: .command)
+                .disabled(abs(zoom - 1) < 0.001)
+            // Follow the + character on every layout, as Safari does, rather
+            // than the US key position.
+            Button("Zoom In") { ReaderController.setZoom(1) }
+                .keyboardShortcut("+", modifiers: .command, localization: .custom)
+                .disabled(!ReaderController.canZoomIn)
+            Button("Zoom Out") { ReaderController.setZoom(-1) }
+                .keyboardShortcut("-", modifiers: .command)
+                .disabled(!ReaderController.canZoomOut)
+            Divider()
+            Button("Command Palette…") { window?.palette = true }
+                .keyboardShortcut("k", modifiers: .command)
+                .disabled(window == nil || !model.loggedIn)
+        }
+    }
+}
+
+private struct GoCommands: Commands {
+    @ObservedObject var model: AppModel
+    @FocusedObject private var window: WindowModel?
+    @ObservedObject private var keyboard = KeyboardRouter.shared
+
+    var body: some Commands {
+        CommandMenu("Go") {
+            ForEach(Section.places) { target in
+                place(target)
+            }
+            Divider()
+            singleKey(Button("Next Article") { window?.move(1) }
+                .disabled(window.map { !$0.canBrowse } ?? true), "j")
+            singleKey(Button("Previous Article") { window?.move(-1) }
+                .disabled(window.map { !$0.canBrowse } ?? true), "k")
+        }
+    }
+
     @ViewBuilder
-    private func shortcut<V: View>(_ view: V, _ key: Character, _ modifiers: EventModifiers = []) -> some View {
-        if window?.singleKeyShortcuts ?? true {
-            view.keyboardShortcut(KeyEquivalent(key), modifiers: modifiers)
+    private func singleKey<V: View>(_ view: V, _ key: Character) -> some View {
+        // The palette's field also stands them down, should it not yet be
+        // first responder when a letter arrives.
+        if (window?.singleKeyShortcuts ?? true) && !keyboard.editingText && !(window?.palette ?? false) {
+            view.keyboardShortcut(KeyEquivalent(key), modifiers: [])
+        } else {
+            view
+        }
+    }
+
+    @ViewBuilder
+    private func place(_ target: Section) -> some View {
+        let button = Button(target.title) { window?.go(to: target) }
+            .disabled(!model.loggedIn || window == nil)
+        if let key = target.keyEquivalent.flatMap(Character.init) {
+            button.keyboardShortcut(KeyEquivalent(key), modifiers: .command)
+        } else {
+            button
+        }
+    }
+}
+
+private struct ArticleCommands: Commands {
+    @ObservedObject var model: AppModel
+    @FocusedObject private var window: WindowModel?
+    @ObservedObject private var keyboard = KeyboardRouter.shared
+
+    var body: some Commands {
+        CommandMenu("Article") {
+            singleKey(Button("Open in Browser") { window?.openOriginal() }
+                .disabled(window?.selectedURL == nil), "o")
+            Button("Copy Link") {
+                guard let url = window?.selectedURL else { return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.writeObjects([url as NSURL])
+                NSPasteboard.general.setString(url.absoluteString, forType: .string)
+            }
+            .disabled(window?.selectedURL == nil)
+            if let url = window?.selectedURL {
+                ShareLink("Share…", item: url, subject: Text(window?.selectedTitle ?? ""))
+            } else {
+                Button("Share…") {}.disabled(true)
+            }
+            Divider()
+            singleKey(Button("Move to Done") { window?.command(.done) }
+                .disabled(!canAct), "e")
+            singleKey(Button(window?.selectedIsLater == true ? "Remove from Later" : "Move to Later") { window?.command(.later) }
+                .disabled(!canAct), "s")
+            singleKey(Button(window?.selectedIsKept == true ? "Unkeep" : "Keep") { window?.command(.keep) }
+                .disabled(!canAct), "f")
+            singleKey(Button("Mark as Unread") { window?.command(.unread) }
+                .disabled(!canAct || window?.selectedIsUnread == true), "m")
+            Divider()
+            Button("Load Images") { window?.loadImages() }
+                .disabled(window.map { $0.selected == nil || $0.imageMode != .click || $0.offlineCopy } ?? true)
+        }
+    }
+
+    private var canAct: Bool { window?.canActOnEntry ?? false }
+
+    /// Attach an unmodified-letter binding only while the account's
+    /// single-key preference is on and no text field has focus. The menu
+    /// action stays clickable either way, and the palette lists it.
+    @ViewBuilder
+    private func singleKey<V: View>(_ view: V, _ key: Character) -> some View {
+        // The palette's field also stands them down, should it not yet be
+        // first responder when a letter arrives.
+        if (window?.singleKeyShortcuts ?? true) && !keyboard.editingText && !(window?.palette ?? false) {
+            view.keyboardShortcut(KeyEquivalent(key), modifiers: [])
         } else {
             view
         }
     }
 }
 
-private struct GoCommands: Commands {
-    let model: AppModel
-    @FocusedObject private var window: WindowModel?
+private struct AccountCommands: Commands {
+    @ObservedObject var model: AppModel
 
     var body: some Commands {
-        CommandMenu("Go") {
-            ForEach(Section.allCases) { target in
-                Button("Go to \(target.rawValue)") { window?.section = target }
-                    .keyboardShortcut(KeyEquivalent(Character(target.keyEquivalent)), modifiers: .command)
-                    .disabled(!model.loggedIn || window == nil)
-            }
-            Divider()
-            Button("Sign Out") { model.signOut() }
-                .keyboardShortcut("q", modifiers: [.command, .shift])
+        // After Settings…, before Services.
+        CommandGroup(before: .systemServices) {
+            Button("Sign Out…") { model.requestSignOut() }
                 .disabled(!model.loggedIn)
+            Divider()
         }
     }
 }
 
-/// Each window owns its WindowModel, so selection and reader are independent;
-/// the shared AppModel is injected alongside it.
-@MainActor private struct WindowRootView: View {
-    let model: AppModel
-    @StateObject private var window: WindowModel
+private struct HelpCommands: Commands {
+    @Environment(\.openWindow) private var openWindow
 
-    init(model: AppModel) {
-        self.model = model
-        _window = StateObject(wrappedValue: WindowModel(app: model))
-    }
-
-    var body: some View {
-        ContentView()
-            .environmentObject(model)
-            .environmentObject(window)
-            .focusedSceneObject(window)
-    }
-}
-
-@MainActor struct ContentView: View {
-    @EnvironmentObject private var model: AppModel
-    @EnvironmentObject private var window: WindowModel
-
-    var body: some View {
-        Group {
-            if model.loggedIn { mainView } else { loginView }
+    var body: some Commands {
+        CommandGroup(replacing: .help) {
+            // Also opened by pressing ? outside text fields; ⇧⌘/ stays with
+            // the system's Help search.
+            Button("Keyboard Shortcuts") { openWindow(id: "shortcuts") }
         }
-        .frame(minWidth: 880, minHeight: 520)
-        .onAppear {
-            if !model.server.isEmpty && !model.connected { model.connect() }
-            window.refreshSection()
-        }
-        .alert("Error", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
-            Button("OK", role: .cancel) { model.error = nil }
-        } message: {
-            Text(model.error ?? "")
-        }
-        .sheet(isPresented: $window.palette) {
-            PaletteView()
-                .environmentObject(window)
-        }
-        .onOpenURL { window.openDeepLink($0) }
-    }
-
-    private var mainView: some View {
-        NavigationSplitView {
-            List(Section.allCases, selection: Binding(
-                get: { window.section },
-                set: { if let target = $0 { window.section = target } })) { target in
-                Label(target.rawValue, systemImage: target.icon).tag(target)
-            }
-            .listStyle(.sidebar)
-            .frame(minWidth: 170)
-        } content: {
-            contentColumn
-                // Inset on the column, not the split view: macOS columns do not
-                // yield to a split-view inset, so the note covered the end statement.
-                .safeAreaInset(edge: .bottom) {
-                    if let note = model.connectionNote {
-                        Text(note).font(.caption).textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(8)
-                            .background(.regularMaterial)
-                    }
-                }
-                .frame(minWidth: 320)
-        } detail: {
-            if window.selected != nil {
-                VStack(spacing: 0) {
-                    if let entry = window.readingEntry {
-                        ReaderHeader(entry: entry, feedTitle: window.readingFeedTitle, openOriginal: window.openOriginal)
-                        Divider()
-                    }
-                    if window.imageMode == .click {
-                        HStack {
-                            Text("Images are blocked for externally opened articles.")
-                                .font(.caption)
-                            Button("Load Images") { window.loadImages() }
-                        }
-                        .padding(8)
-                    }
-                    if window.offlineCopy {
-                        Text("Offline copy. Images are blocked.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(8)
-                    }
-                    if window.articleUnavailable {
-                        ContentUnavailableView("Not available offline", systemImage: "wifi.slash",
-                                               description: Text("Earnest keeps articles you have opened. This one loads when you are back online."))
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        Reader(html: window.html, imageOrigin: window.imageOrigin, style: window.readerStyle)
-                    }
-                }
-                .background(Color(nsColor: .textBackgroundColor))
-            } else {
-                ContentUnavailableView("Select an article", systemImage: "doc.text")
-            }
-        }
-        .onChange(of: window.section) { window.refreshSection() }
-        .toolbar {
-            ToolbarItemGroup {
-                if model.pendingOps > 0 {
-                    Text("\(model.pendingOps) pending")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                if model.syncing {
-                    ProgressView().controlSize(.small)
-                }
-                Button("Refresh", systemImage: "arrow.clockwise") { model.scheduleSync() }
-                Button("Sign Out", systemImage: "rectangle.portrait.and.arrow.right") { model.signOut() }
-            }
-        }
-    }
-
-    private var entrySelection: Binding<Int64?> {
-        Binding(get: { window.selected }, set: { window.selectFromList($0) })
-    }
-
-    @ViewBuilder private var contentColumn: some View {
-        switch window.section {
-        case .today:
-            VStack(spacing: 0) {
-                if model.readerSettings.readingMode == .unreadCounts {
-                    UnreadCountsView()
-                    Divider()
-                }
-                if !model.briefs.isEmpty {
-                    BriefsView(briefs: model.briefs, names: model.principalNames)
-                    Divider()
-                }
-                if window.rows.isEmpty && model.briefs.isEmpty {
-                    Spacer()
-                } else {
-                    EntryTable(entries: window.rows, selection: entrySelection)
-                }
-                if !window.endTitle.isEmpty {
-                    Divider()
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(window.endTitle).font(.callout)
-                        if !window.endDetail.isEmpty {
-                            Text(window.endDetail)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-                }
-            }
-        case .edition:
-            EditionListView(groups: window.editionGroups, selection: entrySelection)
-        case .later, .kept, .done:
-            if window.rows.isEmpty {
-                ContentUnavailableView("Nothing here", systemImage: "tray")
-            } else {
-                EntryTable(entries: window.rows, selection: entrySelection)
-            }
-        case .feeds:
-            FeedsView()
-        case .activity:
-            ActivityView()
-        case .search:
-            SearchView(search: window.search)
-        case .settings:
-            SettingsView(settings: window.settings)
-        }
-    }
-
-    private var loginView: some View {
-        VStack(spacing: 16) {
-            BrandLockup()
-            TextField("Server URL", text: $model.server)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 320)
-                .disabled(model.connected)
-            if let code = model.code {
-                Text("Enter \(code.userCode) at \(code.verificationURI)")
-                    .textSelection(.enabled)
-            }
-            HStack {
-                if model.connected {
-                    Button("Sign In") { model.login() }
-                        .disabled(model.loggingIn || model.server.isEmpty)
-                    if model.loggingIn || model.code != nil {
-                        Button("Cancel") { model.cancelLogin() }
-                    }
-                    Button("Change Server") { model.connected = false; model.signOut() }
-                } else {
-                    Button("Connect") { model.connect() }
-                        .disabled(model.server.isEmpty)
-                }
-            }
-            if let note = model.connectionNote {
-                Text(note).font(.caption).foregroundStyle(.secondary)
-            }
-        }
-        .padding(40)
-    }
-}
-
-@MainActor struct PaletteView: View {
-    @EnvironmentObject private var window: WindowModel
-    @Environment(\.dismiss) private var dismiss
-    @SwiftUI.State private var filter = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            TextField("Type a command", text: $filter)
-                .textFieldStyle(.roundedBorder)
-            List(window.paletteCommands().filter {
-                filter.isEmpty || $0.title.localizedCaseInsensitiveContains(filter)
-            }) { command in
-                Button {
-                    dismiss()
-                    command.action()
-                } label: {
-                    HStack {
-                        Text(command.title)
-                        Spacer()
-                        Text(command.key).foregroundStyle(.secondary)
-                    }
-                }
-                .buttonStyle(.plain)
-                .disabled(!command.enabled)
-            }
-        }
-        .padding(12)
-        .frame(width: 320, height: 380)
     }
 }

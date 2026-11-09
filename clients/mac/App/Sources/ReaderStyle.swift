@@ -66,5 +66,9 @@ struct ReaderStyle: Equatable {
             + "body{max-width:\(width)ch!important;margin:2rem auto;padding:0 1rem;font:1.1rem/1.65 \(family)!important;"
             + "background:\(palette.background)!important;color:\(palette.foreground)!important;\(spacing)overflow-wrap:anywhere}"
             + "img{max-width:100%;height:auto}a{color:inherit}pre{overflow:auto}"
+            // Earnest's own header above the publisher HTML; it scrolls with the article.
+            + ".earnest-header{margin:0 0 1.75rem;padding-bottom:1rem;border-bottom:1px solid color-mix(in srgb,currentColor 18%,transparent)}"
+            + ".earnest-header h1{font-size:1.7em;line-height:1.2;margin:0 0 .45rem;font-weight:650}"
+            + ".earnest-header h1 a{text-decoration:none}.earnest-meta{margin:0;font-size:.82em;opacity:.72}"
     }
 }

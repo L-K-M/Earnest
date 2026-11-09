@@ -1,156 +1,202 @@
 import SwiftUI
 import EarnestKit
 
+extension APISavedSearch: @retroactive Identifiable {}
+
+/// Search results for the toolbar search field, with a scope bar of filters
+/// and a Save button, as in Finder. Publisher matches and agent notes stay in
+/// separate, labelled sections; snippets are literal text.
 @MainActor struct SearchView: View {
     @ObservedObject var search: SearchModel
     @EnvironmentObject private var app: AppModel
     @EnvironmentObject private var window: WindowModel
-    @FocusState private var field: Field?
-    @SwiftUI.State private var confirmingDelete = false
+    @SwiftUI.State private var saving = false
 
-    private enum Field { case query, name }
+    private static let pageSizes: [Int64] = [20, 50, 100, 200]
 
     var body: some View {
-        VStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    TextField("Search your feeds", text: $search.query)
-                        .textFieldStyle(.roundedBorder)
-                        .focused($field, equals: .query)
-                        .onSubmit { search.submit() }
-                    Button("Search") { search.submit() }.disabled(!search.canSearch)
-                }
-                HStack {
-                    Picker("Mode", selection: Binding(
-                        get: { search.embeddingStatus == "enabled" ? search.filter.mode : .fulltext },
-                        set: { search.filter.mode = $0 }
-                    )) {
-                        Text("Full text").tag(APISearchMode.fulltext)
-                        if search.embeddingStatus == "enabled" { Text("Hybrid").tag(APISearchMode.hybrid) }
-                    }
-                    Picker("Page size", selection: $search.filter.limit) {
-                        Text("Default").tag(Int64?.none)
-                        ForEach([20, 50, 100, 200], id: \.self) { count in
-                            Text("\(count)").tag(Int64?.some(Int64(count)))
-                        }
-                        if let limit = search.filter.limit, ![20, 50, 100, 200].contains(limit) {
-                            Text("\(limit)").tag(Int64?.some(limit))
-                        }
-                    }
-                }
-                Picker("Feed", selection: $search.filter.subscriptionID) {
-                    Text("All feeds").tag(Int64?.none)
+        VStack(spacing: 0) {
+            scopeBar
+            Divider()
+            results
+        }
+        .sheet(isPresented: $saving) {
+            NameSheet(title: "Save Search", prompt: "Name", action: "Save", initial: search.submittedQuery) { name in
+                search.saveNew(named: name)
+            }
+        }
+    }
+
+    private var entries: [APISearchMatch] { search.matches.filter { $0.kind == "entry" } }
+    private var notes: [APISearchMatch] { search.matches.filter { $0.kind == "agent_note" } }
+    private var hybridAvailable: Bool { search.embeddingStatus == "enabled" }
+
+    private var scopeBar: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Picker("Feed", selection: filterBinding(\.subscriptionID)) {
+                    Text("All Feeds").tag(Int64?.none)
+                    Divider()
                     ForEach(app.feeds.filter { !$0.deleted }) { feed in
                         Text(verbatim: feed.title.isEmpty ? feed.url : feed.title).tag(Int64?.some(feed.id))
                     }
                 }
-                Picker("Folder", selection: $search.filter.folderID) {
-                    Text("All folders").tag(Int64?.none)
+                .help("Search one feed")
+                Picker("Folder", selection: filterBinding(\.folderID)) {
+                    Text("All Folders").tag(Int64?.none)
+                    if !search.folders.isEmpty { Divider() }
                     ForEach(search.folders, id: \.id) { folder in
                         Text(verbatim: folder.name).tag(Int64?.some(folder.id))
                     }
                 }
-                if search.embeddingStatus == "paused" {
-                    Text("Hybrid search is paused. Full-text search is available.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                if search.filter.mode == .hybrid && search.embeddingStatus == "enabled" {
-                    Text("Hybrid search can make an embedding call and searches a bounded window. Use Full text to page further.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+                .help("Search one folder")
+                .disabled(search.folders.isEmpty)
             }
-            .padding([.horizontal, .top], 10)
-
-            List {
-                if !search.savedSearches.isEmpty {
-                    SwiftUI.Section("Saved searches") {
-                        ForEach(search.savedSearches, id: \.id) { saved in
-                            Button { search.selectSaved(saved) } label: {
-                                HStack {
-                                    Text(verbatim: saved.name)
-                                    if search.selectedSavedID == saved.id { Image(systemName: "checkmark") }
-                                }
-                            }
-                            .disabled(search.saving)
+            .labelsHidden()
+            .pickerStyle(.menu)
+            HStack(spacing: 8) {
+                if hybridAvailable {
+                    Picker("Mode", selection: filterBinding(\.mode)) {
+                        Text("Full Text").tag(APISearchMode.fulltext)
+                        Text("Hybrid").tag(APISearchMode.hybrid)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                    .help("Hybrid search can make an embedding call and searches a bounded window. Use Full Text to page further.")
+                }
+                Menu {
+                    Picker("Results per Page", selection: filterBinding(\.limit)) {
+                        Text("Server Default").tag(Int64?.none)
+                        ForEach(Self.pageSizes, id: \.self) { Text("\($0)").tag(Int64?.some($0)) }
+                        if let limit = search.filter.limit, !Self.pageSizes.contains(limit) {
+                            Text("\(limit)").tag(Int64?.some(limit))
                         }
-                        Button("New saved search") { search.selectSaved(nil) }.disabled(search.saving)
                     }
+                    .pickerStyle(.inline)
+                } label: {
+                    Label("Results per Page", systemImage: "line.3.horizontal.decrease.circle")
                 }
-                if !search.submittedQuery.isEmpty {
-                    SwiftUI.Section("Articles") {
-                        ForEach(search.matches.filter { $0.kind == "entry" }) { match in result(match) }
-                    }
-                    SwiftUI.Section("Agent notes") {
-                        ForEach(search.matches.filter { $0.kind == "agent_note" }) { match in result(match) }
-                    }
-                    if !search.loading && search.matches.isEmpty && search.error == nil && search.status == nil {
-                        Text("No matches.").foregroundStyle(.secondary)
-                    }
-                    if let status = search.status {
-                        Text("Hybrid search is \(status).")
-                        Button("Use full-text search") { search.useFullText() }
-                    }
-                    if search.nextCursor != nil {
-                        Button("More search results") { search.loadMore() }.disabled(search.loading)
-                    }
-                } else {
-                    Text("Search publisher content and separately labelled agent notes.")
-                        .foregroundStyle(.secondary)
+                .menuStyle(.button)
+                .buttonStyle(.borderless)
+                .labelStyle(.iconOnly)
+                .fixedSize()
+                .help("Results per page")
+                Spacer(minLength: 0)
+                if search.selectedSavedID == nil {
+                    Button("Save…") { saving = true }
+                        .help("Save this search in the sidebar")
+                        .disabled(!search.hasSubmittedQuery || search.saving || search.loading)
                 }
+                if search.saving { ProgressView().controlSize(.small) }
             }
-            if search.loading { ProgressView("Searching…").controlSize(.small) }
-            if let error = search.error { message(error, color: .red) }
-            if let error = search.metadataError {
-                message(error, color: .red)
-                Button("Retry search setup") { search.loadMetadata() }.disabled(search.loadingMetadata)
+            if search.embeddingStatus == "paused" {
+                Text("Hybrid search is paused. Full-text search is available.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            if let notice = search.notice { message(notice) }
-            if !search.submittedQuery.isEmpty {
-                VStack(spacing: 8) {
-                    TextField("Saved search name", text: $search.savedName)
-                        .textFieldStyle(.roundedBorder)
-                        .focused($field, equals: .name)
-                        .disabled(search.saving)
+        }
+        .controlSize(.small)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    /// Filters apply at once to a submitted search, as Finder's scope bar does.
+    private func filterBinding<Value>(_ path: WritableKeyPath<APISearchFilter, Value>) -> Binding<Value> {
+        Binding(get: { search.filter[keyPath: path] }, set: { value in
+            search.filter[keyPath: path] = value
+            if search.hasSubmittedQuery { search.submit() }
+        })
+    }
+
+    /// Results as article-table rows. Row identifiers are positions, since an
+    /// article and an agent note on it share an entry ID.
+    private var table: (groups: [EditionGroup], matches: [Int64: APISearchMatch]) {
+        var byRow: [Int64: APISearchMatch] = [:]
+        var next: Int64 = 1
+        func rows(_ matches: [APISearchMatch]) -> [EntryRow] {
+            matches.map { match in
+                let id = next
+                next += 1
+                byRow[id] = match
+                let source = match.kind == "agent_note"
+                    ? "Agent note · \(match.agentName.flatMap { $0.isEmpty ? nil : $0 } ?? "Unknown agent")"
+                    : app.feedMap[match.subscriptionID]?.title ?? "Feed"
+                let snippet = match.snippet.trimmingCharacters(in: .whitespacesAndNewlines)
+                let url = URL(string: match.url).flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil }
+                return EntryRow(id: id, title: match.title.isEmpty ? "Untitled" : match.title,
+                                subtitle: snippet.isEmpty ? source : "\(source) — \(snippet)", unread: false, url: url)
+            }
+        }
+        var groups: [EditionGroup] = []
+        if !entries.isEmpty { groups.append(EditionGroup(subscriptionID: -1, title: "Articles", rows: rows(entries))) }
+        if !notes.isEmpty { groups.append(EditionGroup(subscriptionID: -2, title: "Agent Notes", rows: rows(notes))) }
+        return (groups, byRow)
+    }
+
+    @ViewBuilder private var results: some View {
+        if !search.hasSubmittedQuery {
+            ContentUnavailableView("Search Your Feeds", systemImage: "magnifyingglass",
+                                   description: Text("Type in the search field and press Return. Publisher text and agent notes are searched separately."))
+        } else if search.matches.isEmpty && search.loading {
+            ProgressView("Searching…").controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if search.matches.isEmpty && (search.error != nil || search.status != nil) {
+            // The message bar below says why and offers the way forward.
+            ContentUnavailableView("Couldn’t Search", systemImage: "exclamationmark.magnifyingglass")
+        } else if search.matches.isEmpty {
+            ContentUnavailableView.search(text: search.submittedQuery)
+        } else {
+            let table = self.table
+            EntryTable(groups: table.groups, selection: Binding(get: {
+                table.matches.first { $0.value.id == window.selectedMatchID && $0.value.entryID == window.selected }?.key
+            }, set: { row in
+                if let row, let match = table.matches[row] { window.selectSearchMatch(match) }
+            }), actions: EntryTableActions(
+                perform: { command, row in
+                    if let match = table.matches[row] { window.command(command, entryID: match.entryID) }
+                },
+                openInBrowser: { row in
+                    if let url = table.matches[row].flatMap({ URL(string: $0.url) }),
+                       ["http", "https"].contains(url.scheme?.lowercased() ?? "") { NSWorkspace.shared.open(url) }
+                },
+                canAct: window.tableActions.canAct,
+                // Reading actions need the article, which loads when it is opened.
+                canActOn: { row in
+                    guard let id = table.matches[row]?.entryID else { return false }
+                    return window.entries.contains { $0.id == id }
+                }))
+            if search.nextCursor != nil {
+                Button("Load More Results") { search.loadMore() }
+                    .disabled(search.loading)
+                    .buttonStyle(.link)
+                    .padding(8)
+                    .frame(maxWidth: .infinity)
+                    .background(.bar)
+            }
+        }
+        messages
+    }
+
+    @ViewBuilder private var messages: some View {
+        let lines = [search.error, search.metadataError, search.notice].compactMap { $0 }
+        if !lines.isEmpty || search.status != nil {
+            VStack(alignment: .leading, spacing: 6) {
+                if let status = search.status {
                     HStack {
-                        Button("Save as new") { search.saveNew() }.disabled(search.saving)
-                        if search.selectedSavedID != nil {
-                            Button("Rename") { search.rename() }.disabled(search.saving)
-                            Button("Delete", role: .destructive) { confirmingDelete = true }.disabled(search.saving)
-                        }
-                        if search.saving { ProgressView().controlSize(.small) }
+                        Text("Hybrid search is \(status).")
+                        Spacer()
+                        Button("Use Full Text") { search.useFullText() }
                     }
                 }
-                .padding([.horizontal, .bottom], 10)
-            }
-        }
-        .onChange(of: field) { window.editingSearch = field != nil }
-        .onDisappear { window.editingSearch = false }
-        .confirmationDialog("Delete this saved search?", isPresented: $confirmingDelete) {
-            Button("Delete", role: .destructive) { search.delete() }
-        } message: {
-            Text("Only the saved view is removed. Your articles stay in Earnest.")
-        }
-    }
-
-    private func result(_ match: APISearchMatch) -> some View {
-        Button { window.selectSearchMatch(match) } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(verbatim: match.title.isEmpty ? "Untitled" : match.title).font(.headline)
-                if match.kind == "agent_note" {
-                    Text("Agent note · \(match.agentName.flatMap { $0.isEmpty ? nil : $0 } ?? "Unknown agent")")
-                        .font(.caption).foregroundStyle(.secondary)
+                ForEach(lines, id: \.self) { Text(verbatim: $0) }
+                if search.metadataError != nil {
+                    Button("Retry") { search.loadMetadata() }.disabled(search.loadingMetadata)
                 }
-                Text(verbatim: match.snippet).font(.callout).lineLimit(4)
             }
+            .font(.caption)
+            .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 4)
+            .padding(10)
+            .background(.bar)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("\(match.kind == "agent_note" ? "Agent note" : "Article"): \(match.title.isEmpty ? "Untitled" : match.title)")
-    }
-
-    private func message(_ text: String, color: Color = .secondary) -> some View {
-        Text(verbatim: text).font(.caption).foregroundStyle(color)
-            .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 10)
     }
 }

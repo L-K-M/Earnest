@@ -1,7 +1,7 @@
 name: Earnest
 options:
   deploymentTarget:
-    macOS: '15.0'
+    macOS: '26.0'
 packages:
   EarnestKit:
     path: ../EarnestKit
@@ -39,7 +39,24 @@ targets:
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         CFBundleURLTypes:
-          - CFBundleURLSchemes: [earnest]
+          - CFBundleURLName: ch.lkmc.Earnest.entry
+            CFBundleURLSchemes: [earnest]
+          - CFBundleURLName: ch.lkmc.Earnest.feed
+            CFBundleURLSchemes: [feed]
+        # OPML subscription lists open as an import, ranked below a reader
+        # the user has chosen as their default.
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: OPML Subscription List
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [org.opml.opml]
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: org.opml.opml
+            UTTypeDescription: OPML Subscription List
+            UTTypeConformsTo: [public.xml]
+            UTTypeTagSpecification:
+              public.filename-extension: [opml]
+              public.mime-type: [text/x-opml]
   EarnestTests:
     type: bundle.unit-test
     platform: macOS

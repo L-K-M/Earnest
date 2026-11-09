@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import XCTest
 import EarnestKit
@@ -270,9 +271,16 @@ import EarnestKit
         defer { app.signOut() }
         window.section = .search
         XCTAssertTrue(window.canBrowse)
-        window.editingSearch = true
-        XCTAssertFalse(window.canBrowse, "Typing a query must not execute single-key reading commands")
-        window.editingSearch = false
+        // Typing a query must not execute single-key reading commands: the
+        // menus drop letter equivalents while a field editor has focus.
+        let field = NSTextView()
+        field.isFieldEditor = true
+        XCTAssertTrue(KeyboardRouter.isTextInput(field))
+        let readOnly = NSTextView()
+        readOnly.isEditable = false
+        XCTAssertFalse(KeyboardRouter.isTextInput(readOnly))
+        XCTAssertFalse(KeyboardRouter.isTextInput(NSTableView()))
+        XCTAssertFalse(KeyboardRouter.isTextInput(nil))
         let note = try JSONDecoder().decode(APISearchMatch.self, from: Data(match(42, kind: "agent_note", annotation: 9).utf8))
         window.selectSearchMatch(note)
         XCTAssertEqual(window.selected, 42)
@@ -280,6 +288,6 @@ import EarnestKit
         let entry = try JSONDecoder().decode(APISearchMatch.self, from: Data(match(42).utf8))
         window.selectSearchMatch(entry)
         XCTAssertEqual(window.imageMode, .proxied)
-        XCTAssertTrue(window.paletteCommands().contains { $0.title == "Go to Search" })
+        XCTAssertTrue(window.paletteCommands().contains { $0.title == "Search Articles" })
     }
 }

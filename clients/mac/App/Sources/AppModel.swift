@@ -40,6 +40,16 @@ struct ReaderPreferencesScope: Equatable {
     /// last fetch failed; it is never treated as zero.
     @Published private(set) var unreadCounts: APIUnreadCounts?
     @Published private(set) var unreadCountsError: String?
+    /// When the last synchronization finished, for the sidebar status line.
+    @Published private(set) var lastSyncedAt: Date?
+    /// Incremented to ask the frontmost window to open the Settings window.
+    @Published var openSettingsRequest = 0
+    /// Sign Out was chosen; the active window asks for confirmation.
+    @Published var confirmingSignOut = false
+    /// A New Subscription request is in flight.
+    @Published private(set) var subscribing = false
+    /// A subscription import or export in progress, for the status line.
+    @Published private(set) var transfer: String?
     private var readerSettingsGeneration: String?
     private var countsRequestID = 0
 
@@ -58,9 +68,32 @@ struct ReaderPreferencesScope: Equatable {
     private var tasks: [String: Task<Void, Never>] = [:]
     var sessionActions = SessionCounts()
     private var windowRefs: [WindowRef] = []
+    private var preferenceRefs: [PreferencesRef] = []
 
     private struct WindowRef {
         weak var value: WindowModel?
+    }
+
+    private struct PreferencesRef {
+        weak var value: ReaderSettingsModel?
+    }
+
+    struct ImportReport: Identifiable, Equatable {
+        let id = UUID()
+        let title: String
+        let detail: String
+    }
+
+    /// Settings drafts over the shared account preferences: the Settings
+    /// window's, and any a test creates.
+    var preferenceModels: [ReaderSettingsModel] {
+        preferenceRefs.removeAll { $0.value == nil }
+        return preferenceRefs.compactMap(\.value)
+    }
+
+    func register(preferences: ReaderSettingsModel) {
+        preferenceRefs.removeAll { $0.value == nil || $0.value === preferences }
+        preferenceRefs.append(PreferencesRef(value: preferences))
     }
 
     /// Open windows in registration order; dead references are pruned on read.
@@ -130,15 +163,31 @@ struct ReaderPreferencesScope: Equatable {
         countsRequestID &+= 1
         unreadCounts = nil
         unreadCountsError = nil
+        lastSyncedAt = nil
+        confirmingSignOut = false
+        subscribing = false
+        transfer = nil
         error = nil
         for window in windows { window.endSession() }
+        for preferences in preferenceModels { preferences.endSession() }
     }
 
     func connect() {
         do {
-            let trimmed = server.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let url = URL(string: trimmed), !trimmed.isEmpty else { throw APIError.invalidBaseURL }
+            guard let trimmed = ServerAddress.normalize(server), let url = URL(string: trimmed) else {
+                throw APIError.invalidBaseURL
+            }
+            server = trimmed
+            // A link opened while signed out or launching waits for this session,
+            // and so does a feed: link's New Subscription offer.
+            let links = windows.compactMap { window in window.pendingDeepLink.map { (window, $0) } }
+            let offers = windows.filter(\.subscribing).map { ($0, $0.subscribeURL) }
             endSession()
+            for (window, link) in links { window.deferDeepLink(link) }
+            for (window, address) in offers {
+                window.subscribeURL = address
+                window.subscribing = true
+            }
             api = nil
             tokens = nil
             serverURL = nil
@@ -365,6 +414,7 @@ struct ReaderPreferencesScope: Equatable {
                 } else {
                     self.connectionNote = nil
                 }
+                self.lastSyncedAt = Date()
                 self.rebuildPresentation()
                 await self.refresh()
                 self.refreshPrincipalNames()
@@ -402,12 +452,8 @@ struct ReaderPreferencesScope: Equatable {
                 let authorization = try await api.startDevice(clientName: "Earnest for Mac")
                 try Task.checkCancellation()
                 guard self.session == expectedSession else { return }
+                // The sign-in page opens when you ask for it, not on its own.
                 self.code = authorization
-                #if canImport(AppKit)
-                if let url = URL(string: authorization.verificationURI), ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
-                    NSWorkspace.shared.open(url)
-                }
-                #endif
                 let deadline = Date().addingTimeInterval(TimeInterval(authorization.expiresIn))
                 var interval = max(1, authorization.interval)
                 while Date() < deadline {
@@ -442,6 +488,43 @@ struct ReaderPreferencesScope: Equatable {
                 self.report(error)
             }
         }
+    }
+
+    /// Ask before signing out. With no reading window open there is nowhere
+    /// to show a sheet, so ask in an alert of its own.
+    func requestSignOut() {
+        guard loggedIn else { return }
+        #if canImport(AppKit)
+        if !windows.contains(where: { $0.nsWindow?.isVisible == true }) {
+            let alert = NSAlert()
+            alert.messageText = "Sign Out of Earnest?"
+            alert.informativeText = "You will need to approve this Mac again to sign in."
+            alert.addButton(withTitle: "Sign Out").hasDestructiveAction = true
+            alert.addButton(withTitle: "Cancel")
+            if alert.runModal() == .alertFirstButtonReturn { signOut() }
+            return
+        }
+        #endif
+        confirmingSignOut = true
+    }
+
+    /// The device-approval page for the code on screen, if it is a web address.
+    var signInPage: URL? {
+        guard let code, let url = URL(string: code.verificationURI),
+              ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
+        return url
+    }
+
+    func openSignInPage() {
+        #if canImport(AppKit)
+        if let signInPage { NSWorkspace.shared.open(signInPage) }
+        #endif
+    }
+
+    /// Return to the server field, forgetting the connection and any login.
+    func changeServer() {
+        connected = false
+        signOut()
     }
 
     func cancelLogin() {
@@ -585,6 +668,7 @@ struct ReaderPreferencesScope: Equatable {
     func rebuildPresentation() {
         pendingOps = (try? engine?.snapshot().outbox.count) ?? 0
         for window in windows { window.rebuildPresentation() }
+        for preferences in preferenceModels { preferences.update(from: readerSettings) }
     }
 
     /// Read the durable settings and last-synced counts into the shared
@@ -607,7 +691,7 @@ struct ReaderPreferencesScope: Equatable {
         }
         unreadCounts = generation == nil ? nil : snapshot.unreadCounts
         if changed {
-            for window in windows { window.settings.update(from: readerSettings) }
+            for preferences in preferenceModels { preferences.update(from: readerSettings) }
         }
     }
 
@@ -632,6 +716,7 @@ struct ReaderPreferencesScope: Equatable {
         guard let effective = try engine.readerSettings() else { throw SyncError.invalidPage }
         readerSettings = effective
         for window in windows { window.rebuildPresentation() }
+        for preferences in preferenceModels { preferences.update(from: effective) }
         if effective.readingMode == .unreadCounts {
             Task { [weak self] in await self?.refreshUnreadCounts() }
         }
@@ -679,12 +764,15 @@ struct ReaderPreferencesScope: Equatable {
     // MARK: - Feeds
 
     func subscribe(url: String, cadence: String, onSubscribed: @escaping () -> Void) {
-        guard let api else { return }
+        guard let api, !subscribing else { return }
         let expectedSession = session
+        subscribing = true
         runTask("feeds") { [weak self] in
+            defer { if self?.session == expectedSession { self?.subscribing = false } }
             do {
                 _ = try await api.subscribe(url: url, cadence: cadence)
                 guard let self, self.loggedIn, self.session == expectedSession, !Task.isCancelled else { return }
+                self.subscribing = false
                 onSubscribed()
                 await self.refreshFeeds()
                 self.rebuildPresentation()
@@ -727,6 +815,102 @@ struct ReaderPreferencesScope: Equatable {
             self.rebuildPresentation()
             self.scheduleSync()
         }
+    }
+
+    /// Ask the server to fetch a feed on its next pass.
+    func refreshFeed(_ subscriptionID: Int64) {
+        guard let api else { return }
+        let expectedSession = session
+        runTask("feed-refresh-\(subscriptionID)") { [weak self] in
+            do {
+                try await api.refreshSubscription(id: subscriptionID)
+            } catch is CancellationError {
+                return
+            } catch {
+                if self?.session == expectedSession { self?.report(error) }
+                return
+            }
+            guard let self, self.loggedIn, self.session == expectedSession else { return }
+            self.connectionNote = nil
+            await self.refreshFeeds()
+            self.rebuildPresentation()
+        }
+    }
+
+    // MARK: - Subscription files
+
+    /// The server and the API transport accept request bodies up to 8 MiB.
+    static let opmlLimit = 8 << 20
+
+    /// Import an OPML document's folders and feeds. The server skips feeds
+    /// you already follow; the report, handed to the window that asked, says
+    /// what happened, failures included.
+    func importOPML(_ document: Data, name: String, reported: @escaping (ImportReport) -> Void) {
+        guard let api, loggedIn else { return }
+        guard transfer == nil else {
+            error = "Wait for the current subscription transfer to finish, then import “\(name)” again."
+            return
+        }
+        guard document.count <= Self.opmlLimit else {
+            error = "“\(name)” is too large to be a subscription list."
+            return
+        }
+        let expectedSession = session
+        let followed = Set(feeds.map(\.id))
+        transfer = "Importing subscriptions…"
+        runTask("opml") { [weak self] in
+            defer { if self?.session == expectedSession { self?.transfer = nil } }
+            do {
+                let summary = try await api.importOPML(document)
+                guard let self, self.session == expectedSession, self.loggedIn else { return }
+                reported(Self.report(for: summary, name: name, followed: followed))
+                await self.refreshFeeds()
+                self.rebuildPresentation()
+                self.scheduleSync()
+            } catch is CancellationError {
+            } catch {
+                guard self?.session == expectedSession else { return }
+                self?.report(error)
+            }
+        }
+    }
+
+    static func report(for summary: OPMLImportSummary, name: String, followed: Set<Int64> = []) -> ImportReport {
+        var parts: [String] = []
+        let added = summary.subscriptionIDs.filter { !followed.contains($0) }.count
+        let already = summary.subscriptionIDs.count - added
+        parts.append(added == 0 ? "No new subscriptions." : added == 1 ? "1 new subscription." : "\(added) new subscriptions.")
+        if already > 0 {
+            parts.append(already == 1 ? "1 feed you already follow." : "\(already) feeds you already follow.")
+        }
+        if summary.folders > 0 { parts.append(summary.folders == 1 ? "1 folder." : "\(summary.folders) folders.") }
+        if summary.deferred > 0 {
+            parts.append(summary.deferred == 1 ? "1 feed will be checked shortly." : "\(summary.deferred) feeds will be checked shortly.")
+        }
+        if !summary.failures.isEmpty {
+            let count = summary.failures.count
+            let listed = summary.failures.prefix(5).joined(separator: "\n")
+            parts.append((count == 1 ? "1 entry could not be imported:" : "\(count) entries could not be imported:") + "\n" + listed)
+            if count > 5 { parts.append("and \(count - 5) more.") }
+        }
+        let title = summary.failures.isEmpty ? "Imported “\(name)”" : "Imported “\(name)” with problems"
+        return ImportReport(title: title, detail: parts.joined(separator: " "))
+    }
+
+    /// Fetch the account's subscriptions as OPML for a save panel, or nil
+    /// when another transfer is running, which is reported.
+    func exportOPML() async throws -> Data? {
+        guard let api, loggedIn else { throw APIError.invalidResponse }
+        guard transfer == nil else {
+            error = "Wait for the current subscription transfer to finish, then export again."
+            return nil
+        }
+        let expectedSession = session
+        transfer = "Exporting subscriptions…"
+        defer { if session == expectedSession { transfer = nil } }
+        let data = try await api.exportOPML()
+        guard session == expectedSession, loggedIn else { throw CancellationError() }
+        return data
     }
 
     // MARK: - Activity

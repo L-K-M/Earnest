@@ -38,3 +38,6 @@ filter:
     - rename-saved-search
     - delete-saved-search
     - pipeline-status
+    - export-opml
+    - import-opml
+    - refresh-subscription

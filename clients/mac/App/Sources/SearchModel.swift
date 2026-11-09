@@ -67,6 +67,28 @@ import SwiftUI
         generation = nil
     }
 
+    /// Leave search: drop the query and its results but keep the account's
+    /// saved searches and AI availability for the sidebar.
+    func clearQuery() {
+        searchTask?.cancel()
+        requestID &+= 1
+        query = ""
+        filter = APISearchFilter()
+        submittedFilter = APISearchFilter()
+        submittedQuery = ""
+        matches = []
+        selectedSavedID = nil
+        savedName = ""
+        nextCursor = nil
+        status = nil
+        loading = false
+        error = nil
+        notice = nil
+    }
+
+    /// A query has been submitted; it may have found nothing.
+    var hasSubmittedQuery: Bool { !submittedQuery.isEmpty }
+
     func invalidateAfterRestore() {
         let current = try? app.engine?.snapshot().cursor?.generation
         if let generation, current != generation { reset() }
@@ -216,6 +238,27 @@ import SwiftUI
         mutate(.delete(id: id))
     }
 
+    /// Save the submitted search under a name typed in the save sheet.
+    func saveNew(named name: String) {
+        savedName = name
+        saveNew()
+    }
+
+    /// Rename a saved search from the sidebar, whether or not it is open.
+    func rename(_ saved: APISavedSearch, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { error = "Enter a saved search name."; return }
+        guard savedSearches.contains(where: { $0.id == saved.id }) else { return }
+        if selectedSavedID == saved.id { savedName = trimmed }
+        mutate(.rename(id: saved.id, name: trimmed))
+    }
+
+    /// Delete a saved search from the sidebar. Only the definition goes.
+    func delete(_ saved: APISavedSearch) {
+        guard savedSearches.contains(where: { $0.id == saved.id }) else { return }
+        mutate(.delete(id: saved.id))
+    }
+
     private func mutate(_ action: SavedAction) {
         guard let api = app.api, app.loggedIn, !saving else { return }
         let session = app.session
@@ -233,6 +276,11 @@ import SwiftUI
                     guard self.isCurrent(session, generation: generation) else { return }
                     self.savedSearches.removeAll { $0.id == saved.id }
                     self.savedSearches.append(saved)
+                    // The open results are now that saved search, as in Finder.
+                    if self.submittedQuery == saved.query {
+                        self.selectedSavedID = saved.id
+                        self.savedName = saved.name
+                    }
                     self.notice = "Search saved."
                 case .rename(let id, let name):
                     try await api.renameSavedSearch(id: id, name: name)
