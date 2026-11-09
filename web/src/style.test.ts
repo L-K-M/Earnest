@@ -14,10 +14,19 @@ it('keeps light-dark tokens behind @supports with plain light values outside', (
   const guarded = css.slice(guard, css.indexOf('\n}\n', guard))
   const outside = css.slice(0, guard) + css.slice(guard + guarded.length)
   expect(outside).not.toContain('light-dark(')
-  const themed = [...guarded.matchAll(/--([\w-]+):\s*light-dark\(([^,]+(?:\([^)]*\))?[^,]*),/g)]
-  expect(themed.length).toBeGreaterThan(0)
-  for (const [, name, light] of themed) {
-    expect(outside, `plain value for --${name}`).toContain(`--${name}: ${light.trim()};`)
+  // The plain values live in the same selector's base rule, just before the
+  // guard; other theme blocks declaring a token do not count.
+  const selector = ':root, [data-theme=light], [data-theme=dark] {'
+  const baseStart = css.lastIndexOf(selector, guard)
+  expect(baseStart).toBeGreaterThanOrEqual(0)
+  const base = css.slice(baseStart, css.indexOf('}', baseStart))
+  // Every token the guard themes, including composite ones such as --shadow.
+  const names = [...guarded.matchAll(/--([\w-]+):/g)].map(match => match[1])
+  expect(names.length).toBeGreaterThan(0)
+  for (const name of names) expect(base, `plain value for --${name}`).toMatch(new RegExp(`--${name}:\\s*[^;]*[^;\\s]`))
+  // Where the whole value is light-dark(), the plain value is its light half.
+  for (const [, name, light] of guarded.matchAll(/--([\w-]+):\s*light-dark\(([^,]+(?:\([^)]*\))?[^,]*),/g)) {
+    expect(base, `plain value for --${name}`).toContain(`--${name}: ${light.trim()};`)
   }
 })
 
