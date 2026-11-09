@@ -458,7 +458,7 @@ struct WindowAccessor: NSViewRepresentable {
                     Text("Feeds set to This Week collect here.")
                 }
             } else {
-                EntryTable(groups: window.editionGroups, selection: entrySelection, actions: window.tableActions, takeFocusRequest: window.takeListFocusRequest)
+                EntryTable(groups: window.editionGroups, selection: entrySelection, actions: window.tableActions, takeFocusRequest: window.takeListFocusRequest, media: model.media)
             }
         case .later, .kept, .done:
             if window.rows.isEmpty {
@@ -473,7 +473,7 @@ struct WindowAccessor: NSViewRepresentable {
                     Text(emptyDetail)
                 }
             } else {
-                EntryTable(entries: window.rows, selection: entrySelection, actions: window.tableActions, takeFocusRequest: window.takeListFocusRequest)
+                EntryTable(entries: window.rows, selection: entrySelection, actions: window.tableActions, takeFocusRequest: window.takeListFocusRequest, media: model.media)
             }
         case .feeds:
             FeedsView()
@@ -611,7 +611,7 @@ struct WindowAccessor: NSViewRepresentable {
                     if !window.endDetail.isEmpty { Text(window.endDetail) }
                 }
             } else {
-                EntryTable(entries: window.rows, selection: $selection, actions: window.tableActions, takeFocusRequest: window.takeListFocusRequest)
+                EntryTable(entries: window.rows, selection: $selection, actions: window.tableActions, takeFocusRequest: window.takeListFocusRequest, media: model.media)
                 if !window.endTitle.isEmpty {
                     EndStatement(title: window.endTitle, detail: window.endDetail)
                 }

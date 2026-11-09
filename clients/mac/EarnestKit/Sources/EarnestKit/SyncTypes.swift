@@ -124,6 +124,11 @@ public struct SyncEntry: Codable, Equatable, Sendable {
     public var rev: Int64
     public var deleted: Bool
     public var hasBody: Bool
+    /// Whether the row can be listed: it has a body, or kept the title or
+    /// link of an earlier one when a bodyless change, such as a new
+    /// thumbnail, raised its revision. Such a row stays listed while it
+    /// waits for the REST refresh that restores its body.
+    public var hasMetadata: Bool { hasBody || !title.isEmpty || !url.isEmpty }
     public init(id: Int64, subscriptionID: Int64 = 0, feedID: Int64 = 0, seq: Int64 = 0,
                 guid: String? = nil, title: String = "", url: String = "", author: String = "",
                 publishedAt: Date? = nil, updatedAt: Date? = nil, firstSeenAt: Date? = nil,

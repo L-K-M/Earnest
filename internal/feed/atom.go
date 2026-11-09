@@ -46,7 +46,10 @@ func parseAtomEntry(n *node, feedLang string, is03 bool, feedLink, feedURL strin
 		}
 	}
 
-	it.Title = atomText(n.child("title"))
+	it.Title, it.identityTitle = atomTitleTexts(n.child("title"))
+	if it.identityTitle == it.Title {
+		it.identityTitle = ""
+	}
 	it.Author = atomAuthor(n)
 
 	if is03 {
@@ -97,15 +100,23 @@ func parseAtomEntry(n *node, feedLang string, is03 bool, feedLink, feedURL strin
 
 // atomText renders a type-carrying Atom text construct as display text.
 func atomText(n *node) string {
+	text, _ := atomTitleTexts(n)
+	return text
+}
+
+// atomTitleTexts is atomText plus the text the identity rule hashes; see
+// titleTexts.
+func atomTitleTexts(n *node) (display, identity string) {
 	if n == nil {
-		return ""
+		return "", ""
 	}
 	typ := strings.ToLower(strings.TrimSpace(n.attrAny("type")))
 	switch typ {
 	case "xhtml", "application/xhtml+xml":
-		return htmlText("<div>" + unwrapXHTMLDiv(n) + "</div>")
+		text := htmlText("<div>" + unwrapXHTMLDiv(n) + "</div>")
+		return text, text
 	default:
-		return plainTitle(textContent(n))
+		return titleTexts(textContent(n))
 	}
 }
 

@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   change offers the same. Mark unread returns a read article to unread
   and clears Done with it. The reader header gained Copy link and Share
   for the entry URL.
+- The Mac app shows feed icons and article thumbnails in article rows and
+  feed icons in Feeds, loaded with the account's token and kept per
+  account. Article titles in the list now wrap to two lines as their row
+  height assumes.
 - The web article list shows each feed's icon and a thumbnail of the
   article's image. Earnest downloads and shrinks them when feeds and
   articles arrive and serves its own copies, so lists never contact
@@ -70,6 +74,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Titles that a feed escaped twice, such as The Verge's
+  "Pomera&#8217;s", now show the character instead of the reference.
+  Earnest's identity for items without a GUID or link is unchanged, so
+  no article is stored twice.
 - A feed that lists two items under one identity, such as a WordPress
   comments feed, no longer stops `earnest serve`: comments on one post
   keep distinct identities, a repeated item is stored once, and data the

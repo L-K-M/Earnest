@@ -54,6 +54,9 @@ struct ReaderPreferencesScope: Equatable {
     private var countsRequestID = 0
 
     private(set) var api: EarnestAPI?
+    /// Thumbnails and feed icons for the active account. Replaced with the
+    /// session so one account's images and misses never reach another's.
+    private(set) var media = MediaStore()
     private var tokens: (any TokenStore)?
     private var serverURL: URL?
     private let identities: IdentityStore
@@ -142,6 +145,7 @@ struct ReaderPreferencesScope: Equatable {
         engine = nil
         cache = nil
         identity = nil
+        media = MediaStore()
         coordinator = nil
         principalID = 0
         feeds = []
@@ -275,6 +279,7 @@ struct ReaderPreferencesScope: Equatable {
             self.cache = cache
             self.engine = engine
             self.identity = resolved
+            media = MediaStore(identity: resolved.cacheKey, api: api, cache: cache)
             principalID = resolved.principalID
             coordinator = SyncCoordinator(engine: engine, api: api)
             do {
@@ -316,7 +321,7 @@ struct ReaderPreferencesScope: Equatable {
     func currentEntries() throws -> [APIEntry] {
         guard let engine else { return [] }
         let snapshot = try engine.snapshot()
-        let cached = snapshot.entries.filter { !$0.deleted && $0.hasBody }.sorted { $0.seq < $1.seq }
+        let cached = snapshot.entries.filter { !$0.deleted && $0.hasMetadata }.sorted { $0.seq < $1.seq }
         let states = try engine.states(principal: principalID, entryIDs: cached.map(\.id))
         return try cached.map { try cachedEntry($0, principal: principalID, engine: engine, state: states[$0.id]) }
     }
