@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
@@ -98,6 +99,7 @@ import ch.lkmc.earnest.core.River
 import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.core.SyncSnapshot
 import ch.lkmc.earnest.core.UnreadCounts
+import ch.lkmc.earnest.core.iconUrl
 import ch.lkmc.earnest.core.typographyFor
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -253,6 +255,12 @@ private fun MainScaffold(
             .filter { it.kind == SyncEngine.OBJECT_SUBSCRIPTION }
             .associate { it.id to it.name }
     }
+    val subscriptionIcons = remember(state.snapshot) {
+        state.snapshot.objects
+            .filter { it.kind == SyncEngine.OBJECT_SUBSCRIPTION }
+            .mapNotNull { subscription -> subscription.iconUrl()?.let { subscription.id to it } }
+            .toMap()
+    }
     val lists = remember(state.snapshot, state.states, state.cadences, state.riverEntryIds) {
         val visible = entries.filterNot { it.deleted }
         fun stateOf(id: Long) = state.states[id] ?: SyncEngine.initialState(state.principalId, id)
@@ -394,6 +402,7 @@ private fun MainScaffold(
                                     states = state.states,
                                     principalId = state.principalId,
                                     subscriptionTitles = subscriptionTitles,
+                                    subscriptionIcons = subscriptionIcons,
                                     briefs = if (view == View.TODAY) state.briefs else emptyList(),
                                     principalNames = state.principals,
                                     entryTitles = state.snapshot.entries.associate { it.id to it.title },
@@ -614,6 +623,7 @@ private fun EntryListScreen(
     states: Map<Long, ch.lkmc.earnest.core.State>,
     principalId: Long,
     subscriptionTitles: Map<Long, String>,
+    subscriptionIcons: Map<Long, String>,
     briefs: List<ch.lkmc.earnest.db.BriefEntity>,
     principalNames: Map<Long, String>,
     entryTitles: Map<Long, String>,
@@ -676,6 +686,7 @@ private fun EntryListScreen(
                     entry = entry,
                     state = effective,
                     source = subscriptionTitles[entry.subscriptionId].orEmpty(),
+                    sourceIcon = subscriptionIcons[entry.subscriptionId],
                     onClick = { onOpen(entry.id) },
                 )
             }
@@ -743,34 +754,48 @@ private fun EntryRow(
     entry: CachedEntry,
     state: ch.lkmc.earnest.core.State,
     source: String,
+    sourceIcon: String? = null,
     onClick: () -> Unit,
 ) {
     val unread = state.seen.value == kotlinx.serialization.json.JsonPrimitive(SyncEngine.VALUE_UNSEEN) &&
         state.shelf.value != kotlinx.serialization.json.JsonPrimitive(SyncEngine.VALUE_DONE)
-    Column(
+    Row(
         Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .padding(16.dp),
+        verticalAlignment = Alignment.Top,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (unread) {
-                Box(
-                    Modifier
-                        .width(8.dp)
-                        .height(8.dp)
-                        .background(LocalTones.current.orange, MaterialTheme.shapes.small),
-                )
-                Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (unread) {
+                    Box(
+                        Modifier
+                            .width(8.dp)
+                            .height(8.dp)
+                            .background(LocalTones.current.orange, MaterialTheme.shapes.small),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(entry.title, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            Text(entry.title, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (source.isNotEmpty()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (sourceIcon != null) {
+                        MediaImage(sourceIcon, Modifier.size(16.dp), RoundedCornerShape(4.dp))
+                        Spacer(Modifier.width(4.dp))
+                    }
+                    Text(
+                        "$source · ${entry.firstSeenAt.relativeTime()}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
-        if (source.isNotEmpty()) {
-            Text(
-                "$source · ${entry.firstSeenAt.relativeTime()}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        entry.thumbnailUrl?.let { thumbnail ->
+            Spacer(Modifier.width(12.dp))
+            MediaImage(thumbnail, Modifier.size(56.dp), RoundedCornerShape(8.dp))
         }
     }
 }
@@ -873,7 +898,13 @@ private fun FeedsScreen(
         }
         items(subscriptions, key = { it.id }) { subscription ->
             Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                Text(subscription.name, style = MaterialTheme.typography.bodyLarge)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    subscription.iconUrl()?.let {
+                        MediaImage(it, Modifier.size(24.dp), RoundedCornerShape(4.dp))
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(subscription.name, style = MaterialTheme.typography.bodyLarge)
+                }
                 Text(
                     subscription.raw.url(),
                     style = MaterialTheme.typography.bodySmall,

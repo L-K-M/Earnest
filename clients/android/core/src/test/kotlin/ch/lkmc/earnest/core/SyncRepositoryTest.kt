@@ -221,6 +221,60 @@ class SyncRepositoryTest {
     private val event = """{"id":2,"subscription_id":3,"seq":4,"first_seen_at":"2026-11-03T00:00:00Z","rev":1,"deleted":false}"""
     private val detail = """{"id":2,"subscription_id":3,"feed_id":5,"seq":4,"first_seen_at":"2026-11-03T00:00:00Z","title":"Headline","url":"https://news.test/article","author":"Author","rev":2,"deleted":false}"""
 
+    @Test
+    fun bootstrapCarriesThumbnailAndIconPaths() = runBlocking {
+        val engine = engine()
+        val api = api { request ->
+            when (val path = request.url.encodedPath) {
+                "/v1/bootstrap" -> 200 to """{"generation":"g1","rev":0}"""
+                "/v1/bootstrap/entries" -> 200 to """{"items":[{"id":2,"subscription_id":3,"seq":4,"first_seen_at":"2026-11-03T00:00:00Z","rev":1,"deleted":false,"thumbnail_url":"/v1/entries/2/thumbnail?v=boot"}],"next_id":0,"next_principal":0,"next_view":"","has_more":false}"""
+                "/v1/bootstrap/subscriptions" -> 200 to """{"items":[{"id":3,"folder_id":1,"title":"Weekly","rev":1,"deleted":false,"icon_url":"/v1/subscriptions/3/icon?v=feed"}],"next_id":0,"next_principal":0,"next_view":"","has_more":false}"""
+                else -> {
+                    check(path.startsWith("/v1/bootstrap/")) { "unexpected request $path" }
+                    200 to """{"items":[],"next_id":0,"next_principal":0,"next_view":"","has_more":false}"""
+                }
+            }
+        }
+        SyncRepository(api, engine).bootstrap()
+        assertEquals("/v1/entries/2/thumbnail?v=boot", engine.entry(2)?.thumbnailUrl)
+        assertEquals("/v1/subscriptions/3/icon?v=feed",
+            engine.snapshot().objects.single { it.kind == SyncEngine.OBJECT_SUBSCRIPTION }.iconUrl())
+    }
+
+    @Test
+    fun hydratedThumbnailIsReplacedByNewerRevisions() = runBlocking {
+        val engine = engine()
+        var second = false
+        val api = api { request ->
+            when {
+                request.url.encodedPath == "/v1/entries/2" -> 200 to if (second) {
+                    detail.replace("\"rev\":2", "\"rev\":3,\"thumbnail_url\":\"/v1/entries/2/thumbnail?v=two\"")
+                } else {
+                    detail.replace("\"rev\":2", "\"rev\":2,\"thumbnail_url\":\"/v1/entries/2/thumbnail?v=one\"")
+                }
+                request.url.queryParameter("rev") == "0" -> changes(request, """{"entry":$event}""")
+                request.url.queryParameter("rev") == "1" && second -> 200 to
+                    """{"changes":[{"rev":2,"type":"entry.updated","payload":{"entry":${event.replace("\"rev\":1", "\"rev\":3")}}}],"next":{"generation":"g1","rev":2},"next_cursor":"g1:2"}"""
+                else -> 200 to """{"changes":[],"next":{"generation":"g1","rev":${request.url.queryParameter("rev")}},"next_cursor":"g1:${request.url.queryParameter("rev")}"}"""
+            }
+        }
+        SyncRepository(api, engine).pull()
+        assertEquals("/v1/entries/2/thumbnail?v=one", engine.entry(2)?.thumbnailUrl)
+        second = true
+        SyncRepository(api, engine).pull()
+        assertEquals("/v1/entries/2/thumbnail?v=two", engine.entry(2)?.thumbnailUrl)
+    }
+
+    @Test
+    fun subscriptionChangeCarriesIconPath() = runBlocking {
+        val engine = engine()
+        val payload = """{"subscription":{"id":3,"title":"Weekly","rev":1,"icon_url":"/v1/subscriptions/3/icon?v=feed"},"object":{"kind":"subscription","id":3,"name":"Weekly","rev":1}}"""
+        SyncRepository(api { changes(it, payload) }, engine).pull()
+        assertEquals("/v1/subscriptions/3/icon?v=feed",
+            engine.snapshot().objects.single { it.kind == SyncEngine.OBJECT_SUBSCRIPTION }.iconUrl())
+    }
+
+
     private fun changes(request: okhttp3.Request, payload: String): Pair<Int, String> {
         return 200 to if (request.url.queryParameter("rev") == "0") {
             """{"changes":[{"rev":1,"type":"entry.updated","payload":$payload}],"next":{"generation":"g1","rev":1},"next_cursor":"g1:1"}"""

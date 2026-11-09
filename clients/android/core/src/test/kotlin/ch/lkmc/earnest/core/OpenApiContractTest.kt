@@ -313,6 +313,7 @@ class OpenApiContractTest {
         5,
         false,
         state(),
+        "/v1/entries/1/thumbnail?v=0123abcd",
     )
 
     private fun subscription() = Subscription(
@@ -331,6 +332,7 @@ class OpenApiContractTest {
         false,
         false,
         FeedHealth("2026-11-01T00:00:00Z", "2026-11-02T00:00:00Z", "2026-11-03T00:00:00Z", "", "", 0, 200, 1.5, false),
+        "/v1/subscriptions/1/icon?v=0123abcd",
     )
 
     private fun activity() = Activity(
