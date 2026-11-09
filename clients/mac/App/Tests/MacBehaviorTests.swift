@@ -320,7 +320,7 @@ import EarnestKit
         XCTAssertEqual(clean.detail, "2 new subscriptions. 1 feed you already follow. 1 folder.")
         let failed = AppModel.report(for: OPMLImportSummary(subscribed: 0, folders: 0, deferred: 1, failures: ["bad URL"]), name: "x.opml")
         XCTAssertEqual(failed.title, "Imported “x.opml” with problems")
-        XCTAssertTrue(failed.detail.contains("0 new subscriptions."))
+        XCTAssertTrue(failed.detail.contains("No new subscriptions."))
         XCTAssertTrue(failed.detail.contains("1 feed will be checked shortly."))
         XCTAssertTrue(failed.detail.contains("1 entry could not be imported:\nbad URL"))
     }

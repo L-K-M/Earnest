@@ -22,7 +22,7 @@ import AppKit
             guard oldValue != selected else { return }
             // The article read before stays in the river only while it is
             // open; drop it from the list as soon as the selection moves.
-            if oldValue != nil, section == .today || section == .edition { rebuildPresentation() }
+            if oldValue != nil, (section == .today || section == .edition) { rebuildPresentation() }
             open(selected)
         }
     }
@@ -124,6 +124,15 @@ import AppKit
     func restoreCachedEntries(_ entries: [APIEntry]) {
         self.entries = keepingOpenArticle(entries)
         cachedPresentation = true
+    }
+
+    /// Whether selecting an article would show it in this list: it is listed,
+    /// or it is in the river, where the open article stays while it is open.
+    private func canShow(_ id: Int64) -> Bool {
+        if visibleEntryIDs().contains(id) { return true }
+        guard section == .today || section == .edition, let entry = entries.first(where: { $0.id == id }) else { return false }
+        let inRiver = effectiveState(of: entry).shelf.value == .text("none")
+        return inRiver && (section == .edition) == (cadence(of: entry) == "week")
     }
 
     /// Put a cached article back into this window's entries.
@@ -281,7 +290,7 @@ import AppKit
         if !entry.author.isEmpty { subtitle += " · \(entry.author)" }
         // Kept and Later show as row markers; Done, which has none, stays in words.
         if state.shelf.value == .text("done") && section != .done { subtitle += " · Done" }
-        let url = URL(string: entry.url).flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil }
+        let url = Self.webURL(entry.url)
         return EntryRow(id: entry.id, title: entry.title.isEmpty ? "Untitled" : entry.title,
                         subtitle: subtitle, unread: state.seen.value == .text("unseen"),
                         kept: state.kept.value == .flag(true), later: state.shelf.value == .text("later"),
@@ -454,8 +463,13 @@ import AppKit
 
     /// The article's link, when it is a web address the browser can open.
     var selectedURL: URL? {
-        guard let entry = readingEntry ?? entries.first(where: { $0.id == selected }),
-              let url = URL(string: entry.url), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
+        guard let entry = readingEntry ?? entries.first(where: { $0.id == selected }) else { return nil }
+        return Self.webURL(entry.url)
+    }
+
+    /// An HTTP(S) address the browser may open; anything else is not a link.
+    static func webURL(_ text: String) -> URL? {
+        guard let url = URL(string: text), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
         return url
     }
 
@@ -514,8 +528,7 @@ import AppKit
 
     /// Open a row's article in the default browser.
     func openInBrowser(entryID: Int64) {
-        guard let entry = entries.first(where: { $0.id == entryID }), let url = URL(string: entry.url),
-              ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return }
+        guard let entry = entries.first(where: { $0.id == entryID }), let url = Self.webURL(entry.url) else { return }
         #if canImport(AppKit)
         NSWorkspace.shared.open(url)
         #endif
@@ -570,8 +583,8 @@ import AppKit
               let generation = try? engine.snapshot().cursor?.generation else { return }
         let state = (try? engine.state(principal: app.principalID, entryID: entryID))
             ?? EarnestKit.State(principal: app.principalID, entryID: entryID)
-        let wasVisible = visibleEntryIDs().contains(entryID)
         let index = visibleEntryIDs().firstIndex(of: entryID)
+        let wasVisible = index != nil
         do {
             for register in [Register.shelf, .kept, .seen] {
                 guard let value = values[register], state[register].value != value else { continue }
@@ -599,10 +612,8 @@ import AppKit
         // action may have dropped it from this window's entries, so restore
         // it from the cache first. If it still cannot be shown, stay put.
         if !wasVisible, selected != entryID {
-            let previous = selected
             restoreEntryFromCache(entryID)
-            selectFromList(entryID)
-            if !visibleEntryIDs().contains(entryID) { selectFromList(previous) }
+            if canShow(entryID) { selectFromList(entryID) }
         } else if wasVisible, selected == entryID, !visibleEntryIDs().contains(entryID) {
             keepSelection(near: index)
         }
@@ -714,10 +725,14 @@ import AppKit
     /// Activity rows open the article an agent acted on. Agent-surfaced
     /// articles block automatic images, like agent-note search matches.
     func selectActivity(_ item: ActivityItem?) {
-        selectedActivityID = item?.id
-        guard let entryID = item?.entryID else {
+        guard let item else {
+            selectFromList(nil)
+            return
+        }
+        selectedActivityID = item.id
+        guard let entryID = item.entryID else {
             // A row without an article, such as a notification, stays selected.
-            if item != nil { selected = nil }
+            selected = nil
             return
         }
         imageMode = .click

@@ -86,7 +86,7 @@ extension APISavedSearch: @retroactive Identifiable {}
                 if search.selectedSavedID == nil {
                     Button("Save…") { saving = true }
                         .help("Save this search in the sidebar")
-                        .disabled(!search.hasResults || search.saving || search.loading)
+                        .disabled(!search.hasSubmittedQuery || search.saving || search.loading)
                 }
                 if search.saving { ProgressView().controlSize(.small) }
             }
@@ -104,7 +104,7 @@ extension APISavedSearch: @retroactive Identifiable {}
     private func filterBinding<Value>(_ path: WritableKeyPath<APISearchFilter, Value>) -> Binding<Value> {
         Binding(get: { search.filter[keyPath: path] }, set: { value in
             search.filter[keyPath: path] = value
-            if search.hasResults { search.submit() }
+            if search.hasSubmittedQuery { search.submit() }
         })
     }
 
@@ -134,7 +134,7 @@ extension APISavedSearch: @retroactive Identifiable {}
     }
 
     @ViewBuilder private var results: some View {
-        if !search.hasResults {
+        if !search.hasSubmittedQuery {
             ContentUnavailableView("Search Your Feeds", systemImage: "magnifyingglass",
                                    description: Text("Type in the search field and press Return. Publisher text and agent notes are searched separately."))
         } else if search.matches.isEmpty && search.loading {

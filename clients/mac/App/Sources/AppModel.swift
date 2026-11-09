@@ -879,7 +879,7 @@ struct ReaderPreferencesScope: Equatable {
         var parts: [String] = []
         let added = summary.subscriptionIDs.filter { !followed.contains($0) }.count
         let already = summary.subscriptionIDs.count - added
-        parts.append(added == 1 ? "1 new subscription." : "\(added) new subscriptions.")
+        parts.append(added == 0 ? "No new subscriptions." : added == 1 ? "1 new subscription." : "\(added) new subscriptions.")
         if already > 0 {
             parts.append(already == 1 ? "1 feed you already follow." : "\(already) feeds you already follow.")
         }
@@ -897,12 +897,13 @@ struct ReaderPreferencesScope: Equatable {
         return ImportReport(title: title, detail: parts.joined(separator: " "))
     }
 
-    /// Fetch the account's subscriptions as OPML for a save panel.
-    func exportOPML() async throws -> Data {
+    /// Fetch the account's subscriptions as OPML for a save panel, or nil
+    /// when another transfer is running, which is reported.
+    func exportOPML() async throws -> Data? {
         guard let api, loggedIn else { throw APIError.invalidResponse }
         guard transfer == nil else {
             error = "Wait for the current subscription transfer to finish, then export again."
-            throw CancellationError()
+            return nil
         }
         let expectedSession = session
         transfer = "Exporting subscriptions…"

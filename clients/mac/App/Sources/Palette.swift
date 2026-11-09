@@ -29,7 +29,6 @@ import EarnestKit
                     .onSubmit { run(commands.first { $0.id == highlighted && $0.enabled }) }
                     .onKeyPress(.downArrow) { step(1, in: commands); return .handled }
                     .onKeyPress(.upArrow) { step(-1, in: commands); return .handled }
-                    .onKeyPress(.escape) { dismiss(); return .handled }
             }
             .padding(14)
             Divider()
@@ -59,6 +58,14 @@ import EarnestKit
             }
         }
         .frame(width: 440, height: 380)
+        // Escape and Return still work after a click moves focus to the list.
+        .onKeyPress(.escape) { dismiss(); return .handled }
+        .onKeyPress(.return) {
+            // The field submits on its own; this covers a focused list.
+            guard !fieldFocused else { return .ignored }
+            run(commands.first { $0.id == highlighted })
+            return .handled
+        }
         .onAppear {
             fieldFocused = true
             highlighted = commands.first { $0.enabled }?.id
@@ -66,10 +73,14 @@ import EarnestKit
         .onChange(of: filter) { highlighted = self.commands.first { $0.enabled }?.id ?? self.commands.first?.id }
     }
 
+    /// Move to the next command that can run, staying put at either end.
     private func step(_ offset: Int, in commands: [PaletteCommand]) {
         guard !commands.isEmpty else { return }
-        let index = commands.firstIndex { $0.id == highlighted } ?? (offset > 0 ? -1 : commands.count)
-        highlighted = commands[min(commands.count - 1, max(0, index + offset))].id
+        var index = commands.firstIndex { $0.id == highlighted } ?? (offset > 0 ? -1 : commands.count)
+        repeat {
+            index += offset
+        } while commands.indices.contains(index) && !commands[index].enabled
+        if commands.indices.contains(index) { highlighted = commands[index].id }
     }
 
     private func run(_ command: PaletteCommand?) {

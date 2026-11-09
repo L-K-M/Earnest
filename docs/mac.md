@@ -9,7 +9,7 @@ swift build
 swift test
 ```
 
-The native app requires macOS 26 (Tahoe) or later, Xcode 26 or later and XcodeGen. Generate the
+The native app requires macOS 26 (Tahoe) or later, Xcode 26 or later, and XcodeGen. Generate the
 project and build and test the unsigned app:
 
 ```sh
@@ -180,13 +180,14 @@ and article. Agent text remains plain SwiftUI text.
 Each window has three columns. The sidebar lists Today and Edition under
 Reading, Later, Kept and Done under Shelves, any saved searches, and Feeds and
 Activity under Library; its foot says what sync is doing, what is waiting and
-when the account last caught up. The middle column lists the section, and the
-right column shows the open article, or the selected subscription in Feeds.
+when the account last caught up. The middle column lists the section's
+articles, and the right column shows the open article, or the selected
+subscription in Feeds.
 Each window restores its section and open article, and keeps its frame, across
 launches. Closing the last window leaves Earnest running; click its Dock icon or
 choose File > New Window to open another.
 
-Every command is in the menu bar with its key equivalent. File has New
+Every command is in the menu bar, most with a key equivalent. File has New
 Subscription… (⌘N), New Window (⌥⌘N) and Import and Export Subscriptions…;
 Edit > Find has Search Articles (⌥⌘F), Find in Article… (⌘F), Find Next (⌘G)
 and Find Previous (⇧⌘G); View has the sidebar and toolbar commands, Refresh
@@ -220,20 +221,22 @@ Text zoom is shared by every window.
 Import Subscriptions… reads an OPML file through the open panel. You can also
 drop an OPML file on a window or open one with Earnest from the Finder; Earnest
 asks before importing and then reports new subscriptions, feeds you already
-follow, folders, feeds still to be checked and any entries it could not import. Export Subscriptions… saves the
-account's OPML through the save panel. Dropping a web address on a window, or
-opening a `feed:` link, fills in New Subscription for you to confirm.
+follow, folders, feeds still to be checked and any entries it could not import.
+Export Subscriptions… saves the account's OPML through the save panel.
+Dropping a web address on a window, or opening a `feed:` link, fills in New
+Subscription for you to confirm.
 
 To sign in, type the server address; a bare host name gets `https://`, or
-`http://` for localhost, an IP address, an unqualified name or a `.local` name.
+`http://` for localhost, an IP address, a name without a dot such as `nas`, or
+a `.local` name.
 Earnest shows the device code with Copy Code and Open Sign-In Page, and opens
 the browser only when you ask.
 
 ## Search and saved views
 
 Type in the toolbar search field (Edit > Find > Search Articles, ⌥⌘F) and press
-Return. Results replace the list, in the same rows as articles with a snippet
-after the source, until you clear the field or press Escape, which returns to
+Return. Results replace the list, in the same row layout as articles with a
+snippet after the source, until you clear the field or press Escape, which returns to
 the section you searched from with the list focused. Tab moves from the search
 field to the results. Full-text search works without a model provider.
 Hybrid search appears when embeddings are enabled and can make an embedding
@@ -308,8 +311,9 @@ settings and saves it shortly after each change, after any save in flight. If
 the account's revision moved elsewhere, saving stops and Settings offers Use
 Latest instead of overwriting. The server keeps the last write, so a change made
 elsewhere while a save is already in flight is replaced by it; Settings then
-keeps the conflict flagged and says so instead of reporting a plain save. An ambiguous save failure freezes its exact
-body and operation ID, so Try Again resends them unchanged; editing the draft
+keeps the conflict flagged and says so instead of reporting a plain save. An
+ambiguous save failure freezes its exact body and operation ID, so Try Again
+resends them unchanged; editing the draft
 or losing the account or server scope ends the frozen request. A dirty draft
 survives sync updates and is flagged as a conflict rather than replaced. Saving
 needs your verified account and an available server; failures are reported.

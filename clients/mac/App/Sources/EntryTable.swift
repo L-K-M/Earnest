@@ -152,9 +152,13 @@ struct EntryTable: NSViewRepresentable {
         var revealed: Int64?
         fileprivate var heights: [Int: CGFloat] = [:]
         private var width: CGFloat = 0
-        private var observer: NSObjectProtocol?
+        nonisolated(unsafe) private var observer: NSObjectProtocol?
 
         init(_ parent: EntryTable) { self.parent = parent; items = parent.items }
+
+        deinit {
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+        }
 
         func observeWidth(of view: NSView, table: NSTableView) {
             observer = NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: view, queue: .main) { [weak self, weak table] _ in
@@ -344,7 +348,7 @@ final class EntryCell: NSTableCellView {
         title.frame = NSRect(x: inset.left, y: top - titleHeight, width: textWidth, height: titleHeight)
         title.preferredMaxLayoutWidth = textWidth
         subtitle.frame = NSRect(x: inset.left, y: top - titleHeight - 2 - subtitleHeight,
-                                width: bounds.width - inset.left - inset.right, height: subtitleHeight)
+                                width: textWidth, height: subtitleHeight)
         let lineHeight = ceil(Self.titleFont.ascender - Self.titleFont.descender)
         dot.frame = NSRect(x: 5, y: top - lineHeight / 2 - 4, width: 8, height: 8)
         marks.frame = NSRect(x: bounds.width - inset.right - Self.markWidth + 2, y: top - lineHeight / 2 - 7,

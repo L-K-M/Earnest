@@ -86,7 +86,8 @@ import SwiftUI
         notice = nil
     }
 
-    var hasResults: Bool { !submittedQuery.isEmpty }
+    /// A query has been submitted; it may have found nothing.
+    var hasSubmittedQuery: Bool { !submittedQuery.isEmpty }
 
     func invalidateAfterRestore() {
         let current = try? app.engine?.snapshot().cursor?.generation

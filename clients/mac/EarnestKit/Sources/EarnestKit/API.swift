@@ -128,8 +128,9 @@ public enum APIError: Error, Sendable {
     case invalidBaseURL, invalidResponse, httpStatus(Int), invalidEntryID
 }
 
-/// Outcome of an OPML import: how many subscriptions and folders were created,
-/// how many outlines were deferred, and the per-outline errors, in order.
+/// Outcome of an OPML import: how many outlines resolved to a subscription or
+/// folder, new or already present, how many were deferred, and the
+/// per-outline errors, in order.
 public struct OPMLImportSummary: Equatable, Sendable {
     public let subscribed: Int
     public let folders: Int
@@ -305,6 +306,7 @@ public final class EarnestAPI: Sendable {
     public func exportOPML() async throws -> Data {
         let body = try await generated { try await client.exportOpml(.init()).ok.body }
         do { return try await Data(collecting: try body.textXOpml, upTo: opmlDocumentLimit) }
+        catch is CancellationError { throw CancellationError() }
         catch { throw APIError.invalidResponse }
     }
     /// Imports an OPML document and summarizes each outline's outcome.

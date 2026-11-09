@@ -138,7 +138,7 @@ import EarnestKit
                 Text("Saving…")
             } else if settings.conflict {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
-                Text("Settings changed on another device.")
+                Text(settings.error ?? "Settings changed on another device.")
                 Button("Use Latest") { settings.load() }.buttonStyle(.link)
             } else if let error = settings.error {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)

@@ -105,7 +105,7 @@ final class ArticleScheme: NSObject, WKURLSchemeHandler {
     }
 
     static func setZoom(_ step: Int) {
-        let index = zoomSteps.firstIndex { $0 >= zoom - 0.001 } ?? 2
+        let index = zoomSteps.firstIndex { $0 >= zoom - 0.001 } ?? zoomSteps.count - 1
         let next = zoomSteps[min(zoomSteps.count - 1, max(0, index + step))]
         UserDefaults.standard.set(next, forKey: zoomKey)
     }
@@ -113,6 +113,9 @@ final class ArticleScheme: NSObject, WKURLSchemeHandler {
     static func resetZoom() { UserDefaults.standard.set(1.0, forKey: zoomKey) }
     static var canZoomIn: Bool { zoom < (zoomSteps.last ?? 2) - 0.001 }
     static var canZoomOut: Bool { zoom > (zoomSteps.first ?? 0.75) + 0.001 }
+
+    /// A changed query has not been searched yet.
+    func queryEdited() { findMatched = nil }
 
     func showFind() {
         findVisible = true
@@ -296,6 +299,7 @@ struct Reader: NSViewRepresentable {
                 .focused($findFocused)
                 .frame(maxWidth: 260)
                 .onSubmit { reader.find() }
+                .onChange(of: reader.findQuery) { reader.queryEdited() }
                 .onKeyPress(.escape) {
                     reader.hideFind()
                     return .handled

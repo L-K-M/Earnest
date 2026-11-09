@@ -168,7 +168,7 @@ import EarnestKit
                 exportDocument = nil
             }
             .onOpenURL { open($0) }
-            .dropDestination(for: URL.self) { urls, _ in handleDrop(urls) }
+            .dropDestination(for: URL.self) { urls, _ in _ = handleDrop(urls) }
             .onReceive(NotificationCenter.default.publisher(for: .earnestImportSubscriptions)) { _ in
                 if window.presentsAppAlerts, model.loggedIn { importing = true }
             }
@@ -202,7 +202,9 @@ import EarnestKit
     private func export() {
         guard window.presentsAppAlerts, model.loggedIn else { return }
         Task {
-            do { exportDocument = OPMLDocument(data: try await model.exportOPML()) }
+            do {
+                if let data = try await model.exportOPML() { exportDocument = OPMLDocument(data: data) }
+            }
             catch is CancellationError {}
             catch { model.report(error) }
         }
@@ -349,7 +351,7 @@ struct WindowAccessor: NSViewRepresentable {
         case .activity:
             return ""
         case .search:
-            guard window.search.hasResults else { return "" }
+            guard window.search.hasSubmittedQuery else { return "" }
             let count = window.search.matches.count
             return window.search.loading && count == 0 ? "Searching…" : "\(count) result\(count == 1 ? "" : "s")"
         }

@@ -154,9 +154,7 @@ private struct GoCommands: Commands {
     var body: some Commands {
         CommandMenu("Go") {
             ForEach(Section.places) { target in
-                Button(target.title) { window?.go(to: target) }
-                    .keyboardShortcut(KeyEquivalent(Character(target.keyEquivalent ?? "0")), modifiers: .command)
-                    .disabled(!model.loggedIn || window == nil)
+                place(target)
             }
             Divider()
             singleKey(Button("Next Article") { window?.move(1) }
@@ -168,10 +166,23 @@ private struct GoCommands: Commands {
 
     @ViewBuilder
     private func singleKey<V: View>(_ view: V, _ key: Character) -> some View {
-        if (window?.singleKeyShortcuts ?? true) && !keyboard.editingText {
+        // The palette's field also stands them down, should it not yet be
+        // first responder when a letter arrives.
+        if (window?.singleKeyShortcuts ?? true) && !keyboard.editingText && !(window?.palette ?? false) {
             view.keyboardShortcut(KeyEquivalent(key), modifiers: [])
         } else {
             view
+        }
+    }
+
+    @ViewBuilder
+    private func place(_ target: Section) -> some View {
+        let button = Button(target.title) { window?.go(to: target) }
+            .disabled(!model.loggedIn || window == nil)
+        if let key = target.keyEquivalent.flatMap(Character.init) {
+            button.keyboardShortcut(KeyEquivalent(key), modifiers: .command)
+        } else {
+            button
         }
     }
 }
@@ -219,7 +230,9 @@ private struct ArticleCommands: Commands {
     /// action stays clickable either way, and the palette lists it.
     @ViewBuilder
     private func singleKey<V: View>(_ view: V, _ key: Character) -> some View {
-        if (window?.singleKeyShortcuts ?? true) && !keyboard.editingText {
+        // The palette's field also stands them down, should it not yet be
+        // first responder when a letter arrives.
+        if (window?.singleKeyShortcuts ?? true) && !keyboard.editingText && !(window?.palette ?? false) {
             view.keyboardShortcut(KeyEquivalent(key), modifiers: [])
         } else {
             view
