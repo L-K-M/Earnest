@@ -25,7 +25,7 @@ func (s *Store) EditionCandidates(ctx context.Context, user int64, since, until 
  LEFT JOIN folders folder ON folder.id=sub.folder_id AND folder.user_id=sub.user_id AND folder.deleted_at IS NULL
  LEFT JOIN entry_clusters ec ON ec.entry_id=e.id AND ec.user_id=$1 AND ec.deleted_at IS NULL
  LEFT JOIN LATERAL(SELECT source,sanitizer_version,excerpt_only FROM contents WHERE entry_id=e.id AND content_hash=e.content_hash ORDER BY (source='extracted') DESC,sanitizer_version DESC LIMIT 1)c ON true
- WHERE e.deleted_at IS NULL AND sub.cadence='week' AND e.first_seen_at>=$2 AND e.first_seen_at<=$3
+ WHERE e.deleted_at IS NULL AND NOT e.imported AND sub.cadence='week' AND e.first_seen_at>=$2 AND e.first_seen_at<=$3
  ORDER BY e.seq DESC,e.id DESC`, user, since, until)
 	if err != nil {
 		return nil, fmt.Errorf("edition entries: %w", err)

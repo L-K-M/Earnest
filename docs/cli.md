@@ -69,10 +69,17 @@ which is already machine-readable, so `--json` does not wrap it.
 
 ```sh
 earnest entries list [--view today|later|kept|done|all] [--unread] [--feed 5] [--limit 50] [--cursor 123]
+earnest entries import starred.json   # keep starred articles from a Google Reader JSON export
 earnest read 1234
 earnest search "rustls" [--feed 5] [--folder 2] [--limit 50] [--cursor 123]
 earnest briefing
 ```
+
+`import` posts the file to `/v1/kept:import` and reports each article: created
+(stored from the export), matched (already in Earnest), unchanged, unkept (you
+removed it from Kept, so it stays out), not subscribed, gone (removed by
+retention) or failed. It never subscribes to feeds unless you pass
+`--subscribe-missing`. Importing the same file again is safe.
 
 `--view today` is the API's `river`: the undecided flow with today decay.
 `--unread` adds `unread_only`, `--feed` filters by subscription id, and
@@ -219,6 +226,7 @@ Rules an agent must respect:
 | `feeds import` | `POST /v1/opml:import` |
 | `feeds export` | `GET /v1/opml` |
 | `entries list` | `GET /v1/entries` |
+| `entries import` | `POST /v1/kept:import` |
 | `read` | `GET /v1/entries/{id}/content` |
 | `search` | `GET /v1/search` |
 | `saved-searches list` | `GET /v1/saved-searches` |

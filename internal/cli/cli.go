@@ -262,6 +262,7 @@ Token:  EARNEST_TOKEN or the config written by earnest login
   feeds export              write the OPML subscription list
 
   entries list [flags]      list entries (--view, --unread, --feed, --limit, --cursor)
+  entries import <file>     keep starred articles from a Google Reader JSON export (--subscribe-missing)
   read <id>                 print the stored plain text
   search [flags] <query>    search entries and notes (--feed, --folder, --limit, --cursor)
   briefing                  entries new since this principal's position

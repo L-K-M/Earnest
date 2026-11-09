@@ -523,6 +523,8 @@ func (s *Service) entryPageQuery(ctx context.Context, a Actor, f EntryFilter, pr
 			"COALESCE(st.shelf, 'none') = 'none'",
 			"NOT s.muted",
 			"e.first_seen_at >= s.initial_since",
+			// An exported copy no fetch has seen is history, whatever its dates.
+			"NOT e.imported",
 			"(e.seq > s.initial_through_seq OR e.published_at IS NULL OR e.published_at >= s.initial_since)",
 			`NOT EXISTS (SELECT 1 FROM mutes m WHERE m.user_id = $1 AND m.deleted_at IS NULL AND
 				((m.kind = 'author' AND lower(m.value) = lower(e.author)) OR

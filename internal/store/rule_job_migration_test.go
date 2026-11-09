@@ -23,6 +23,7 @@ func TestMigrationDoesNotReplayRestoredLegacyRuleJobs(t *testing.T) {
 				t.Fatal(err)
 			}
 			// This fixture represents a pre-0009 snapshot with a pending rule job.
+			// Later migrations are idempotent and rerun with 0009.
 			if _, err := db.Pool().Exec(ctx, `INSERT INTO users(id,username,password_hash) VALUES(1,'restore','$argon2id$test');
  INSERT INTO principals(user_id,kind,name) VALUES(1,'human','Human');
  INSERT INTO feeds(id,url) VALUES(1,'https://restore.test/feed');
@@ -38,7 +39,7 @@ func TestMigrationDoesNotReplayRestoredLegacyRuleJobs(t *testing.T) {
 			if _, err := db.Pool().Exec(ctx, `INSERT INTO jobs(kind,payload) VALUES('rule',jsonb_build_object('user_id',1,'rule_id',$1::bigint,'feed_id',1,'entry_ids',jsonb_build_array(1)))`, rule.ID); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := db.Pool().Exec(ctx, `DELETE FROM schema_migrations WHERE name='0009_rule_job_generation.sql'`); err != nil {
+			if _, err := db.Pool().Exec(ctx, `DELETE FROM schema_migrations WHERE name>='0009_'`); err != nil {
 				t.Fatal(err)
 			}
 			generation, err := db.RotateGeneration(ctx)

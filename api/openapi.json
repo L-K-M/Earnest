@@ -1159,6 +1159,77 @@
         ],
         "type": "object"
       },
+      "KeptImportReport": {
+        "additionalProperties": false,
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/KeptImportResult"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "subscribed": {
+            "items": {
+              "$ref": "#/components/schemas/Subscription"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "results",
+          "subscribed"
+        ],
+        "type": "object"
+      },
+      "KeptImportResult": {
+        "additionalProperties": false,
+        "properties": {
+          "entry_id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "error": {
+            "type": "string"
+          },
+          "feed_url": {
+            "type": "string"
+          },
+          "index": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "created",
+              "matched",
+              "unchanged",
+              "unkept",
+              "not_subscribed",
+              "gone",
+              "failed"
+            ],
+            "type": "string"
+          },
+          "subscription_id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "status"
+        ],
+        "type": "object"
+      },
       "Label": {
         "additionalProperties": false,
         "properties": {
@@ -8976,6 +9047,177 @@
             "session": []
           }
         ]
+      }
+    },
+    "/v1/kept:import": {
+      "post": {
+        "description": "Keeps the articles of a Google Reader JSON export, such as the starred-articles export of FreshRSS, Inoreader or Google Takeout. Articles Earnest already has are kept; others are stored from the export. The import never rewrites existing articles, never overrides an article you un-kept, and keeps imported articles out of the river.",
+        "operationId": "import-kept",
+        "parameters": [
+          {
+            "description": "What to do with articles whose feed you don't follow: skip them, or subscribe to the feed first.",
+            "explode": false,
+            "in": "query",
+            "name": "missing_feeds",
+            "schema": {
+              "default": "skip",
+              "description": "What to do with articles whose feed you don't follow: skip them, or subscribe to the feed first.",
+              "enum": [
+                "skip",
+                "subscribe"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "description": "Google Reader stream contents: an object with an items array.",
+                "type": "object"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "properties": {
+                  "file": {
+                    "contentMediaType": "application/octet-stream",
+                    "format": "binary",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeptImportReport"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Gone"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "csrf": [],
+            "session": []
+          }
+        ],
+        "summary": "Import starred articles into Kept"
       }
     },
     "/v1/labels": {

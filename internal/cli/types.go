@@ -156,6 +156,23 @@ type entriesPage struct {
 	NextCursor string  `json:"next_cursor,omitempty"`
 }
 
+// keptImportReport is the response from POST /v1/kept:import.
+type keptImportReport struct {
+	Results    []keptImportResult `json:"results"`
+	Subscribed []subscription     `json:"subscribed"`
+}
+
+// keptImportResult is one article's outcome from a Kept import.
+type keptImportResult struct {
+	Index          int    `json:"index"`
+	Status         string `json:"status"`
+	EntryID        int64  `json:"entry_id,omitempty"`
+	SubscriptionID int64  `json:"subscription_id,omitempty"`
+	FeedURL        string `json:"feed_url,omitempty"`
+	Title          string `json:"title,omitempty"`
+	Error          string `json:"error,omitempty"`
+}
+
 type position struct {
 	Principal int64  `json:"principal"`
 	View      string `json:"view"`

@@ -8,6 +8,7 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"slices"
 
 	"github.com/L-K-M/Earnest/internal/feed"
 	"github.com/L-K-M/Earnest/internal/service"
@@ -24,44 +25,9 @@ type opmlOutput struct {
 
 func (s *server) opmlRoutes() {
 	route(s, http.MethodPost, "/v1/opml:import", "import-opml", func(ctx context.Context, in *opmlInput) ([]service.OPMLResult, error) {
-		body := in.RawBody
-		contentType := request(ctx).Header.Get("Content-Type")
-		if contentType == "" {
-			contentType = "application/xml"
-		}
-		media, params, err := mime.ParseMediaType(contentType)
+		body, err := uploadBody(ctx, in.RawBody, maxOPMLBytes, "file", "opml")
 		if err != nil {
-			return nil, service.ErrInvalid
-		}
-		if media == "multipart/form-data" {
-			reader := multipart.NewReader(io.LimitReader(bytes.NewReader(body), maxOPMLBytes+1), params["boundary"])
-			found := false
-			for {
-				part, err := reader.NextPart()
-				if err == io.EOF {
-					break
-				}
-				if err != nil {
-					return nil, service.ErrInvalid
-				}
-				if part.FileName() == "" && part.FormName() != "file" && part.FormName() != "opml" {
-					_ = part.Close()
-					continue
-				}
-				body, err = io.ReadAll(io.LimitReader(part, maxOPMLBytes+1))
-				_ = part.Close()
-				if err != nil {
-					return nil, fmt.Errorf("read OPML upload: %w", service.ErrInvalid)
-				}
-				found = true
-				break
-			}
-			if !found {
-				return nil, service.ErrInvalid
-			}
-		}
-		if len(body) > maxOPMLBytes {
-			return nil, service.ErrInvalid
+			return nil, err
 		}
 		doc, err := feed.ParseOPML(body)
 		if err != nil {
@@ -85,6 +51,51 @@ func (s *server) opmlRoutes() {
 		}
 		return &opmlOutput{ContentType: "text/x-opml; charset=utf-8", Body: body}, nil
 	})
+}
+
+// uploadBody returns an uploaded file: the raw request body, or the first
+// multipart/form-data part that carries a file name or one of the given form
+// field names. Either way it holds at most limit bytes.
+func uploadBody(ctx context.Context, body []byte, limit int64, fields ...string) ([]byte, error) {
+	contentType := request(ctx).Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	media, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return nil, service.ErrInvalid
+	}
+	if media == "multipart/form-data" {
+		reader := multipart.NewReader(io.LimitReader(bytes.NewReader(body), limit+1), params["boundary"])
+		found := false
+		for {
+			part, err := reader.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return nil, service.ErrInvalid
+			}
+			if part.FileName() == "" && !slices.Contains(fields, part.FormName()) {
+				_ = part.Close()
+				continue
+			}
+			body, err = io.ReadAll(io.LimitReader(part, limit+1))
+			_ = part.Close()
+			if err != nil {
+				return nil, fmt.Errorf("read upload: %w", service.ErrInvalid)
+			}
+			found = true
+			break
+		}
+		if !found {
+			return nil, service.ErrInvalid
+		}
+	}
+	if int64(len(body)) > limit {
+		return nil, service.ErrInvalid
+	}
+	return body, nil
 }
 
 func toServiceOutlines(outlines []feed.Outline) []service.OPMLOutline {
