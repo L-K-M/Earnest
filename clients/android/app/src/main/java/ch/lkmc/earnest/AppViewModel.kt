@@ -128,6 +128,10 @@ class AppViewModel internal constructor(
     @Volatile private var account: SessionCache? = null
     @Volatile private var activeSession: AuthenticatedSession? = null
     @Volatile private var keptImportDocument: ByteArray? = null
+    // Entries the reader explicitly marked unread. The passive seen heuristic
+    // from scrolling never overrides that choice (the web client's rule);
+    // opening the article reads it again.
+    private val markedUnread: MutableSet<Long> = java.util.concurrent.ConcurrentHashMap.newKeySet()
     private var sessionStartedAt = Instant.now()
     private var changesSince = Instant.EPOCH.toString()
     private val json = Json { ignoreUnknownKeys = true }
@@ -189,6 +193,7 @@ class AppViewModel internal constructor(
         account = null
         activeSession = null
         keptImportDocument = null
+        markedUnread.clear()
         _sessionNotice.value = null
         _state.value = UiState(readerSettingsUi = ReaderSettingsUi(epoch = epoch))
         viewModelScope.launch(Dispatchers.IO) {
@@ -768,10 +773,23 @@ class AppViewModel internal constructor(
         }
     }
 
+    /** Marks the entry read, as opening an article does. */
     fun markSeen(entryId: Long) {
         queue(entryId, "seen", SyncEngine.KIND_PASSIVE) { state ->
             listOf(RegisterIntent(SyncEngine.REGISTER_SEEN, JsonPrimitive(SyncEngine.VALUE_SEEN), state.seen.value))
         }
+    }
+
+    /**
+     * Records reading progress from scrolling past a row. Returns false, and
+     * writes nothing, for an entry the reader explicitly marked unread: the
+     * passive heuristic never overrides that choice until the article is
+     * opened.
+     */
+    fun markScrolledPast(entryId: Long): Boolean {
+        if (entryId in markedUnread) return false
+        markSeen(entryId)
+        return true
     }
 
     internal fun later(entryId: Long, onSaved: (ReversibleAction) -> Unit = {}) {
@@ -793,8 +811,10 @@ class AppViewModel internal constructor(
     /**
      * Marks a read article unread again. A Done shelf is cleared with it (the
      * server rule the engine enforces), and [undo] restores both registers.
+     * Scrolling past the row never marks it read again (see [markScrolledPast]).
      */
     internal fun markUnread(entryId: Long, onSaved: (ReversibleAction) -> Unit = {}) {
+        markedUnread += entryId
         queue(entryId, EntryActionName.UNREAD.id, SyncEngine.KIND_EXPLICIT, EntryActionName.UNREAD, onSaved, ::unreadIntents)
     }
 

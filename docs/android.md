@@ -81,7 +81,8 @@ it, as the server does; its undo restores both registers. Undo writes back
 the registers an action changed and leaves alone one another writer has
 changed since. A row marks itself seen once it has been on
 screen and then scrolls out through the top edge, or when you open it; rows
-visible on first composition, or never composed, stay unseen. Today keeps
+visible on first composition, or never composed, stay unseen. Scrolling never
+marks a row read again after you marked it unread; opening the article does. Today keeps
 its session membership stable: passive seen updates do not remove rows or
 expose more rows to automatic marking. Later and Done remove rows
 immediately; refresh starts a new membership from the current effective
@@ -188,8 +189,9 @@ agent-change retrieval, WebView error fallback, deep-link parsing, brief labels,
 widget headline selection, theme persistence, notification channels and server
 notification text, notification permission timing, cadence selection, swipe
 thresholds and action messages, undo restoration and its changed-since
-guard, mark unread clearing Done, share and clipboard intents, activity
-descriptions, reader date and original URL, and outbox flush debounce.
+guard, mark unread clearing Done and surviving passive marking, share
+and clipboard intents, activity descriptions, reader date and original
+URL, and outbox flush debounce.
 Core repository tests exercise real wire payloads, batch boundaries, in-flight
 retries, entry hydration and sibling subscription projections. Room regressions
 use Robolectric's native SQLite mode on Apple silicon because legacy SQLite

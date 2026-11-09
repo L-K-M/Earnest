@@ -91,6 +91,29 @@ class EntryActionsTest {
         assertEquals(JsonPrimitive(SyncEngine.VALUE_DONE), intents[1].value)
     }
 
+    @Test fun markUnreadUndoSkipsOnlyTheRegisterChangedSince() {
+        val saved = action(
+            "Marked as unread",
+            mapOf(
+                SyncEngine.REGISTER_SHELF to JsonPrimitive(SyncEngine.VALUE_DONE),
+                SyncEngine.REGISTER_SEEN to JsonPrimitive(SyncEngine.VALUE_SEEN),
+            ),
+            mapOf(
+                SyncEngine.REGISTER_SHELF to JsonPrimitive(SyncEngine.VALUE_NONE),
+                SyncEngine.REGISTER_SEEN to JsonPrimitive(SyncEngine.VALUE_UNSEEN),
+            ),
+        )
+        // Another writer moved the shelf on to Later; undo restores only seen.
+        val shelfChanged = undoIntents(saved, stateOf(seen = "unseen", shelf = "later"))
+        assertEquals(listOf(SyncEngine.REGISTER_SEEN), shelfChanged.map { it.register })
+        assertEquals(JsonPrimitive(SyncEngine.VALUE_SEEN), shelfChanged.single().value)
+
+        // The mirror: seen moved on, the shelf still holds what the action wrote.
+        val seenChanged = undoIntents(saved, stateOf(seen = "seen", shelf = "none"))
+        assertEquals(listOf(SyncEngine.REGISTER_SHELF), seenChanged.map { it.register })
+        assertEquals(JsonPrimitive(SyncEngine.VALUE_DONE), seenChanged.single().value)
+    }
+
     @Test fun canMarkUnreadOnlyForReadArticles() {
         assertTrue(canMarkUnread(stateOf(seen = "seen", shelf = "none")))
         assertFalse(canMarkUnread(stateOf(seen = "unseen", shelf = "none")))

@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unread name themselves in an undo snackbar that writes back the
   registers they changed and leaves alone one changed since, and a cadence
   change offers the same. Mark unread returns a read article to unread
-  and clears Done with it. The reader header gained Copy link and Share
+  and clears Done with it; scrolling never reverses it, only opening the
+  article reads it again. The reader header gained Copy link and Share
   for the entry URL.
 - The Mac app shows feed icons and article thumbnails in article rows and
   feed icons in Feeds, loaded with the account's token and kept per

@@ -257,6 +257,39 @@ class AppViewModelTest {
         assertEquals(kotlinx.serialization.json.JsonPrimitive("done"), SessionCache(app, identity).withEngine { it.state(1, 2) }.shelf.value)
     }
 
+    @Test fun markUnreadSticksThroughScrollingPast() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadEntry(2)
+        // Opening the article reads it.
+        model.markSeen(2)
+        withTimeout(15000) {
+            while (SessionCache(app, identity).withEngine { it.state(1, 2) }.seen.value != kotlinx.serialization.json.JsonPrimitive("seen")) delay(10)
+        }
+        val action = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
+        model.markUnread(2) { action.set(it) }
+        withTimeout(15000) { while (action.get() == null) delay(10) }
+
+        // Scrolling past the row afterwards never re-marks it read.
+        assertFalse(model.markScrolledPast(2))
+        delay(250)
+        assertEquals(kotlinx.serialization.json.JsonPrimitive("unseen"), SessionCache(app, identity).withEngine { it.state(1, 2) }.seen.value)
+
+        // Opening the article reads it again.
+        model.markSeen(2)
+        withTimeout(15000) {
+            while (SessionCache(app, identity).withEngine { it.state(1, 2) }.seen.value != kotlinx.serialization.json.JsonPrimitive("seen")) delay(10)
+        }
+    }
+
+    @Test fun scrollingPastMarksUnseenRowsRead() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadEntry(2)
+        assertTrue(model.markScrolledPast(2))
+        withTimeout(15000) {
+            while (SessionCache(app, identity).withEngine { it.state(1, 2) }.seen.value != kotlinx.serialization.json.JsonPrimitive("seen")) delay(10)
+        }
+    }
+
     @Test fun notificationMissingFromSnapshotFetchesMetadata() = runBlocking(Dispatchers.IO) {
         val model = model()
         val entry = model.loadEntry(2)

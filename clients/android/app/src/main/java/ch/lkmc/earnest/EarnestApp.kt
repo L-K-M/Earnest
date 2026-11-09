@@ -391,9 +391,14 @@ private fun MainScaffold(
                                     onCadence = { id, cadence ->
                                         val prior = state.snapshot.objects
                                             .firstOrNull { it.kind == SyncEngine.OBJECT_SUBSCRIPTION && it.id == id }
-                                            ?.let(River::cadence) ?: "today"
+                                            ?.let(River::cadence)
                                         model.setCadence(id, cadence) {
-                                            offerUndo("Cadence set to ${cadenceOf(cadence).label}") { model.setCadence(id, prior) }
+                                            // Undo only when the cadence this
+                                            // change replaced is actually
+                                            // known; never guess one.
+                                            if (prior != null) {
+                                                offerUndo("Cadence set to ${cadenceOf(cadence).label}") { model.setCadence(id, prior) }
+                                            }
                                         }
                                     },
                                 )
@@ -427,7 +432,7 @@ private fun MainScaffold(
                                     },
                                     onLater = { id -> model.later(id, undoable) },
                                     onDone = { id -> model.done(id, undoable) },
-                                    onSeen = model::markSeen,
+                                    onSeen = { id -> model.markScrolledPast(id) },
                                     onKeep = { id -> model.keep(id, undoable) },
                                     onUnkeep = { id -> model.unkeep(id, undoable) },
                                     onMarkUnread = { id -> model.markUnread(id, undoable) },
