@@ -16,6 +16,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import kotlin.coroutines.resumeWithException
 import java.io.IOException
@@ -71,9 +72,15 @@ class EarnestApi(
 
     suspend fun delete(url: HttpUrl): JsonElement = request("DELETE", url, null)
 
-    private suspend fun request(method: String, url: HttpUrl, body: JsonElement?): JsonElement {
-        val requestBody = body?.let { it.toString().toRequestBody(JSON_MEDIA_TYPE) }
-        val builder = Request.Builder().url(url).method(method, requestBody)
+    private suspend fun request(method: String, url: HttpUrl, body: JsonElement?): JsonElement =
+        requestRaw(method, url, body?.let { it.toString().toRequestBody(JSON_MEDIA_TYPE) })
+
+    /**
+     * Sends [body] verbatim instead of parsing it into a [JsonElement]. File
+     * exports reach tens of MiB, far more than a parsed tree would allow.
+     */
+    private suspend fun requestRaw(method: String, url: HttpUrl, body: RequestBody?): JsonElement {
+        val builder = Request.Builder().url(url).method(method, body)
         token?.let { builder.header("Authorization", "Bearer $it") }
         builder.header("Accept", "application/json")
         val call = http.newCall(builder.build())
@@ -316,6 +323,21 @@ class EarnestApi(
     suspend fun deleteDevice(id: Long, opId: String): Empty =
         delete(url("/v1/devices/$id") { it.addQueryParameter("op_id", opId) }).decode()
 
+    /**
+     * Imports the starred articles of a Google Reader JSON export, such as the
+     * starred-articles export of FreshRSS, Inoreader or Google Takeout.
+     * [document] is posted verbatim as `application/json`; [subscribeMissing]
+     * subscribes to feeds you do not follow first instead of skipping their
+     * articles.
+     */
+    suspend fun importKept(document: ByteArray, subscribeMissing: Boolean): KeptImportReport {
+        require(document.size <= MAX_KEPT_IMPORT_BYTES) { "The export is larger than 64 MiB." }
+        val url = url("/v1/kept:import") {
+            it.addQueryParameter("missing_feeds", if (subscribeMissing) "subscribe" else "skip")
+        }
+        return requestRaw("POST", url, document.toRequestBody(JSON_MEDIA_TYPE)).decode()
+    }
+
     suspend fun me(): MeResult = get(url("/v1/me")).decode()
 
     suspend fun tokens(): List<Token> = get(url("/v1/tokens")).decode()
@@ -350,5 +372,6 @@ class EarnestApi(
 
     companion object {
         private val JSON_MEDIA_TYPE = "application/json".toMediaType()
+
     }
 }

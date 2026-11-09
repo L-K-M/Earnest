@@ -1,5 +1,7 @@
 package ch.lkmc.earnest
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,6 +15,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -28,15 +32,21 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
+import ch.lkmc.earnest.core.KeptImportReport
 import ch.lkmc.earnest.core.ReaderFont
+import ch.lkmc.earnest.core.MAX_KEPT_IMPORT_BYTES
+import ch.lkmc.earnest.core.readAtMost
+import ch.lkmc.earnest.core.summarizeKeptImport
 import kotlin.math.roundToInt
 import ch.lkmc.earnest.core.ReaderOverride
 import ch.lkmc.earnest.core.ReaderSettings
@@ -44,6 +54,9 @@ import ch.lkmc.earnest.core.ReaderTheme
 import ch.lkmc.earnest.core.ReadingMode
 import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.core.SyncObject
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -72,6 +85,33 @@ internal fun SettingsScreen(
     var overrideMeasureInput by remember(state.accountKey, ui.epoch) { mutableStateOf(OverrideMeasureInput.fromValue(null)) }
     var overrideFont by remember(state.accountKey, ui.epoch) { mutableStateOf<ReaderFont?>(null) }
 
+    val keptImport = state.keptImport
+    var subscribeMissing by remember(state.accountKey) { mutableStateOf(false) }
+    var readingImport by remember(state.accountKey) { mutableStateOf(false) }
+    val importScope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        readingImport = true
+        importScope.launch {
+            // Reading counts as working, so a second tap cannot start a second
+            // read while the first file is still on its way.
+            // Read at most one byte past the limit, so a huge file picked by
+            // mistake is refused without loading it all into memory.
+            val document = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { readAtMost(it, MAX_KEPT_IMPORT_BYTES) }
+                }.getOrNull()
+            }
+            readingImport = false
+            when {
+                document == null -> model.keptImportReadFailed("Could not read that file.")
+                document.size > MAX_KEPT_IMPORT_BYTES -> model.keptImportReadFailed("The export is larger than 64 MiB.")
+                else -> model.importKept(document, subscribeMissing)
+            }
+        }
+    }
+
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
@@ -91,6 +131,30 @@ internal fun SettingsScreen(
         }
         ui.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (ui.success) Text("Saved", color = MaterialTheme.colorScheme.primary)
+
+        Section("Starred articles") {
+            Text(
+                "Bring starred articles from another reader into Kept. Export them as Google Reader JSON, for example from FreshRSS or Inoreader.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(
+                    checked = subscribeMissing,
+                    onCheckedChange = { subscribeMissing = it },
+                    enabled = !keptImport.busy && !readingImport,
+                )
+                Text("Also subscribe to feeds you don't follow")
+            }
+            Button(
+                onClick = { importPicker.launch(arrayOf("application/json", "*/*")) },
+                enabled = !keptImport.busy && !readingImport,
+            ) { Text("Import starred articles") }
+            keptImport.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            keptImport.report?.let { report ->
+                KeptImportReportView(report = report, busy = keptImport.busy, onRetry = model::importKeptAgain)
+            }
+        }
+
         if (ui.loaded == null || state.snapshot.cursor.generation.isEmpty()) {
             Text("Sync or load your account settings before editing.")
             return@Column
@@ -286,6 +350,48 @@ internal fun SettingsScreen(
                 TextButton(onClick = model::dismissReaderSettingsConflict) { Text("Keep editing") }
             },
         )
+    }
+}
+
+/** The import report, worded the same way as the web client's. */
+@Composable
+private fun KeptImportReportView(report: KeptImportReport, busy: Boolean, onRetry: () -> Unit) {
+    val summary = summarizeKeptImport(report)
+    val total = summary.added + summary.existing
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            "$total ${if (total == 1) "article" else "articles"} in Kept: " +
+                "${summary.added} added from the export, ${summary.existing} already in Earnest.",
+        )
+        if (summary.subscribed > 0) {
+            Text(
+                "Subscribed to ${summary.subscribed} ${if (summary.subscribed == 1) "feed" else "feeds"}. " +
+                    "Their first fetches run in the background.",
+            )
+        }
+        if (summary.labelled > 0) {
+            Text("Added the export's labels to ${summary.labelled} ${if (summary.labelled == 1) "article" else "articles"}.")
+        }
+        if (summary.unkept > 0) Text("${summary.unkept} left out because you removed them from Kept.")
+        if (summary.gone > 0) Text("${summary.gone} no longer available in Earnest.")
+        if (summary.skipped.isNotEmpty()) {
+            val skippedTotal = summary.skipped.sumOf { it.count }
+            Text("$skippedTotal skipped because you don't follow their feed:")
+            summary.skipped.forEach { skip ->
+                Text(
+                    "${skip.feedUrl.ifBlank { "Unknown feed" }} (${skip.count})",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            TextButton(onClick = onRetry, enabled = !busy) { Text("Subscribe to these feeds and import again") }
+        }
+        if (summary.failed.isNotEmpty()) {
+            Text(
+                "${summary.failed.size} could not be imported: ${summary.failed.joinToString("; ")}",
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
     }
 }
 
