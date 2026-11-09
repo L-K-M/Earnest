@@ -156,17 +156,20 @@ function Session({onLogout}: {onLogout: () => void}) {
     url.searchParams.delete('notification')
     history.replaceState(history.state, '', url)
     const rest = `${url.search}${url.hash}`
+    // If the reader navigates while these requests are in flight, the late
+    // response must not replace the history entry they are now on.
+    const landed = currentHref()
     let active = true
     if (!/^[1-9]\d*$/.test(id)) return
     void request<components['schemas']['Notification']>(`/v1/notifications/${id}`).then(async notification => {
-      if (!active) return
+      if (!active || currentHref() !== landed) return
       const entryID = notification.entry_ids?.[0]
       if (!entryID) { go(`/notifications/${id}${rest}`, {replace: true}); return }
       const entry = await request<Entry>(`/v1/entries/${entryID}`)
-      if (!active) return
+      if (!active || currentHref() !== landed) return
       remember(entry); setSelected(entry)
       go(`${viewHref(TODAY, entry.id)}${rest}`, {replace: true})
-    }).catch(e => {if (active) {setError(e instanceof Error ? e.message : 'Could not open notification.'); go(`/notifications${rest}`, {replace: true})}})
+    }).catch(e => {if (active && currentHref() === landed) {setError(e instanceof Error ? e.message : 'Could not open notification.'); go(`/notifications${rest}`, {replace: true})}})
     return () => {active = false}
   }, [identity, go, remember])
 
@@ -480,7 +483,15 @@ function Session({onLogout}: {onLogout: () => void}) {
     try {
       // Cache clearing can need a retry after the server has revoked the session.
       if (!sessionRevoked.current) {
-        await request('/v1/session/logout', {method:'POST'})
+        // A 401 means the server already ended this session, so signing out
+        // locally is all that is left. Any other failure keeps the session
+        // cookie alive, so it is reported rather than hidden behind a sign-in
+        // screen that a reload would undo.
+        try {
+          await request('/v1/session/logout', {method:'POST'})
+        } catch (error) {
+          if (!(error instanceof RequestError && error.status === 401)) throw error
+        }
         sessionRevoked.current = true
       }
       await clearOffline()

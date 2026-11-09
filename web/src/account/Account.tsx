@@ -172,6 +172,8 @@ export function Push() {
       e.preventDefault()
       const form = new FormData(e.currentTarget)
       const problem = zoneError(String(form.get('timezone')))
+      // A blocked submit must not leave an earlier "saved" status on screen.
+      setStatus('');setError('')
       setTimezoneError(problem)
       if (problem) return
       void run(async () => {

@@ -54,7 +54,11 @@ export function Search({saved, route, onRoute, onDeleted, onOpen, subscriptions 
   const routeKey = route ? searchHref(route) : ''
   const [adopted,setAdopted] = useState(routeKey)
   if (route && routeKey !== adopted) {
-    setAdopted(routeKey);setInput(route.q);setQuery(route.q);setMode(route.mode === 'hybrid' ? 'hybrid' : 'fulltext')
+    setAdopted(routeKey)
+    // Adopt the route's query only when it differs from the committed one, so
+    // a filter echo does not wipe text typed but not yet submitted.
+    if (route.q !== query) setInput(route.q)
+    setQuery(route.q);setMode(route.mode === 'hybrid' ? 'hybrid' : 'fulltext')
     setSubscriptionID(route.feed ?? 0);setFolderID(route.folder ?? 0);setLimit(route.limit ?? 0)
   }
   function publish(change: {q?: string; mode?: string; feed?: number; folder?: number; limit?: number}, replace: boolean) {

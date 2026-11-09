@@ -38,7 +38,7 @@ export function Palette({commands,shortcuts,enabled=true,helpRef,triggers=true,r
   const help = helpRef ?? ownHelp
   const input = useRef<HTMLInputElement>(null)
   const list = useRef<HTMLUListElement>(null)
-  const previousFocus = useRef<HTMLElement | null>(null)
+  const previousFocus = useRef(new Map<HTMLDialogElement, HTMLElement | null>())
   const ids = useId()
   const [query,setQuery] = useState('')
   const [index,setIndex] = useState(0)
@@ -53,13 +53,15 @@ export function Palette({commands,shortcuts,enabled=true,helpRef,triggers=true,r
   const optionID = (command: Command) => `${ids}-command-${command.id}`
   function open(node: HTMLDialogElement | null) {
     if (!node || node.open) return
-    previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    // Each dialog remembers its own opener, so stacked dialogs restore focus
+    // to the right place instead of overwriting a single shared slot.
+    previousFocus.current.set(node, document.activeElement instanceof HTMLElement ? document.activeElement : null)
     setQuery('');setIndex(0);setError('');node.showModal()
     if (node === dialog.current) input.current?.focus()
   }
-  function restoreFocus() {
-    const target = previousFocus.current
-    previousFocus.current = null
+  function restoreFocus(node: HTMLDialogElement | null) {
+    const target = node ? previousFocus.current.get(node) ?? null : null
+    if (node) previousFocus.current.delete(node)
     if (target?.isConnected) target.focus()
   }
   useImperativeHandle(ref, () => ({openPalette:() => open(dialog.current), openHelp:() => open(help.current)}))
@@ -95,7 +97,7 @@ export function Palette({commands,shortcuts,enabled=true,helpRef,triggers=true,r
   async function run(command: Command | undefined) {
     if (!command || command.disabled || running) return
     setRunning(true);setError('')
-    try {await command.run();dialog.current?.close();restoreFocus()}
+    try {await command.run();dialog.current?.close();restoreFocus(dialog.current)}
     catch(error) {setError(error instanceof Error ? error.message : 'Command failed.')}
     finally {setRunning(false)}
   }
@@ -104,7 +106,7 @@ export function Palette({commands,shortcuts,enabled=true,helpRef,triggers=true,r
   }
   return <>
     {triggers && <><button type="button" onClick={() => open(dialog.current)}>Command palette (Ctrl+K / ⌘K)</button><button type="button" onClick={() => open(help.current)}>Keyboard help (?)</button></>}
-    <dialog ref={dialog} className="palette" aria-labelledby={`${ids}-palette-title`} onClose={restoreFocus} onClick={event => {if (event.target === dialog.current) dialog.current.close()}}>
+    <dialog ref={dialog} className="palette" aria-labelledby={`${ids}-palette-title`} onClose={() => restoreFocus(dialog.current)} onClick={event => {if (event.target === dialog.current) dialog.current.close()}}>
       <h2 id={`${ids}-palette-title`} className="sr-only">Command palette</h2>
       <div className="palette-search">
         <label htmlFor={`${ids}-palette-input`} className="sr-only">Find a command</label>
@@ -125,7 +127,7 @@ export function Palette({commands,shortcuts,enabled=true,helpRef,triggers=true,r
       {error && <p role="alert" className="palette-error">{error}</p>}
       <p className="palette-hint" aria-hidden="true"><kbd>↑</kbd><kbd>↓</kbd> to move · <kbd>Enter</kbd> to run · <kbd>Esc</kbd> to close</p>
     </dialog>
-    <dialog ref={help} className="shortcuts" aria-labelledby={`${ids}-shortcuts-title`} onClose={restoreFocus} onClick={event => {if (event.target === help.current) help.current.close()}}>
+    <dialog ref={help} className="shortcuts" aria-labelledby={`${ids}-shortcuts-title`} onClose={() => restoreFocus(help.current)} onClick={event => {if (event.target === help.current) help.current.close()}}>
       <div className="dialog-header"><h2 id={`${ids}-shortcuts-title`}>Keyboard shortcuts</h2><button type="button" className="quiet" onClick={() => help.current?.close()}>Close help</button></div>
       <p className="muted">Single-key shortcuts work outside text fields. {shortcuts ? 'You can switch them off in Settings.' : 'They are switched off in Settings.'} Ctrl+K and ⌘K always open the palette.</p>
       <div className="shortcut-groups">{shortcutGroups.map((group,at) => <section key={group.title} aria-labelledby={`${ids}-group-${at}`}><h3 id={`${ids}-group-${at}`}>{group.title}</h3><dl>{group.keys.map(([key,title]) => <div key={key}><dt><kbd>{key}</kbd></dt><dd>{title}</dd></div>)}</dl></section>)}</div>

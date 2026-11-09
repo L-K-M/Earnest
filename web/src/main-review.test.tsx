@@ -3,7 +3,7 @@ import type {ReactElement,ReactNode} from 'react'
 import {afterEach,beforeAll,beforeEach,expect,it,vi} from 'vitest'
 import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react'
 import type {QueryClient} from '@tanstack/react-query'
-import {request} from './request'
+import {request, RequestError} from './request'
 import {clearOffline} from './offline/Offline'
 import {defaultSettings} from './Settings'
 import type {Entry} from './reader'
@@ -11,7 +11,7 @@ import type {Entry} from './reader'
 const sync = vi.hoisted(() => ({refresh:null as null | ((reason?: 'generation') => void)}))
 let app: ReactElement<{client: QueryClient}>
 vi.mock('react-dom/client',() => ({createRoot:() => ({render:(node:ReactNode) => {app=node as typeof app}})}))
-vi.mock('./request',() => ({request:vi.fn(),setCSRF:vi.fn()}))
+vi.mock('./request',async importOriginal => ({RequestError:(await importOriginal<typeof import('./request')>()).RequestError,request:vi.fn(),setCSRF:vi.fn()}))
 vi.mock('./offline/Offline',() => ({OfflineStatus:() => null,useOnline:() => true,registerOffline:vi.fn().mockResolvedValue(undefined),clearOffline:vi.fn()}))
 vi.mock('./syncBridge',() => ({useReaderSync:(_identity:unknown,refresh:NonNullable<typeof sync.refresh>) => {sync.refresh=refresh;return {state:(entry:Entry) => entry.state,act:vi.fn(),retry:vi.fn(),status:'Synced',error:''}}}))
 vi.mock('./River',() => ({River:() => <main>Today articles</main>}))
@@ -98,6 +98,56 @@ it('clears a generation reset error after a successful retry',async () => {
   fireEvent.click(screen.getByRole('button',{name:'Retry'}))
   await screen.findByRole('button',{name:'Sign out'})
   expect(screen.queryByRole('alert')).toBeNull()
+})
+
+it('signs out locally when the server already ended the session',async () => {
+  vi.mocked(request).mockImplementation(async path => {
+    if (path === '/v1/me') return {user_id:1,principal_id:1}
+    if (path === '/v1/session/logout') throw new RequestError(401,'Unauthorized')
+    if (path === '/v1/settings') return {...defaultSettings,rev:1}
+    return []
+  })
+  render(app)
+  await screen.findByRole('button',{name:'Sign out'})
+  fireEvent.click(screen.getByRole('button',{name:'Sign out'}))
+  expect(await screen.findByRole('button',{name:'Sign in'})).toBeTruthy()
+  expect(localStorage.getItem('earnest.csrf')).toBeNull()
+})
+
+it('stays signed in and says so when the session cannot be ended',async () => {
+  vi.mocked(request).mockImplementation(async path => {
+    if (path === '/v1/me') return {user_id:1,principal_id:1}
+    if (path === '/v1/session/logout') throw new Error('Earnest could not be reached.')
+    if (path === '/v1/settings') return {...defaultSettings,rev:1}
+    return []
+  })
+  render(app)
+  await screen.findByRole('button',{name:'Sign out'})
+  fireEvent.click(screen.getByRole('button',{name:'Sign out'}))
+  expect(await screen.findByText(/could not be reached/)).toBeTruthy()
+  expect(screen.queryByRole('button',{name:'Sign in'})).toBeNull()
+})
+
+it('does not hijack navigation made while a notification was loading',async () => {
+  let resolveNotification: (value: {entry_ids: number[]}) => void = () => {}
+  vi.mocked(request).mockImplementation(async path => {
+    if (path === '/v1/me') return {user_id:1,principal_id:1}
+    if (path === '/v1/settings') return {...defaultSettings,rev:1}
+    if (path === '/v1/notifications/42') return new Promise(resolve => {resolveNotification = resolve})
+    if (path === '/v1/entries/7') return {id:7,title:'Notification article'}
+    return []
+  })
+  history.replaceState(null,'','/?notification=42')
+  render(app)
+  await screen.findByRole('button',{name:'Sign out'})
+  await waitFor(() => expect(vi.mocked(request).mock.calls.some(([path]) => path === '/v1/notifications/42')).toBe(true))
+  fireEvent.click(screen.getByRole('link',{name:'Later'}))
+  expect(location.pathname).toBe('/later')
+  await act(async () => {
+    resolveNotification({entry_ids:[7]})
+    await new Promise(resolve => setTimeout(resolve, 0))
+  })
+  expect(location.pathname).toBe('/later')
 })
 
 it('retries cache clearing after sign-out without repeating session revocation',async () => {
