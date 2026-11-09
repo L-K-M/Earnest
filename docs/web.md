@@ -62,8 +62,9 @@ placeholder until the web bundle has been copied into `internal/web/dist`.
    classes and shows the service's last attempt/success and next scheduled fetch.
 
 Importing starred articles keeps the articles Earnest already has and stores the
-rest from the export. It never rewrites an article, leaves out articles you
-removed from Kept, and keeps imported articles out of Today; an unread one the
+rest from the export, adding the export's labels to each article. It never rewrites an article, leaves out articles you
+removed from Kept, never brings back a label you deleted or removed from an
+article, and keeps imported articles out of Today; an unread one the
 feed still carries arrives with the feed's next fetch. Articles from feeds you
 don't follow are skipped unless you choose to subscribe to those feeds.
 

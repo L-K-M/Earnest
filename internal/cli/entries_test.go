@@ -238,7 +238,7 @@ func TestEntriesImportRequestAndOutput(t *testing.T) {
 	file := writeExport(t, string(export))
 	report := keptImportReport{
 		Results: []keptImportResult{
-			{Index: 0, Status: "created", EntryID: 12, SubscriptionID: 3, FeedURL: "https://a.example/feed", Title: "An article"},
+			{Index: 0, Status: "created", EntryID: 12, SubscriptionID: 3, FeedURL: "https://a.example/feed", Title: "An article", Labels: []string{"Tech"}},
 			{Index: 1, Status: "matched", EntryID: 13, Title: "Another"},
 			{Index: 2, Status: "not_subscribed", FeedURL: "https://b.example/rss", Title: "Third"},
 			{Index: 3, Status: "failed", Title: "Broken", Error: "the article has no ID, link or title"},
@@ -275,6 +275,7 @@ func TestEntriesImportRequestAndOutput(t *testing.T) {
 		"subscribed: Example Feed",
 		"subscribed: https://example.com/other.xml",
 		"summary: 1 created, 1 matched, 1 not subscribed, 1 failed",
+		"labels: added the export's labels to 1 article",
 		"1 skipped because you don't follow their feed; run again with --subscribe-missing to subscribe and import them",
 	})
 }

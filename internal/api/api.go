@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/L-K-M/Earnest/internal/syncmodel"
 	"log/slog"
 	"net/http"
@@ -280,6 +281,10 @@ func registerStatus[I, O any](s *server, method, path, id string, access routeAc
 // request body limit.
 func routeUpload[I, O any](s *server, method, path, id string, maxBody int64, fn func(context.Context, *I) (O, error)) {
 	registerOperation(s, method, path, id, authenticatedAccess, http.StatusOK, maxBody, fn)
+	// A body over the limit is refused with 413 before the handler runs.
+	item := s.api.OpenAPI().Paths[path]
+	op := map[string]*huma.Operation{http.MethodPost: item.Post, http.MethodPut: item.Put, http.MethodPatch: item.Patch}[method]
+	op.Responses[strconv.Itoa(http.StatusRequestEntityTooLarge)] = &huma.Response{Description: fmt.Sprintf("The upload is larger than %d MiB.", maxBody>>20)}
 }
 
 // defaultMaxBodyBytes bounds every request body unless a route raises it.

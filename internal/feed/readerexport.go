@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
 	"regexp"
 	"strings"
 	"time"
@@ -35,11 +36,18 @@ type ReaderItem struct {
 	// Crawled is when the exporting reader first stored the article, from
 	// crawlTimeMsec or timestampUsec. It is nil when neither is usable.
 	Crawled *time.Time
+	// Labels are the user's labels on the article, from "user/<id>/label/<name>"
+	// tags, in export order without repeats. Inoreader also lists the feed's
+	// folder this way; the importer tells the two apart.
+	Labels []string
 }
 
 // readStateRE matches the read state tag for any user: "user/-/..." in
 // FreshRSS and Google Reader, "user/<numeric id>/..." in Inoreader.
 var readStateRE = regexp.MustCompile(`^user/[^/]+/state/com\.google/read$`)
+
+// labelRE matches a user label tag and captures its name.
+var labelRE = regexp.MustCompile(`^user/[^/]+/label/(.+)$`)
 
 // ParseReaderExport reads a Google Reader stream-contents export. Items are
 // streamed so the item cap and deadline apply during the walk, as for JSON
@@ -104,6 +112,16 @@ func ParseReaderExport(data []byte, limits Limits) (*ReaderExport, error) {
 	}
 	if !sawItems {
 		return nil, ErrUnsupportedFormat
+	}
+	// An export is one object. Anything after it means the file was
+	// concatenated or damaged, so nothing in it is trusted.
+	if tok, err := dec.Token(); err != nil {
+		return nil, malformedJSON(err)
+	} else if err := expectDelim(tok, '}'); err != nil {
+		return nil, err
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, fmt.Errorf("%w: data after the export object", ErrMalformed)
 	}
 	return export, nil
 }
@@ -183,9 +201,17 @@ func readerItem(m map[string]any) ReaderItem {
 		}
 		it.Enclosures = append(it.Enclosures, Enclosure{URL: link, Type: cleanText(coerceString(obj["type"])), Length: max(coerceInt(numberish(obj["length"])), 0)})
 	}
+	seenLabels := map[string]bool{}
 	for _, c := range coerceSlice(m["categories"]) {
-		if readStateRE.MatchString(strings.TrimSpace(coerceString(c))) {
+		tag := strings.TrimSpace(coerceString(c))
+		if readStateRE.MatchString(tag) {
 			out.Read = true
+		}
+		if match := labelRE.FindStringSubmatch(tag); match != nil {
+			if name := strings.TrimSpace(match[1]); name != "" && !seenLabels[name] {
+				seenLabels[name] = true
+				out.Labels = append(out.Labels, name)
+			}
 		}
 	}
 	out.Item = it

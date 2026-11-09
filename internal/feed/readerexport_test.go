@@ -225,3 +225,35 @@ func TestIdentityCandidates(t *testing.T) {
 		t.Fatalf("no GUID = %v", got)
 	}
 }
+
+func TestParseReaderExportLabels(t *testing.T) {
+	doc := `{"items": [{"categories": [
+		"user/-/state/com.google/starred", "user/1005921515/label/Tech", "user/-/label/ Read later ",
+		"user/-/label/Tech", "user/-/label/", "Technology", "user/-/label/A/B"
+	]}]}`
+	export, err := ParseReaderExport([]byte(doc), Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := export.Items[0].Labels
+	want := []string{"Tech", "Read later", "A/B"}
+	if len(got) != len(want) {
+		t.Fatalf("labels = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("labels = %q, want %q; feed tags such as Technology are not labels", got, want)
+		}
+	}
+}
+
+func TestParseReaderExportRejectsTrailingData(t *testing.T) {
+	for _, doc := range []string{`{"items": []} {"items": []}`, `{"items": []}garbage`, `{"items": []}]`} {
+		if _, err := ParseReaderExport([]byte(doc), Limits{}); !errors.Is(err, ErrMalformed) {
+			t.Errorf("%q: err = %v, want ErrMalformed", doc, err)
+		}
+	}
+	if _, err := ParseReaderExport([]byte("{\"items\": []}\n \t\r\n"), Limits{}); err != nil {
+		t.Fatalf("trailing whitespace is fine: %v", err)
+	}
+}
