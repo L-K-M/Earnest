@@ -149,6 +149,7 @@ internal fun SettingsScreen(
                 onClick = { importPicker.launch(arrayOf("application/json", "*/*")) },
                 enabled = !keptImport.busy && !readingImport,
             ) { Text("Import starred articles") }
+            if (keptImport.busy || readingImport) Text("Importing starred articles…")
             keptImport.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             keptImport.report?.let { report ->
                 KeptImportReportView(report = report, busy = keptImport.busy, onRetry = model::importKeptAgain)

@@ -9,6 +9,8 @@ import ch.lkmc.earnest.core.Annotation
 import ch.lkmc.earnest.core.ApiException
 import ch.lkmc.earnest.core.EarnestApi
 import ch.lkmc.earnest.core.KeptImportReport
+import ch.lkmc.earnest.core.MAX_KEPT_IMPORT_BYTES
+import ch.lkmc.earnest.core.summarizeKeptImport
 import ch.lkmc.earnest.core.ReaderSettings
 import ch.lkmc.earnest.core.ReadingMode
 import ch.lkmc.earnest.core.RejectedOperation
@@ -346,6 +348,7 @@ class AppViewModel internal constructor(
                 refreshUnreadCounts(cache, session)
                 refreshWidgets(getApplication())
             } catch (error: ApiException) {
+                keptImportDocument = null
                 if (!currentOrExpired(session, cache)) return@launch
                 if (error.isUnauthorized && sessions.current() == session) {
                     // Clear only the session that failed: a login that completed
@@ -666,6 +669,13 @@ class AppViewModel internal constructor(
      */
     fun importKept(document: ByteArray, subscribeMissing: Boolean) {
         val (cache, session) = activeAccount("Still signing in; the import did not run.") ?: return
+        if (document.size > MAX_KEPT_IMPORT_BYTES) {
+            keptImportDocument = null
+            _state.update { current ->
+                current.copy(keptImport = KeptImportUi(error = "The export is larger than 64 MiB."))
+            }
+            return
+        }
         keptImportDocument = document
         _state.update { current ->
             current.copy(keptImport = current.keptImport.copy(busy = true, error = null, report = null))
@@ -673,6 +683,9 @@ class AppViewModel internal constructor(
         viewModelScope.launch(readerDispatcher) {
             try {
                 val report = apiFactory(session).importKept(document, subscribeMissing)
+                // Keep the bytes only while the report offers a retry; an
+                // export can be 64 MiB.
+                if (summarizeKeptImport(report).skipped.isEmpty()) keptImportDocument = null
                 if (!currentOrExpired(session, cache)) return@launch
                 _state.update { current ->
                     current.copy(keptImport = current.keptImport.copy(busy = false, report = report))
@@ -686,6 +699,7 @@ class AppViewModel internal constructor(
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
             } catch (error: Exception) {
+                keptImportDocument = null
                 if (currentOrExpired(session, cache)) {
                     _state.update { current ->
                         current.copy(keptImport = current.keptImport.copy(busy = false, error = failureText("Could not import that file", error)))
@@ -703,8 +717,9 @@ class AppViewModel internal constructor(
 
     /** Surfaces a picked export the client could not read; no import ran. */
     fun keptImportReadFailed(message: String) {
+        keptImportDocument = null
         _state.update { current ->
-            current.copy(keptImport = current.keptImport.copy(busy = false, error = message))
+            current.copy(keptImport = KeptImportUi(error = message))
         }
     }
 

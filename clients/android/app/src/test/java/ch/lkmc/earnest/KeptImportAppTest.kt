@@ -93,7 +93,7 @@ class KeptImportAppTest {
 
     @Test fun importKeptStoresTheReportAndRepeatsWithSubscribe() = runBlocking(Dispatchers.IO) {
         val model = model()
-        importBody = """{"results":[{"index":0,"status":"created","entry_id":12,"subscription_id":3,"feed_url":"https://a.test/feed","title":"An article"}],"subscribed":[]}"""
+        importBody = """{"results":[{"index":0,"status":"created","entry_id":12,"subscription_id":3,"feed_url":"https://a.test/feed","title":"An article"},{"index":1,"status":"not_subscribed","feed_url":"https://b.test/rss"}],"subscribed":[]}"""
         val document = """{"items":[]}""".toByteArray()
 
         model.importKept(document, subscribeMissing = false)
@@ -102,7 +102,7 @@ class KeptImportAppTest {
         assertArrayEquals(document, importCalls.single().body)
         val report = model.state.value.keptImport.report
         assertNotNull(report)
-        assertEquals("created", report!!.results!!.single().status)
+        assertEquals("created", report!!.results!!.first().status)
         assertEquals(1, summarizeKeptImport(report).added)
 
         model.importKeptAgain()
@@ -131,5 +131,37 @@ class KeptImportAppTest {
         withTimeout(15000) { model.state.first { it.keptImport.error != null } }
         assertEquals("Could not read that file.", model.state.value.keptImport.error)
         assertTrue(importCalls.isEmpty())
+    }
+
+    @Test fun importKeptReleasesTheFileWhenThereIsNothingToRetry() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        importBody = """{"results":[{"index":0,"status":"created","entry_id":12}],"subscribed":[]}"""
+        model.importKept("""{"items":[]}""".toByteArray(), subscribeMissing = false)
+        withTimeout(15000) { model.state.first { it.keptImport.report != null && !it.keptImport.busy } }
+        // Nothing was skipped, so the 64 MiB-capable buffer is gone and a
+        // retry has nothing to send.
+        model.importKeptAgain()
+        // importKept marks itself busy before launching, so a retry that ran
+        // would show here at once.
+        assertFalse(model.state.value.keptImport.busy)
+        assertEquals(1, importCalls.size)
+    }
+
+    @Test fun importKeptRefusesAnOversizedExportWithoutARequest() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.importKept(ByteArray(ch.lkmc.earnest.core.MAX_KEPT_IMPORT_BYTES + 1), subscribeMissing = false)
+        withTimeout(15000) { model.state.first { it.keptImport.error != null } }
+        assertEquals("The export is larger than 64 MiB.", model.state.value.keptImport.error)
+        assertTrue(importCalls.isEmpty())
+    }
+
+    @Test fun aReadFailureClearsAnEarlierReport() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        importBody = """{"results":[{"index":0,"status":"created","entry_id":12}],"subscribed":[]}"""
+        model.importKept("""{"items":[]}""".toByteArray(), subscribeMissing = false)
+        withTimeout(15000) { model.state.first { it.keptImport.report != null && !it.keptImport.busy } }
+        model.keptImportReadFailed("Could not read that file.")
+        withTimeout(15000) { model.state.first { it.keptImport.error != null } }
+        assertNull(model.state.value.keptImport.report)
     }
 }

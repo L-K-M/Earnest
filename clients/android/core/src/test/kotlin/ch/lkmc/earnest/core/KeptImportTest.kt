@@ -93,7 +93,7 @@ class KeptImportTest {
     @Test
     fun importKeptRejectsExportsOver64MiBBeforeSending() = runBlocking {
         val (api, requests) = client { response(it, body = """{"results":[],"subscribed":[]}""") }
-        val tooLarge = ByteArray(64 * 1024 * 1024 + 1)
+        val tooLarge = ByteArray(MAX_KEPT_IMPORT_BYTES + 1)
         val error = runCatching { api.importKept(tooLarge, subscribeMissing = false) }.exceptionOrNull()
         assertTrue("expected a size failure, got $error", error is IllegalArgumentException)
         assertNotNull(error!!.message)
@@ -186,5 +186,24 @@ class KeptImportTest {
         val large = ByteArray(200_000)
         assertEquals(101, readAtMost(large.inputStream(), 100).size)
         assertEquals(0, readAtMost(ByteArray(0).inputStream(), 100).size)
+        assertEquals(1, readAtMost(ByteArray(5).inputStream(), 0).size)
+    }
+
+    @Test
+    fun readAtMostCollectsAStreamThatReturnsShortReads() {
+        val data = ByteArray(1000) { (it % 251).toByte() }
+        // Hands out at most seven bytes per read, as slow providers do.
+        val trickle = object : java.io.InputStream() {
+            private var at = 0
+            override fun read(): Int = if (at < data.size) data[at++].toInt() and 0xff else -1
+            override fun read(b: ByteArray, off: Int, len: Int): Int {
+                if (at >= data.size) return -1
+                val n = minOf(len, 7, data.size - at)
+                System.arraycopy(data, at, b, off, n)
+                at += n
+                return n
+            }
+        }
+        assertEquals(data.toList(), readAtMost(trickle, 5000).toList())
     }
 }

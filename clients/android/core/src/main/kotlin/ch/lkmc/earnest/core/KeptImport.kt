@@ -13,6 +13,7 @@ const val MAX_KEPT_IMPORT_BYTES: Int = 64 * 1024 * 1024
  * the limit from one at it without loading a huge file into memory.
  */
 fun readAtMost(input: InputStream, limit: Int): ByteArray {
+    require(limit in 0 until Int.MAX_VALUE) { "limit must leave room for one more byte" }
     val out = ByteArrayOutputStream()
     val buffer = ByteArray(64 * 1024)
     while (out.size() <= limit) {
