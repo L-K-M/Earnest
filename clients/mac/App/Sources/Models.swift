@@ -102,6 +102,10 @@ struct EntryRow: Identifiable, Equatable {
     /// The article's web address, when it is HTTP(S): for dragging, copying
     /// and opening in the browser.
     var url: URL? = nil
+    /// Server paths of the article's thumbnail and its feed's icon, stored by
+    /// Earnest at ingest.
+    var thumbnail: String? = nil
+    var icon: String? = nil
 }
 
 struct EditionGroup: Identifiable, Equatable {
@@ -122,6 +126,8 @@ struct FeedInfo: Identifiable, Equatable {
     let isPrivate: Bool
     let deleted: Bool
     let issue: String?
+    /// Server path of the icon stored at ingest, when there is one.
+    let iconURL: String?
 
     init?(_ value: APIValue) {
         guard let id = value["id"]?.int64Value, id > 0 else { return nil }
@@ -131,6 +137,7 @@ struct FeedInfo: Identifiable, Equatable {
         url = value["url"]?.stringValue ?? ""
         siteURL = value["site_url"]?.stringValue ?? ""
         cadence = value["cadence"]?.stringValue ?? "today"
+        iconURL = value["icon_url"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 }
         isPrivate = value["private"]?.boolValue ?? false
         deleted = value["deleted"]?.boolValue ?? false
         let health = value["health"]

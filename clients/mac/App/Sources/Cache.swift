@@ -5,6 +5,7 @@ import EarnestKit
 // SQLite transactions make a cache snapshot and its cursor durable together.
 final class Cache: SyncStore {
     static let articleLimit = 200
+    static let mediaLimit = 2000
     private let db: DatabaseQueue
     private let key: String
 
@@ -74,6 +75,12 @@ final class Cache: SyncStore {
                     PRIMARY KEY (identity, entry_id)
                 )
                 """)
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS media_copies (
+                    identity TEXT NOT NULL, path TEXT NOT NULL, data BLOB NOT NULL, recency INTEGER NOT NULL,
+                    PRIMARY KEY (identity, path)
+                )
+                """)
         }
     }
 
@@ -83,6 +90,7 @@ final class Cache: SyncStore {
             try db.execute(sql: "DELETE FROM snapshots WHERE key = ?", arguments: [key])
             try db.execute(sql: "DELETE FROM cached_resources WHERE identity = ?", arguments: [key])
             try db.execute(sql: "DELETE FROM article_copies WHERE identity = ?", arguments: [key])
+            try db.execute(sql: "DELETE FROM media_copies WHERE identity = ?", arguments: [key])
         }
     }
 
@@ -153,5 +161,37 @@ final class Cache: SyncStore {
             UPDATE article_copies SET recency = (SELECT COALESCE(MAX(recency), 0) + 1 FROM article_copies WHERE identity = ?)
             WHERE identity = ? AND entry_id = ?
             """, arguments: [key, key, entryID])
+    }
+
+    /// A stored thumbnail or icon; reading counts as use so eviction keeps
+    /// what rows still show.
+    func media(path: String) throws -> Data? {
+        try db.write { db in
+            let data = try Data.fetchOne(db, sql: "SELECT data FROM media_copies WHERE identity = ? AND path = ?", arguments: [key, path])
+            if data != nil { try touchMedia(path, db: db) }
+            return data
+        }
+    }
+
+    func saveMedia(path: String, data: Data) throws {
+        try db.write { db in
+            try db.execute(sql: """
+                INSERT INTO media_copies (identity, path, data, recency) VALUES (?, ?, ?, 0)
+                ON CONFLICT(identity, path) DO UPDATE SET data = excluded.data
+                """, arguments: [key, path, data])
+            try touchMedia(path, db: db)
+            try db.execute(sql: """
+                DELETE FROM media_copies WHERE identity = ? AND path NOT IN (
+                    SELECT path FROM media_copies WHERE identity = ? ORDER BY recency DESC LIMIT ?
+                )
+                """, arguments: [key, key, Self.mediaLimit])
+        }
+    }
+
+    private func touchMedia(_ path: String, db: Database) throws {
+        try db.execute(sql: """
+            UPDATE media_copies SET recency = (SELECT COALESCE(MAX(recency), 0) + 1 FROM media_copies WHERE identity = ?)
+            WHERE identity = ? AND path = ?
+            """, arguments: [key, key, path])
     }
 }

@@ -34,14 +34,18 @@ struct EntryTable: NSViewRepresentable {
     var actions = EntryTableActions()
     /// Returns true once when the window wants the list to take keyboard focus.
     var takeFocusRequest: () -> Bool = { false }
+    /// The account's image store, for feed icons and article thumbnails.
+    var media: MediaStore? = nil
 
     init(entries: [EntryRow] = [], groups: [EditionGroup] = [], selection: Binding<Int64?>,
-         actions: EntryTableActions = EntryTableActions(), takeFocusRequest: @escaping () -> Bool = { false }) {
+         actions: EntryTableActions = EntryTableActions(), takeFocusRequest: @escaping () -> Bool = { false },
+         media: MediaStore? = nil) {
         self.entries = entries
         self.groups = groups
         _selection = selection
         self.actions = actions
         self.takeFocusRequest = takeFocusRequest
+        self.media = media
     }
 
     private var items: [TableItem] {
@@ -206,7 +210,7 @@ struct EntryTable: NSViewRepresentable {
             case .entry(let entry):
                 let identifier = NSUserInterfaceItemIdentifier("entry")
                 let cell = (tableView.makeView(withIdentifier: identifier, owner: nil) as? EntryCell) ?? EntryCell(identifier: identifier)
-                cell.configure(entry)
+                cell.configure(entry, media: parent.media)
                 return cell
             }
         }
@@ -294,21 +298,34 @@ final class ClosureMenuItem: NSMenuItem {
 }
 
 /// One article row: an unread dot, a title of up to two lines, its source
-/// line, and markers for Kept and Later. Heights are measured from the same
-/// fonts so rows fit their text at any column width.
+/// line with the feed's icon, the article's thumbnail, and markers for Kept
+/// and Later. Heights are measured from the same fonts so rows fit their
+/// text at any column width.
 final class EntryCell: NSTableCellView {
     private let dot = NSImageView()
     private let title = NSTextField(wrappingLabelWithString: "")
     private let subtitle = NSTextField(labelWithString: "")
     private let marks = NSImageView()
+    private let feedIcon = NSImageView()
+    private let thumb = NSImageView()
     /// The tone of the Kept or Later mark, set per row in `configure`.
     private var markTint = Tone.plum.nsColor
+    /// The media paths the row was configured with; a load result applies
+    /// only while the cell still shows the path it asked for.
+    private var iconPath: String?
+    private var thumbPath: String?
 
     static let titleFont = NSFont.preferredFont(forTextStyle: .body)
     static let unreadTitleFont = NSFont.systemFont(ofSize: titleFont.pointSize, weight: .semibold)
     static let subtitleFont = NSFont.preferredFont(forTextStyle: .subheadline)
     private static let inset = NSEdgeInsets(top: 7, left: 18, bottom: 7, right: 6)
     private static let markWidth: CGFloat = 16
+    /// The feed icon's size, and its slot plus gap on the subtitle line.
+    private static let iconSize: CGFloat = 14
+    private static let iconSpace: CGFloat = 18
+    /// The thumbnail's size, and its slot plus gap before the marks column.
+    private static let thumbSize: CGFloat = 48
+    private static let thumbSpace: CGFloat = 56
 
     init(identifier: NSUserInterfaceItemIdentifier) {
         super.init(frame: .zero)
@@ -317,13 +334,27 @@ final class EntryCell: NSTableCellView {
             .withSymbolConfiguration(.init(pointSize: 7, weight: .regular))
         dot.contentTintColor = Tone.orange.nsColor
         title.maximumNumberOfLines = 2
-        title.lineBreakMode = .byTruncatingTail
+        // Word wrapping with a truncated last line gives the two lines the
+        // height model reserves; a truncating line break mode would keep the
+        // title on one line.
+        title.lineBreakMode = .byWordWrapping
         title.cell?.truncatesLastVisibleLine = true
         subtitle.font = Self.subtitleFont
         subtitle.textColor = .secondaryLabelColor
         subtitle.lineBreakMode = .byTruncatingTail
         marks.contentTintColor = Tone.plum.nsColor
-        for view in [dot, title, subtitle, marks] { addSubview(view) }
+        // Decorative only: the icon and thumbnail add no accessible content.
+        feedIcon.imageScaling = .scaleProportionallyUpOrDown
+        feedIcon.wantsLayer = true
+        feedIcon.layer?.cornerRadius = 3
+        feedIcon.layer?.masksToBounds = true
+        feedIcon.setAccessibilityElement(false)
+        thumb.imageScaling = .scaleProportionallyUpOrDown
+        thumb.wantsLayer = true
+        thumb.layer?.cornerRadius = 6
+        thumb.layer?.masksToBounds = true
+        thumb.setAccessibilityElement(false)
+        for view in [dot, title, subtitle, marks, feedIcon, thumb] { addSubview(view) }
         setAccessibilityElement(true)
         setAccessibilityRole(.cell)
     }
@@ -343,7 +374,7 @@ final class EntryCell: NSTableCellView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    func configure(_ row: EntryRow) {
+    func configure(_ row: EntryRow, media: MediaStore? = nil) {
         title.stringValue = row.title
         title.font = row.unread ? Self.unreadTitleFont : Self.titleFont
         subtitle.stringValue = row.subtitle
@@ -354,6 +385,13 @@ final class EntryCell: NSTableCellView {
         marks.isHidden = symbol == nil
         markTint = row.kept ? Tone.plum.nsColor : Tone.amber.nsColor
         updateMarks()
+        iconPath = row.icon
+        thumbPath = row.thumbnail
+        feedIcon.image = nil
+        thumb.image = nil
+        feedIcon.isHidden = row.icon == nil
+        thumb.isHidden = row.thumbnail == nil
+        loadImages(media)
         var spoken = [row.title, row.subtitle]
         if row.unread { spoken.insert("Unread", at: 0) }
         if row.kept { spoken.append("Kept") }
@@ -363,18 +401,45 @@ final class EntryCell: NSTableCellView {
         needsLayout = true
     }
 
+    /// Ask the account's store for the configured paths; a recycled cell
+    /// applies a result only while it still shows the path it asked for.
+    private func loadImages(_ media: MediaStore?) {
+        guard let media else { return }
+        if let path = iconPath {
+            Task { [weak self] in
+                let image = await media.image(for: path)
+                guard let self, self.iconPath == path else { return }
+                self.feedIcon.image = image
+            }
+        }
+        if let path = thumbPath {
+            Task { [weak self] in
+                let image = await media.image(for: path)
+                guard let self, self.thumbPath == path else { return }
+                self.thumb.image = image
+            }
+        }
+    }
+
     override func layout() {
         super.layout()
         let inset = Self.inset
-        let textWidth = max(40, bounds.width - inset.left - inset.right - Self.markWidth)
+        let thumbSpace = thumbPath != nil ? Self.thumbSpace : 0
+        let iconSpace = iconPath != nil ? Self.iconSpace : 0
+        let textWidth = max(40, bounds.width - inset.left - inset.right - Self.markWidth - thumbSpace)
         let titleHeight = Self.titleHeight(title.stringValue, font: title.font ?? Self.titleFont, width: textWidth)
         let subtitleHeight = ceil(Self.subtitleFont.ascender - Self.subtitleFont.descender + Self.subtitleFont.leading)
         // Flipped-agnostic: AppKit's origin is bottom-left.
         let top = bounds.height - inset.top
         title.frame = NSRect(x: inset.left, y: top - titleHeight, width: textWidth, height: titleHeight)
         title.preferredMaxLayoutWidth = textWidth
-        subtitle.frame = NSRect(x: inset.left, y: top - titleHeight - 2 - subtitleHeight,
-                                width: textWidth, height: subtitleHeight)
+        subtitle.frame = NSRect(x: inset.left + iconSpace, y: top - titleHeight - 2 - subtitleHeight,
+                                width: textWidth - iconSpace, height: subtitleHeight)
+        feedIcon.frame = NSRect(x: inset.left, y: subtitle.frame.minY + (subtitleHeight - Self.iconSize) / 2,
+                                width: Self.iconSize, height: Self.iconSize)
+        // Top-aligned with the title, to the left of the marks column.
+        thumb.frame = NSRect(x: bounds.width - inset.right - Self.markWidth - Self.thumbSpace,
+                             y: top - Self.thumbSize, width: Self.thumbSize, height: Self.thumbSize)
         let lineHeight = ceil(Self.titleFont.ascender - Self.titleFont.descender)
         dot.frame = NSRect(x: 5, y: top - lineHeight / 2 - 4, width: 8, height: 8)
         marks.frame = NSRect(x: bounds.width - inset.right - Self.markWidth + 2, y: top - lineHeight / 2 - 7,
@@ -382,10 +447,13 @@ final class EntryCell: NSTableCellView {
     }
 
     static func height(for row: EntryRow, width: CGFloat) -> CGFloat {
-        let textWidth = max(40, width - inset.left - inset.right - markWidth)
+        let thumbSpace: CGFloat = row.thumbnail == nil ? 0 : Self.thumbSpace
+        let textWidth = max(40, width - inset.left - inset.right - markWidth - thumbSpace)
         let titleHeight = titleHeight(row.title, font: row.unread ? unreadTitleFont : titleFont, width: textWidth)
         let subtitleHeight = ceil(subtitleFont.ascender - subtitleFont.descender + subtitleFont.leading)
-        return ceil(inset.top + titleHeight + 2 + subtitleHeight + inset.bottom)
+        let text = inset.top + titleHeight + 2 + subtitleHeight + inset.bottom
+        let media: CGFloat = row.thumbnail == nil ? 0 : inset.top + thumbSize + inset.bottom
+        return ceil(max(text, media))
     }
 
     private static func titleHeight(_ text: String, font: NSFont, width: CGFloat) -> CGFloat {

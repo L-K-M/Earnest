@@ -218,6 +218,12 @@ header scrolls with the article; its title links to the original. Blocked
 images and offline copies are explained in a floating bar with Load Images.
 Text zoom is shared by every window.
 
+Rows show the feed's icon before the source line and the article's thumbnail
+to the left of the row's markers, and Feeds shows each icon before the name;
+Earnest stored both when the feed and article arrived. The app keeps copies
+per account in the same identity-partitioned cache as article HTML. Rows
+restored offline from the sync cache show icons but not thumbnails.
+
 Import Subscriptions… reads an OPML file through the open panel. You can also
 drop an OPML file on a window or open one with Earnest from the Finder; Earnest
 asks before importing and then reports new subscriptions, feeds you already

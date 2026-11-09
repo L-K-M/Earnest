@@ -493,3 +493,40 @@ private func change(_ rev: Int64, _ type: String, _ payload: APIValue) -> APICha
     }
     #expect(bulk[2]?.kept.value == .flag(true))
 }
+
+// Regression: the server sends a subscription.updated with both a protocol
+// object and the native projection at one revision. The projection's extra
+// fields, such as a newly stored icon_url, must still reach the cache even
+// though the object merged first.
+@Test func subscriptionProjectionFieldsApplyAtTheObjectsRevision() throws {
+    let engine = SyncEngine(store: MemorySyncStore())
+    try engine.bootstrap(Cursor(generation: "g1", rev: 0))
+    try engine.apply([
+        change(1, "subscription.created", .object(pairs: [("subscription", .object(pairs: [("id", .integer(7)), ("title", .string("Feed")), ("rev", .integer(1))]))])),
+        change(2, "subscription.updated", .object(pairs: [
+            ("object", .object(pairs: [("kind", .string("subscription")), ("id", .integer(7)), ("name", .string("Feed")), ("rev", .integer(2))])),
+            ("subscription", .object(pairs: [("id", .integer(7)), ("title", .string("Feed")), ("rev", .integer(2)), ("icon_url", .string("/v1/subscriptions/7/icon?v=ab12"))])),
+        ])),
+    ], next: Cursor(generation: "g1", rev: 2))
+    let object = try #require(try engine.snapshot().objects.first { $0.kind == .subscription && $0.id == 7 })
+    #expect(object.rev == 2)
+    #expect(object.fields["icon_url"] == .string("/v1/subscriptions/7/icon?v=ab12"))
+}
+
+// Regression: a bodyless entry.updated, such as the one sent when a
+// thumbnail is stored, keeps the row listable from the cache while it waits
+// for the REST refresh that restores its body.
+@Test func bodylessUpdateKeepsCachedMetadataListable() throws {
+    let engine = SyncEngine(store: MemorySyncStore())
+    try engine.bootstrap(Cursor(generation: "g1", rev: 0))
+    try engine.mergeEntry(SyncEntry(id: 1, subscriptionID: 7, seq: 1, title: "Story", url: "https://example.com/story", rev: 1))
+    try engine.apply([
+        change(1, "entry.updated", .object(pairs: [("entry", .object(pairs: [("id", .integer(1)), ("subscription_id", .integer(7)), ("seq", .integer(1)), ("rev", .integer(2))]))])),
+    ], next: Cursor(generation: "g1", rev: 1))
+    let entry = try #require(try engine.snapshot().entries.first { $0.id == 1 })
+    #expect(entry.rev == 2)
+    #expect(!entry.hasBody)
+    #expect(entry.hasMetadata)
+    #expect(entry.title == "Story")
+    #expect(!SyncEntry(id: 2, rev: 1, hasBody: false).hasMetadata)
+}

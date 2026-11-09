@@ -196,6 +196,9 @@ private let opmlDocumentLimit = 16 * 1024 * 1024
 /// The largest starred-articles export the server accepts.
 let keptImportLimit = 64 * 1024 * 1024
 
+/// The largest icon or thumbnail body accepted.
+private let mediaLimit = 2 * 1024 * 1024
+
 private final class RejectRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
         completionHandler(nil)
@@ -309,6 +312,32 @@ public final class EarnestAPI: Sendable {
         origin.host = host
         origin.port = url.port
         return SignedArticle(html: html, imageOrigin: mode == .proxied ? origin.url : nil)
+    }
+    /// Image bytes for a server media path, or nil when none is stored. A
+    /// path outside the shapes the server generates throws without a
+    /// request, so the token is never sent elsewhere.
+    public func media(path: String) async throws -> Data? {
+        // Media fetches send the bearer token, so only the path shapes the
+        // server generates for thumbnails and icons may be requested at all.
+        let mediaPath = #/^/v1/(entries|subscriptions)/[1-9][0-9]{0,18}/(thumbnail|icon)(\?v=[A-Za-z0-9_-]{1,64})?$/#
+        guard path.wholeMatch(of: mediaPath) != nil else { throw APIError.invalidResponse }
+        guard let url = URL(string: baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + path) else {
+            throw APIError.invalidBaseURL
+        }
+        var request = URLRequest(url: url)
+        if let token = try tokenStore.load() {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue("image/png, image/jpeg", forHTTPHeaderField: "Accept")
+        let (data, response) = try await session.data(for: request)
+        guard let response = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        if response.statusCode == 404 { return nil }
+        try validateHTTP(response, data: data)
+        let type = response.value(forHTTPHeaderField: "Content-Type")?.split(separator: ";").first?
+            .trimmingCharacters(in: .whitespaces).lowercased()
+        guard type == "image/png" || type == "image/jpeg",
+              !data.isEmpty, data.count <= mediaLimit else { throw APIError.invalidResponse }
+        return data
     }
     public func mutes() async throws -> [APIValue] {
         try await generated { try adapt(try await client.listMutes(.init()).ok.body.json ?? []) }
