@@ -635,6 +635,39 @@ import EarnestKit
         SettingsHTTP.assertFinished()
     }
 
+    func testAConflictReplacesAnEarlierUnrelatedError() async throws {
+        let (api, session) = try makeAPI([
+            .init(method: "PUT", path: "/v1/settings", body: "", failure: .notConnectedToInternet),
+        ])
+        defer { session.invalidateAndCancel() }
+        let engine = SyncEngine(store: MemorySyncStore())
+        let model = makeModel(api: api, engine: engine)
+        model.loggedIn = true
+        let settings = ReaderSettingsModel(app: model)
+        settings.draft.theme = .dark
+        settings.save()
+        try await waitUntil { !settings.busy }
+        XCTAssertNotNil(settings.error, "The failed save is reported")
+
+        // Another device saves; the unsaved draft now conflicts with it.
+        let generation = try XCTUnwrap(engine.snapshot().cursor?.generation)
+        try engine.mergeSettings(APIReaderSettings(theme: .light, rev: 5), generation: generation)
+        try model.restoreReaderPreferences()
+        model.rebuildPresentation()
+        XCTAssertTrue(settings.conflict)
+        XCTAssertNil(settings.error, "The conflict row describes the conflict, not the old failure")
+
+        // A message about the conflict itself survives later syncs.
+        settings.save()
+        let conflictMessage = try XCTUnwrap(settings.error)
+        try engine.mergeSettings(APIReaderSettings(theme: .black, rev: 6), generation: generation)
+        try model.restoreReaderPreferences()
+        model.rebuildPresentation()
+        XCTAssertTrue(settings.conflict)
+        XCTAssertEqual(settings.error, conflictMessage)
+        SettingsHTTP.assertFinished()
+    }
+
     func testAutosaveWaitsForReloadAfterAConflict() async throws {
         let engine = SyncEngine(store: MemorySyncStore())
         let model = makeModel(engine: engine)

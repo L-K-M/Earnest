@@ -290,7 +290,7 @@ import AppKit
         if !entry.author.isEmpty { subtitle += " · \(entry.author)" }
         // Kept and Later show as row markers; Done, which has none, stays in words.
         if state.shelf.value == .text("done") && section != .done { subtitle += " · Done" }
-        let url = Self.webURL(entry.url)
+        let url = WebLink.url(entry.url)
         return EntryRow(id: entry.id, title: entry.title.isEmpty ? "Untitled" : entry.title,
                         subtitle: subtitle, unread: state.seen.value == .text("unseen"),
                         kept: state.kept.value == .flag(true), later: state.shelf.value == .text("later"),
@@ -464,13 +464,7 @@ import AppKit
     /// The article's link, when it is a web address the browser can open.
     var selectedURL: URL? {
         guard let entry = readingEntry ?? entries.first(where: { $0.id == selected }) else { return nil }
-        return Self.webURL(entry.url)
-    }
-
-    /// An HTTP(S) address the browser may open; anything else is not a link.
-    static func webURL(_ text: String) -> URL? {
-        guard let url = URL(string: text), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
-        return url
+        return WebLink.url(entry.url)
     }
 
     var selectedTitle: String {
@@ -528,7 +522,7 @@ import AppKit
 
     /// Open a row's article in the default browser.
     func openInBrowser(entryID: Int64) {
-        guard let entry = entries.first(where: { $0.id == entryID }), let url = Self.webURL(entry.url) else { return }
+        guard let entry = entries.first(where: { $0.id == entryID }), let url = WebLink.url(entry.url) else { return }
         #if canImport(AppKit)
         NSWorkspace.shared.open(url)
         #endif

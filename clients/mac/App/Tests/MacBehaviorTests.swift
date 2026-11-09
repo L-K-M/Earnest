@@ -311,6 +311,16 @@ import EarnestKit
         XCTAssertNil(FeedLink.subscriptionURL(try XCTUnwrap(URL(string: "feed://user:secret@example.com/rss"))))
     }
 
+    func testOnlyHTTPAddressesWithAHostAreWebLinks() {
+        XCTAssertEqual(WebLink.url("https://example.com/a"), URL(string: "https://example.com/a"))
+        XCTAssertEqual(WebLink.url("HTTP://example.com"), URL(string: "HTTP://example.com"))
+        XCTAssertNil(WebLink.url("http://"), "A scheme without a host is not a link")
+        XCTAssertNil(WebLink.url("https:///path"))
+        XCTAssertNil(WebLink.url("javascript:alert(1)"))
+        XCTAssertNil(WebLink.url("file:///etc/hosts"))
+        XCTAssertNil(WebLink.url(""))
+    }
+
     func testImportReportStatesFailuresPlainly() {
         XCTAssertEqual(AppModel.opmlLimit, 8 << 20, "The server and transport accept 8 MiB")
         let clean = AppModel.report(for: OPMLImportSummary(subscribed: 3, folders: 1, deferred: 0, failures: [],

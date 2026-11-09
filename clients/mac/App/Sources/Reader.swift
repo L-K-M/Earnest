@@ -19,8 +19,7 @@ struct ArticleHeader: Equatable {
         self.feedTitle = feedTitle.isEmpty ? "Feed" : feedTitle
         author = entry.author
         date = entry.publishedAt.flatMap(DateFormatting.parse) ?? DateFormatting.parse(entry.firstSeenAt)
-        let url = URL(string: entry.url)
-        link = ["http", "https"].contains(url?.scheme?.lowercased() ?? "") ? url : nil
+        link = WebLink.url(entry.url)
     }
 
     var html: String {
@@ -125,8 +124,21 @@ final class ArticleScheme: NSObject, WKURLSchemeHandler {
     func hideFind() {
         findVisible = false
         findMatched = nil
+        clearFindHighlight()
         // Return focus to the article so the keyboard keeps scrolling it.
         webView?.window?.makeFirstResponder(webView)
+    }
+
+    /// Two private-use characters in a row, which article text is very
+    /// unlikely to contain; an article that had them would show them
+    /// highlighted instead.
+    static let unmatchable = "\u{E000}\u{E001}"
+
+    /// WebKit keeps its yellow match indicator up after the find bar closes,
+    /// and has no public call to hide it; a search that finds nothing does.
+    /// (An empty search is ignored and leaves the indicator up.)
+    private func clearFindHighlight() {
+        webView?.find(Self.unmatchable, configuration: WKFindConfiguration()) { _ in }
     }
 
     func find(backwards: Bool = false) {
@@ -201,8 +213,8 @@ struct Reader: NSViewRepresentable {
                 decisionHandler(.allow)
                 return
             }
-            if action.navigationType == .linkActivated, ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
-                NSWorkspace.shared.open(url)
+            if action.navigationType == .linkActivated, let web = WebLink.validated(url) {
+                NSWorkspace.shared.open(web)
             }
             decisionHandler(.cancel)
         }
