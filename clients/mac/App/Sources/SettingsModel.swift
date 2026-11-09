@@ -71,6 +71,13 @@ import EarnestKit
         if synchronizeScope() { return }
         guard settings.rev >= baseline.rev, settings != baseline else { return }
         if isDirty {
+            // The conflict row shows the error if there is one. An error from
+            // before the conflict is unrelated and must not stand in for it;
+            // messages set after it describe the conflict and stay.
+            if !conflict {
+                error = nil
+                confirmed = false
+            }
             conflict = true
             return
         }
