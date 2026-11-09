@@ -68,6 +68,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Titles that a feed escaped twice, such as The Verge's
+  "Pomera&#8217;s", now show the character instead of the reference.
+  Earnest's identity for items without a GUID or link is unchanged, so
+  no article is stored twice.
 - A feed that lists two items under one identity, such as a WordPress
   comments feed, no longer stops `earnest serve`: comments on one post
   keep distinct identities, a repeated item is stored once, and data the
