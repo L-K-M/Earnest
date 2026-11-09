@@ -138,7 +138,7 @@ import AppKit
     /// Put a cached article back into this window's entries.
     private func restoreEntryFromCache(_ id: Int64) {
         guard !entries.contains(where: { $0.id == id }), let engine = app.engine, app.principalID > 0,
-              let cached = try? engine.entry(id), !cached.deleted, cached.hasBody,
+              let cached = try? engine.entry(id), !cached.deleted, cached.hasMetadata,
               let entry = try? cachedEntry(cached, principal: app.principalID, engine: engine) else { return }
         entries.insert(entry, at: entries.firstIndex { $0.seq > entry.seq } ?? entries.endIndex)
     }
@@ -294,7 +294,8 @@ import AppKit
         return EntryRow(id: entry.id, title: entry.title.isEmpty ? "Untitled" : entry.title,
                         subtitle: subtitle, unread: state.seen.value == .text("unseen"),
                         kept: state.kept.value == .flag(true), later: state.shelf.value == .text("later"),
-                        url: url)
+                        url: url, thumbnail: entry.thumbnailURL,
+                        icon: app.feedMap[entry.subscriptionID]?.iconURL)
     }
 
     func rebuildPresentation() {
@@ -306,7 +307,7 @@ import AppKit
         let pendingIDs = Set(snapshot?.outbox.filter { $0.principal == app.principalID }.map(\.entryID) ?? [])
         let isRiver = section == .today || section == .edition
         let missing = (snapshot?.entries ?? []).filter {
-            !$0.deleted && $0.hasBody && !knownIDs.contains($0.id) && section.entryView != nil
+            !$0.deleted && $0.hasMetadata && !knownIDs.contains($0.id) && section.entryView != nil
                 && (!isRiver || cachedPresentation || pendingIDs.contains($0.id))
         }
         // Prefetch states for fetched candidates and possible additions once.
