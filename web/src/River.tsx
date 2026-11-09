@@ -13,6 +13,8 @@ import {longDate, shortAge} from './format'
 import {viewHref} from './routes'
 import {Link, whenPresent} from './router'
 import {explainHealth} from './feeds'
+import {articleMenu} from './menus'
+import {MENU_ATTRIBUTE, type MenuItem} from './ContextMenu'
 
 type ClusterGroup = {entry: Entry; also_in: number}
 type Page = {entries: Entry[]; next_cursor?: string; groups?: ClusterGroup[]}
@@ -54,7 +56,7 @@ function newTabClick(event: ReactMouseEvent): boolean {
   return event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey
 }
 
-export function River({view, subscriptions, actions, selected, onSelect, onOpen, shortcuts, counts, summary, onNewestLoaded, reading = false, since = '1970-01-01T00:00:00Z', sessionStart = '1970-01-01T00:00:00Z'}: {since?:string; sessionStart?:string; onNewestLoaded?: (seq: number) => void; view: View; subscriptions: Subscription[]; actions: ReaderActions; selected: Entry | null; onSelect: (entry: Entry) => void; onOpen: (entry: Entry, mode?: OpenMode) => void; shortcuts: boolean; counts: boolean; summary: SessionSummary; reading?: boolean}) {
+export function River({view, subscriptions, actions, selected, onSelect, onOpen, onMenu, shortcuts, counts, summary, onNewestLoaded, reading = false, since = '1970-01-01T00:00:00Z', sessionStart = '1970-01-01T00:00:00Z'}: {since?:string; sessionStart?:string; onNewestLoaded?: (seq: number) => void; view: View; subscriptions: Subscription[]; actions: ReaderActions; selected: Entry | null; onSelect: (entry: Entry) => void; onOpen: (entry: Entry, mode?: OpenMode) => void; onMenu?: (event: ReactMouseEvent<HTMLElement>, entry: Entry, items: MenuItem[]) => void; shortcuts: boolean; counts: boolean; summary: SessionSummary; reading?: boolean}) {
   const pipeline = usePipeline()
   const key = viewKey(view)
   const scroller = useRef<HTMLDivElement>(null)
@@ -234,6 +236,20 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     onOpen(entry, mode)
   }, [onOpen])
 
+  // A row's menu offers what its shortcuts do. As with "m", a deliberate read
+  // or unread replaces the row's queued passive seen.
+  function rowMenu(event: ReactMouseEvent<HTMLElement>, entry: Entry) {
+    onMenu?.(event, entry, articleMenu(actions.state(entry), {
+      open: () => open(entry),
+      openTab: () => { window.open(viewHref({kind: view.kind, id: view.id}, entry.id), '_blank', 'noopener') },
+      openOriginal: () => { window.open(entry.url, '_blank', 'noopener,noreferrer') },
+      act: (register, value) => {
+        if (register === 'seen') pending.current.delete(entry.id)
+        return actions.act(entry, register, value)
+      },
+    }))
+  }
+
   // move selects the row at `index`; in reading mode it opens it in place.
   const move = useCallback((index: number, from: number, focus: boolean) => {
     const target = entries[index]
@@ -325,7 +341,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
           const date = entry.published_at || entry.first_seen_at
           return <div className="virtual-row" key={entry.id} role="listitem" data-entry={entry.id} data-index={row.index} ref={virtual.measureElement} style={{transform: `translateY(${row.start - virtual.options.scrollMargin}px)`}}>
             {group && <h3 className="feed-group">{source}</h3>}
-            <a className="entry" href={viewHref({kind: view.kind, id: view.id}, entry.id)} tabIndex={entry.id === tabStop ? 0 : -1} data-unread={isUnread || undefined} data-selected={selected?.id === entry.id || undefined} aria-current={reading && selected?.id === entry.id ? 'page' : undefined} onFocus={() => onSelect(entry)} onClick={event => { if (newTabClick(event)) return; event.preventDefault(); open(entry) }}>
+            <a className="entry" href={viewHref({kind: view.kind, id: view.id}, entry.id)} tabIndex={entry.id === tabStop ? 0 : -1} data-unread={isUnread || undefined} data-selected={selected?.id === entry.id || undefined} aria-current={reading && selected?.id === entry.id ? 'page' : undefined} onFocus={() => onSelect(entry)} onClick={event => { if (newTabClick(event)) return; event.preventDefault(); open(entry) }} onContextMenu={onMenu ? event => rowMenu(event, entry) : undefined} {...(onMenu ? {[MENU_ATTRIBUTE]: ''} : {})}>
               <span className="entry-body">
               <span className="entry-title">{isUnread && <span className="unread-dot" aria-hidden="true" />}{entry.title || 'Untitled'}</span>
               {pipeline.status.blurb === 'enabled' && entry.blurb && <span className="entry-blurb">{entry.blurb}</span>}

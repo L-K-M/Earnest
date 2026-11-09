@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
+	"fmt"
 
 	"github.com/L-K-M/Earnest/internal/imageproxy"
 	"github.com/L-K-M/Earnest/internal/outbound"
@@ -53,7 +55,16 @@ func TestAppPolicyAndFallback(t *testing.T) {
 
 type fakeContent struct{}
 
-func (fakeContent) Content(_ context.Context, _ service.Actor, _ int64) (service.EntryContent, error) {
+func (fakeContent) Content(_ context.Context, _ service.Actor, id int64) (service.EntryContent, error) {
+	if id == 404 {
+		return service.EntryContent{}, service.ErrNotFound
+	}
+	if id == 403 {
+		return service.EntryContent{}, fmt.Errorf("entry %d: %w", id, service.ErrForbidden)
+	}
+	if id == 500 {
+		return service.EntryContent{}, errors.New("database unavailable")
+	}
 	return service.EntryContent{HTML: "<p>Article</p>"}, nil
 }
 
@@ -67,7 +78,7 @@ func newContentRecorder(t *testing.T, query string) *httptest.ResponseRecorder {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &Content{svc: fakeContent{}, proxy: proxy, signer: &TicketSigner{key: []byte(strings.Repeat("x", 32)), origin: "https://content.example", now: func() time.Time { return time.Unix(100, 0) }}}
+	c := &Content{svc: fakeContent{}, proxy: proxy, appOrigin: "https://app.example", signer: &TicketSigner{key: []byte(strings.Repeat("x", 32)), origin: "https://content.example", now: func() time.Time { return time.Unix(100, 0) }}}
 	sig := c.signer.Sign(Ticket{UserID: 1, PrincipalID: 2, Kind: service.PrincipalHuman, EntryID: 3, Expires: 101, Mode: ImageProxied})
 	w := httptest.NewRecorder()
 	c.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/content/3?sig="+sig+query, nil))
@@ -118,7 +129,7 @@ func TestContentPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &Content{svc: fakeContent{}, proxy: proxy, signer: &TicketSigner{key: []byte(strings.Repeat("x", 32)), origin: "https://content.example", now: func() time.Time { return time.Unix(100, 0) }}}
+	c := &Content{svc: fakeContent{}, proxy: proxy, appOrigin: "https://app.example", signer: &TicketSigner{key: []byte(strings.Repeat("x", 32)), origin: "https://content.example", now: func() time.Time { return time.Unix(100, 0) }}}
 	sig := c.signer.Sign(Ticket{UserID: 1, PrincipalID: 2, Kind: service.PrincipalHuman, EntryID: 3, Expires: 101, Mode: ImageProxied})
 	w := httptest.NewRecorder()
 	c.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/content/3?sig="+sig, nil))
@@ -126,17 +137,82 @@ func TestContentPolicy(t *testing.T) {
 		t.Fatalf("status = %d", w.Code)
 	}
 	policy := w.Header().Get("Content-Security-Policy")
-	if !strings.Contains(policy, "default-src 'none'") || !strings.Contains(policy, "img-src https://content.example") || !strings.Contains(policy, "style-src 'sha256-") || strings.Contains(policy, "script-src") {
+	if !strings.Contains(policy, "default-src 'none'") || !strings.Contains(policy, "img-src https://content.example") || !strings.Contains(policy, "style-src 'sha256-") {
 		t.Fatalf("CSP = %q", policy)
+	}
+	// The page's own script is the only one allowed: one hash, no
+	// 'unsafe-inline', no host or scheme sources, no handler attributes.
+	var scriptSrc string
+	for _, directive := range strings.Split(policy, ";") {
+		if fields := strings.Fields(directive); len(fields) > 0 && fields[0] == "script-src" {
+			scriptSrc = strings.TrimSpace(directive)
+		}
+	}
+	if fields := strings.Fields(scriptSrc); len(fields) != 2 || !strings.HasPrefix(fields[1], "'sha256-") {
+		t.Fatalf("script-src = %q, want exactly one hash", scriptSrc)
 	}
 }
 
-func TestReaderIframeSandbox(t *testing.T) {
-	source, err := os.ReadFile("../../web/src/App.tsx")
+// The article page's script must be admitted by its hash and nothing else,
+// and it reports only to the configured app origin.
+func TestContentScriptHashMatchesScript(t *testing.T) {
+	w := newContentRecorder(t, "")
+	body := w.Body.String()
+	start := strings.Index(body, "<script>")
+	end := strings.Index(body, "</script>")
+	if start < 0 || end < start {
+		t.Fatalf("script element not found in %q", body)
+	}
+	if head := strings.Index(body, "</head>"); head < end {
+		t.Fatal("the script must sit in the head, before any article markup")
+	}
+	script := body[start+len("<script>") : end]
+	sum := sha256.Sum256([]byte(script))
+	want := "script-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+	if policy := w.Header().Get("Content-Security-Policy"); !strings.Contains(policy, want) {
+		t.Fatalf("CSP = %q, want %q", policy, want)
+	}
+	if !strings.Contains(script, `const app="https://app.example"`) || strings.Count(script, "postMessage(") != 2 || strings.Count(script, ",app)") != 2 {
+		t.Fatalf("script must post only to the app origin: %q", script)
+	}
+	// Space on a focused summary must still open its details.
+	if !strings.Contains(script, `closest("summary")`) {
+		t.Fatalf("script must leave Space on a summary alone: %q", script)
+	}
+	// Shift with arrows, Home, End or Page keys must still extend a selection.
+	if !strings.Contains(script, `if(e.shiftKey&&k!==" "&&scroll.has(k))return;`) {
+		t.Fatalf("script must leave selection keys alone: %q", script)
+	}
+}
+
+// Without an app origin the page stays script-free and scrolls in its frame.
+func TestContentWithoutAppOriginHasNoScript(t *testing.T) {
+	egress, err := outbound.New(outbound.Config{Version: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(source), `sandbox="allow-popups allow-popups-to-escape-sandbox"`) {
+	proxy, err := imageproxy.New([]byte(strings.Repeat("x", 32)), egress, "https://content.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Content{svc: fakeContent{}, proxy: proxy, signer: &TicketSigner{key: []byte(strings.Repeat("x", 32)), origin: "https://content.example", now: func() time.Time { return time.Unix(100, 0) }}}
+	sig := c.signer.Sign(Ticket{UserID: 1, PrincipalID: 2, Kind: service.PrincipalHuman, EntryID: 3, Expires: 101, Mode: ImageProxied})
+	w := httptest.NewRecorder()
+	c.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/content/3?sig="+sig, nil))
+	if strings.Contains(w.Header().Get("Content-Security-Policy"), "script-src") || strings.Contains(w.Body.String(), "<script") {
+		t.Fatalf("CSP = %q, body = %q", w.Header().Get("Content-Security-Policy"), w.Body.String())
+	}
+}
+
+// The frame may run the page's hashed script, but it must never share an
+// origin with anything: allow-same-origin would hand the article the
+// content origin's storage.
+func TestReaderIframeSandbox(t *testing.T) {
+	source, err := os.ReadFile("../../web/src/ArticleFrame.tsx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(source), `sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"`) || strings.Contains(string(source), "allow-same-origin") {
 		t.Fatal("reader iframe sandbox changed")
 	}
 }
@@ -173,5 +249,46 @@ func TestExpiredTicketPage(t *testing.T) {
 	c.ServeHTTP(w3, httptest.NewRequest(http.MethodGet, "/content/3?sig=garbage", nil))
 	if !strings.Contains(w3.Body.String(), "This article link has expired") {
 		t.Fatalf("bad sig body = %q", w3.Body.String())
+	}
+}
+
+// Every page the reader's frame can show reports its height, so a notice
+// never inherits the previous article's height.
+func TestContentNoticesCarryTheFrameScript(t *testing.T) {
+	egress, err := outbound.New(outbound.Config{Version: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy, err := imageproxy.New([]byte(strings.Repeat("x", 32)), egress, "https://content.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Content{svc: fakeContent{}, proxy: proxy, appOrigin: "https://app.example", signer: &TicketSigner{key: []byte(strings.Repeat("x", 32)), origin: "https://content.example", now: func() time.Time { return time.Unix(100, 0) }}}
+	for _, tc := range []struct {
+		name, path string
+		status     int
+		heading    string
+	}{
+		{"expired", "/content/3?sig=bogus", http.StatusGone, "This article link has expired"},
+		{"gone", "/content/404?sig=" + c.signer.Sign(Ticket{UserID: 1, PrincipalID: 2, Kind: service.PrincipalHuman, EntryID: 404, Expires: 101, Mode: ImageProxied}), http.StatusNotFound, "This article is not available"},
+		{"hidden", "/content/403?sig=" + c.signer.Sign(Ticket{UserID: 1, PrincipalID: 2, Kind: service.PrincipalHuman, EntryID: 403, Expires: 101, Mode: ImageProxied}), http.StatusNotFound, "This article is not available"},
+		{"broken", "/content/500?sig=" + c.signer.Sign(Ticket{UserID: 1, PrincipalID: 2, Kind: service.PrincipalHuman, EntryID: 500, Expires: 101, Mode: ImageProxied}), http.StatusInternalServerError, "This article could not be shown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			c.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tc.path, nil))
+			body := w.Body.String()
+			if w.Code != tc.status || !strings.Contains(body, tc.heading) {
+				t.Fatalf("status = %d, body = %q", w.Code, body)
+			}
+			start, end := strings.Index(body, "<script>"), strings.Index(body, "</script>")
+			if start < 0 || end < start {
+				t.Fatalf("no frame script in %q", body)
+			}
+			sum := sha256.Sum256([]byte(body[start+len("<script>") : end]))
+			if want := "script-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"; !strings.Contains(w.Header().Get("Content-Security-Policy"), want) {
+				t.Fatalf("CSP = %q, want %q", w.Header().Get("Content-Security-Policy"), want)
+			}
+		})
 	}
 }

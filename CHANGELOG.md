@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and clears Done with it; scrolling never reverses it, only opening the
   article reads it again. The reader header gained Copy link and Share
   for the entry URL.
+- Context menus in the web client. Right-click, long-press or press
+  Shift+F10 on Today, a folder or a feed for "Mark all as read", a
+  refresh and its settings, or on an article for its reading actions and
+  "Mark read up to here". Shift with a right click keeps the browser's
+  menu.
+- The Earnest logo in the web client's sidebar goes to Today.
 - The Android app shows feed icons and article thumbnails in article rows
   and feed icons in Feeds, loaded with the account's token and kept per
   account.
@@ -78,6 +84,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The web reader scrolls an article in one place. The article frame now
+  takes the article's height instead of the pane's, so Space, Page Down
+  and the arrow keys move through the whole article, also after a click
+  inside it.
 - Titles that a feed escaped twice, such as The Verge's
   "Pomera&#8217;s", now show the character instead of the reference.
   Earnest's identity for items without a GUID or link is unchanged, so
