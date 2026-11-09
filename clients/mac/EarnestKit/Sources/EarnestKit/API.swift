@@ -190,6 +190,9 @@ public struct KeptImportSummary: Equatable, Sendable {
 /// OPML exports are bounded so a runaway response cannot exhaust memory.
 private let opmlDocumentLimit = 16 * 1024 * 1024
 
+/// The largest starred-articles export the server accepts.
+let keptImportLimit = 64 * 1024 * 1024
+
 private final class RejectRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
         completionHandler(nil)
@@ -398,6 +401,9 @@ public final class EarnestAPI: Sendable {
     /// Imports a Google Reader JSON export of starred articles into Kept.
     /// `subscribeMissing` sends the server's `missing_feeds=subscribe`.
     public func importKept(_ document: Data, subscribeMissing: Bool) async throws -> KeptImportSummary {
+        // Refuse before decoding: the server takes at most 64 MiB, and
+        // decoding builds a tree several times the document's size.
+        guard document.count <= keptImportLimit else { throw APIError.invalidDocument }
         let body: OpenAPIObjectContainer
         do { body = try JSONDecoder().decode(OpenAPIObjectContainer.self, from: document) }
         catch { throw APIError.invalidDocument }

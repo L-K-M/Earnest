@@ -301,6 +301,9 @@ import EarnestKit
                 return
             }
             pendingStarredImport = PendingStarredImport(name: url.lastPathComponent, data: try Data(contentsOf: url))
+            // Each file asks afresh: an earlier file's choice to subscribe
+            // must not carry over to this one.
+            starredSubscribeMissing = false
         } catch {
             model.error = "Earnest couldn't read “\(url.lastPathComponent)”. \(error.localizedDescription)"
         }

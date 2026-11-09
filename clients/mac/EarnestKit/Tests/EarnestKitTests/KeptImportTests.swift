@@ -132,4 +132,13 @@ extension NetworkTests {
         await #expect(throws: APIError.self) { try await api.importKept(Data("[]".utf8), subscribeMissing: false) }
         ScriptedHTTP.assertFinished()
     }
+
+    @Test func importKeptRefusesAnOversizedExportWithoutARequest() async throws {
+        let session = ScriptedHTTP.install([])
+        defer { session.invalidateAndCancel() }
+        let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: TestTokens(), session: session)
+        let oversized = Data(count: keptImportLimit + 1)
+        await #expect(throws: APIError.self) { try await api.importKept(oversized, subscribeMissing: false) }
+        ScriptedHTTP.assertFinished()
+    }
 }

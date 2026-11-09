@@ -54,10 +54,13 @@ struct KeptImportRetry: Equatable {
             do {
                 let summary = try await api.importKept(document, subscribeMissing: subscribeMissing)
                 guard let model, model.session == session, model.loggedIn, !Task.isCancelled else { return }
-                reported(Self.report(for: summary, name: name, data: document))
                 await model.refreshFeeds()
                 model.rebuildPresentation()
                 model.scheduleSync()
+                // Finish before reporting, so the report's retry is never
+                // refused as an import still in progress.
+                self.task = nil
+                reported(Self.report(for: summary, name: name, data: document))
             } catch is CancellationError {
             } catch {
                 guard let model, model.session == session else { return }
@@ -79,7 +82,7 @@ struct KeptImportRetry: Equatable {
             parts.append("Added the export's labels to \(summary.labelled) \(summary.labelled == 1 ? "article" : "articles").")
         }
         if summary.unkept > 0 {
-            parts.append("\(summary.unkept) left out because you removed them from Kept.")
+            parts.append("\(summary.unkept) left out because you removed \(summary.unkept == 1 ? "it" : "them") from Kept.")
         }
         if summary.gone > 0 {
             parts.append("\(summary.gone) no longer available in Earnest.")

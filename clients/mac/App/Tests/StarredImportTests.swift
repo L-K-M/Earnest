@@ -34,6 +34,14 @@ import EarnestKit
         XCTAssertNil(report.retry)
     }
 
+    func testKeptImportReportCountsOneArticleAndLabels() {
+        let summary = KeptImportSummary(added: 1, existing: 0, unkept: 1, gone: 0, labelled: 1)
+        let report = StarredImportCoordinator.report(for: summary, name: "one.json", data: Data())
+        XCTAssertTrue(report.detail.contains("1 article in Kept"))
+        XCTAssertTrue(report.detail.contains("Added the export's labels to 1 article."))
+        XCTAssertTrue(report.detail.contains("1 left out because you removed it from Kept."))
+    }
+
     func testKeptImportLimitMatchesTheServer() {
         XCTAssertEqual(AppModel.keptLimit, 64 << 20)
     }
