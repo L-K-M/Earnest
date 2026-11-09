@@ -10,10 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Import starred articles into Kept from another reader's Google Reader
-  JSON export (FreshRSS, Inoreader, Google Takeout), in Manage feeds,
-  with `earnest entries import` or `POST /v1/kept:import`. Imported
-  articles stay out of the river, never override articles you un-kept,
-  and are adopted by the feed's next fetch instead of duplicated.
+  JSON export (FreshRSS, Inoreader, Google Takeout), with its labels, in
+  Manage feeds, with `earnest entries import` or `POST /v1/kept:import`.
+  Imported articles stay out of the river, never override articles or
+  labels you removed, and are adopted by the feed's next fetch instead of
+  duplicated. Upload limits are documented as 413 responses.
 - The native API (`/v1`, OpenAPI, SSE hints), the Google Reader subset
   for NetNewsWire and Capy Reader, and `earnest serve` wiring it all.
 - The agent surface: tokens bound to an audience, annotations and

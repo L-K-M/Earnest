@@ -304,6 +304,7 @@ function KeptImportTools({busy, act}: {busy: boolean; act: Act}) {
     {summary && <div role="status">
       <p>{summary.added + summary.existing} {summary.added + summary.existing === 1 ? 'article' : 'articles'} in Kept: {summary.added} added from the export, {summary.existing} already in Earnest.</p>
       {summary.subscribed > 0 && <p>Subscribed to {summary.subscribed} {summary.subscribed === 1 ? 'feed' : 'feeds'}. Their first fetches run in the background.</p>}
+      {summary.labelled > 0 && <p>Added the export's labels to {summary.labelled} {summary.labelled === 1 ? 'article' : 'articles'}.</p>}
       {summary.unkept > 0 && <p>{summary.unkept} left out because you removed them from Kept.</p>}
       {summary.gone > 0 && <p>{summary.gone} no longer available in Earnest.</p>}
       {summary.skipped.length > 0 && <>

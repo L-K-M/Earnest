@@ -527,7 +527,7 @@ export interface paths {
         put?: never;
         /**
          * Import starred articles into Kept
-         * @description Keeps the articles of a Google Reader JSON export, such as the starred-articles export of FreshRSS, Inoreader or Google Takeout. Articles Earnest already has are kept; others are stored from the export. The import never rewrites existing articles, never overrides an article you un-kept, and keeps imported articles out of the river.
+         * @description Keeps the articles of a Google Reader JSON export, such as the starred-articles export of FreshRSS, Inoreader or Google Takeout, up to 64 MiB and 10,000 articles. Articles Earnest already has are kept; others are stored from the export. The export's labels are added to each article. The import never rewrites existing articles, never brings back an article you un-kept, a label you deleted or a label you removed from an article, and keeps imported articles out of the river.
          */
         post: operations["import-kept"];
         delete?: never;
@@ -1543,6 +1543,7 @@ export interface components {
             feed_url?: string;
             /** Format: int64 */
             index: number;
+            labels?: string[] | null;
             /** @enum {string} */
             status: "created" | "matched" | "unchanged" | "unkept" | "not_subscribed" | "gone" | "failed";
             /** Format: int64 */
@@ -6569,6 +6570,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            /** @description The upload is larger than 64 MiB. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Unprocessable Entity */
             422: {
                 headers: {
@@ -8526,6 +8536,15 @@ export interface operations {
             };
             /** @description Gone */
             410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The upload is larger than 8 MiB. */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };

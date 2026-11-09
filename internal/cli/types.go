@@ -164,13 +164,14 @@ type keptImportReport struct {
 
 // keptImportResult is one article's outcome from a Kept import.
 type keptImportResult struct {
-	Index          int    `json:"index"`
-	Status         string `json:"status"`
-	EntryID        int64  `json:"entry_id,omitempty"`
-	SubscriptionID int64  `json:"subscription_id,omitempty"`
-	FeedURL        string `json:"feed_url,omitempty"`
-	Title          string `json:"title,omitempty"`
-	Error          string `json:"error,omitempty"`
+	Index          int      `json:"index"`
+	Status         string   `json:"status"`
+	EntryID        int64    `json:"entry_id,omitempty"`
+	SubscriptionID int64    `json:"subscription_id,omitempty"`
+	FeedURL        string   `json:"feed_url,omitempty"`
+	Title          string   `json:"title,omitempty"`
+	Error          string   `json:"error,omitempty"`
+	Labels         []string `json:"labels,omitempty"`
 }
 
 type position struct {

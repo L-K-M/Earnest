@@ -49,6 +49,8 @@ const (
 	// maxKeptImportBody bounds one article's markup. Sanitising builds a tree
 	// several times the input's size; real articles stay far below this.
 	maxKeptImportBody = 4 << 20
+	// maxKeptImportLabels bounds the labels applied per article.
+	maxKeptImportLabels = 32
 	// maxKeptImportEnclosures bounds the attachments stored per article.
 	maxKeptImportEnclosures = 32
 	// keptReportTextBytes bounds the title and feed URL echoed in a result.
@@ -86,6 +88,8 @@ type KeptImportItem struct {
 	Read bool
 	// CrawledAt is when the exporting reader stored the article.
 	CrawledAt *time.Time
+	// Labels are the article's labels in the exporting reader.
+	Labels []string
 }
 
 // KeptImportStatus is one article's outcome.
@@ -118,6 +122,8 @@ type KeptImportResult struct {
 	FeedURL        string           `json:"feed_url,omitempty"`
 	Title          string           `json:"title,omitempty"`
 	Error          string           `json:"error,omitempty"`
+	// Labels lists the exported labels this import added to the article.
+	Labels []string `json:"labels,omitempty"`
 }
 
 // KeptImportReport is every article's outcome, in export order, and the
@@ -143,6 +149,7 @@ type keptWork struct {
 	change     ingestChange
 	identities [][]byte // candidates, the identity to create with first
 	read       bool
+	labels     []string
 }
 
 // ImportKept keeps exported starred articles. It is idempotent: importing the
@@ -329,14 +336,37 @@ func prepareKept(index int, in KeptImportItem, receipt time.Time) (keptWork, err
 		},
 		identities: identities,
 		read:       in.Read,
+		labels:     keptLabels(in.Labels),
 	}, nil
+}
+
+// keptLabels trims an article's exported labels and drops blank, overlong
+// and repeated names, keeping at most maxKeptImportLabels.
+func keptLabels(names []string) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if !validName(name) || seen[name] {
+			continue
+		}
+		if len(out) == maxKeptImportLabels {
+			break
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
 }
 
 // keptFeed is how one feed URL resolved within a chunk.
 type keptFeed struct {
 	subscription, feed int64
-	missing            bool
-	err                error
+	// folder names the subscription's folder; an exported label of that name
+	// is the folder, which some exports list among an article's labels.
+	folder  string
+	missing bool
+	err     error
 }
 
 // keptTarget is an entry a chunk writes state for, and the result to fill.
@@ -433,7 +463,111 @@ func (s *Service) importKeptChunk(ctx context.Context, tx pgx.Tx, a Actor, gener
 	if err := s.keepImported(ctx, tx, a, generation, importID, chunk, targets, results, receipt); err != nil {
 		return nil, nil, err
 	}
+	if err := s.labelImported(ctx, tx, a, chunk, feeds, targets, results); err != nil {
+		return nil, nil, err
+	}
 	return results, subscribed, nil
+}
+
+// labelImported adds each article's exported labels that it does not have
+// yet. A label you have is reused and one you never had is created. A label
+// you deleted, a membership you removed, and a label naming the article's
+// folder (some exports list the folder among the labels) are left alone, so
+// the import fills gaps and never brings back what you took away.
+func (s *Service) labelImported(ctx context.Context, tx pgx.Tx, a Actor, chunk []keptWork, feeds map[string]keptFeed, targets []keptTarget, results []KeptImportResult) error {
+	wanted := map[string][]keptTarget{}
+	for _, t := range targets {
+		w := chunk[t.result]
+		for _, name := range w.labels {
+			if name == feeds[w.feedURL].folder {
+				continue
+			}
+			wanted[name] = append(wanted[name], t)
+		}
+	}
+	if len(wanted) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(wanted))
+	for name := range wanted {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	active, deleted := map[string]int64{}, map[string]bool{}
+	rows, err := tx.Query(ctx, "SELECT id,name,deleted_at IS NOT NULL FROM labels WHERE user_id=$1 AND name=ANY($2) ORDER BY id", a.UserID, names)
+	if err != nil {
+		return fmt.Errorf("find imported labels: %w", err)
+	}
+	for rows.Next() {
+		var id int64
+		var name string
+		var gone bool
+		if err := rows.Scan(&id, &name, &gone); err != nil {
+			rows.Close()
+			return fmt.Errorf("find imported labels: %w", err)
+		}
+		if gone {
+			deleted[name] = true
+		} else {
+			active[name] = id
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("find imported labels: %w", err)
+	}
+	for _, name := range names {
+		id, ok := active[name]
+		if !ok && deleted[name] {
+			continue
+		}
+		if !ok {
+			rev, err := changeRev(ctx, tx, a.UserID)
+			if err != nil {
+				return err
+			}
+			if id, err = store.InsertLabel(ctx, tx, a.UserID, name, rev); err != nil {
+				return domainError(err)
+			}
+			if err := s.emitChange(ctx, tx, a.UserID, rev, syncmodel.LabelAdded, "label", labelDefinition(Label{ID: id, Name: name, Rev: uint64(rev)})); err != nil {
+				return err
+			}
+		}
+		entries := []int64{}
+		for _, t := range wanted[name] {
+			entries = append(entries, t.entry)
+		}
+		members, err := store.LoadMemberships(ctx, tx, a.UserID, id, entries)
+		if err != nil {
+			return err
+		}
+		fresh := []int64{}
+		for _, entry := range entries {
+			// Any row, live or removed, means the article already has a
+			// decision about this label.
+			if _, found := members[entry]; !found {
+				fresh = append(fresh, entry)
+			}
+		}
+		if len(fresh) == 0 {
+			continue
+		}
+		added, err := s.addLabelsTx(ctx, tx, a, id, fresh)
+		if err != nil {
+			return err
+		}
+		labelled := map[int64]bool{}
+		for _, m := range added.Memberships {
+			labelled[m.EntryID] = true
+		}
+		for _, t := range wanted[name] {
+			if labelled[t.entry] {
+				results[t.result].Labels = append(results[t.result].Labels, name)
+				labelled[t.entry] = false
+			}
+		}
+	}
+	return nil
 }
 
 // keptCandidate is a stored entry an exported article may be.
@@ -531,10 +665,11 @@ func matchKept(w keptWork, candidates []keptCandidate) (keptCandidate, bool) {
 // a failed subscribe fails only that feed's articles.
 func (s *Service) resolveKeptFeed(ctx context.Context, tx pgx.Tx, a Actor, w keptWork, missing MissingFeeds) (keptFeed, *Subscription, error) {
 	var f keptFeed
-	err := tx.QueryRow(ctx, `SELECT s.id,s.feed_id FROM subscriptions s JOIN feeds f ON f.id=s.feed_id
+	err := tx.QueryRow(ctx, `SELECT s.id,s.feed_id,coalesce(fo.name,'') FROM subscriptions s JOIN feeds f ON f.id=s.feed_id
+ LEFT JOIN folders fo ON fo.id=s.folder_id AND fo.deleted_at IS NULL
  WHERE s.user_id=$1 AND s.deleted_at IS NULL AND (f.url=$2 OR f.permanent_redirect_url=$2)
  AND (f.owner_user_id IS NULL OR f.owner_user_id=$1)
- ORDER BY f.url=$2 DESC,f.owner_user_id NULLS LAST,s.id LIMIT 1`, a.UserID, w.feedURL).Scan(&f.subscription, &f.feed)
+ ORDER BY f.url=$2 DESC,f.owner_user_id NULLS LAST,s.id LIMIT 1`, a.UserID, w.feedURL).Scan(&f.subscription, &f.feed, &f.folder)
 	if err == nil {
 		return f, nil, nil
 	}
