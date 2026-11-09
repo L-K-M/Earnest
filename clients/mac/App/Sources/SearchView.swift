@@ -122,7 +122,7 @@ extension APISavedSearch: @retroactive Identifiable {}
                     ? "Agent note · \(match.agentName.flatMap { $0.isEmpty ? nil : $0 } ?? "Unknown agent")"
                     : app.feedMap[match.subscriptionID]?.title ?? "Feed"
                 let snippet = match.snippet.trimmingCharacters(in: .whitespacesAndNewlines)
-                let url = URL(string: match.url).flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil }
+                let url = WebLink.url(match.url)
                 return EntryRow(id: id, title: match.title.isEmpty ? "Untitled" : match.title,
                                 subtitle: snippet.isEmpty ? source : "\(source) — \(snippet)", unread: false, url: url)
             }
@@ -155,8 +155,7 @@ extension APISavedSearch: @retroactive Identifiable {}
                     if let match = table.matches[row] { window.command(command, entryID: match.entryID) }
                 },
                 openInBrowser: { row in
-                    if let url = table.matches[row].flatMap({ URL(string: $0.url) }),
-                       ["http", "https"].contains(url.scheme?.lowercased() ?? "") { NSWorkspace.shared.open(url) }
+                    if let url = table.matches[row].flatMap({ WebLink.url($0.url) }) { NSWorkspace.shared.open(url) }
                 },
                 canAct: window.tableActions.canAct,
                 // Reading actions need the article, which loads when it is opened.

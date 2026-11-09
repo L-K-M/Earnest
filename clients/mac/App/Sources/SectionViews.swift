@@ -49,8 +49,7 @@ struct BriefsView: View {
 extension FeedInfo {
     var displayTitle: String { title.isEmpty ? url : title }
     var website: URL? {
-        guard let url = URL(string: siteURL), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
-        return url
+        WebLink.url(siteURL)
     }
 }
 

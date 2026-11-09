@@ -280,6 +280,20 @@ enum ServerAddress {
     }
 }
 
+/// Addresses Earnest opens in the browser or renders as links: HTTP(S) with
+/// a host. Anything else (other schemes, `http://` alone) is not a link, so
+/// it is never handed to the browser to fail silently.
+enum WebLink {
+    static func url(_ text: String) -> URL? {
+        URL(string: text).flatMap(validated)
+    }
+
+    static func validated(_ url: URL) -> URL? {
+        guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host?.isEmpty == false else { return nil }
+        return url
+    }
+}
+
 /// `feed:` links from browsers: `feed://host/path` means HTTP, and
 /// `feed:https://host/path` wraps an explicit URL. Only HTTP(S) results are
 /// accepted; the subscribe sheet still asks before subscribing.

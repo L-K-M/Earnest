@@ -510,9 +510,8 @@ struct ReaderPreferencesScope: Equatable {
 
     /// The device-approval page for the code on screen, if it is a web address.
     var signInPage: URL? {
-        guard let code, let url = URL(string: code.verificationURI),
-              ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
-        return url
+        guard let code else { return nil }
+        return WebLink.url(code.verificationURI)
     }
 
     func openSignInPage() {

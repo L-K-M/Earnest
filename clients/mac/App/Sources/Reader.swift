@@ -19,8 +19,7 @@ struct ArticleHeader: Equatable {
         self.feedTitle = feedTitle.isEmpty ? "Feed" : feedTitle
         author = entry.author
         date = entry.publishedAt.flatMap(DateFormatting.parse) ?? DateFormatting.parse(entry.firstSeenAt)
-        let url = URL(string: entry.url)
-        link = ["http", "https"].contains(url?.scheme?.lowercased() ?? "") ? url : nil
+        link = WebLink.url(entry.url)
     }
 
     var html: String {
@@ -201,8 +200,8 @@ struct Reader: NSViewRepresentable {
                 decisionHandler(.allow)
                 return
             }
-            if action.navigationType == .linkActivated, ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
-                NSWorkspace.shared.open(url)
+            if action.navigationType == .linkActivated, let web = WebLink.validated(url) {
+                NSWorkspace.shared.open(web)
             }
             decisionHandler(.cancel)
         }
