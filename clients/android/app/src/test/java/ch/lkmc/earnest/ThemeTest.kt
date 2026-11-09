@@ -146,4 +146,22 @@ class ThemeTest {
         assertTrue("keep text on light background", contrast(LightTones.plum, LightColors.background) >= 4.5f)
         assertTrue("keep text on dark background", contrast(DarkTones.plum, DarkColors.background) >= 4.5f)
     }
+
+    // A snackbar draws its action, such as Undo after a swipe, in
+    // inversePrimary on inverseSurface, and its message in inverseOnSurface.
+    @Test fun snackbarTextIsReadableInEveryTheme() {
+        ThemeSetting.entries.forEach { setting ->
+            listOf(false, true).forEach { systemDark ->
+                val scheme = colorScheme(setting, systemDark)
+                assertTrue(
+                    "$setting action (dark system: $systemDark)",
+                    contrast(scheme.inversePrimary, scheme.inverseSurface) >= 4.5f,
+                )
+                assertTrue(
+                    "$setting message (dark system: $systemDark)",
+                    contrast(scheme.inverseOnSurface, scheme.inverseSurface) >= 4.5f,
+                )
+            }
+        }
+    }
 }

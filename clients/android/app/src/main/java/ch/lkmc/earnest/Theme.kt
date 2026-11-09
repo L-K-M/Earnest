@@ -224,7 +224,8 @@ internal fun colorScheme(setting: ThemeSetting, systemDark: Boolean): ColorSchem
             surfaceBright = Color.White,
             inverseSurface = Color.Black,
             inverseOnSurface = Color.White,
-            inversePrimary = Color.Black,
+            // A snackbar's action sits on the black inverse surface.
+            inversePrimary = Color.White,
         )
     }
 
