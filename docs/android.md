@@ -89,6 +89,12 @@ immediately; refresh starts a new membership from the current effective
 state. Cached subscription cadences are restored before a network request,
 so Today and Edition also work on an offline cold launch.
 
+List rows show the feed's icon next to the source line and the article's
+thumbnail at the end of the row, and Feeds rows show the icon before the
+feed name. Earnest stored those copies when the feed and the article
+arrived, so showing them never contacts a publisher. The app keeps its own
+copies per account in its cache directory, plus a small set in memory.
+
 Today and Edition share the server's river membership rule. Subscription import
 boundaries, subscription muting, case-insensitive author and title-keyword mutes,
 seen/shelf state and first-seen decay all apply. Now never decays, Today uses the

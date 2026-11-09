@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and clears Done with it; scrolling never reverses it, only opening the
   article reads it again. The reader header gained Copy link and Share
   for the entry URL.
+- The Android app shows feed icons and article thumbnails in article rows
+  and feed icons in Feeds, loaded with the account's token and kept per
+  account.
 - The Mac app shows feed icons and article thumbnails in article rows and
   feed icons in Feeds, loaded with the account's token and kept per
   account. Article titles in the list now wrap to two lines as their row
