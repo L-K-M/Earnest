@@ -25,6 +25,9 @@ func TestPlainTitle(t *testing.T) {
 		{"Caf&eacute; &amp; bar &#x2014; open", "Caf\u00e9 & bar \u2014 open"},
 		{"Q&A, M&Ms, Mom&nottoday, &copy2026", "Q&A, M&Ms, Mom&nottoday, &copy2026"},
 		{"An &unknown; entity", "An &unknown; entity"},
+		// Regression: a legacy name that only starts the reference is not
+		// decoded on its own.
+		{"Mom&nottoday; and &copy2026;", "Mom&nottoday; and &copy2026;"},
 	}
 	for _, tt := range tests {
 		if got := plainTitle(tt.in); got != tt.want {

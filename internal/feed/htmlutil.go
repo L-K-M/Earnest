@@ -4,6 +4,7 @@ import (
 	"html"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	xhtml "golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
@@ -35,7 +36,16 @@ func decodeCharRefs(s string) string {
 	if !strings.Contains(s, "&") {
 		return s
 	}
-	return charRefRE.ReplaceAllStringFunc(s, html.UnescapeString)
+	return charRefRE.ReplaceAllStringFunc(s, func(ref string) string {
+		// html.UnescapeString also decodes a legacy name that merely starts
+		// the reference, turning "&nottoday;" into "¬today;". A whole
+		// reference expands to one or two characters.
+		decoded := html.UnescapeString(ref)
+		if decoded == ref || utf8.RuneCountInString(decoded) > 2 {
+			return ref
+		}
+		return decoded
+	})
 }
 
 // looksLikeHTML reports whether s contains something that could be a tag.
