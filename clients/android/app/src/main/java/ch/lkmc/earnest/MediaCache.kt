@@ -3,6 +3,7 @@ package ch.lkmc.earnest
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.os.SystemClock
 import android.util.LruCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
@@ -37,7 +38,11 @@ import java.util.concurrent.ConcurrentHashMap
  * cached data. Unversioned paths may change, so they are fetched every time
  * and only the memory cache serves them.
  */
-internal class MediaCache(context: Context) {
+internal class MediaCache(
+    context: Context,
+    // Monotonic milliseconds for the retry delay; tests pass a fake clock.
+    private val clock: () -> Long = SystemClock::elapsedRealtime,
+) {
     private val root = File(context.cacheDir, "media")
 
     // LruCache cannot store null; Miss remembers an absent or undecodable
@@ -48,6 +53,9 @@ internal class MediaCache(context: Context) {
         override fun sizeOf(key: String, value: Any): Int = (value as? Bitmap)?.byteCount ?: 1
     }
     private val inFlight = ConcurrentHashMap<String, Deferred<Bitmap?>>()
+    // When a load last failed; it is not retried for RETRY_DELAY_MS, so
+    // scrolling offline does not issue a request per row appearance.
+    private val failures = ConcurrentHashMap<String, Long>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     fun close() = scope.cancel()
@@ -59,9 +67,10 @@ internal class MediaCache(context: Context) {
      * disk write other rows still wait on.
      */
     suspend fun load(accountKey: String, path: String, fetch: suspend (String) -> ByteArray?): ImageBitmap? {
-        require(accountKey.matches(Regex("[0-9a-f]{64}"))) { "invalid account cache key" }
+        require(ACCOUNT_KEY.matches(accountKey)) { "invalid account cache key" }
         val key = "$accountKey\n$path"
         memory.get(key)?.let { return (it as? Bitmap)?.asImageBitmap() }
+        failures[key]?.let { if (clock() - it < RETRY_DELAY_MS) return null }
         val job = inFlight.computeIfAbsent(key) {
             scope.async {
                 try {
@@ -70,8 +79,10 @@ internal class MediaCache(context: Context) {
                     } catch (error: CancellationException) {
                         throw error
                     } catch (_: Exception) {
+                        failures[key] = clock()
                         return@async null
                     }
+                    failures.remove(key)
                     memory.put(key, bitmap ?: Miss)
                     bitmap
                 } finally {
@@ -119,7 +130,21 @@ internal class MediaCache(context: Context) {
             .forEach { it.delete() }
     }
 
-    private fun ByteArray.decode(): Bitmap? = BitmapFactory.decodeByteArray(this, 0, size)
+    /**
+     * Decodes a stored image. The server only stores images of at most 192
+     * pixels, but the size is checked first so an oversized body cannot
+     * exhaust memory.
+     */
+    private fun ByteArray.decode(): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(this, 0, size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0 ||
+            bounds.outWidth > MAX_SIDE || bounds.outHeight > MAX_SIDE
+        ) {
+            return null
+        }
+        return BitmapFactory.decodeByteArray(this, 0, size)
+    }
 
     private fun sha256(value: String): String =
         MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
@@ -130,6 +155,9 @@ internal class MediaCache(context: Context) {
     companion object {
         private const val MEMORY_BYTES = 8 * 1024 * 1024
         private const val MAX_DISK_FILES = 2000
+        private const val MAX_SIDE = 1024
+        private const val RETRY_DELAY_MS = 60_000L
+        private val ACCOUNT_KEY = Regex("[0-9a-f]{64}")
     }
 }
 

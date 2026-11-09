@@ -192,6 +192,7 @@ class AppViewModel internal constructor(
         search.reset()
         account = null
         activeSession = null
+        mediaClient = null
         keptImportDocument = null
         _sessionNotice.value = null
         _state.value = UiState(readerSettingsUi = ReaderSettingsUi(epoch = epoch))
@@ -289,6 +290,7 @@ class AppViewModel internal constructor(
         search.reset()
         sessions.clearToken()
         activeSession = null
+        mediaClient = null
         account = null
         keptImportDocument = null
         _state.value = UiState(readerSettingsUi = ReaderSettingsUi(epoch = readerEpoch.incrementAndGet()))
@@ -1126,6 +1128,7 @@ class AppViewModel internal constructor(
         search.reset()
         account = null
         activeSession = null
+        mediaClient = null
         keptImportDocument = null
         _state.value = UiState(readerSettingsUi = ReaderSettingsUi(epoch = readerEpoch.incrementAndGet()))
         if (_loggedIn.value) _sessionNotice.value = "Your session expired. Sign in again."

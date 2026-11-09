@@ -112,14 +112,29 @@ class MediaCacheTest {
     }
 
     // Regression: a fetch that fails (offline, server error) is not
-    // remembered, so the image loads once the network is back.
+    // remembered for good, so the image loads once the network is back, but
+    // it waits a minute rather than refetching on every row appearance.
     @Test
-    fun failedFetchesAreRetried() = runBlocking {
+    fun failedFetchesAreRetriedAfterADelay() = runBlocking {
         val path = "/v1/entries/3/thumbnail?v=retry"
         var fetches = 0
-        val cache = cache()
+        var now = 1_000L
+        val cache = MediaCache(context) { now }
         assertNull(cache.load(account, path) { fetches++; throw java.io.IOException("offline") })
+        assertNull(cache.load(account, path) { fetches++; png })
+        assertEquals("a retry within the delay must not fetch", 1, fetches)
+        now += 60_001L
         assertNotNull(cache.load(account, path) { fetches++; png })
         assertEquals(2, fetches)
+    }
+
+    // An image larger than any the server stores is rejected without being
+    // decoded at full size.
+    @Test
+    fun oversizedImagesAreNotDecoded() = runBlocking {
+        val path = "/v1/entries/4/thumbnail?v=huge"
+        val bitmap = android.graphics.Bitmap.createBitmap(2000, 10, android.graphics.Bitmap.Config.ARGB_8888)
+        val bytes = java.io.ByteArrayOutputStream().also { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
+        assertNull(cache().load(account, path) { bytes })
     }
 }
