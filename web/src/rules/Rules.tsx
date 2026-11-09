@@ -6,6 +6,7 @@ import {request} from '../request'
 import {usePipeline} from '../search/pipeline'
 import {PredicateEditor} from './PredicateEditor'
 import {actionRestriction, predicateError, type Action} from './model'
+import {useBlocker} from '../router'
 
 type Rule = components['schemas']['Rule']
 type Body = Omit<components['schemas']['RuleBody'], 'op_id'>
@@ -14,13 +15,19 @@ const initial: Body = {name:'', enabled:true, predicate:{type:'feed_in', ids:[]}
 const actionTypes = [['add_label','Add label'], ['set_shelf','Set shelf'], ['notify','Notify'], ['webhook','Webhook']] as const
 const message = (error: unknown) => error instanceof Error ? error.message : 'The rule could not be saved.'
 
-export function Rules(resources: Resources) {
+// With onEdit, the shell owns which rule is open (it is part of the URL);
+// standalone, the open editor is local state.
+export function Rules({editing: routed, onEdit, onClose, ...resources}: Resources & {editing?: number | 'new'; onEdit?: (id: number | 'new') => void; onClose?: () => void}) {
   const cache = useQueryClient()
   const pipeline = usePipeline()
   const list = useQuery({queryKey:['rules'], queryFn:({signal}) => request<Rule[] | null>('/v1/rules',{signal})})
   // Watch IDs keep the ordinary editor from changing a watch's notify-only action.
   const watches = useQuery({queryKey:['watch-rules'], queryFn:({signal}) => request<components['schemas']['WatchRule'][] | null>('/v1/watch-rules',{signal})})
-  const [editing, setEditing] = useState<Rule | 'new' | null>(null)
+  const [localEditing, setLocalEditing] = useState<Rule | 'new' | null>(null)
+  const routedRule = typeof routed === 'number' ? list.data?.find(rule => rule.id === routed) : undefined
+  const editing: Rule | 'new' | null = onEdit ? (routed === 'new' ? 'new' : routedRule ?? null) : localEditing
+  const missing = onEdit && typeof routed === 'number' && list.isSuccess && !routedRule
+  const setEditing = (rule: Rule | 'new' | null) => { if (!onEdit) setLocalEditing(rule); else if (rule === null) onClose?.(); else onEdit(rule === 'new' ? 'new' : rule.id) }
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   async function mutate(path: string, method: string) {
@@ -30,14 +37,16 @@ export function Rules(resources: Resources) {
     finally { setBusy(false) }
   }
   const watchIDs = new Set(watches.data?.map(w => w.id))
-  return <main><h2>Rules</h2>
+  return <section className="rules" aria-labelledby="rules-title"><div className="page-header"><h2 id="rules-title">Rules</h2><p className="muted">Rules act on new articles as they arrive. Each one is dry-run against the past week before it is saved.</p></div>
     {(error || list.error || watches.error || pipeline.error) && <p role="alert">{error || list.error?.message || watches.error?.message || pipeline.error?.message}</p>}
     {(list.isPending || watches.isPending) && <p role="status">Loading rules…</p>}
-    <button onClick={() => setEditing('new')}>New rule</button>
+    {missing && <p role="alert" className="banner problem inline">This rule no longer exists. It may have been deleted on another device.</p>}
+    <button className="primary" onClick={() => setEditing('new')}>New rule</button>
+    {list.isSuccess && watches.isSuccess && !(list.data ?? []).some(rule => !watchIDs.has(rule.id)) && <p className="empty-state">No rules yet. A rule can label, shelve or notify you about articles from feeds you choose.</p>}
     <ul>{(watches.isSuccess ? list.data ?? [] : []).filter(rule => !watchIDs.has(rule.id)).map(rule => <li key={rule.id}><strong>{rule.name}</strong><p>{rule.enabled ? 'Enabled' : 'Disabled'} · {rule.match_count} matches · Last match: {rule.last_match_at ? new Date(rule.last_match_at).toLocaleString() : 'Never'}</p>{rule.disable_reason && <p>{rule.disable_reason}</p>}<button disabled={busy} onClick={() => setEditing(rule)}>Edit {rule.name}</button><button disabled={busy} onClick={() => {void mutate(`/v1/rules/${rule.id}:${rule.enabled ? 'disable' : 'enable'}`,'POST')}}>{rule.enabled ? 'Disable' : 'Enable'} {rule.name}</button><button disabled={busy} onClick={() => {void mutate(`/v1/rules/${rule.id}`,'DELETE')}}>Delete {rule.name}</button></li>)}</ul>
     {editing && <RuleEditor key={editing === 'new' ? 'new' : editing.id} {...resources} rule={editing === 'new' ? undefined : editing} pipeline={pipeline.status} onCancel={() => setEditing(null)} onSaved={() => {setEditing(null);void cache.invalidateQueries({queryKey:['rules']})}}/>}
     {pipeline.status.watch === 'enabled' && <Watches watches={watches.data ?? []} onChanged={() => {void cache.invalidateQueries({queryKey:['watch-rules']});void cache.invalidateQueries({queryKey:['rules']})}}/>}
-  </main>
+  </section>
 }
 
 function RuleEditor({rule, feeds, folders, labels, pipeline, onCancel, onSaved}: Resources & {rule?: Rule; pipeline: components['schemas']['PipelineStatus']; onCancel: () => void; onSaved: () => void}) {
@@ -54,6 +63,8 @@ function RuleEditor({rule, feeds, folders, labels, pipeline, onCancel, onSaved}:
   const actions = draft.actions ?? []
   const invalid = predicateError(draft.predicate,pipeline) || (!actions.length ? 'Choose at least one action.' : '') || actions.map(action => actionRestriction(draft.predicate,action.type) || (action.type === 'add_label' && !action.label_id ? 'Choose a native label.' : action.type === 'webhook' && !action.webhook_id ? 'Choose a webhook destination.' : action.type === 'notify' && (!Number.isSafeInteger(action.budget) || (action.budget ?? 0) <= 0) ? 'Enter a positive daily notification budget.' : '')).find(Boolean)
   const serialized = JSON.stringify(draft)
+  const [pristine] = useState(serialized)
+  const release = useBlocker(serialized !== pristine || words.trim() !== '', 'Discard your unsaved changes to this rule?')
   const reviewed = preview?.body === serialized
   function changeAction(index: number, action: Action) {setDraft({...draft,actions:actions.map((old,i) => i === index ? action : old)})}
   async function compile() {
@@ -78,7 +89,7 @@ function RuleEditor({rule, feeds, folders, labels, pipeline, onCancel, onSaved}:
     setBusy(true);setError('')
     if (!rule && creation.current?.body !== serialized) creation.current = {body:serialized, opID:crypto.randomUUID()}
     const body = rule ? serialized : JSON.stringify({...draft, op_id:creation.current?.opID})
-    try {await request(rule ? `/v1/rules/${rule.id}` : '/v1/rules',{method:rule ? 'PATCH' : 'POST',body});onSaved()}
+    try {await request(rule ? `/v1/rules/${rule.id}` : '/v1/rules',{method:rule ? 'PATCH' : 'POST',body});release();onSaved()}
     catch (error) {setError(message(error))}
     finally {setBusy(false)}
   }
@@ -102,7 +113,7 @@ function RuleEditor({rule, feeds, folders, labels, pipeline, onCancel, onSaved}:
     {reviewed && <div role="status"><p>Would have matched {preview.total} items.{preview.total > preview.entries.length && ` Showing the first ${preview.entries.length}.`}</p><button type="button" onClick={() => setReview(!review)}>Review them</button><button type="button" disabled={Boolean(invalid) || Boolean(compiledFeeds?.length && !confirmed)} onClick={() => {void save()}}>Save</button></div>}
     {reviewed && review && <ul aria-label="Dry-run matches">{preview.entries.map(entry => <li key={entry.id}><strong>{entry.title || 'Untitled'}</strong><p>{entry.author && `${entry.author} · `}Feed: {feeds.find(feed => feed.feed_id === entry.feed_id)?.title || entry.feed_id}{entry.first_seen_at && ` · ${new Date(entry.first_seen_at).toLocaleString()}`}</p></li>)}</ul>}
     {preview && !reviewed && <p>Rule changed. Run the dry run again before saving.</p>}
-    <button type="button" onClick={onCancel}>Cancel</button>
+    <button type="button" onClick={() => {release();onCancel()}}>Cancel</button>
     </fieldset></form>{(error || webhooks.error) && <p role="alert">{error || webhooks.error?.message}</p>}</section>
 }
 

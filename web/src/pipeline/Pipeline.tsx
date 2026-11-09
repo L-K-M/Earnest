@@ -37,21 +37,28 @@ export function Summary({entryID}: {entryID: number}) {
   return <section aria-label="Summary"><button onClick={() => {void toggle()}} aria-expanded={visible}>Summary</button>{visible && <>{busy && <p role="status">Generating summary…</p>}{error && <p role="alert">{error} <button onClick={() => {setVisible(false)}}>Close</button></p>}{result && <><p>Summary · {result.model} · <time dateTime={result.generated_at}>{new Date(result.generated_at).toLocaleString()}</time></p>{result.excerpt_notice && <p>{result.excerpt_notice}</p>}{result.claims?.map((claim, index) => <div key={index}><p>{claim.text}</p>{!claim.verified && <p>Citation not found in the article</p>}{claim.passages?.map((text, i) => <button key={i} onClick={() => setPassage(text)}>{text}</button>)}</div>)}{passage && <p>Highlighting is unavailable in the article frame. Passage: {passage}</p>}</>}</>}</section>
 }
 
+// The question survives a refresh as a draft. It is never put in the URL:
+// opening a link must not spend a question from the daily budget.
+const ASK_DRAFT = 'earnest.ask.draft'
+function askDraft(): string {
+  try { return sessionStorage.getItem(ASK_DRAFT) ?? '' } catch { return '' }
+}
+
 export function Ask({onOpen}: {onOpen: (entry: Entry) => void}) {
-  const [question, setQuestion] = useState('')
+  const [question, setQuestion] = useState(askDraft)
   const [result, setResult] = useState<components['schemas']['AskResult']>()
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   async function submit() {
     setBusy(true);setError('')
-    try {setResult(await request('/v1/ask',{method:'POST',body:JSON.stringify({question})}))}
+    try {setResult(await request('/v1/ask',{method:'POST',body:JSON.stringify({question})}));try {sessionStorage.removeItem(ASK_DRAFT)} catch { /* Nothing to clear. */ }}
     catch (error) {setError(message(error))}
     finally {setBusy(false)}
   }
   async function open(id: number) {
     try {onOpen(await request<Entry>(`/v1/entries/${id}`))} catch (error) {setError(message(error))}
   }
-  return <main><h2>Ask my feeds</h2><p>Answers come from your feeds only.</p><form onSubmit={event => {event.preventDefault();void submit()}}><label>Question<textarea value={question} required onChange={event => setQuestion(event.target.value)}/></label><button disabled={busy}>Ask</button></form>{error && <p role="alert">{error}</p>}{result && <><p>{result.remaining_today} of {result.daily_limit} questions remaining today.</p>{result.excerpt_notice && <p>{askExcerptNotice}</p>}<GroundedClaims claims={result.claims} onOpen={id => {void open(id)}}/></>}</main>
+  return <section className="ask" aria-labelledby="ask-title"><div className="page-header"><h2 id="ask-title">Ask my feeds</h2><p className="muted">Answers come from your feeds only, with the passages they rely on.</p></div><form onSubmit={event => {event.preventDefault();void submit()}}><label>Question<textarea value={question} required rows={3} onChange={event => {setQuestion(event.target.value);try {sessionStorage.setItem(ASK_DRAFT, event.target.value)} catch { /* The draft is a convenience. */ }}} onKeyDown={event => {if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {event.preventDefault();event.currentTarget.form?.requestSubmit()}}}/></label><p className="hint">Press ⌘ Enter or Ctrl+Enter to ask. Each question counts toward a daily limit.</p><button className="primary" disabled={busy}>{busy ? 'Asking…' : 'Ask'}</button></form>{error && <p role="alert">{error}</p>}{result && <><p>{result.remaining_today} of {result.daily_limit} questions remaining today.</p>{result.excerpt_notice && <p>{askExcerptNotice}</p>}<GroundedClaims claims={result.claims} onOpen={id => {void open(id)}}/></>}</section>
 }
 
 export function Edition({onOpen}: {onOpen: (entry: Entry) => void}) {

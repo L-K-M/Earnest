@@ -3,9 +3,12 @@ package web
 
 import (
 	"embed"
+	"io"
 	"io/fs"
+	"mime"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 )
 
@@ -36,6 +39,9 @@ func newHandler(root fs.FS, origin string) http.Handler {
 			w.Header().Set("Cache-Control", "no-cache")
 		}
 		info, err := fs.Stat(root, name)
+		if err == nil && !info.IsDir() && strings.HasPrefix(name, "assets/") && serveEncoded(w, r, root, name) {
+			return
+		}
 		if err != nil {
 			// A missing asset must 404 rather than return the SPA index with a
 			// mismatched content type; every other miss is a client-side route.
@@ -51,4 +57,58 @@ func newHandler(root fs.FS, origin string) http.Handler {
 		}
 		files.ServeHTTP(w, r)
 	})
+}
+
+// encodings lists the compressed copies the web build writes next to each
+// fingerprinted asset, in order of preference. Serving them avoids sending
+// the uncompressed bundle on slow links without compressing per request.
+var encodings = []struct{ name, suffix string }{{"br", ".br"}, {"gzip", ".gz"}}
+
+// serveEncoded serves a precompressed copy of name when the client accepts
+// one and the build produced it. It reports whether it wrote a response.
+func serveEncoded(w http.ResponseWriter, r *http.Request, root fs.FS, name string) bool {
+	w.Header().Add("Vary", "Accept-Encoding")
+	accept := r.Header.Get("Accept-Encoding")
+	for _, encoding := range encodings {
+		if !acceptsEncoding(accept, encoding.name) {
+			continue
+		}
+		file, err := root.Open(name + encoding.suffix)
+		if err != nil {
+			continue
+		}
+		defer file.Close()
+		info, err := file.Stat()
+		content, seekable := file.(io.ReadSeeker)
+		if err != nil || !seekable {
+			return false
+		}
+		if kind := mime.TypeByExtension(path.Ext(name)); kind != "" {
+			w.Header().Set("Content-Type", kind)
+		}
+		w.Header().Set("Content-Encoding", encoding.name)
+		http.ServeContent(w, r, name, info.ModTime(), content)
+		return true
+	}
+	return false
+}
+
+// acceptsEncoding reports whether an Accept-Encoding header allows encoding,
+// honouring an explicit q=0 refusal.
+func acceptsEncoding(header, encoding string) bool {
+	for _, part := range strings.Split(header, ",") {
+		token, params, _ := strings.Cut(strings.TrimSpace(part), ";")
+		if !strings.EqualFold(strings.TrimSpace(token), encoding) {
+			continue
+		}
+		for _, param := range strings.Split(params, ";") {
+			if value, ok := strings.CutPrefix(strings.TrimSpace(param), "q="); ok {
+				if q, err := strconv.ParseFloat(value, 64); err == nil && q == 0 {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	return false
 }

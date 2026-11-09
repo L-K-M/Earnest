@@ -19,7 +19,7 @@ it('opens a text copy and keeps reading actions on the existing outbox path offl
   expect(await screen.findByText('Saved publisher body')).toBeTruthy()
   expect(renderBody).not.toHaveBeenCalled()
   expect(request).not.toHaveBeenCalledWith('/web/content-url/7',expect.anything())
-  fireEvent.click(screen.getByRole('button',{name:'Later (s)'}))
+  fireEvent.click(screen.getByRole('button',{name:'Later'}))
   await waitFor(() => expect(act).toHaveBeenCalledWith(entry,'shelf','later'))
 })
 

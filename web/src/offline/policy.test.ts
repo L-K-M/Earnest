@@ -1,5 +1,5 @@
 import {describe,expect,it} from 'vitest'
-import {cacheKind,evictionKeys,warmContentPaths,warmLimit} from './policy'
+import {appNavigation,cacheKind,evictionKeys,warmContentPaths,warmLimit} from './policy'
 
 const origin = 'https://reader.test'
 describe('offline cache allowlist',() => {
@@ -8,7 +8,7 @@ describe('offline cache allowlist',() => {
     ['/icon-192.png','shell'],['/wordmark.png','shell'],['/icon-512.png',null],
     ['/v1/me','resource'],['/v1/settings','resource'],['/v1/subscriptions','resource'],
     ['/v1/positions/feed%3A7','reading'],['/v1/entries?view=river&after_seq=7','reading'],
-    ['/v1/entries/42/content','content'],
+    ['/v1/entries/42/content','content'],['/v1/entries/42','reading'],
     ['/v1/state:batch',null],['/v1/events',null],['/v1/bootstrap',null],['/v1/changes?cursor=1',null],
     ['/web/content-url/42',null],['/v1/tokens',null],['/v1/session/login',null],
     ['/v1/entries/42/annotations',null],['/v1/entries/0/content',null],
@@ -33,4 +33,12 @@ describe('bounded oldest-first eviction',() => {
     expect(paths[0]).toBe('/v1/entries/1/content')
     expect(warmContentPaths(null)).toEqual([])
   })
+})
+
+describe('offline app navigations',() => {
+  it.each([
+    ['/today',true],['/feeds/3/articles/9',true],['/search?q=rust',true],['/settings',true],['/device?user_code=AB',true],
+    ['/',false],['/v1/me',false],['/api/greader/reader',false],['/web/content-url/4',false],['/mcp',false],['/push/',false],
+    ['/healthz',false],['/openapi.json',false],['/manifest.json',false],['/assets/app-1.js',false],['https://elsewhere.test/today',false],
+  ])('treats %s as an app route: %s',(path,expected) => expect(appNavigation(path,origin)).toBe(expected))
 })
