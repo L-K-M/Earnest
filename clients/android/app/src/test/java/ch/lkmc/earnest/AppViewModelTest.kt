@@ -200,6 +200,63 @@ class AppViewModelTest {
         assertEquals("failed action reported success", 0, saved.get())
     }
 
+    @Test fun markUnreadClearsDoneAndUndoRestoresBothRegisters() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadEntry(2)
+        SessionCache(app, identity).withEngine {
+            it.queue(StateWrite("seed-seen", 1, 2, SyncEngine.REGISTER_SEEN, kotlinx.serialization.json.JsonPrimitive("seen"), Revision("g1", 0), "2026-11-03T00:00:00Z", "explicit"))
+            it.queue(StateWrite("seed-shelf", 1, 2, SyncEngine.REGISTER_SHELF, kotlinx.serialization.json.JsonPrimitive("done"), Revision("g1", 0), "2026-11-03T00:00:00Z", "explicit"))
+        }
+        val action = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
+        model.markUnread(2) { action.set(it) }
+        withTimeout(15000) { while (action.get() == null) delay(10) }
+        var state = SessionCache(app, identity).withEngine { it.state(1, 2) }
+        assertEquals(kotlinx.serialization.json.JsonPrimitive("unseen"), state.seen.value)
+        assertEquals(kotlinx.serialization.json.JsonPrimitive("none"), state.shelf.value)
+
+        val undone = java.util.concurrent.atomic.AtomicInteger()
+        model.undo(action.get()) { undone.incrementAndGet() }
+        withTimeout(15000) { while (undone.get() == 0) delay(10) }
+        state = SessionCache(app, identity).withEngine { it.state(1, 2) }
+        assertEquals(kotlinx.serialization.json.JsonPrimitive("seen"), state.seen.value)
+        assertEquals(kotlinx.serialization.json.JsonPrimitive("done"), state.shelf.value)
+    }
+
+    @Test fun keepIsUndoableWithTheValuesItReplaced() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadEntry(2)
+        val action = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
+        model.keep(2) { action.set(it) }
+        withTimeout(15000) { while (action.get() == null) delay(10) }
+        assertEquals("Kept", action.get().message)
+        assertEquals(kotlinx.serialization.json.JsonPrimitive(false), action.get().prior[SyncEngine.REGISTER_KEPT])
+        assertEquals(kotlinx.serialization.json.JsonPrimitive(true), action.get().written[SyncEngine.REGISTER_KEPT])
+        assertEquals(kotlinx.serialization.json.JsonPrimitive(true), SessionCache(app, identity).withEngine { it.state(1, 2) }.kept.value)
+
+        val undone = java.util.concurrent.atomic.AtomicInteger()
+        model.undo(action.get()) { undone.incrementAndGet() }
+        withTimeout(15000) { while (undone.get() == 0) delay(10) }
+        assertEquals(kotlinx.serialization.json.JsonPrimitive(false), SessionCache(app, identity).withEngine { it.state(1, 2) }.kept.value)
+    }
+
+    @Test fun undoLeavesAnActionAnotherWriteChanged() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadEntry(2)
+        val first = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
+        model.later(2) { first.set(it) }
+        withTimeout(15000) { while (first.get() == null) delay(10) }
+        val second = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
+        model.done(2) { second.set(it) }
+        withTimeout(15000) { while (second.get() == null) delay(10) }
+
+        val undone = java.util.concurrent.atomic.AtomicInteger()
+        model.undo(first.get()) { undone.incrementAndGet() }
+        withTimeout(15000) { while (undone.get() == 0) delay(10) }
+        // The Later action's write is gone from the article; undo must not
+        // drag it out of Done back to no shelf.
+        assertEquals(kotlinx.serialization.json.JsonPrimitive("done"), SessionCache(app, identity).withEngine { it.state(1, 2) }.shelf.value)
+    }
+
     @Test fun notificationMissingFromSnapshotFetchesMetadata() = runBlocking(Dispatchers.IO) {
         val model = model()
         val entry = model.loadEntry(2)

@@ -75,7 +75,11 @@ the reader falls back to the cached content when the signed content URL cannot
 be fetched. Swipe a row left a short distance for Later, or a long distance
 for Done; the label appears during the gesture and an undo action is offered
 in a snackbar that names the action and auto-dismisses. The swipe background
-is hidden until the row moves. A row marks itself seen once it has been on
+is hidden until the row moves. Rows also offer Keep, Unkeep and, once read,
+Mark unread. Mark unread returns the article to unread and clears Done with
+it, as the server does; its undo restores both registers. Undo writes back
+the registers an action changed and leaves alone one another writer has
+changed since. A row marks itself seen once it has been on
 screen and then scrolls out through the top edge, or when you open it; rows
 visible on first composition, or never composed, stay unseen. Today keeps
 its session membership stable: passive seen updates do not remove rows or
@@ -106,9 +110,12 @@ available offline. Background sync caches the same notices; an interrupted or
 failed refresh leaves a visible warning on the next offline launch.
 
 The reader shows the feed title and the published date (falling back to
-first seen) under the article title, with an Open original action that opens
-the entry URL in the browser. It loads the signed content URL in a WebView
-with JavaScript, file access and content access disabled, and allows only
+first seen) under the article title, with Open original, Copy link and Share
+actions for the entry URL; a read article's header also offers Mark unread.
+Open original opens the URL in the browser, Copy link places it on the
+clipboard and Share opens the system share sheet. It loads the signed
+content URL in a WebView with JavaScript, file access and content access
+disabled, and allows only
 that origin; other links open in the browser. Articles you open from your lists
 load images through the image proxy. Articles an agent surfaced (a
 notification, a deep link or an agent-change notice) request `mode=click`, so
@@ -143,8 +150,9 @@ articles. Notes and snippets remain plain text.
 ## Feeds and activity
 
 Feeds subscribes by URL, changes a subscription's cadence (Now, Today, This
-week) and unsubscribes. The current cadence is selected in the row. Activity
-groups agent changes by principal, shows a readable description with the
+week) and unsubscribes. The current cadence is selected in the row. A saved
+cadence change offers an undo snackbar that restores the previous cadence.
+Activity groups agent changes by principal, shows a readable description with the
 article title where there is one, and offers Revert where the server reports
 that the action can still be undone.
 
@@ -179,8 +187,9 @@ Today session membership, passive seen on scroll, missing notification metadata,
 agent-change retrieval, WebView error fallback, deep-link parsing, brief labels,
 widget headline selection, theme persistence, notification channels and server
 notification text, notification permission timing, cadence selection, swipe
-thresholds and snackbar text, activity descriptions, reader date and original
-URL, and outbox flush debounce.
+thresholds and action messages, undo restoration and its changed-since
+guard, mark unread clearing Done, share and clipboard intents, activity
+descriptions, reader date and original URL, and outbox flush debounce.
 Core repository tests exercise real wire payloads, batch boundaries, in-flight
 retries, entry hydration and sibling subscription projections. Room regressions
 use Robolectric's native SQLite mode on Apple silicon because legacy SQLite

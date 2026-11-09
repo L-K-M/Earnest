@@ -769,34 +769,60 @@ class AppViewModel internal constructor(
     }
 
     fun markSeen(entryId: Long) {
-        queue(entryId, SyncEngine.REGISTER_SEEN, JsonPrimitive(SyncEngine.VALUE_SEEN), SyncEngine.KIND_PASSIVE, "seen")
+        queue(entryId, "seen", SyncEngine.KIND_PASSIVE) { state ->
+            listOf(RegisterIntent(SyncEngine.REGISTER_SEEN, JsonPrimitive(SyncEngine.VALUE_SEEN), state.seen.value))
+        }
     }
 
-    fun later(entryId: Long, onSaved: () -> Unit = {}) {
-        queue(entryId, SyncEngine.REGISTER_SHELF, JsonPrimitive(SyncEngine.VALUE_LATER), SyncEngine.KIND_EXPLICIT, "later", onSaved)
+    internal fun later(entryId: Long, onSaved: (ReversibleAction) -> Unit = {}) {
+        act(entryId, EntryActionName.LATER, SyncEngine.REGISTER_SHELF, JsonPrimitive(SyncEngine.VALUE_LATER), onSaved)
     }
 
-    fun done(entryId: Long, onSaved: () -> Unit = {}) {
-        queue(entryId, SyncEngine.REGISTER_SHELF, JsonPrimitive(SyncEngine.VALUE_DONE), SyncEngine.KIND_EXPLICIT, "done", onSaved)
+    internal fun done(entryId: Long, onSaved: (ReversibleAction) -> Unit = {}) {
+        act(entryId, EntryActionName.DONE, SyncEngine.REGISTER_SHELF, JsonPrimitive(SyncEngine.VALUE_DONE), onSaved)
     }
 
-    fun keep(entryId: Long) {
-        queue(entryId, SyncEngine.REGISTER_KEPT, JsonPrimitive(true), SyncEngine.KIND_EXPLICIT, "keep")
+    internal fun keep(entryId: Long, onSaved: (ReversibleAction) -> Unit = {}) {
+        act(entryId, EntryActionName.KEEP, SyncEngine.REGISTER_KEPT, JsonPrimitive(true), onSaved)
     }
 
-    fun unkeep(entryId: Long) {
-        queue(entryId, SyncEngine.REGISTER_KEPT, JsonPrimitive(false), SyncEngine.KIND_EXPLICIT, "unkeep")
+    internal fun unkeep(entryId: Long, onSaved: (ReversibleAction) -> Unit = {}) {
+        act(entryId, EntryActionName.UNKEEP, SyncEngine.REGISTER_KEPT, JsonPrimitive(false), onSaved)
     }
 
-    fun undoShelf(entryId: Long) {
-        queue(entryId, SyncEngine.REGISTER_SHELF, JsonPrimitive(SyncEngine.VALUE_NONE), SyncEngine.KIND_EXPLICIT, "undo")
+    /**
+     * Marks a read article unread again. A Done shelf is cleared with it (the
+     * server rule the engine enforces), and [undo] restores both registers.
+     */
+    internal fun markUnread(entryId: Long, onSaved: (ReversibleAction) -> Unit = {}) {
+        queue(entryId, EntryActionName.UNREAD.id, SyncEngine.KIND_EXPLICIT, EntryActionName.UNREAD, onSaved, ::unreadIntents)
     }
 
-    fun undoDone(entryId: Long) {
-        queue(entryId, SyncEngine.REGISTER_SHELF, JsonPrimitive(SyncEngine.VALUE_NONE), SyncEngine.KIND_EXPLICIT, "undo")
+    /** Writes back the registers [action] wrote and nothing has changed since. */
+    internal fun undo(action: ReversibleAction, onSaved: (ReversibleAction) -> Unit = {}) {
+        queue(action.entryId, "undo", SyncEngine.KIND_EXPLICIT, onSaved = onSaved) { state -> undoIntents(action, state) }
     }
 
-    private fun queue(entryId: Long, register: String, value: JsonElement, kind: String, action: String, onSaved: () -> Unit = {}) {
+    private fun act(entryId: Long, name: EntryActionName, register: String, value: JsonElement, onSaved: (ReversibleAction) -> Unit) {
+        queue(entryId, name.id, SyncEngine.KIND_EXPLICIT, name, onSaved) { state ->
+            listOf(RegisterIntent(register, value, valueOf(state, register)))
+        }
+    }
+
+    /**
+     * Queues the register writes [build] derives from the entry's current
+     * state, as one action. [undoable] names the action for its undo snackbar.
+     * [onSaved] reports success only after the writes are durably queued,
+     * carrying the values undo must restore.
+     */
+    private fun queue(
+        entryId: Long,
+        opId: String,
+        kind: String,
+        undoable: EntryActionName? = null,
+        onSaved: (ReversibleAction) -> Unit = {},
+        build: (ch.lkmc.earnest.core.State) -> List<RegisterIntent>,
+    ) {
         viewModelScope.launch(Dispatchers.IO) {
             val (cache, session) = activeAccount("Still signing in; the action was not saved.") ?: return@launch
             try {
@@ -808,22 +834,20 @@ class AppViewModel internal constructor(
                         return@withEngine
                     }
                     val current = syncEngine.state(principal, entryId)
-                    val base = when (register) {
-                        SyncEngine.REGISTER_SHELF -> current.shelf.rev
-                        SyncEngine.REGISTER_KEPT -> current.kept.rev
-                        else -> current.seen.rev
+                    val intents = build(current)
+                    intents.forEachIndexed { index, intent ->
+                        val write = StateWrite(
+                            opId = "$opId-$entryId-${java.util.UUID.randomUUID()}-$index",
+                            principal = principal,
+                            entryId = entryId,
+                            register = intent.register,
+                            value = intent.value,
+                            base = Revision(syncEngine.snapshot().cursor.generation, revOf(current, intent.register)),
+                            occurredAt = Instant.now().toString(),
+                            kind = kind,
+                        )
+                        syncEngine.queue(write)
                     }
-                    val write = StateWrite(
-                        opId = "$action-$entryId-${java.util.UUID.randomUUID()}",
-                        principal = principal,
-                        entryId = entryId,
-                        register = register,
-                        value = value,
-                        base = Revision(syncEngine.snapshot().cursor.generation, base),
-                        occurredAt = Instant.now().toString(),
-                        kind = kind,
-                    )
-                    syncEngine.queue(write)
                     syncEngine.flush()
                     val restored = restoredState(syncEngine, principal)
                     search.invalidateForGeneration(restored.snapshot.cursor.generation)
@@ -835,7 +859,12 @@ class AppViewModel internal constructor(
                         agentChanges = agentChanges,
                         sessionAgentChanges = activitySince(agentChanges, sessionStartedAt),
                     ) }
-                    onSaved()
+                    onSaved(ReversibleAction(
+                        entryId = entryId,
+                        message = undoable?.message.orEmpty(),
+                        prior = intents.associate { it.register to it.prior },
+                        written = intents.associate { it.register to it.value },
+                    ))
                     flushScheduler.request()
                 }
             } catch (error: kotlinx.coroutines.CancellationException) {
@@ -927,12 +956,15 @@ class AppViewModel internal constructor(
         }
     }
 
-    fun setCadence(subscriptionId: Long, cadence: String) {
+    fun setCadence(subscriptionId: Long, cadence: String, onSaved: () -> Unit = {}) {
         viewModelScope.launch(Dispatchers.IO) {
             val api = api() ?: return@launch
             runCatching {
                 api.updateSubscription(subscriptionId, SubscriptionPatch(opId = opId("cadence"), cadence = cadence))
-            }.onSuccess { refresh() }
+            }.onSuccess {
+                onSaved()
+                refresh()
+            }
             .onFailure { _state.update { current -> current.copy(error = failureText("Could not save the cadence", it)) } }
         }
     }
