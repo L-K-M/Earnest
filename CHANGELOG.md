@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The Android app shows feed icons and article thumbnails in article rows
+  and feed icons in Feeds, loaded with the account's token and kept per
+  account.
 - The web article list shows each feed's icon and a thumbnail of the
   article's image. Earnest downloads and shrinks them when feeds and
   articles arrive and serves its own copies, so lists never contact

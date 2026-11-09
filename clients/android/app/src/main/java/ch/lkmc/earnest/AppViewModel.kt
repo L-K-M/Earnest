@@ -1,6 +1,7 @@
 package ch.lkmc.earnest
 
 import android.app.Application
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -128,6 +129,7 @@ class AppViewModel internal constructor(
     @Volatile private var account: SessionCache? = null
     @Volatile private var activeSession: AuthenticatedSession? = null
     @Volatile private var keptImportDocument: ByteArray? = null
+    private val mediaCache = MediaCache(getApplication())
     private var sessionStartedAt = Instant.now()
     private var changesSince = Instant.EPOCH.toString()
     private val json = Json { ignoreUnknownKeys = true }
@@ -179,6 +181,7 @@ class AppViewModel internal constructor(
         readerEpoch.incrementAndGet()
         search.reset()
         flushScheduler.cancel()
+        mediaCache.close()
         super.onCleared()
     }
 
@@ -1130,6 +1133,19 @@ class AppViewModel internal constructor(
 
     private fun api(): EarnestApi? =
         activeAccount("Still signing in; the action was not saved.")?.let { apiFactory(it.second) }
+
+    /**
+     * A stored feed icon or entry thumbnail for the live account, or null
+     * when none exists or it cannot be fetched. The images are decorative, so
+     * failures report nothing to the UI.
+     */
+    internal suspend fun mediaBitmap(path: String): ImageBitmap? {
+        val cache = account ?: return null
+        val session = activeSession ?: return null
+        if (!isCurrent(session, cache)) return null
+        val api = apiFactory(session)
+        return mediaCache.load(session.identity.cacheKey, path) { api.media(it) }
+    }
 
     /** Cache fallback must not turn cancellation or expired credentials into success. */
     private inline fun <T> optionalMetadata(fetch: () -> T): Result<T> = try {
