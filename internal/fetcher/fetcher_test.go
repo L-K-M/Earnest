@@ -20,7 +20,11 @@ import (
 	"github.com/L-K-M/Earnest/internal/service"
 )
 
-type fakeService struct{ outcomes []service.FetchOutcome }
+type fakeService struct {
+	outcomes []service.FetchOutcome
+	// rejects are returned by successive RecordFetch calls, then nil.
+	rejects []error
+}
 
 func (s *fakeService) ClaimDueFeeds(context.Context, time.Time, int, time.Duration) ([]service.FeedToFetch, error) {
 	return nil, nil
@@ -30,6 +34,11 @@ func (s *fakeService) KnownIdentities(context.Context, int64, []string) (map[str
 }
 func (s *fakeService) RecordFetch(_ context.Context, o service.FetchOutcome) (service.IngestSummary, error) {
 	s.outcomes = append(s.outcomes, o)
+	if len(s.rejects) > 0 {
+		err := s.rejects[0]
+		s.rejects = s.rejects[1:]
+		return service.IngestSummary{}, err
+	}
 	return service.IngestSummary{}, nil
 }
 func testFetcher(t *testing.T, server *httptest.Server) (*Fetcher, *fakeService) {

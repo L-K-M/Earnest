@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
@@ -301,6 +302,21 @@ func (f *Fetcher) Fetch(ctx context.Context, item service.FeedToFetch) error {
 	}
 	out.NextFetchAt = now.Add(interval)
 	summary, recordErr := f.service.RecordFetch(ctx, out)
+	if recordErr != nil && out.Status != service.FetchFailed && errors.Is(recordErr, service.ErrInvalid) {
+		// The service refused what this feed served. That is one feed's
+		// problem, not the server's: record it as a parse failure, so feed
+		// health shows it and the schedule moves on, and keep fetching the
+		// other feeds. The cache validators are dropped so the next fetch
+		// reads the whole document again.
+		slog.Warn("feed data rejected", "feed_id", out.FeedID, "error", recordErr)
+		failed := service.FetchOutcome{
+			FeedID: out.FeedID, AttemptedAt: out.AttemptedAt, Status: service.FetchFailed, HTTPStatus: out.HTTPStatus,
+			ErrorClass: persistedErrorClass(classParse), ErrorMessage: "the feed's items were rejected: " + recordErr.Error(),
+			PermanentRedirectURL: out.PermanentRedirectURL, NextFetchAt: out.NextFetchAt,
+		}
+		out = failed
+		summary, recordErr = f.service.RecordFetch(ctx, failed)
+	}
 	if f.config.Metrics != nil {
 		class := string(out.Status)
 		if out.ErrorClass != "" {
@@ -390,7 +406,15 @@ func (f *Fetcher) items(ctx context.Context, claim service.FeedToFetch, list []f
 		extractDeadline = claim.LeaseUntil.Add(-leaseMargin)
 	}
 	var jobs []extractJob
-	for i, it := range list {
+	// Publishers repeat items, and distinct items can share an identity. The
+	// service accepts each identity once per fetch, so the first wins.
+	seen := make(map[string]bool, len(list))
+	for _, it := range list {
+		identity := feed.IdentityHash(it)
+		if seen[identity] {
+			continue
+		}
+		seen[identity] = true
 		base := itemBase(it.URL)
 		link := ""
 		if base != nil {
@@ -432,11 +456,13 @@ func (f *Fetcher) items(ctx context.Context, claim service.FeedToFetch, list []f
 		if it.ContentHTML == "" {
 			source = service.ContentFromFeedExcerpt
 		}
-		if claim.Extract == service.ExtractAlways && base != nil && !known[feed.IdentityHash(it)] &&
+		if claim.Extract == service.ExtractAlways && base != nil && !known[identity] &&
 			len(jobs) < maxExtractsPerFetch && (extractDeadline.IsZero() || time.Now().Before(extractDeadline)) {
-			jobs = append(jobs, extractJob{index: i, link: link})
+			// The index is the item's place in result, which skipped
+			// repeats, not in list.
+			jobs = append(jobs, extractJob{index: len(result), link: link})
 		}
-		entry := service.IngestItem{IdentityHash: feed.IdentityHash(it), GUID: it.GUID, URL: link, Title: it.Title, Author: it.Author, PublishedAt: it.Published, UpdatedAt: it.Updated, ContentHash: feed.ContentHash(it), Language: it.Language, ContentHTML: doc.HTML, ContentText: sanitize.Text(doc.HTML), SanitizerVersion: int(doc.Version), ContentSource: source}
+		entry := service.IngestItem{IdentityHash: identity, LegacyIdentityHash: feed.LegacyIdentityHash(it), GUID: it.GUID, URL: link, Title: it.Title, Author: it.Author, PublishedAt: it.Published, UpdatedAt: it.Updated, ContentHash: feed.ContentHash(it), Language: it.Language, ContentHTML: doc.HTML, ContentText: sanitize.Text(doc.HTML), SanitizerVersion: int(doc.Version), ContentSource: source}
 		for _, enc := range it.Enclosures {
 			entry.Enclosures = append(entry.Enclosures, service.Enclosure{URL: enc.URL, Type: enc.Type, Length: enc.Length})
 		}

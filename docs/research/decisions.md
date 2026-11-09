@@ -40,3 +40,11 @@ Taken by you on 2026-11-07, while triaging the review PRs.
 - **Bulk mark-read is a command, not a button.** "Mark the rest read" lives in the web command palette for Today, a feed or a folder. It marks through the newest entry loaded in that view, after a confirmation, so items that arrive later stay unread. The [anti-pattern](ux.md#anti-patterns) against "Mark all read" as a primary toolbar action stands.
 - **Tab moves focus.** The web reader's summary opens and closes only from its button. This drops the [ux.md](ux.md) binding "Tab hides the summary", so you can always tab through the page.
 - **Mac windows are independent.** Each window keeps its own selection and reader over the shared sync engine, so you can read two articles side by side. The app stays multi-window instead of becoming single-window.
+
+## Fetching
+
+Taken on 2026-11-09, at your request, while fixing a feed that stopped the server.
+
+- **One feed's bad data never stops the server.** When the service refuses what a feed served, the fetcher records it as that feed's parse failure, visible in feed health, and keeps fetching the others. Database and other system errors still stop the fetcher, as before.
+- **A repeated item is stored once per fetch.** When a feed lists the same identity twice, the first occurrence wins.
+- **GUID fragments are part of the identity.** Comment feeds such as WordPress's give each comment its post's URL plus `#comment-N`, so dropping the fragment merged every comment on a post into one entry. Link identities still drop fragments, because there they only scroll the page. An entry stored under the earlier rule is adopted by its first fetch under the new identity, so nothing is stored twice.

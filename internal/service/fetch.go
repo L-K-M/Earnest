@@ -158,8 +158,12 @@ type ingestChange struct {
 	seq               uint64
 	firstSeen         time.Time
 	kind              syncmodel.ChangeType
-	// adopt moves an imported entry to this fetch's identity and first sighting.
+	// adopt moves an imported entry to this fetch's identity and first
+	// sighting, or a legacy entry to the current identity.
 	adopt bool
+	// legacy is the identity an earlier rule stored the article under, nil
+	// when the rules agree.
+	legacy []byte
 }
 
 // RecordFetch commits identity/content versions, user events and health together.
@@ -219,7 +223,17 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 		if item.Language == "" {
 			item.Language = "simple"
 		}
-		prepared = append(prepared, ingestChange{item: item, excerptOnly: excerptOnly, identity: identity, content: content})
+		var legacy []byte
+		if item.LegacyIdentityHash != "" {
+			legacy, err = decodeHash(item.LegacyIdentityHash)
+			if err != nil {
+				return IngestSummary{}, err
+			}
+			if bytes.Equal(legacy, identity) {
+				legacy = nil
+			}
+		}
+		prepared = append(prepared, ingestChange{item: item, excerptOnly: excerptOnly, identity: identity, legacy: legacy, content: content})
 	}
 	summary := IngestSummary{}
 	var newEntries []int64
@@ -266,6 +280,21 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 				if found {
 					adopted = append(adopted, p.id)
 					p.firstSeen = receipt
+					changes = append(changes, p)
+					summary.Updated++
+					continue
+				}
+			}
+			if errors.Is(err, pgx.ErrNoRows) && p.legacy != nil {
+				found, deleted, err := adoptLegacy(ctx, tx, outcome.FeedID, &p, adopted, receipt)
+				if err != nil {
+					return err
+				}
+				if found && deleted {
+					continue
+				}
+				if found {
+					adopted = append(adopted, p.id)
 					changes = append(changes, p)
 					summary.Updated++
 					continue
@@ -444,6 +473,30 @@ func adoptImported(ctx context.Context, tx pgx.Tx, feedID int64, p *ingestChange
 	}
 	if err != nil {
 		return false, false, fmt.Errorf("find imported entry: %w", err)
+	}
+	p.kind = syncmodel.EntryUpdated
+	p.adopt = true
+	return true, deleted, nil
+}
+
+// adoptLegacy finds the entry an earlier identity rule stored this article
+// under, skipping entries this fetch already adopted. The entry becomes an
+// update that takes the current identity, so a rule change never stores an
+// article twice; it keeps its first sighting unless it was an exported copy,
+// which arrives with this fetch. A retention tombstone is reported as deleted
+// and is never resurrected.
+func adoptLegacy(ctx context.Context, tx pgx.Tx, feedID int64, p *ingestChange, adopted []int64, receipt time.Time) (found, deleted bool, err error) {
+	var imported bool
+	err = tx.QueryRow(ctx, `SELECT id,seq,first_seen_at,deleted_at IS NOT NULL,imported FROM entries
+ WHERE feed_id=$1 AND identity_hash=$2 AND NOT id=ANY($3)`, feedID, p.legacy, adopted).Scan(&p.id, &p.seq, &p.firstSeen, &deleted, &imported)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, fmt.Errorf("find legacy identity: %w", err)
+	}
+	if imported {
+		p.firstSeen = receipt
 	}
 	p.kind = syncmodel.EntryUpdated
 	p.adopt = true

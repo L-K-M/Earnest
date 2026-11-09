@@ -85,6 +85,10 @@ type IngestItem struct {
 	SanitizerVersion int
 	ContentSource    ContentSource
 	Enclosures       []Enclosure
+
+	// LegacyIdentityHash is feed.LegacyIdentityHash: the identity an earlier
+	// rule stored this article under, or "" when the rules agree.
+	LegacyIdentityHash string
 }
 
 // FetchOutcome reports one attempt. On FetchFailed, Items is empty and

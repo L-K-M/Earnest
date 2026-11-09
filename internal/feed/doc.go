@@ -19,7 +19,9 @@
 // mix in their own feed scope. It returns SHA-256 over a canonical string
 // built from the first available source:
 //
-//  1. "guid:" + canonical value, when GUID is non-empty and stable. A GUID is
+//  1. "guid:" + canonical value, when GUID is non-empty and stable. A URL
+//     GUID is canonicalised like a link but keeps its fragment, which comment
+//     feeds use to tell comments on one post apart. A GUID is
 //     stable when it is an absolute http(s) URL, when the source marked it as
 //     a permalink (RSS isPermaLink defaults to true), or when it is a
 //     URN-shaped identifier (urn:, tag:, UUID). An RSS GUID explicitly marked
@@ -31,6 +33,8 @@
 //
 // Each source carries its prefix so values from different sources cannot
 // collide. Normalisation trims and collapses whitespace but does not change
-// case. This rule is in every client cache: changing it duplicates entries,
-// so it must stay stable once clients exist.
+// case. Changing this rule would store every affected article again, so it
+// changes only with a migration path: GUID fragments joined the identity on
+// 2026-11-09, and LegacyIdentityHash lets a fetch adopt an entry stored under
+// the earlier rule instead of duplicating it.
 package feed
