@@ -242,16 +242,32 @@ func (c *Content) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		font = "Verdana,Arial,sans-serif"
 		spacing = "letter-spacing:.05em;word-spacing:.12em;"
 	}
-	bg, fg := "#fff", "#202020"
+	// Borders, captions and code blocks need theme-tuned colours so they do
+	// not fall back to browser defaults that clash with the reading theme.
+	bg, fg, muted, codeBg := "#fff", "#202020", "#6b675e", "#f3f1ea"
 	switch r.URL.Query().Get("theme") {
 	case "dark":
-		bg, fg = "#242424", "#eee"
+		bg, fg, muted, codeBg = "#242424", "#eee", "#a3a09a", "#2e2e2c"
 	case "black":
-		bg, fg = "#000", "#fff"
+		bg, fg, muted, codeBg = "#000", "#fff", "#9a9a9a", "#141414"
 	case "eink":
-		bg, fg = "#fff", "#000"
+		bg, fg, muted, codeBg = "#fff", "#000", "#000", "#fff"
 	}
-	css := fmt.Sprintf("body{max-width:%dch;margin:2rem auto;padding:0 1rem;font:1.1rem/1.65 %s;background:%s;color:%s;%soverflow-wrap:anywhere}img{max-width:100%%;height:auto}a{color:inherit}pre{overflow:auto}", measure, font, bg, fg, spacing)
+	css := fmt.Sprintf("body{max-width:%dch;margin:2rem auto;padding:0 1rem;font:1.1rem/1.65 %s;background:%s;color:%s;%soverflow-wrap:anywhere}"+
+		"h1,h2,h3,h4{line-height:1.25;margin-top:1.6em;margin-bottom:.5em}h1{font-size:1.6em}h2{font-size:1.35em}h3{font-size:1.15em}h4{font-size:1em}"+
+		"p,ul,ol,dl,blockquote,figure,table,pre{margin:.9em 0}"+
+		"img{max-width:100%%;height:auto}"+
+		"a{color:inherit;text-underline-offset:.15em}"+
+		"code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em}"+
+		"pre{padding:.8em 1em;border-radius:6px;background:%s;overflow:auto}"+
+		"pre code{font-size:1em}"+
+		"blockquote{margin-inline:0;padding-inline-start:1em;border-inline-start:3px solid %s}"+
+		"figure img{display:block;margin:0 auto}"+
+		"figcaption{font-size:.85em;color:%s;margin-top:.4em;text-align:center}"+
+		"table{border-collapse:collapse;display:block;overflow-x:auto;max-width:100%%}"+
+		"th,td{border:1px solid %s;padding:.35em .6em;text-align:start;vertical-align:top}"+
+		"hr{border:0;border-top:1px solid %s;margin:2em 0}",
+		measure, font, bg, fg, spacing, codeBg, muted, muted, muted, muted)
 	hash := sha256.Sum256([]byte(css))
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src "+c.signer.origin+"; style-src 'sha256-"+base64.StdEncoding.EncodeToString(hash[:])+"'; base-uri 'none'; form-action 'none'")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

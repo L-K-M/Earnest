@@ -46,6 +46,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The web client gives every view a URL: lists, open articles, searches,
+  rules, notifications, feed management and settings survive refresh,
+  Back and Forward, and can be bookmarked. Rows are links, `j`/`k` open
+  the next article while reading, deliberate actions offer an undo
+  (`z`), and narrow screens get a drawer and a single-pane reader.
+  Fingerprinted web assets are served precompressed (Brotli or gzip).
 - The Mac client now requires macOS 26 and follows Mac conventions:
   Settings in its own window, toolbar search with saved searches in the
   sidebar, a full menu bar, undoable reading actions, context menus,

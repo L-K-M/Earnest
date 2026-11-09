@@ -3,7 +3,7 @@ import {afterEach, describe, expect, it, vi} from 'vitest'
 import {cleanup, fireEvent, render, screen, waitFor, within} from '@testing-library/react'
 import {QueryClient, QueryClientProvider} from '@tanstack/react-query'
 import {River} from './River'
-import type {Entry, ReaderActions} from './reader'
+import type {Entry, ReaderActions, Subscription} from './reader'
 import {request} from './request'
 vi.mock('./request', () => ({request:vi.fn()}))
 const virtualItems = vi.hoisted(() => ({items: [0, 1]}))
@@ -213,4 +213,72 @@ it('reports the newest loaded entry for the mark-rest command', async () => {
   const onNewestLoaded = vi.fn()
   render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'today',title:'Today'}} subscriptions={[]} actions={{act:vi.fn(),state:entry=>entry.state}} selected={null} onSelect={vi.fn()} onOpen={vi.fn()} shortcuts counts={false} summary={{seen:0,done:0,later:0,kept:0}} onNewestLoaded={onNewestLoaded} /></QueryClientProvider>)
   await waitFor(() => expect(onNewestLoaded).toHaveBeenLastCalledWith(Math.max(...entries.map(entry => entry.seq))))
+})
+
+describe('list navigation', () => {
+  function mountWith(props: {reading?: boolean; selected?: Entry; shortcuts?: boolean}) {
+    vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {blurb:'disabled'} : path.startsWith('/v1/positions') ? {seq:0} : {entries})
+    const onSelect = vi.fn()
+    const onOpen = vi.fn()
+    render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'feed',id:9,title:'Rust'}} subscriptions={[]} actions={{act:vi.fn().mockResolvedValue(undefined),state:entry=>entry.state}} selected={props.selected ?? entries[0]} onSelect={onSelect} onOpen={onOpen} reading={props.reading} shortcuts={props.shortcuts ?? true} counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>)
+    return {onSelect, onOpen}
+  }
+  it('renders rows as links to the article in this view with one tab stop', async () => {
+    mountWith({})
+    const link = (await screen.findByText('Article 1')).closest('a')!
+    expect(link.getAttribute('href')).toBe('/feeds/9/articles/1')
+    expect(document.querySelectorAll('.entry[tabindex="0"]')).toHaveLength(1)
+  })
+  it('leaves modified clicks to the browser so articles open in a new tab', async () => {
+    const {onOpen} = mountWith({})
+    const link = (await screen.findByText('Article 2')).closest('a')!
+    const event = new MouseEvent('click', {bubbles:true, cancelable:true, metaKey:true})
+    link.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(false)
+    expect(onOpen).not.toHaveBeenCalled()
+  })
+  it('moves the selection with arrow keys even with single-key shortcuts off', async () => {
+    const {onSelect} = mountWith({shortcuts:false})
+    const link = (await screen.findByText('Article 1')).closest('a')!
+    link.focus()
+    fireEvent.keyDown(link, {key:'ArrowDown'})
+    expect(onSelect).toHaveBeenLastCalledWith(entries[1])
+    fireEvent.keyDown(link, {key:'End'})
+    expect(onSelect).toHaveBeenLastCalledWith(entries[2])
+  })
+  it('opens the next article in place while one is being read', async () => {
+    const {onOpen} = mountWith({reading:true})
+    await screen.findByText('Article 1')
+    fireEvent.keyDown(document.body, {key:'j'})
+    expect(onOpen).toHaveBeenCalledWith(entries[1], 'replace')
+  })
+  it('names each list’s emptiness instead of reusing the river line', async () => {
+    vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {blurb:'disabled'} : path.startsWith('/v1/positions') ? {seq:0} : {entries:[]})
+    render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'later',title:'Later'}} subscriptions={[]} actions={{act:vi.fn(),state:entry=>entry.state}} selected={null} onSelect={vi.fn()} onOpen={vi.fn()} shortcuts counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>)
+    expect(await screen.findByText(/Nothing waiting for later/)).toBeTruthy()
+  })
+})
+
+it('says when the feed being read is failing and links to its settings', async () => {
+  vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {blurb:'disabled'} : path.startsWith('/v1/positions') ? {seq:0} : {entries})
+  const failing = {id:9, title:'Rust', health:{consecutive_failures:3, error_class:''}} as unknown as Subscription
+  render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'feed',id:9,title:'Rust'}} subscriptions={[failing]} actions={{act:vi.fn(),state:entry=>entry.state}} selected={null} onSelect={vi.fn()} onOpen={vi.fn()} shortcuts counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>)
+  expect(await screen.findByText('Fetch failed.')).toBeTruthy()
+  expect(screen.getByRole('link',{name:'Fix it in feed settings'}).getAttribute('href')).toBe('/feeds#subscription-9')
+  expect(screen.getByRole('link',{name:'Feed settings'}).getAttribute('href')).toBe('/feeds#subscription-9')
+})
+
+it('leaves Enter on a brief summary to the summary instead of opening the selection', async () => {
+  const {container} = mount()
+  await screen.findByText('Article 1')
+  const details = document.createElement('details')
+  const summary = document.createElement('summary')
+  summary.textContent = 'While you were out'
+  details.append(summary)
+  container.append(details)
+  const onOpenCalls = vi.mocked(request).mock.calls.length
+  const event = new KeyboardEvent('keydown', {key:'Enter', bubbles:true, cancelable:true})
+  summary.dispatchEvent(event)
+  expect(event.defaultPrevented).toBe(false)
+  expect(vi.mocked(request).mock.calls.length).toBe(onOpenCalls)
 })

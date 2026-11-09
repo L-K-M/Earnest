@@ -12,7 +12,7 @@ const sync = vi.hoisted(() => ({refresh:null as null | ((reason?: 'generation') 
 let app: ReactElement<{client: QueryClient}>
 vi.mock('react-dom/client',() => ({createRoot:() => ({render:(node:ReactNode) => {app=node as typeof app}})}))
 vi.mock('./request',() => ({request:vi.fn(),setCSRF:vi.fn()}))
-vi.mock('./offline/Offline',() => ({OfflineStatus:() => null,registerOffline:vi.fn().mockResolvedValue(undefined),clearOffline:vi.fn()}))
+vi.mock('./offline/Offline',() => ({OfflineStatus:() => null,useOnline:() => true,registerOffline:vi.fn().mockResolvedValue(undefined),clearOffline:vi.fn()}))
 vi.mock('./syncBridge',() => ({useReaderSync:(_identity:unknown,refresh:NonNullable<typeof sync.refresh>) => {sync.refresh=refresh;return {state:(entry:Entry) => entry.state,act:vi.fn(),retry:vi.fn(),status:'Synced',error:''}}}))
 vi.mock('./River',() => ({River:() => <main>Today articles</main>}))
 vi.mock('./ArticleReader',() => ({Reader:({entry}:{entry:Entry}) => <article>{entry.title}</article>}))

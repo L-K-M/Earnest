@@ -37,6 +37,7 @@ function folder(overrides: Partial<Folder> = {}): Folder {
 beforeEach(() => {
   cleanup()
   mocked.mockReset()
+  sessionStorage.clear()
 })
 
 describe('feed rules', () => {
@@ -106,6 +107,61 @@ describe('Feeds', () => {
     await screen.findByText('Broken Feed')
     expect(screen.getByText(/reports itself gone/).textContent).toContain('3 times')
     expect(screen.getByText('Feed One')).toBeTruthy()
+  })
+
+  it('opens the edit details of a failing feed by default', async () => {
+    api({
+      '/v1/subscriptions': [sub(), sub({id: 2, title: 'Broken Feed', health: {...baseHealth, consecutive_failures: 2, error_class: 'gone'}})],
+      '/v1/folders': [],
+      '/v1/mutes': [],
+    })
+    render(<Feeds onChanged={() => {}} />)
+    const summaries = await screen.findAllByText('Edit')
+    expect(summaries[0].closest('details')?.hasAttribute('open')).toBe(false)
+    expect(summaries[1].closest('details')?.hasAttribute('open')).toBe(true)
+  })
+
+  it('validates the feed URL on blur without calling the API', async () => {
+    api({'/v1/subscriptions': [], '/v1/folders': [], '/v1/mutes': []})
+    render(<Feeds onChanged={() => {}} />)
+    const input = await screen.findByLabelText('Feed or site URL')
+    fireEvent.change(input, {target: {value: 'not a url'}})
+    fireEvent.blur(input)
+    expect(input.getAttribute('aria-invalid')).toBe('true')
+    const error = await screen.findByText(/does not look like a feed address/)
+    expect(error.id).toBe('subscribe-url-error')
+    const describedby = input.getAttribute('aria-describedby') ?? ''
+    expect(describedby).toContain('subscribe-url-hint')
+    expect(describedby).toContain('subscribe-url-error')
+    expect(mocked.mock.calls.filter(([, options]) => options?.method && options.method !== 'GET')).toHaveLength(0)
+    fireEvent.change(input, {target: {value: 'https://example.com/feed'}})
+    await waitFor(() => expect(input.getAttribute('aria-invalid')).toBeNull())
+    expect(screen.queryByText(/does not look like a feed address/)).toBeNull()
+  })
+
+  it('restores the subscribe draft after remount and clears it after subscribing', async () => {
+    api({
+      '/v1/subscriptions': (options?: RequestInit) => options?.method === 'POST' ? sub({id: 2}) : [],
+      '/v1/folders': [folder()],
+      '/v1/mutes': [],
+    })
+    const first = render(<Feeds onChanged={() => {}} />)
+    fireEvent.change(await first.findByLabelText('Feed or site URL'), {target: {value: 'https://example.com/feed'}})
+    fireEvent.change(first.getByLabelText('Title (optional)'), {target: {value: 'My feed'}})
+    fireEvent.change(first.getByLabelText('Folder'), {target: {value: '3'}})
+    fireEvent.click(first.getByLabelText(/This week/))
+    fireEvent.change(first.getByLabelText('Full text'), {target: {value: 'always'}})
+    expect(JSON.parse(sessionStorage.getItem('earnest.subscribe.draft') ?? '')).toEqual({url: 'https://example.com/feed', title: 'My feed', folderID: 3, cadence: 'week', extract: 'always'})
+    first.unmount()
+    const second = render(<Feeds onChanged={() => {}} />)
+    expect((await second.findByLabelText('Feed or site URL') as HTMLInputElement).value).toBe('https://example.com/feed')
+    expect((second.getByLabelText('Title (optional)') as HTMLInputElement).value).toBe('My feed')
+    expect((second.getByLabelText('Folder') as HTMLSelectElement).value).toBe('3')
+    expect((second.getByLabelText(/This week/) as HTMLInputElement).checked).toBe(true)
+    expect((second.getByLabelText('Full text') as HTMLSelectElement).value).toBe('always')
+    fireEvent.click(second.getByRole('button', {name: 'Subscribe'}))
+    await second.findByText('Subscribed. The first fetch is on its way.')
+    await waitFor(() => expect(sessionStorage.getItem('earnest.subscribe.draft')).toBeNull())
   })
 
   it('rejects an invalid feed URL without calling the API', async () => {
