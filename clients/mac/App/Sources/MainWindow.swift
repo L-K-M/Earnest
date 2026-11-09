@@ -44,9 +44,13 @@ import EarnestKit
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
     @SwiftUI.State private var importing = false
+    @SwiftUI.State private var importingStarred = false
     @SwiftUI.State private var exportDocument: OPMLDocument?
     @SwiftUI.State private var pendingImport: PendingImport?
     @SwiftUI.State private var importReport: AppModel.ImportReport?
+    @SwiftUI.State private var pendingStarredImport: PendingStarredImport?
+    @SwiftUI.State private var keptImportReport: KeptImportReport?
+    @SwiftUI.State private var starredSubscribeMissing = false
 
     // The body is split so each part type-checks quickly on every toolchain.
     var body: some View {
@@ -71,6 +75,8 @@ import EarnestKit
             if wasSignedIn && !signedIn {
                 pendingImport = nil
                 importReport = nil
+                pendingStarredImport = nil
+                keptImportReport = nil
             }
         }
     }
@@ -98,6 +104,16 @@ import EarnestKit
         Binding(get: { pendingImport != nil && model.loggedIn }, set: { if !$0 { pendingImport = nil } })
     }
 
+    /// The result belongs to the window whose import it was.
+    private var showsKeptImportReport: Binding<Bool> {
+        Binding(get: { keptImportReport != nil }, set: { if !$0 { keptImportReport = nil } })
+    }
+
+    /// A starred-articles file waits until the account is signed in.
+    private var showsStarredImportConfirmation: Binding<Bool> {
+        Binding(get: { pendingStarredImport != nil && model.loggedIn }, set: { if !$0 { pendingStarredImport = nil } })
+    }
+
     private var signOutMessage: String {
         let waiting = model.pendingOps
         guard waiting > 0 else { return "You will need to approve this Mac again to sign in." }
@@ -115,6 +131,20 @@ import EarnestKit
             }
             .alert(importReport?.title ?? "", isPresented: showsImportReport, presenting: importReport) { _ in
                 Button("OK", role: .cancel) { importReport = nil }
+            } message: { report in
+                Text(report.detail)
+            }
+            .alert(keptImportReport?.title ?? "", isPresented: showsKeptImportReport, presenting: keptImportReport) { report in
+                if report.retry != nil {
+                    Button("Subscribe to these feeds and import again") {
+                        if let retry = report.retry {
+                            startStarredImport(retry.data, name: retry.name, subscribeMissing: true)
+                        }
+                        keptImportReport = nil
+                    }
+                    .keyboardShortcut(.defaultAction)
+                }
+                Button("OK", role: .cancel) { keptImportReport = nil }
             } message: { report in
                 Text(report.detail)
             }
@@ -162,6 +192,21 @@ import EarnestKit
                 guard case .success(let urls) = result, let url = urls.first else { return }
                 stage(url)
             }
+            .fileImporter(isPresented: $importingStarred, allowedContentTypes: [.json],
+                          allowsMultipleSelection: false) { result in
+                guard case .success(let urls) = result, let url = urls.first else { return }
+                stageStarred(url)
+            }
+            .sheet(isPresented: showsStarredImportConfirmation) {
+                if let pending = pendingStarredImport {
+                    StarredImportConfirmationSheet(name: pending.name, subscribeMissing: $starredSubscribeMissing) {
+                        startStarredImport(pending.data, name: pending.name, subscribeMissing: starredSubscribeMissing)
+                        pendingStarredImport = nil
+                    } onCancel: {
+                        pendingStarredImport = nil
+                    }
+                }
+            }
             .fileExporter(isPresented: showsExporter, document: exportDocument, contentType: .opml,
                           defaultFilename: "Earnest Subscriptions") { result in
                 if case .failure(let error) = result { model.report(error) }
@@ -171,6 +216,9 @@ import EarnestKit
             .dropDestination(for: URL.self) { urls, _ in _ = handleDrop(urls) }
             .onReceive(NotificationCenter.default.publisher(for: .earnestImportSubscriptions)) { _ in
                 if window.presentsAppAlerts, model.loggedIn { importing = true }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .earnestImportStarredArticles)) { _ in
+                if window.presentsAppAlerts, model.loggedIn { importingStarred = true }
             }
             .onReceive(NotificationCenter.default.publisher(for: .earnestExportSubscriptions)) { _ in
                 export()
@@ -182,7 +230,10 @@ import EarnestKit
     /// link fills in New Subscription.
     private func handleDrop(_ urls: [URL]) -> Bool {
         guard model.loggedIn, let url = urls.first else { return false }
-        if url.isFileURL { stage(url); return true }
+        if url.isFileURL {
+            if url.pathExtension.lowercased() == "json" { stageStarred(url) } else { stage(url) }
+            return true
+        }
         let address: String
         switch url.scheme?.lowercased() {
         case "feed":
@@ -214,7 +265,7 @@ import EarnestKit
     /// open articles and `feed:` links offer a subscription.
     private func open(_ url: URL) {
         if url.isFileURL {
-            stage(url)
+            if url.pathExtension.lowercased() == "json" { stageStarred(url) } else { stage(url) }
         } else if let feed = FeedLink.subscriptionURL(url) {
             // Shown once the account is signed in, if it is not yet.
             window.subscribeURL = feed
@@ -239,7 +290,37 @@ import EarnestKit
         }
     }
 
+    /// A starred-articles file asks before importing, like an OPML file.
+    private func stageStarred(_ url: URL) {
+        let access = url.startAccessingSecurityScopedResource()
+        defer { if access { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard size <= AppModel.keptLimit else {
+                model.error = "“\(url.lastPathComponent)” is too large to be a starred-articles export."
+                return
+            }
+            pendingStarredImport = PendingStarredImport(name: url.lastPathComponent, data: try Data(contentsOf: url))
+            // Each file asks afresh: an earlier file's choice to subscribe
+            // must not carry over to this one.
+            starredSubscribeMissing = false
+        } catch {
+            model.error = "Earnest couldn't read “\(url.lastPathComponent)”. \(error.localizedDescription)"
+        }
+    }
+
+    private func startStarredImport(_ data: Data, name: String, subscribeMissing: Bool) {
+        StarredImportCoordinator.shared.importStarred(model: model, document: data, name: name,
+                                                      subscribeMissing: subscribeMissing) { keptImportReport = $0 }
+    }
+
     private struct PendingImport: Identifiable {
+        let id = UUID()
+        let name: String
+        let data: Data
+    }
+
+    private struct PendingStarredImport: Identifiable {
         let id = UUID()
         let name: String
         let data: Data

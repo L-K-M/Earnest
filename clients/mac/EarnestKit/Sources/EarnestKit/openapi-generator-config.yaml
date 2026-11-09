@@ -40,4 +40,5 @@ filter:
     - pipeline-status
     - export-opml
     - import-opml
+    - import-kept
     - refresh-subscription

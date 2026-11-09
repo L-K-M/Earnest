@@ -1,4 +1,5 @@
 import Foundation
+import HTTPTypes
 import OpenAPIRuntime
 #if canImport(FoundationNetworking)
 import FoundationNetworking
@@ -125,7 +126,7 @@ public struct APIProblem: Codable, Error, Sendable {
     public let budget: APIValue?
 }
 public enum APIError: Error, Sendable {
-    case invalidBaseURL, invalidResponse, httpStatus(Int), invalidEntryID
+    case invalidBaseURL, invalidResponse, httpStatus(Int), invalidEntryID, invalidDocument
 }
 
 /// Outcome of an OPML import: how many outlines resolved to a subscription or
@@ -149,12 +150,89 @@ public struct OPMLImportSummary: Equatable, Sendable {
     }
 }
 
+/// Outcome of a starred-articles import: how many articles it added, found
+/// already present, left out or lost, the feeds it skipped, and the failures.
+public struct KeptImportSummary: Equatable, Sendable {
+    public let added: Int
+    /// Articles Earnest already had, matched or unchanged.
+    public let existing: Int
+    public let unkept: Int
+    public let gone: Int
+    /// Feeds whose articles were skipped, with how many each, sorted by count
+    /// descending then URL.
+    public let skipped: [(feedURL: String, count: Int)]
+    /// "<title or Article n>: <error>" for each rejected article.
+    public let failures: [String]
+    public let subscribed: Int
+    /// Articles the import added at least one of the export's labels to.
+    public let labelled: Int
+
+    public init(added: Int, existing: Int, unkept: Int, gone: Int,
+                skipped: [(feedURL: String, count: Int)] = [], failures: [String] = [], subscribed: Int = 0, labelled: Int = 0) {
+        self.added = added
+        self.existing = existing
+        self.unkept = unkept
+        self.gone = gone
+        self.skipped = skipped
+        self.failures = failures
+        self.subscribed = subscribed
+        self.labelled = labelled
+    }
+
+    public static func == (lhs: KeptImportSummary, rhs: KeptImportSummary) -> Bool {
+        lhs.added == rhs.added && lhs.existing == rhs.existing && lhs.unkept == rhs.unkept && lhs.gone == rhs.gone
+            && lhs.subscribed == rhs.subscribed && lhs.labelled == rhs.labelled && lhs.failures == rhs.failures
+            && lhs.skipped.count == rhs.skipped.count
+            && zip(lhs.skipped, rhs.skipped).allSatisfy { $0.feedURL == $1.feedURL && $0.count == $1.count }
+    }
+}
+
 /// OPML exports are bounded so a runaway response cannot exhaust memory.
 private let opmlDocumentLimit = 16 * 1024 * 1024
+
+/// The largest starred-articles export the server accepts.
+let keptImportLimit = 64 * 1024 * 1024
 
 private final class RejectRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
         completionHandler(nil)
+    }
+}
+
+/// The generated client rejects unknown response fields. A future server can
+/// add an optional field to a kept-import result (for example `labels`), so
+/// drop keys the schema does not declare before the generated decoder runs.
+private struct KeptImportTransport: ClientTransport {
+    private static let reportKeys: Set<String> = ["results", "subscribed"]
+    private static let resultKeys: Set<String> = ["index", "status", "entry_id", "subscription_id", "feed_url", "title", "error", "labels"]
+
+    let base: APITransport
+
+    func send(_ request: HTTPRequest, body: HTTPBody?, baseURL: URL, operationID: String) async throws -> (HTTPResponse, HTTPBody?) {
+        var request = request
+        if operationID == "import-kept" {
+            // The runtime writes `application/json; charset=utf-8`; the server
+            // and the export contract name the bare type.
+            request.headerFields[.contentType] = "application/json"
+        }
+        let (response, body) = try await base.send(request, body: body, baseURL: baseURL, operationID: operationID)
+        guard operationID == "import-kept", response.status.code == 200, let body else { return (response, body) }
+        let data = try await Data(collecting: body, upTo: 64 << 20)
+        return (response, HTTPBody(Self.sanitize(data)))
+    }
+
+    private static func sanitize(_ data: Data) -> Data {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return data }
+        var sanitized: [String: Any] = [:]
+        for (key, value) in object where reportKeys.contains(key) {
+            if key == "results", let results = value as? [[String: Any]] {
+                sanitized[key] = results.map { $0.filter { resultKeys.contains($0.key) } }
+            } else {
+                sanitized[key] = value
+            }
+        }
+        guard let encoded = try? JSONSerialization.data(withJSONObject: sanitized) else { return data }
+        return encoded
     }
 }
 
@@ -164,6 +242,7 @@ public final class EarnestAPI: Sendable {
     private let tokenStore: any TokenStore
     private let session: URLSession
     private let client: Client
+    private let keptImportClient: Client
 
     public init(baseURL: URL, tokenStore: any TokenStore, session: URLSession? = nil) throws {
         guard let scheme = baseURL.scheme?.lowercased(), ["https", "http"].contains(scheme),
@@ -173,8 +252,11 @@ public final class EarnestAPI: Sendable {
         self.tokenStore = tokenStore
         let session = session ?? URLSession(configuration: .ephemeral, delegate: RejectRedirects(), delegateQueue: nil)
         self.session = session
-        client = Client(serverURL: baseURL, configuration: OpenAPIRuntime.Configuration(dateTranscoder: RFC3339DateTranscoder()),
-                        transport: APITransport(session: session, tokenStore: tokenStore))
+        let transport = APITransport(session: session, tokenStore: tokenStore)
+        let configuration = OpenAPIRuntime.Configuration(dateTranscoder: RFC3339DateTranscoder())
+        client = Client(serverURL: baseURL, configuration: configuration, transport: transport)
+        keptImportClient = Client(serverURL: baseURL, configuration: configuration,
+                                  transport: KeptImportTransport(base: transport))
     }
 
     public func startDevice(clientName: String) async throws -> DeviceAuthorization {
@@ -316,6 +398,23 @@ public final class EarnestAPI: Sendable {
         } ?? []
         return summarizeOPMLResults(results)
     }
+    /// Imports a Google Reader JSON export of starred articles into Kept.
+    /// `subscribeMissing` sends the server's `missing_feeds=subscribe`.
+    public func importKept(_ document: Data, subscribeMissing: Bool) async throws -> KeptImportSummary {
+        // Refuse before decoding: the server takes at most 64 MiB, and
+        // decoding builds a tree several times the document's size.
+        guard document.count <= keptImportLimit else { throw APIError.invalidDocument }
+        let body: OpenAPIObjectContainer
+        do { body = try JSONDecoder().decode(OpenAPIObjectContainer.self, from: document) }
+        catch { throw APIError.invalidDocument }
+        let report = try await generated {
+            try await keptImportClient.importKept(.init(
+                query: .init(missingFeeds: subscribeMissing ? .subscribe : .skip),
+                body: .json(body)
+            )).ok.body.json
+        }
+        return summarizeKeptResults(report)
+    }
     /// Makes a feed due for the next fetcher pass.
     public func refreshSubscription(id: Int64) async throws {
         _ = try await generated {
@@ -407,6 +506,38 @@ func validateReaderSettings(_ settings: APIReaderSettings, opID: String) throws 
             throw APIReaderSettingsError(field: "feed_overrides measure")
         }
     }
+}
+
+/// Folds the server's report into counts. Null lists count as empty; a
+/// failure falls back to its position and a generic reason when the server
+/// omits the title or error.
+func summarizeKeptResults(_ report: Components.Schemas.KeptImportReport?) -> KeptImportSummary {
+    var added = 0
+    var existing = 0
+    var unkept = 0
+    var gone = 0
+    var skipped: [String: Int] = [:]
+    var failures: [String] = []
+    var labelled = 0
+    for result in report?.results ?? [] {
+        if !(result.labels ?? []).isEmpty { labelled += 1 }
+        switch result.status {
+        case .created: added += 1
+        case .matched, .unchanged: existing += 1
+        case .unkept: unkept += 1
+        case .gone: gone += 1
+        case .notSubscribed: skipped[result.feedUrl ?? "", default: 0] += 1
+        case .failed:
+            let title = result.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Article \(result.index + 1)"
+            failures.append("\(title): \(result.error ?? "could not be imported")")
+        }
+    }
+    let skippedFeeds: [(feedURL: String, count: Int)] = skipped
+        .sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
+        .map { (feedURL: $0.key, count: $0.value) }
+    return KeptImportSummary(added: added, existing: existing, unkept: unkept, gone: gone,
+                             skipped: skippedFeeds, failures: failures, subscribed: report?.subscribed?.count ?? 0,
+                             labelled: labelled)
 }
 
 /// A result counts as subscribed or as a folder only when it created that

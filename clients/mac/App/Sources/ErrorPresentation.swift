@@ -44,6 +44,7 @@ enum ErrorPresentation {
         if let error = error as? APIError {
             switch error {
             case .invalidBaseURL: return "Enter a valid HTTP or HTTPS server address."
+            case .invalidDocument: return "This file isn't a valid starred-articles export."
             case .invalidResponse: return "The server sent an unexpected response. Try again."
             case .invalidEntryID: return "This article ID is invalid."
             case .httpStatus(403): return "You don't have permission to do that."
