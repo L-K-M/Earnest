@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -104,6 +105,22 @@ func thumbnailCandidates(item IngestItem) []string {
 		return []string{}
 	}
 	return candidates
+}
+
+// sameImages reports whether two candidate lists name the same images,
+// comparing host and path only. Some publishers sign image URLs or add a
+// cache-busting query on every fetch; treating those as new images would
+// download every article's image again on every poll.
+func sameImages(a, b []string) bool {
+	return slices.EqualFunc(a, b, func(x, y string) bool { return imageKey(x) == imageKey(y) })
+}
+
+func imageKey(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	return strings.ToLower(u.Host) + u.EscapedPath()
 }
 
 // queueEntryImage records the thumbnail candidates for an entry's current

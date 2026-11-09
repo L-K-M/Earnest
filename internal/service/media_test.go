@@ -374,6 +374,13 @@ func TestMedia(t *testing.T) {
 			t.Fatalf("after refetch=%+v", r)
 		}
 
+		// A query that changes on every fetch, such as a signature or a
+		// cache-buster, is the same image and is not fetched again.
+		f.record(t, feed, nil, mediaItem("swap", p.URL+"/second.jpg?sig=rotated", ""))
+		if r, _ := loadEntryImage(t, f, id); r.status != mediaReady || r.candidates[0] != p.URL+"/second.jpg" {
+			t.Fatalf("after a rotated query=%+v", r)
+		}
+
 		// An image that disappears keeps the stored thumbnail.
 		f.record(t, feed, nil, mediaItem("swap", "", ""))
 		if r, _ := loadEntryImage(t, f, id); r.status != mediaReady || len(r.candidates) != 1 {

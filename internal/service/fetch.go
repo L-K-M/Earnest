@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"math"
 	"net/url"
-	"slices"
 	"strings"
 	"time"
 
@@ -348,7 +347,7 @@ func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (Ingest
 			if bytes.Equal(oldHash, p.content) && guid == p.item.GUID && rawURL == p.item.URL && title == p.item.Title && author == p.item.Author && language == p.item.Language && timePtrEqual(pub, p.item.PublishedAt) && timePtrEqual(updated, p.item.UpdatedAt) && sameEnclosures && hasVersion {
 				// The article is unchanged, but its image may not be. An
 				// image that disappeared keeps the stored thumbnail.
-				if !hasImageRow || (len(p.candidates) > 0 && !slices.Equal(storedCandidates, p.candidates)) {
+				if !hasImageRow || (len(p.candidates) > 0 && !sameImages(storedCandidates, p.candidates)) {
 					requeue = append(requeue, p)
 				}
 				continue
