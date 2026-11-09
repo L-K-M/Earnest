@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 import EarnestKit
@@ -107,6 +108,9 @@ extension FeedInfo {
         Table(feeds, selection: $window.selectedFeedID, sortOrder: $sortOrder) {
             TableColumn("Name", value: \.displayTitle, comparator: .localizedStandard) { feed in
                 HStack(spacing: 6) {
+                    if let path = feed.iconURL {
+                        FeedIcon(path: path)
+                    }
                     if feed.issue != nil {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(.yellow)
@@ -152,6 +156,32 @@ extension FeedInfo {
         }
         .alternatingRowBackgrounds(.disabled)
         .accessibilityLabel("Subscriptions")
+    }
+}
+
+/// A subscription's stored icon in the Feeds table. Nothing draws until the
+/// image loads, and nothing at all when the feed has none; decorative only.
+@MainActor private struct FeedIcon: View {
+    let path: String
+    @EnvironmentObject private var model: AppModel
+    @SwiftUI.State private var image: NSImage?
+
+    var body: some View {
+        // A ZStack exists even while it is empty, so the frame keeps the slot
+        // and the task runs; an empty Group would have no view to attach to.
+        ZStack {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+            }
+        }
+        .frame(width: 16, height: 16)
+        .accessibilityHidden(true)
+        .task(id: path) {
+            image = await model.media.image(for: path)
+        }
     }
 }
 

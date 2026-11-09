@@ -12,12 +12,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Android app shows feed icons and article thumbnails in article rows
   and feed icons in Feeds, loaded with the account's token and kept per
   account.
+- The Mac app shows feed icons and article thumbnails in article rows and
+  feed icons in Feeds, loaded with the account's token and kept per
+  account. Article titles in the list now wrap to two lines as their row
+  height assumes.
 - The web article list shows each feed's icon and a thumbnail of the
   article's image. Earnest downloads and shrinks them when feeds and
   articles arrive and serves its own copies, so lists never contact
   publishers. Entries carry `thumbnail_url` and subscriptions `icon_url`,
   served by `GET /v1/entries/{id}/thumbnail` and
   `GET /v1/subscriptions/{id}/icon`.
+- The web sidebar's feed list shows feed icons too. A thumbnail is
+  fetched again when a publisher swaps an article's image without
+  changing its text. Storing an icon or thumbnail now raises the
+  subscription's or entry's revision with `subscription.updated` or
+  `entry.updated`, and bootstrap carries `icon_url` and
+  `thumbnail_url`, so sync clients pick them up.
 - Import starred articles into Kept from another reader's Google Reader
   JSON export (FreshRSS, Inoreader, Google Takeout), with its labels, in
   Manage feeds, with `earnest entries import` or `POST /v1/kept:import`.
@@ -61,6 +71,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Titles that a feed escaped twice, such as The Verge's
+  "Pomera&#8217;s", now show the character instead of the reference.
+  Earnest's identity for items without a GUID or link is unchanged, so
+  no article is stored twice.
 - A feed that lists two items under one identity, such as a WordPress
   comments feed, no longer stops `earnest serve`: comments on one post
   keep distinct identities, a repeated item is stored once, and data the

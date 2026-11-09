@@ -162,7 +162,7 @@ extension APISavedSearch: @retroactive Identifiable {}
                 canActOn: { row in
                     guard let id = table.matches[row]?.entryID else { return false }
                     return window.entries.contains { $0.id == id }
-                }))
+                }), media: app.media)
             if search.nextCursor != nil {
                 Button("Load More Results") { search.loadMore() }
                     .disabled(search.loading)

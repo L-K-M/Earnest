@@ -47,6 +47,9 @@ type Item struct {
 	// informs IdentityHash; callers that construct Items by hand get the
 	// permissive default.
 	guidPermalink *bool
+	// identityTitle is the title IdentityHash uses when it differs from the
+	// display Title; see titleTexts.
+	identityTitle string
 }
 
 // Enclosure is a media attachment. Length is zero when the source omitted or

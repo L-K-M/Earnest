@@ -28,6 +28,8 @@ final class ScriptedHTTP: URLProtocol {
         var requestContentType: String?
         var checkBody: (@Sendable (Data?) throws -> Void)?
         var query: String?
+        /// When set, the request must advertise exactly this Accept header.
+        var accept: String?
     }
     private static let lock = NSLock()
     nonisolated(unsafe) private static var replies: [Reply] = []
@@ -52,6 +54,7 @@ final class ScriptedHTTP: URLProtocol {
         #expect(request.url?.path == reply.path)
         #expect(request.httpMethod == reply.method)
         if let query = reply.query { #expect(request.url?.query == query) }
+        if let accept = reply.accept { #expect(request.value(forHTTPHeaderField: "Accept") == accept) }
         if let requestContentType = reply.requestContentType {
             #expect(request.value(forHTTPHeaderField: "Content-Type") == requestContentType)
         }
