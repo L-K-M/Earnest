@@ -1,16 +1,20 @@
-import {Component, lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ComponentType, type ReactNode} from 'react'
+import {Component, lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ComponentType, type MouseEvent as ReactMouseEvent, type ReactNode} from 'react'
 import {useQuery, useQueryClient} from '@tanstack/react-query'
 import type {components} from './api.generated'
 import {request, RequestError, setCSRF} from './request'
 import {readUnreadCounts} from './counts'
 import {River, type SessionSummary} from './River'
 import {Reader} from './ArticleReader'
+import {ArticleFrame} from './ArticleFrame'
 import {defaultSettings, type ReadingSettings} from './Settings'
 import {ActivityScreen, Notifications} from './agents/Surfaces'
 import {useReaderSync} from './syncBridge'
-import {shortcutsAllowed, viewKey, type Entry, type EntryState, type ReaderActions, type Register, type Value, type View} from './reader'
+import {shortcutsAllowed, viewKey, type Entry, type EntryState, type RangeScope, type ReaderActions, type Register, type Value, type View} from './reader'
 import {Search, useSavedSearches} from './search/Search'
 import {markRestCommand} from './markRest'
+import {ContextMenu, menuRequest, SEPARATOR, tidy, useContextMenuKey, type MenuItem, type MenuRequest} from './ContextMenu'
+import {listMenu, markUpToHere, newestListed} from './menus'
+import {refreshSubscription} from './feeds'
 import {Palette, type Command, type PaletteHandle} from './palette/Palette'
 import {OfflineStatus, clearOffline, useOnline} from './offline/Offline'
 import {Ask} from './pipeline/Pipeline'
@@ -90,7 +94,7 @@ function actionMessage(register: Register, value: Value): string {
 }
 
 function inField(target: EventTarget | null): boolean {
-  return target instanceof Element && Boolean(target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), dialog[open]'))
+  return target instanceof Element && Boolean(target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="menu"], dialog[open]'))
 }
 
 export function App() {
@@ -433,6 +437,39 @@ function Session({onLogout}: {onLogout: () => void}) {
   }, [shortcuts, go])
 
   const [newestLoaded, setNewestLoaded] = useState({key: '', seq: 0})
+  const [menu, setMenu] = useState<MenuRequest | null>(null)
+  const closeMenu = useCallback(() => setMenu(null), [])
+  useContextMenuKey()
+  function showMenu(event: ReactMouseEvent<HTMLElement>, label: string, items: MenuItem[]) {
+    // Shift with a right click keeps the browser's own menu.
+    if (event.shiftKey || items.length === 0) return
+    event.preventDefault()
+    setMenu(menuRequest(event, label, items))
+  }
+  const markRange = (scope: RangeScope, throughSeq: number) => sync.actRange(scope, throughSeq)
+  // Bulk marks run through the newest article this browser knows of: what
+  // sync has delivered, or what any list loaded if sync has not caught up.
+  const newestKnown = () => Math.max(sync.newestSeq(), newestListed(queryClient.getQueriesData({queryKey: ['river']}).map(([, data]) => data)))
+  const confirmAction = (message: string) => window.confirm(message)
+  function showListMenu(event: ReactMouseEvent<HTMLElement>, target: View) {
+    showMenu(event, `${target.title} actions`, listMenu(target, subs, {
+      newest: newestKnown, markRange, confirm: confirmAction, notify,
+      go: to => {go(to)}, openTab: href => {window.open(href, '_blank', 'noopener')},
+      refreshFeed: async id => {await refreshSubscription(id)},
+    }))
+  }
+  function showArticleMenu(event: ReactMouseEvent<HTMLElement>, entry: Entry, items: MenuItem[]) {
+    showMenu(event, `${entry.title || 'Untitled'} actions`, tidy([
+      ...items,
+      SEPARATOR,
+      markUpToHere(entry, view, subs, {markRange, confirm: confirmAction, notify}),
+      {id: 'copy-original', label: 'Copy link to the original', icon: 'link', run: async () => {
+        if (!navigator.clipboard) throw new Error('Copying needs Earnest on HTTPS or localhost.')
+        await navigator.clipboard.writeText(entry.url)
+        notify('Link to the original copied.')
+      }},
+    ]))
+  }
   const articleCommand = (id: string, title: string, key: string, run: (entry: Entry) => Promise<void> | void): Command => ({id, title, key, group:'Article', disabled:!current, run:async () => {if (current) await run(current)}})
   const commands: Command[] = [
     ...READING_VIEWS.map(item => ({id:`view-${item.kind}`, title:item.title, group:'Go to', key:item.shortcut, run:() => {go(viewHref({kind:item.kind}))}})),
@@ -517,7 +554,7 @@ function Session({onLogout}: {onLogout: () => void}) {
   // instead of a banner per failed request.
   const syncTone = sync.error && online ? 'problem' as const : !online || /waiting|Restoring|Opening/.test(sync.status) ? 'waiting' as const : 'quiet' as const
   const syncText = !online ? `Offline. ${sync.status.replace(/\.$/, '')}` : sync.error ? 'Sync needs attention' : sync.status.replace(/\.$/, '')
-  const sidebar = <Sidebar route={route} subscriptions={subs} folders={folders.data ?? []} labels={labels.data ?? []} savedSearches={savedSearches.data ?? []} counts={settings.reading_mode === 'unread_counts' ? unreadCounts.data : undefined} askEnabled={pipeline.data?.ask === 'enabled'} sync={{text: syncText, tone: syncTone}} onNavigate={() => drawer.current?.close()} onPalette={() => {drawer.current?.close(); palette.current?.openPalette()}} onHelp={() => {drawer.current?.close(); palette.current?.openHelp()}} onSignOut={() => {void logout()}} prefetch={prefetch} />
+  const sidebar = <Sidebar route={route} subscriptions={subs} folders={folders.data ?? []} labels={labels.data ?? []} savedSearches={savedSearches.data ?? []} counts={settings.reading_mode === 'unread_counts' ? unreadCounts.data : undefined} askEnabled={pipeline.data?.ask === 'enabled'} sync={{text: syncText, tone: syncTone}} onNavigate={() => drawer.current?.close()} onPalette={() => {drawer.current?.close(); palette.current?.openPalette()}} onHelp={() => {drawer.current?.close(); palette.current?.openHelp()}} onSignOut={() => {void logout()}} prefetch={prefetch} onMenu={showListMenu} />
 
   function screen(): ReactNode {
     if (firstRun) return <div className="page" ref={page}><div className="page-inner onboarding" onChangeCapture={() => setOnboardingStarted(true)} onClickCapture={() => setOnboardingStarted(true)}><Suspense fallback={<PageSkeleton />}><OnboardingScreen onComplete={() => {setOnboarded(true);refreshResources();void queryClient.invalidateQueries({queryKey:['position']});go('/today', {replace: true})}} /></Suspense></div></div>
@@ -526,11 +563,11 @@ function Session({onLogout}: {onLogout: () => void}) {
       <div className="list-pane" inert={compact && reading}>
         {resolved.missing
           ? <section className="river"><div className="empty-state"><h2 tabIndex={-1}>This {viewRef.kind} is gone</h2><p>It may have been deleted or unsubscribed on another device.</p><p><Link to="/today">Go to Today</Link></p></div></section>
-          : <River since={since} sessionStart={sessionStart} key={viewKey(view)} onNewestLoaded={seq => setNewestLoaded({key: viewKey(view), seq})} view={view} subscriptions={subs} actions={actions} selected={current} onSelect={setSelected} onOpen={openFromList} reading={reading} shortcuts={shortcuts} counts={settings.reading_mode === 'unread_counts'} summary={summary} />}
+          : <River since={since} sessionStart={sessionStart} key={viewKey(view)} onNewestLoaded={seq => setNewestLoaded({key: viewKey(view), seq})} view={view} subscriptions={subs} actions={actions} selected={current} onSelect={setSelected} onOpen={openFromList} onMenu={showArticleMenu} reading={reading} shortcuts={shortcuts} counts={settings.reading_mode === 'unread_counts'} summary={summary} />}
       </div>
       <div className="reader-pane">
         {!reading ? <ReaderPlaceholder shortcuts={shortcuts} />
-          : openEntry ? <Reader key={openEntry.id} onOpen={entry => openArticle(entry, {mode: 'push'})} entry={openEntry} subscription={subs.find(sub => sub.id === openEntry.subscription_id)} settings={settings} actions={actions} onSettings={savedSettings} onNotify={notify} renderBody={url => <iframe title="Article body" src={url} sandbox="allow-popups allow-popups-to-escape-sandbox" />} onClose={closeReader} />
+          : openEntry ? <Reader key={openEntry.id} onOpen={entry => openArticle(entry, {mode: 'push'})} entry={openEntry} subscription={subs.find(sub => sub.id === openEntry.subscription_id)} settings={settings} actions={actions} onSettings={savedSettings} onNotify={notify} renderBody={url => <ArticleFrame src={url} />} onClose={closeReader} />
           : openQuery.isError ? <ReaderProblem error={openQuery.error} onBack={closeReader} onRetry={() => {void openQuery.refetch()}} />
           : <ReaderSkeleton />}
       </div>
@@ -579,6 +616,7 @@ function Session({onLogout}: {onLogout: () => void}) {
     </div>
     <Palette ref={palette} commands={commands} shortcuts={shortcuts} triggers={false} />
     <ToastRegion toast={toast} onDismiss={dismissToast} />
+    <ContextMenu request={menu} onClose={closeMenu} onError={message => notify(message)} />
   </div>
 }
 

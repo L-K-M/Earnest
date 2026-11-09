@@ -41,6 +41,9 @@ Taken by you on 2026-11-07, while triaging the review PRs.
 - **Tab moves focus.** The web reader's summary opens and closes only from its button. This drops the [ux.md](ux.md) binding "Tab hides the summary", so you can always tab through the page.
 - **Mac windows are independent.** Each window keeps its own selection and reader over the shared sync engine, so you can read two articles side by side. The app stays multi-window instead of becoming single-window.
 
+- **Context menus also offer bulk mark-read** (2026-11-09, at your request). Today, a folder or a feed in the sidebar has "Mark all as read", and an article row has "Mark read up to here". A sidebar list may not be open, so "Mark all as read" marks through the newest article the browser knows of (synced, or loaded in any list) rather than the newest loaded one; the confirmation says so, and later arrivals stay unread. It is still not a toolbar button.
+- **The article frame runs one script of Earnest's own** (2026-11-09, at your request). A frame sized to the pane gave the reader two scrollbars, and Space could not scroll the article. The content page now carries a short script, admitted by its hash in the page's CSP, that reports the article's height and forwards scrolling keys and single-key shortcuts to the app origin only. The frame's sandbox adds `allow-scripts` but never `allow-same-origin`, so the page keeps an opaque origin, and the sanitiser and CSP still stop every script the article itself carries. This relaxes the [tech-stack](tech-stack.md) rule that the frame allows only popups.
+
 ## Fetching
 
 Taken on 2026-11-09, at your request, while fixing a feed that stopped the server.

@@ -77,7 +77,7 @@ func newAPIFixture(t *testing.T, template *storetest.Template) *apiFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	content, err := web.NewContent(svc, auth, proxy, fixtureContentOrigin, secret)
+	content, err := web.NewContent(svc, auth, proxy, fixtureContentOrigin, "https://app.example", secret)
 	if err != nil {
 		t.Fatal(err)
 	}
