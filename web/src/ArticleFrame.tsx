@@ -67,6 +67,8 @@ export function ArticleFrame({src}: {src: string}) {
         return
       }
       // Other keys reach the app's shortcuts as if pressed beside the frame.
+      // The page forwards only keys pressed without Ctrl, Alt or Meta (Shift
+      // aside), so a modified key never arrives here as a bare one.
       node.dispatchEvent(new KeyboardEvent('keydown', {key: message.key, shiftKey: message.shift, bubbles: true, cancelable: true}))
     }
     window.addEventListener('message', receive)

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -268,6 +269,7 @@ func (c *Content) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			c.notice(w, http.StatusNotFound, "This article is not available", "It may have been removed, or you may no longer follow its feed.")
 			return
 		}
+		slog.Error("content: load article", "entry", id, "error", err)
 		c.notice(w, http.StatusInternalServerError, "This article could not be shown", "Close the article and try again.")
 		return
 	}
@@ -277,6 +279,7 @@ func (c *Content) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	fragment, err := c.proxy.Rewrite(body.HTML, mode)
 	if err != nil {
+		slog.Error("content: rewrite article", "entry", id, "error", err)
 		c.notice(w, http.StatusInternalServerError, "This article could not be shown", "Close the article and try again.")
 		return
 	}

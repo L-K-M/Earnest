@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"fmt"
 
 	"github.com/L-K-M/Earnest/internal/imageproxy"
 	"github.com/L-K-M/Earnest/internal/outbound"
@@ -57,6 +58,9 @@ type fakeContent struct{}
 func (fakeContent) Content(_ context.Context, _ service.Actor, id int64) (service.EntryContent, error) {
 	if id == 404 {
 		return service.EntryContent{}, service.ErrNotFound
+	}
+	if id == 403 {
+		return service.EntryContent{}, fmt.Errorf("entry %d: %w", id, service.ErrForbidden)
 	}
 	if id == 500 {
 		return service.EntryContent{}, errors.New("database unavailable")
@@ -267,6 +271,7 @@ func TestContentNoticesCarryTheFrameScript(t *testing.T) {
 	}{
 		{"expired", "/content/3?sig=bogus", http.StatusGone, "This article link has expired"},
 		{"gone", "/content/404?sig=" + c.signer.Sign(Ticket{UserID: 1, PrincipalID: 2, Kind: service.PrincipalHuman, EntryID: 404, Expires: 101, Mode: ImageProxied}), http.StatusNotFound, "This article is not available"},
+		{"hidden", "/content/403?sig=" + c.signer.Sign(Ticket{UserID: 1, PrincipalID: 2, Kind: service.PrincipalHuman, EntryID: 403, Expires: 101, Mode: ImageProxied}), http.StatusNotFound, "This article is not available"},
 		{"broken", "/content/500?sig=" + c.signer.Sign(Ticket{UserID: 1, PrincipalID: 2, Kind: service.PrincipalHuman, EntryID: 500, Expires: 101, Mode: ImageProxied}), http.StatusInternalServerError, "This article could not be shown"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
