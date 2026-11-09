@@ -8,6 +8,7 @@ import {TodayAgents, SessionChanges} from './agents/Surfaces'
 import {Edition} from './pipeline/Pipeline'
 import {usePipeline} from './search/pipeline'
 import {Icon} from './Icon'
+import {EntryThumbnail, FeedIcon} from './EntryMedia'
 import {longDate, shortAge} from './format'
 import {viewHref} from './routes'
 import {Link, whenPresent} from './router'
@@ -331,7 +332,8 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
         {visible.map(row => {
           const entry = entries[row.index]
           const state = actions.state(entry)
-          const source = subscriptions.find(sub => sub.id === entry.subscription_id)?.title || 'Feed'
+          const subscription = subscriptions.find(sub => sub.id === entry.subscription_id)
+          const source = subscription?.title || 'Feed'
           const group = view.kind === 'edition' && (row.index === 0 || entries[row.index - 1].subscription_id !== entry.subscription_id)
           const alsoIn = clusterInfo.get(entry.id) ?? 0
           const isUnread = state.seen.value !== 'seen' && state.shelf.value !== 'done'
@@ -340,9 +342,12 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
           return <div className="virtual-row" key={entry.id} role="listitem" data-entry={entry.id} data-index={row.index} ref={virtual.measureElement} style={{transform: `translateY(${row.start - virtual.options.scrollMargin}px)`}}>
             {group && <h3 className="feed-group">{source}</h3>}
             <a className="entry" href={viewHref({kind: view.kind, id: view.id}, entry.id)} tabIndex={entry.id === tabStop ? 0 : -1} data-unread={isUnread || undefined} data-selected={selected?.id === entry.id || undefined} aria-current={reading && selected?.id === entry.id ? 'page' : undefined} onFocus={() => onSelect(entry)} onClick={event => { if (newTabClick(event)) return; event.preventDefault(); open(entry) }} onContextMenu={onMenu ? event => rowMenu(event, entry) : undefined} {...(onMenu ? {[MENU_ATTRIBUTE]: ''} : {})}>
+              <span className="entry-body">
               <span className="entry-title">{isUnread && <span className="unread-dot" aria-hidden="true" />}{entry.title || 'Untitled'}</span>
               {pipeline.status.blurb === 'enabled' && entry.blurb && <span className="entry-blurb">{entry.blurb}</span>}
-              <span className="entry-meta"><span className="entry-source">{source}{shelf && ` · ${shelf}`}{state.kept.value === true ? ' · Kept' : ''}{cluster && alsoIn > 0 ? ` · also in ${alsoIn}` : ''}{isUnread && <span className="sr-only"> · Unread</span>}</span>{date && <time dateTime={date} title={longDate(date)}>{shortAge(date)}</time>}</span>
+              <span className="entry-meta"><FeedIcon subscription={subscription} title={source} /><span className="entry-source">{source}{shelf && ` · ${shelf}`}{state.kept.value === true ? ' · Kept' : ''}{cluster && alsoIn > 0 ? ` · also in ${alsoIn}` : ''}{isUnread && <span className="sr-only"> · Unread</span>}</span>{date && <time dateTime={date} title={longDate(date)}>{shortAge(date)}</time>}</span>
+              </span>
+              {entry.thumbnail_url && <EntryThumbnail src={entry.thumbnail_url} />}
             </a>
           </div>
         })}

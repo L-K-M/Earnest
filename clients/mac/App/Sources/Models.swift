@@ -38,6 +38,22 @@ enum Section: String, CaseIterable, Identifiable {
         }
     }
 
+    /// The tone that carries this place's identity in the sidebar and its
+    /// empty state. Search has no tone: it is entered from the toolbar
+    /// search field, not a place.
+    var tone: Tone? {
+        switch self {
+        case .today: return .orange
+        case .edition: return .blue
+        case .later: return .amber
+        case .kept: return .plum
+        case .done: return .green
+        case .feeds: return .blue
+        case .activity: return .plum
+        case .search: return nil
+        }
+    }
+
     /// The server-side entries view backing entry sections. Today and the
     /// Edition share the river and split it by subscription cadence.
     var entryView: String? {

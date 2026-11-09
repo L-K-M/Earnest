@@ -1,0 +1,23 @@
+{
+  "feed": {
+    "title": "Atom 0.3 media",
+    "site_url": "",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "tag:example.com,2006:media",
+      "url": "https://example.com/old",
+      "title": "Old media",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "image": "https://cdn.example.com/old.jpg",
+      "language": "",
+      "identity": "696b2273e09787cde1eeb3e09382354b2129bf3b389580d207ac22ab61ee7a0e",
+      "content_hash": "72f8217c6c46465583e8f070d007f1e49b393624a8c3f5dd5f24046bd8391fe0"
+    }
+  ]
+}

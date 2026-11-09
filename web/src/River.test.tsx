@@ -21,12 +21,12 @@ function withShelf(entry: Entry, value: 'none' | 'later' | 'done'): Entry {
   return {...entry, state: {...entry.state, shelf: {...entry.state.shelf, value}}}
 }
 afterEach(() => {cleanup();vi.clearAllMocks();vi.restoreAllMocks();vi.unstubAllGlobals();virtualItems.items=[0,1];observers.length=0;observed.length=0})
-function mount(shortcuts=true, blurbStatus="disabled", selected=entries[0], rows=entries) {
+function mount(shortcuts=true, blurbStatus="disabled", selected=entries[0], rows=entries, subscriptions: Subscription[]=[]) {
   vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {blurb:blurbStatus} : path.startsWith('/v1/positions') ? {seq:0} : {entries:rows})
   const act = vi.fn().mockResolvedValue(undefined)
   const actions: ReaderActions = {act,state:entry=>entry.state}
   const onSelect=vi.fn()
-  const view=render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'today',title:'Today'}} subscriptions={[]} actions={actions} selected={selected} onSelect={onSelect} onOpen={vi.fn()} shortcuts={shortcuts} counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>)
+  const view=render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'today',title:'Today'}} subscriptions={subscriptions} actions={actions} selected={selected} onSelect={onSelect} onOpen={vi.fn()} shortcuts={shortcuts} counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>)
   return {act,onSelect,container:view.container}
 }
 function scroller() { return screen.getByLabelText('Article list') }
@@ -218,6 +218,26 @@ it('retries a scrolled-past row after sync finishes restoring',async()=>{
   await screen.findByText('Article 1')
   scrollPast(1)
   await waitFor(()=>expect(act).toHaveBeenCalledTimes(2),{timeout:2000})
+})
+
+it('shows stored feed icons and thumbnails, with a letter mark when a feed has no icon',async()=>{
+  const subscription = {id:1,title:'404 Media',icon_url:'/v1/subscriptions/1/icon?v=abc'} as Subscription
+  const rows = [{...entries[0],thumbnail_url:'/v1/entries/1/thumbnail?v=def'},{...entries[1],subscription_id:2}]
+  const {container}=mount(true,'disabled',entries[0],rows,[subscription,{id:2,title:'Plain Feed'} as Subscription])
+  await screen.findByText('Article 1')
+  const [first, second] = Array.from(container.querySelectorAll<HTMLElement>('.entry'))
+  expect(first.querySelector('.feed-icon')?.getAttribute('src')).toBe('/v1/subscriptions/1/icon?v=abc')
+  expect(first.querySelector('.entry-thumb')?.getAttribute('src')).toBe('/v1/entries/1/thumbnail?v=def')
+  expect(first.querySelector('.entry-thumb')?.getAttribute('alt')).toBe('')
+  expect(second.querySelector('.feed-icon')).toBeNull()
+  expect(second.querySelector('.feed-mark')?.textContent).toBe('P')
+  expect(second.querySelector('.entry-thumb')).toBeNull()
+  // A copy that fails to load gives way to the letter mark and to no thumbnail.
+  fireEvent.error(first.querySelector('.feed-icon')!)
+  fireEvent.error(first.querySelector('.entry-thumb')!)
+  expect(first.querySelector('.feed-mark')?.textContent).toBe('4')
+  expect(first.querySelector('.entry-thumb')).toBeNull()
+  expect(within(first).getByText('404 Media')).toBeTruthy()
 })
 
 it.each(['enabled','disabled'])('shows cached blurbs only when the task is %s',async status => {

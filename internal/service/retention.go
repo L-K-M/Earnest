@@ -147,6 +147,9 @@ func (s *Service) RetainEntries(ctx context.Context, now time.Time, retention ti
 			if err := store.DeleteContents(ctx, tx, e.ID); err != nil {
 				return err
 			}
+			if err := store.DeleteEntryImage(ctx, tx, e.ID); err != nil {
+				return err
+			}
 		}
 		count = len(candidates)
 		return nil

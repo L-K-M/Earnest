@@ -1,0 +1,35 @@
+{
+  "feed": {
+    "title": "Wrong namespace",
+    "site_url": "https://example.com/",
+    "feed_url": "https://example.test/feed.xml",
+    "language": "",
+    "icon_url": ""
+  },
+  "items": [
+    {
+      "guid": "ns-1",
+      "url": "https://example.com/one",
+      "title": "Wrong namespace ignored",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "image": "https://cdn.example.com/right.jpg",
+      "language": "",
+      "identity": "a678d03800778391da1159eeeebb5bbcc252e53bdf93b33a2cc212e2004d795e",
+      "content_hash": "7d584ec5268def6e840153cf0c3393f48278fb6ef9acef02ade97eeaeaff025a"
+    },
+    {
+      "guid": "ns-2",
+      "url": "https://example.com/two",
+      "title": "Namespace without slash accepted",
+      "author": "",
+      "summary_html": "",
+      "content_html": "",
+      "image": "https://cdn.example.com/slash.jpg",
+      "language": "",
+      "identity": "abc8a7aefe01dbd8aef9eb996828c6765f0257b96533acddccc5fdd16dd35832",
+      "content_hash": "67f4538b1c7cd385435d620a9185b2b45c0c0564d5e4d066ac2389072d6fe002"
+    }
+  ]
+}

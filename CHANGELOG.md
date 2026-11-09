@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Mark read up to here". Shift with a right click keeps the browser's
   menu.
 - The Earnest logo in the web client's sidebar goes to Today.
+- The web article list shows each feed's icon and a thumbnail of the
+  article's image. Earnest downloads and shrinks them when feeds and
+  articles arrive and serves its own copies, so lists never contact
+  publishers. Entries carry `thumbnail_url` and subscriptions `icon_url`,
+  served by `GET /v1/entries/{id}/thumbnail` and
+  `GET /v1/subscriptions/{id}/icon`.
 - Import starred articles into Kept from another reader's Google Reader
   JSON export (FreshRSS, Inoreader, Google Takeout), with its labels, in
   Manage feeds, with `earnest entries import` or `POST /v1/kept:import`.
@@ -69,6 +75,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The web, Android and Mac clients take their colours from the app icon:
+  each place has its own tone (orange Today, blue Edition, amber Later,
+  plum Kept, green Done), unread dots are orange, selection is a warm
+  cream, feed marks use the icon's colours, and the sign-in screens carry
+  a ribbon of them. Android no longer shows Material's stock lavender.
+  Article text stays neutral and e-ink stays black and white. See
+  `media-sources/README.md`.
 - The web client gives every view a URL: lists, open articles, searches,
   rules, notifications, feed management and settings survive refresh,
   Back and Forward, and can be bookmarked. Rows are links, `j`/`k` open

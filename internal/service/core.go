@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/L-K-M/Earnest/internal/outbound"
@@ -40,6 +41,9 @@ type Deps struct {
 	SecretKey    []byte
 	PushRegistry *push.Registry
 	Outbound     *outbound.Client
+	// MediaPorts are the non-default ports of explicitly allowed private
+	// destinations; media fetches may use them, as feed fetches do.
+	MediaPorts []uint16
 }
 
 // Service owns domain operations. Its dependencies must be safe for concurrent use.
@@ -52,6 +56,15 @@ type Service struct {
 	pushRegistry *push.Registry
 	outbound     *outbound.Client
 	probeTimeout time.Duration
+	mediaPorts   []uint16
+	// mediaBackfilled records that no pre-thumbnail entries remain in the
+	// backfill window, so later media passes skip that scan.
+	mediaBackfilled atomic.Bool
+	// mediaSeededAt is when a media pass last found every subscribed feed
+	// with an icon row (Unix nanoseconds, 0 before the first such pass).
+	mediaSeededAt atomic.Int64
+	// mediaDecode admits one image decode at a time; see decodeMedia.
+	mediaDecode chan struct{}
 }
 
 // New derives a purpose-separated credential key without retaining the deployment secret.
@@ -75,7 +88,7 @@ func New(db *store.Store, deps Deps) (*Service, error) {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{store: db, now: now, prober: deps.FeedProber, credentials: aead, pushRegistry: deps.PushRegistry, outbound: deps.Outbound, probeTimeout: defaultProbeTimeout}, nil
+	return &Service{store: db, now: now, prober: deps.FeedProber, credentials: aead, pushRegistry: deps.PushRegistry, outbound: deps.Outbound, probeTimeout: defaultProbeTimeout, mediaPorts: append([]uint16(nil), deps.MediaPorts...), mediaDecode: make(chan struct{}, 1)}, nil
 }
 
 func (s *Service) checkActor(ctx context.Context, a Actor, scope Scope) error {

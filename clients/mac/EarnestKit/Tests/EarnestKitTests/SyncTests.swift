@@ -418,7 +418,7 @@ private func change(_ rev: Int64, _ type: String, _ payload: APIValue) -> APICha
             let shelf = APIRegister(value: .string("none"), rev: 0, occurredAt: "", actor: 1, source: "deliberate")
             let kept = APIRegister(value: .bool(false), rev: 0, occurredAt: "", actor: 1, source: "deliberate")
             return APIEntry(id: Int64(id), subscriptionID: 1, feedID: 1, seq: Int64(id), firstSeenAt: "2026-11-02T12:00:00Z", title: "Old", url: "", author: "", publishedAt: nil, updatedAt: nil, blurb: nil, rev: 100, deleted: false,
-                            state: APIState(principal: 1, entryID: Int64(id), seen: seen, shelf: shelf, kept: kept, stateRev: 100))
+                            state: APIState(principal: 1, entryID: Int64(id), seen: seen, shelf: shelf, kept: kept, stateRev: 100), thumbnailURL: nil)
         }
         // The coordinator completes restore bootstrap while the HTTP request is suspended.
         try engine.bootstrap(Cursor(generation: "after-restore", rev: 5))

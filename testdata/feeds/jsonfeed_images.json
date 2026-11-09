@@ -1,0 +1,39 @@
+{
+  "version": "https://jsonfeed.org/version/1.1",
+  "title": "JSON images",
+  "home_page_url": "https://example.com/",
+  "items": [
+    {
+      "id": "1",
+      "url": "https://example.com/1",
+      "title": "Image wins",
+      "image": "https://cdn.example.com/one.jpg",
+      "banner_image": "https://cdn.example.com/banner.jpg"
+    },
+    {
+      "id": "2",
+      "url": "https://example.com/2",
+      "title": "Banner only",
+      "banner_image": "https://cdn.example.com/two-banner.png"
+    },
+    {
+      "id": "3",
+      "url": "https://example.com/3",
+      "title": "Relative image",
+      "image": "/img/three.jpg"
+    },
+    {
+      "id": "4",
+      "url": "https://example.com/4",
+      "title": "Attachment fallback",
+      "attachments": [{"url": "https://cdn.example.com/four.jpeg", "mime_type": "image/jpeg"}]
+    },
+    {
+      "id": "5",
+      "url": "https://example.com/5",
+      "title": "SVG skipped",
+      "image": "https://cdn.example.com/five.svg",
+      "banner_image": "https://cdn.example.com/five-fallback.webp"
+    }
+  ]
+}

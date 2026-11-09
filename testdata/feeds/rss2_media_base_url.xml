@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>Relative media against the feed URL</title>
+    <item>
+      <title>Feed URL fallback</title>
+      <link>https://example.com/post</link>
+      <guid>base-url-1</guid>
+      <media:content url="media/cover.jpg" medium="image" width="100"/>
+    </item>
+  </channel>
+</rss>

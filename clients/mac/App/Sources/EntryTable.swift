@@ -301,6 +301,8 @@ final class EntryCell: NSTableCellView {
     private let title = NSTextField(wrappingLabelWithString: "")
     private let subtitle = NSTextField(labelWithString: "")
     private let marks = NSImageView()
+    /// The tone of the Kept or Later mark, set per row in `configure`.
+    private var markTint = Tone.plum.nsColor
 
     static let titleFont = NSFont.preferredFont(forTextStyle: .body)
     static let unreadTitleFont = NSFont.systemFont(ofSize: titleFont.pointSize, weight: .semibold)
@@ -313,17 +315,30 @@ final class EntryCell: NSTableCellView {
         self.identifier = identifier
         dot.image = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 7, weight: .regular))
-        dot.contentTintColor = .controlAccentColor
+        dot.contentTintColor = Tone.orange.nsColor
         title.maximumNumberOfLines = 2
         title.lineBreakMode = .byTruncatingTail
         title.cell?.truncatesLastVisibleLine = true
         subtitle.font = Self.subtitleFont
         subtitle.textColor = .secondaryLabelColor
         subtitle.lineBreakMode = .byTruncatingTail
-        marks.contentTintColor = .secondaryLabelColor
+        marks.contentTintColor = Tone.plum.nsColor
         for view in [dot, title, subtitle, marks] { addSubview(view) }
         setAccessibilityElement(true)
         setAccessibilityRole(.cell)
+    }
+
+    /// An emphasized (focused, accent-filled) selected row must keep the dot
+    /// and the mark visible on the fill, so they switch to the alternate
+    /// selected control text colour and restore their tones otherwise.
+    override var backgroundStyle: NSView.BackgroundStyle {
+        didSet { updateMarks() }
+    }
+
+    private func updateMarks() {
+        let onFill = backgroundStyle == .emphasized
+        dot.contentTintColor = onFill ? .alternateSelectedControlTextColor : Tone.orange.nsColor
+        marks.contentTintColor = onFill ? .alternateSelectedControlTextColor : markTint
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -337,6 +352,8 @@ final class EntryCell: NSTableCellView {
         marks.image = symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 10, weight: .regular)) }
         marks.isHidden = symbol == nil
+        markTint = row.kept ? Tone.plum.nsColor : Tone.amber.nsColor
+        updateMarks()
         var spoken = [row.title, row.subtitle]
         if row.unread { spoken.insert("Unread", at: 0) }
         if row.kept { spoken.append("Kept") }

@@ -43,6 +43,9 @@ const (
 	// pending work once a pass finds none. Its pending query probes the whole
 	// entries table, so idle passes must not run every second.
 	pipelineIdleMax = 30 * time.Second
+	// mediaIdleMax paces idle media passes, which rescan subscribed feeds
+	// for missing icon rows.
+	mediaIdleMax = 30 * time.Second
 )
 
 // feedProber forwards Probe to the fetcher. service.New requires a prober
@@ -110,7 +113,7 @@ func serve() error {
 	}
 
 	prober := &feedProber{}
-	svc, err := service.New(db, service.Deps{FeedProber: prober, SecretKey: cfg.SecretKey, PushRegistry: pushRegistry, Outbound: egress})
+	svc, err := service.New(db, service.Deps{FeedProber: prober, SecretKey: cfg.SecretKey, PushRegistry: pushRegistry, Outbound: egress, MediaPorts: privatePorts(cfg.OutboundAllowPrivate)})
 	if err != nil {
 		return fmt.Errorf("service: %w", err)
 	}
@@ -175,6 +178,7 @@ func serve() error {
 		{"webhook delivery", deliveryInterval, svc.RunWebhookJobs},
 		{"rule jobs", deliveryInterval, svc.RunRuleJobs},
 		{"edition jobs", deliveryInterval, svc.RunEditionJobs},
+		{"media", mediaIdleMax, svc.RunMedia},
 	} {
 		workers.Go(func() { runDelivery(ctx, logger, job.name, job.run, job.idleMax) })
 	}
