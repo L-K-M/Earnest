@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -151,7 +152,8 @@ func NewContent(svc *service.Service, auth *service.Auth, proxy *imageproxy.Prox
 // horizontal scrollbar, so the reader can size the frame to the article. It
 // forwards scrolling and single-key presses made while focus is in the
 // frame, so Space and the reading shortcuts work after a click in the
-// article; Space on a focused summary still opens its details. Messages go
+// article; Space on a focused summary still opens its details, and Shift
+// with an arrow, Home, End or a Page key still extends a selection. Messages go
 // only to the app origin, and only when the page is framed; native clients
 // run no script.
 func frameScript(appOrigin string) string {
@@ -162,6 +164,7 @@ func frameScript(appOrigin string) string {
 		`const scroll=new Set([" ","PageDown","PageUp","Home","End","ArrowDown","ArrowUp"]);` +
 		`addEventListener("keydown",e=>{if(e.defaultPrevented||e.ctrlKey||e.metaKey||e.altKey||e.isComposing)return;const k=e.key;` +
 		`if(k===" "&&e.target instanceof Element&&e.target.closest("summary"))return;` +
+		`if(e.shiftKey&&k!==" "&&scroll.has(k))return;` +
 		`if(scroll.has(k))e.preventDefault();else if(k!=="Escape"&&k.length!==1)return;` +
 		`parent.postMessage({earnest:"key",key:k,shift:e.shiftKey},app)})})()`
 }
@@ -259,7 +262,13 @@ func (c *Content) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	actor := service.Actor{UserID: t.UserID, PrincipalID: t.PrincipalID, Kind: t.Kind, Via: service.CredentialSession, Scopes: scopes}
 	body, err := c.svc.Content(r.Context(), actor, id)
 	if err != nil {
-		c.notice(w, http.StatusNotFound, "This article is not available", "It may have been removed, or you may no longer follow its feed.")
+		// A missing, hidden or no longer permitted article reads the same to
+		// the reader and stays a 404; anything else is a server fault.
+		if errors.Is(err, service.ErrNotFound) || errors.Is(err, service.ErrForbidden) || errors.Is(err, service.ErrUnauthorized) || errors.Is(err, service.ErrInvalid) {
+			c.notice(w, http.StatusNotFound, "This article is not available", "It may have been removed, or you may no longer follow its feed.")
+			return
+		}
+		c.notice(w, http.StatusInternalServerError, "This article could not be shown", "Close the article and try again.")
 		return
 	}
 	mode := imageproxy.Proxied

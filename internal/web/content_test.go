@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 
 	"github.com/L-K-M/Earnest/internal/imageproxy"
 	"github.com/L-K-M/Earnest/internal/outbound"
@@ -56,6 +57,9 @@ type fakeContent struct{}
 func (fakeContent) Content(_ context.Context, _ service.Actor, id int64) (service.EntryContent, error) {
 	if id == 404 {
 		return service.EntryContent{}, service.ErrNotFound
+	}
+	if id == 500 {
+		return service.EntryContent{}, errors.New("database unavailable")
 	}
 	return service.EntryContent{HTML: "<p>Article</p>"}, nil
 }
@@ -171,6 +175,10 @@ func TestContentScriptHashMatchesScript(t *testing.T) {
 	if !strings.Contains(script, `closest("summary")`) {
 		t.Fatalf("script must leave Space on a summary alone: %q", script)
 	}
+	// Shift with arrows, Home, End or Page keys must still extend a selection.
+	if !strings.Contains(script, `if(e.shiftKey&&k!==" "&&scroll.has(k))return;`) {
+		t.Fatalf("script must leave selection keys alone: %q", script)
+	}
 }
 
 // Without an app origin the page stays script-free and scrolls in its frame.
@@ -259,6 +267,7 @@ func TestContentNoticesCarryTheFrameScript(t *testing.T) {
 	}{
 		{"expired", "/content/3?sig=bogus", http.StatusGone, "This article link has expired"},
 		{"gone", "/content/404?sig=" + c.signer.Sign(Ticket{UserID: 1, PrincipalID: 2, Kind: service.PrincipalHuman, EntryID: 404, Expires: 101, Mode: ImageProxied}), http.StatusNotFound, "This article is not available"},
+		{"broken", "/content/500?sig=" + c.signer.Sign(Ticket{UserID: 1, PrincipalID: 2, Kind: service.PrincipalHuman, EntryID: 500, Expires: 101, Mode: ImageProxied}), http.StatusInternalServerError, "This article could not be shown"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()

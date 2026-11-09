@@ -92,6 +92,16 @@ describe('ContextMenu', () => {
     expect(document.activeElement).toBe(invoker)
   })
 
+  it('keeps a menu with nothing available closable from the keyboard', () => {
+    render(<Harness items={[{id: 'off', label: 'Unavailable', disabled: true, run: vi.fn()}]} />)
+    const invoker = screen.getByRole('button', {name: 'Rust'})
+    fireEvent.contextMenu(invoker, {clientX: 40, clientY: 50})
+    expect(document.activeElement).toBe(screen.getByRole('menu'))
+    fireEvent.keyDown(screen.getByRole('menu'), {key: 'Escape'})
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(document.activeElement).toBe(invoker)
+  })
+
   it('closes when the pointer goes elsewhere', () => {
     render(<Harness items={items()} />)
     fireEvent.contextMenu(screen.getByRole('button', {name: 'Rust'}), {clientX: 40, clientY: 50})

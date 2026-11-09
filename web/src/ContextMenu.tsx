@@ -77,7 +77,10 @@ export function ContextMenu({request, onClose, onError}: {request: MenuRequest |
     const top = request.y + box.height + EDGE > window.innerHeight ? Math.max(EDGE, request.y - box.height) : request.y
     node.style.left = `${left}px`
     node.style.top = `${top}px`
-    node.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus({preventScroll: true})
+    // With nothing available the menu itself takes focus, so Escape and Tab
+    // still close it.
+    const first = node.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? node
+    first.focus({preventScroll: true})
   }, [request])
 
   // Pointing or scrolling elsewhere, resizing or leaving the window closes
@@ -137,7 +140,7 @@ export function ContextMenu({request, onClose, onError}: {request: MenuRequest |
   // A modal dialog (the narrow layout's navigation drawer) makes everything
   // outside it inert, so a menu opened from inside one lives there.
   const host = request.invoker.closest('dialog[open]') ?? document.body
-  return createPortal(<div ref={menu} role="menu" aria-label={request.label} className="context-menu" popover={POPOVER ? 'manual' : undefined} onKeyDown={keys} onBlur={blur} onContextMenu={event => event.preventDefault()}>
+  return createPortal(<div ref={menu} role="menu" tabIndex={-1} aria-label={request.label} className="context-menu" popover={POPOVER ? 'manual' : undefined} onKeyDown={keys} onBlur={blur} onContextMenu={event => event.preventDefault()}>
     {request.items.map((item, index) => item === SEPARATOR
       ? <div key={`separator-${index}`} role="separator" className="context-menu-separator" />
       : <button key={item.id} type="button" role="menuitem" tabIndex={-1} disabled={item.disabled} onClick={() => choose(item)}>

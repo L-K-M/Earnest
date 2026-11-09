@@ -126,7 +126,8 @@ func serve() error {
 	}
 	content, err := web.NewContent(svc, auth, proxy, cfg.ContentOrigin, cfg.BaseURL, cfg.SecretKey)
 	if err != nil {
-		return fmt.Errorf("content: %w", err)
+		// NewContent errors already name the content handler.
+		return err
 	}
 	contentMux := http.NewServeMux()
 	contentMux.Handle("/content/", content)
