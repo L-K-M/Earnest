@@ -97,6 +97,10 @@ import EarnestKit
         Label(section.title, systemImage: section.icon)
             .badge(count.map { Int($0) } ?? 0)
             .tag(Item.place(section))
+            // The row's icon follows the user's accent colour when they chose
+            // one, and shows Earnest's tone under the default multicolour
+            // accent. Saved searches keep the default tint.
+            .listItemTint(section.tone.map { .preferred($0.color) })
     }
 }
 

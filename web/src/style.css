@@ -1,7 +1,8 @@
 /* Earnest web client. Tokens first, then base elements, the shell, the river,
    the reader, pages and overlays. Themes: system (light/dark), light, dark,
    black and e-ink, set on <html> and, for the article surface, on .reader so
-   the pane always matches the article frame's own palette. */
+   the pane always matches the article frame's own palette. The six tones come
+   from the app icon's palette. */
 
 /* Plain light values first, for browsers without light-dark(). Custom
    properties accept any value, so a light-dark() declaration in this same rule
@@ -12,8 +13,8 @@
   --surface: #ffffff;
   --surface-2: #f0ede3;
   --raised: #ffffff;
-  --hover: #f0ece1;
-  --selected: #e9e3d3;
+  --hover: #f4ede2;
+  --selected: #f9e7d4;
   --ink: #26241f;
   --ink-muted: #5e5a51;
   --line: #e1dccf;
@@ -24,6 +25,13 @@
   --danger: #a3261c;
   --danger-soft: #fbebe8;
   --warning: #8a5300;
+  --orange: #dd5602;
+  --amber: #ae7705;
+  --plum: #8e3b68;
+  --purple: #916e9d;
+  --blue: #3e8aab;
+  --green: #428e87;
+  --glow: rgb(254 223 193 / .6);
   --shadow: 0 1px 2px rgb(40 36 30 / .08), 0 10px 32px rgb(40 36 30 / .14);
 }
 @supports (color: light-dark(#000, #fff)) {
@@ -32,8 +40,8 @@
     --surface: light-dark(#ffffff, #242424);
     --surface-2: light-dark(#f0ede3, #2c2c2a);
     --raised: light-dark(#ffffff, #2b2b29);
-    --hover: light-dark(#f0ece1, #2a2a28);
-    --selected: light-dark(#e9e3d3, #353430);
+    --hover: light-dark(#f4ede2, #2c2825);
+    --selected: light-dark(#f9e7d4, #3a302a);
     --ink: light-dark(#26241f, #ecebe7);
     --ink-muted: light-dark(#5e5a51, #aaa79f);
     --line: light-dark(#e1dccf, #383733);
@@ -44,6 +52,13 @@
     --danger: light-dark(#a3261c, #ff9d90);
     --danger-soft: light-dark(#fbebe8, #3b2321);
     --warning: light-dark(#8a5300, #f0c06a);
+    --orange: light-dark(#dd5602, #fe712e);
+    --amber: light-dark(#ae7705, #ffb428);
+    --plum: light-dark(#8e3b68, #da7fad);
+    --purple: light-dark(#916e9d, #b38fc0);
+    --blue: light-dark(#3e8aab, #5aa5c7);
+    --green: light-dark(#428e87, #5ea9a2);
+    --glow: light-dark(rgb(254 223 193 / .6), rgb(234 95 18 / .12));
     --shadow: 0 1px 2px light-dark(rgb(40 36 30 / .08), rgb(0 0 0 / .4)), 0 10px 32px light-dark(rgb(40 36 30 / .14), rgb(0 0 0 / .45));
   }
 }
@@ -62,12 +77,22 @@
   --r1: 4px; --r2: 6px; --r3: 10px;
   --control: 2.25rem;
   --sidebar: 15.5rem;
+  --ribbon: linear-gradient(90deg, #ffa01c 0 14.2857%, #ea5f12 14.2857% 28.5714%, #c9481e 28.5714% 42.8571%, #8e3b68 42.8571% 57.1429%, #916e9d 57.1429% 71.4286%, #408cad 71.4286% 85.7143%, #5da8a1 85.7143% 100%);
 }
 [data-theme=light] {color-scheme: light}
 [data-theme=dark] {color-scheme: dark}
-[data-theme=black] {color-scheme: dark; --paper:#000; --surface:#000; --surface-2:#141414; --raised:#121212; --hover:#181818; --selected:#262626; --ink:#fff; --ink-muted:#b8b8b8; --line:#2c2c2c; --line-strong:#8c8c8c; --brand:#8bd0ef; --brand-soft:#16303a; --on-brand:#000; --danger:#ff9d90; --danger-soft:#2d1614; --warning:#f0c06a; --shadow:0 0 0 1px #3a3a3a}
-[data-theme=eink] {color-scheme: light; --paper:#fff; --surface:#fff; --surface-2:#fff; --raised:#fff; --hover:#eee; --selected:#ddd; --ink:#000; --ink-muted:#222; --line:#000; --line-strong:#000; --brand:#000; --brand-soft:#e6e6e6; --on-brand:#fff; --danger:#000; --danger-soft:#fff; --warning:#000; --shadow:0 0 0 1px #000}
+[data-theme=black] {color-scheme: dark; --paper:#000; --surface:#000; --surface-2:#141414; --raised:#121212; --hover:#181818; --selected:#262626; --ink:#fff; --ink-muted:#b8b8b8; --line:#2c2c2c; --line-strong:#8c8c8c; --brand:#8bd0ef; --brand-soft:#16303a; --on-brand:#000; --danger:#ff9d90; --danger-soft:#2d1614; --warning:#f0c06a; --orange:#fe712e; --amber:#ffb428; --plum:#da7fad; --purple:#b38fc0; --blue:#5aa5c7; --green:#5ea9a2; --glow:transparent; --shadow:0 0 0 1px #3a3a3a}
+[data-theme=eink] {color-scheme: light; --paper:#fff; --surface:#fff; --surface-2:#fff; --raised:#fff; --hover:#eee; --selected:#ddd; --ink:#000; --ink-muted:#222; --line:#000; --line-strong:#000; --brand:#000; --brand-soft:#e6e6e6; --on-brand:#fff; --danger:#000; --danger-soft:#fff; --warning:#000; --orange:#000; --amber:#000; --plum:#000; --purple:#000; --blue:#000; --green:#000; --glow:transparent; --shadow:0 0 0 1px #000}
 @media (pointer: coarse) { :root {--control: 2.75rem} }
+
+/* An element names its tone and the matching token follows. */
+[data-tone=orange] {--tone: var(--orange)}
+[data-tone=amber] {--tone: var(--amber)}
+[data-tone=plum] {--tone: var(--plum)}
+[data-tone=purple] {--tone: var(--purple)}
+[data-tone=blue] {--tone: var(--blue)}
+[data-tone=green] {--tone: var(--green)}
+[data-tone=brand] {--tone: var(--brand)}
 
 /* Base */
 * {box-sizing: border-box}
@@ -119,6 +144,7 @@ dd {margin: 0}
 .center {text-align: center}
 .button-row {display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin: var(--s3) 0 0}
 .chip {display: inline-block; padding: 0 .45rem; border: 1px solid var(--line-strong); border-radius: 999px; font-size: var(--step--2); line-height: 1.5; color: var(--ink)}
+.chip[data-tone] {border-color: color-mix(in oklab, var(--tone) 55%, transparent); background: color-mix(in oklab, var(--tone) 12%, transparent)}
 .form-error {margin: var(--s2) 0 0; color: var(--danger); font-weight: 500}
 .empty-state {padding: var(--s5) 0; color: var(--ink-muted)}
 .empty-state h2 {color: var(--ink); font-family: var(--font-read); font-weight: 500}
@@ -136,8 +162,13 @@ dd {margin: 0}
 .login .wordmark {height: 2.67rem}
 
 /* Sign in */
-.login {max-width: 25rem; margin: 0 auto; padding: max(8vh, var(--s6)) var(--s4) var(--s6)}
-.login form {padding: var(--s5); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r3); box-shadow: var(--shadow)}
+/* The glow sits behind the sign-in column, which isolates it so a page
+   background can never paint over it. */
+.login {isolation: isolate; max-width: 25rem; margin: 0 auto; padding: max(8vh, var(--s6)) var(--s4) var(--s6)}
+.login::before {content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none; background: radial-gradient(60rem 32rem at 50% -8rem, var(--glow), transparent 70%)}
+.login form {position: relative; overflow: hidden; padding: var(--s5); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r3); box-shadow: var(--shadow)}
+.login form::before {content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; background: var(--ribbon)}
+[data-theme=eink] .sidebar::before, [data-theme=eink] .login form::before {display: none}
 .login form label:first-child {margin-top: 0}
 .login button.primary {width: 100%; margin-top: var(--s3)}
 
@@ -155,7 +186,8 @@ dd {margin: 0}
 .topbar {display: none}
 
 /* Sidebar */
-.sidebar {display: flex; flex-direction: column; min-height: 0; height: 100%; border-right: 1px solid var(--line); background: var(--paper)}
+.sidebar {position: relative; display: flex; flex-direction: column; min-height: 0; height: 100%; border-right: 1px solid var(--line); background: var(--paper)}
+.sidebar::before {content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--ribbon)}
 .sidebar-head {display: grid; gap: var(--s3); padding: var(--s4) var(--s3) var(--s2)}
 .sidebar-head .brand {padding-left: var(--s1)}
 .sidebar-quick {display: flex; gap: var(--s1)}
@@ -172,6 +204,8 @@ dd {margin: 0}
 .nav-link[aria-current=page] {background: var(--selected); font-weight: 600}
 .nav-link > .icon {color: var(--ink-muted)}
 .nav-link[aria-current=page] > .icon {color: var(--brand)}
+.nav-link[data-tone] > .icon {color: var(--tone)}
+.nav-link[data-tone][aria-current=page] {background: color-mix(in oklab, var(--tone) 14%, var(--paper))}
 .nav-label {flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap}
 .nav-count {font-size: var(--step--2); color: var(--ink-muted); font-variant-numeric: tabular-nums}
 .nav-warning {display: inline-flex; color: var(--warning)}
@@ -179,13 +213,21 @@ dd {margin: 0}
 .nav-folder-row .nav-link {padding-left: .15rem}
 .disclosure {flex: none; display: grid; place-items: center; width: 1.5rem; height: 2rem; min-height: 0; padding: 0; border: 0; border-radius: var(--r1); background: transparent; color: var(--ink-muted)}
 .disclosure[aria-expanded=true] .icon {rotate: 90deg}
-.feed-mark {flex: none; display: grid; place-items: center; width: 1.15rem; height: 1.15rem; border-radius: var(--r1); font-size: .66rem; font-weight: 700; line-height: 1; color: #fff; background: oklch(.5 .1 calc(var(--hue, 200) * 1deg))}
+.feed-mark {flex: none; display: grid; place-items: center; width: 1.15rem; height: 1.15rem; border-radius: var(--r1); font-size: .66rem; font-weight: 700; line-height: 1; color: #fff}
+.feed-mark[data-swatch="0"] {background: #dd5602}
+.feed-mark[data-swatch="1"] {background: #ae7705}
+.feed-mark[data-swatch="2"] {background: #b23a1a}
+.feed-mark[data-swatch="3"] {background: #8e3b68}
+.feed-mark[data-swatch="4"] {background: #916e9d}
+.feed-mark[data-swatch="5"] {background: #3e8aab}
+.feed-mark[data-swatch="6"] {background: #428e87}
 [data-theme=eink] .feed-mark {color: #000; background: #fff; outline: 1px solid #000}
 .sidebar-foot {padding: var(--s2) var(--s2) calc(var(--s2) + env(safe-area-inset-bottom)); border-top: 1px solid var(--line)}
 .sync-indicator {display: flex; align-items: center; gap: var(--s2); margin: var(--s2) var(--s2) 0; font-size: var(--step--2); color: var(--ink-muted)}
 .sync-indicator span {min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap}
 .sync-indicator.waiting {color: var(--ink)}
 .sync-indicator.problem {color: var(--danger); font-weight: 600}
+.sync-indicator.quiet > .icon {color: var(--green)}
 
 /* The river and reader share the workspace as two panes. */
 .panes {flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(19rem, 27rem) minmax(0, 1fr)}
@@ -213,7 +255,7 @@ dd {margin: 0}
 .entry:focus-visible {outline: 2px solid var(--brand); outline-offset: -2px}
 .entry-title {display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.35; color: var(--ink-muted); overflow-wrap: anywhere}
 .entry[data-unread] .entry-title {color: var(--ink); font-weight: 600}
-.unread-dot {display: inline-block; width: .5rem; height: .5rem; margin-right: .45rem; border-radius: 50%; background: var(--brand); vertical-align: .1em}
+.unread-dot {display: inline-block; width: .5rem; height: .5rem; margin-right: .45rem; border-radius: 50%; background: var(--orange); vertical-align: .1em}
 .entry-blurb {display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: var(--step--1); color: var(--ink-muted)}
 .entry-meta {display: flex; gap: var(--s2); min-width: 0; font-size: var(--step--1); color: var(--ink-muted)}
 .entry-source {flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap}
@@ -241,6 +283,8 @@ dd {margin: 0}
 .tool {display: inline-flex; align-items: center; gap: .35rem; flex: none; min-height: var(--control); padding: 0 .6rem; border: 0; border-radius: var(--r2); background: transparent; color: var(--ink); font-size: var(--step--1); font-weight: 500; white-space: nowrap; text-decoration: none; cursor: pointer}
 .tool:hover {background: var(--hover)}
 .tool[aria-pressed=true] {background: var(--brand-soft); color: var(--brand)}
+.tool[data-tone] > .icon {color: var(--tone)}
+.tool[data-tone][aria-pressed=true] {background: color-mix(in oklab, var(--tone) 14%, var(--surface)); color: var(--ink)}
 .tool.back {position: sticky; left: 0; z-index: 1; background: var(--surface)}
 .tool.back:hover {background: var(--hover)}
 .tool-divider {flex: none; width: 1px; height: 1.25rem; margin: 0 var(--s1); background: var(--line)}
@@ -403,6 +447,7 @@ dialog::backdrop {background: rgb(10 10 8 / .42)}
   .unread-dot {forced-color-adjust: none; background: CanvasText}
   .entry[aria-current=page], .nav-link[aria-current=page] {outline: 2px solid Highlight; outline-offset: -2px}
   .entry[data-selected] {outline: 1px dashed CanvasText; outline-offset: -3px}
+  .sidebar::before, .login form::before, .login::before {display: none}
 }
 @media print {
   .sidebar, .topbar, .reader-toolbar, .toast-region, .list-pane, .banners {display: none}

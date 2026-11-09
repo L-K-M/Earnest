@@ -11,6 +11,10 @@ import EarnestKit
     var body: some View {
         VStack(spacing: 22) {
             BrandLockup()
+                // The ribbon sits just under the lockup and, through the
+                // bottom padding, is exactly as wide as it.
+                .padding(.bottom, 12)
+                .overlay(alignment: .bottom) { BrandRibbon() }
             if let code = model.code {
                 approval(code)
             } else if model.connected {
@@ -117,5 +121,33 @@ import EarnestKit
     private func connect() {
         guard !model.server.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         model.connect()
+    }
+}
+
+/// A thin band of the icon's own colours, drawn as seven equal hard-edged
+/// segments. Fixed brand colours, never themed. Decorative only, so it is
+/// hidden from assistive technology.
+private struct BrandRibbon: View {
+    /// The spec's ribbon order: #FFA01C, #EA5F12, #C9481E, #8E3B68,
+    /// #916E9D, #408CAD, #5DA8A1.
+    private static let segments: [Color] = [
+        Color(red: 1.0, green: 0.62745098, blue: 0.10980392),
+        Color(red: 0.91764706, green: 0.37254902, blue: 0.07058824),
+        Color(red: 0.78823529, green: 0.28235294, blue: 0.11764706),
+        Color(red: 0.55686275, green: 0.23137255, blue: 0.40784314),
+        Color(red: 0.56862745, green: 0.43137255, blue: 0.61568627),
+        Color(red: 0.25098039, green: 0.54901961, blue: 0.67843137),
+        Color(red: 0.36470588, green: 0.65882353, blue: 0.63137255)
+    ]
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(Self.segments.enumerated()), id: \.offset) { _, segment in
+                Rectangle().fill(segment)
+            }
+        }
+        .frame(height: 4)
+        .clipShape(Capsule())
+        .accessibilityHidden(true)
     }
 }
