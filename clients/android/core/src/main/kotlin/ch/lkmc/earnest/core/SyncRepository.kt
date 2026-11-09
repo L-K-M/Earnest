@@ -343,6 +343,7 @@ class SyncRepository(
         rev = long(item, "rev"),
         deleted = boolean(item, "deleted"),
         raw = raw.toString(),
+        thumbnailUrl = item["thumbnail_url"]?.jsonPrimitive?.contentOrNull,
     )
 
     private fun long(item: JsonObject, key: String): Long = item[key]?.jsonPrimitive?.longOrNull ?: 0L

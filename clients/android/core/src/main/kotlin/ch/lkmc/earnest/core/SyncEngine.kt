@@ -2,8 +2,12 @@ package ch.lkmc.earnest.core
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.time.Duration
 import java.time.Instant
 
@@ -25,6 +29,7 @@ data class CachedEntry(
     val raw: String = "",
     // A metadata 404 hides the entry until a newer server projection arrives.
     val unavailable: Boolean = false,
+    @SerialName("thumbnail_url") val thumbnailUrl: String? = null,
 )
 
 /** A revisioned resource object: subscription, folder, label, annotation or token. */
@@ -40,6 +45,11 @@ data class SyncObject(
     val deleted: Boolean = false,
     val raw: String = "",
 )
+
+/** The stored feed icon path in a subscription's raw projection, or null when none is stored. */
+fun SyncObject.iconUrl(): String? = runCatching {
+    Json.parseToJsonElement(raw).jsonObject["icon_url"]?.jsonPrimitive?.contentOrNull
+}.getOrNull()
 
 @Serializable
 data class CachedPosition(

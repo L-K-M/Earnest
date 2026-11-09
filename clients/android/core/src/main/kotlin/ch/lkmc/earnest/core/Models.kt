@@ -126,6 +126,7 @@ data class Entry(
     val rev: Long,
     val deleted: Boolean,
     val state: State? = null,
+    @SerialName("thumbnail_url") val thumbnailUrl: String? = null,
 )
 
 @Serializable
@@ -166,6 +167,7 @@ data class Subscription(
     val deleted: Boolean,
     val private: Boolean,
     val health: FeedHealth,
+    @SerialName("icon_url") val iconUrl: String? = null,
 )
 
 @Serializable

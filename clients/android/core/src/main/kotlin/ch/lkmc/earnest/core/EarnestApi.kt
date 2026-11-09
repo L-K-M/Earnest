@@ -197,6 +197,76 @@ class EarnestApi(
     suspend fun contentUrl(id: Long, mode: String? = null): ContentUrl =
         get(url("/v1/entries/$id/content-url") { mode?.let { value -> it.addQueryParameter("mode", value) } }).decode()
 
+    /**
+     * Fetches a stored feed icon or entry thumbnail. [path] must match a media
+     * path exactly (for example `/v1/entries/12/thumbnail?v=abc`); the check
+     * runs before any request so the bearer token is never sent elsewhere.
+     * A 404 means no image is stored and yields null; a 200 must carry a
+     * bounded PNG or JPEG body.
+     */
+    suspend fun media(path: String): ByteArray? {
+        require(MEDIA_PATH.matches(path)) { "not a media path" }
+        val target = url(path.substringBefore('?')) { builder ->
+            path.substringAfter("?v=", "").takeIf { it.isNotEmpty() }?.let { builder.addQueryParameter("v", it) }
+        }
+        val builder = Request.Builder().url(target).get()
+        token?.let { builder.header("Authorization", "Bearer $it") }
+        builder.header("Accept", "image/png, image/jpeg")
+        val call = http.newCall(builder.build())
+        return suspendCancellableCoroutine { continuation ->
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    continuation.resumeWithException(e)
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    val result = runCatching {
+                        response.use {
+                            when (it.code) {
+                                404 -> null
+                                200 -> mediaBody(it)
+                                else -> throw problem(it.code, it.body?.string().orEmpty())
+                            }
+                        }
+                    }
+                    continuation.resumeWith(result)
+                }
+            })
+        }
+    }
+
+    /**
+     * The stored image: a bounded PNG or JPEG body. A 200 with any other type,
+     * an empty body or an oversized one is an error, not an absent image.
+     */
+    private fun mediaBody(response: Response): ByteArray {
+        val type = response.body?.contentType()
+        if (type == null || !type.type.equals("image", ignoreCase = true) ||
+            !(type.subtype.equals("png", ignoreCase = true) || type.subtype.equals("jpeg", ignoreCase = true))
+        ) {
+            throw ApiException(response.code, null, "Earnest request failed (${response.code}): unexpected media type")
+        }
+        val body = response.body
+        if (body == null || body.contentLength() > MAX_MEDIA_BYTES) {
+            throw ApiException(response.code, null, "Earnest request failed (${response.code}): invalid media size")
+        }
+        val out = java.io.ByteArrayOutputStream()
+        body.byteStream().use { stream ->
+            val buffer = ByteArray(8192)
+            while (out.size() <= MAX_MEDIA_BYTES) {
+                val read = stream.read(buffer, 0, minOf(buffer.size, MAX_MEDIA_BYTES + 1 - out.size()))
+                if (read < 0) break
+                out.write(buffer, 0, read)
+            }
+        }
+        val bytes = out.toByteArray()
+        if (bytes.isEmpty() || bytes.size > MAX_MEDIA_BYTES) {
+            throw ApiException(response.code, null, "Earnest request failed (${response.code}): invalid media size")
+        }
+        return bytes
+    }
+
     suspend fun mutes(): List<JsonElement> = get(url("/v1/mutes")).decode()
 
     suspend fun settings(): JsonElement = get(url("/v1/settings"))
@@ -373,5 +443,12 @@ class EarnestApi(
     companion object {
         private val JSON_MEDIA_TYPE = "application/json".toMediaType()
 
+        /**
+         * The only paths the media GET may target: an entry thumbnail or a
+         * subscription icon, each with an optional content version.
+         */
+        private val MEDIA_PATH =
+            Regex("""^/v1/(entries|subscriptions)/[1-9][0-9]{0,18}/(thumbnail|icon)(\?v=[A-Za-z0-9_-]{1,64})?$""")
+        private const val MAX_MEDIA_BYTES = 2 * 1024 * 1024
     }
 }
