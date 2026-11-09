@@ -78,9 +78,11 @@ import EarnestKit
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 360)
+            // Not selectable: on macOS 27, selectable text with its own
+            // accessibility label crashed the app when an accessibility
+            // client read it. Copy Code copies the code instead.
             Text(verbatim: code.userCode)
                 .font(.system(size: 34, weight: .semibold, design: .monospaced))
-                .textSelection(.enabled)
                 .padding(.horizontal, 20)
                 .padding(.vertical, 8)
                 .background(.quaternary, in: .rect(cornerRadius: 10))
