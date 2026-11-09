@@ -1,19 +1,23 @@
 import {readFileSync} from 'node:fs'
 import {expect, it} from 'vitest'
 
-const css = readFileSync(new URL('./style.css', import.meta.url), 'utf8')
+// Comments may name light-dark(); only declarations matter here.
+const css = readFileSync(new URL('./style.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
 
-// Browsers without light-dark() invalidate the whole custom property, so each
-// token needs a plain fallback declaration before the light-dark() one.
-it('gives every light-dark token a plain fallback', () => {
-  const lines = css.split('\n')
-  const themed = lines.filter(line => line.includes('light-dark('))
+// Custom properties accept any value, so a light-dark() declaration in the same
+// rule as a plain one would win and then fail at every var() in browsers
+// without light-dark(). Plain values stay outside, light-dark() only behind
+// @supports, and every themed token has a plain light value.
+it('keeps light-dark tokens behind @supports with plain light values outside', () => {
+  const guard = css.indexOf('@supports (color: light-dark(#000, #fff))')
+  expect(guard).toBeGreaterThan(0)
+  const guarded = css.slice(guard, css.indexOf('\n}\n', guard))
+  const outside = css.slice(0, guard) + css.slice(guard + guarded.length)
+  expect(outside).not.toContain('light-dark(')
+  const themed = [...guarded.matchAll(/--([\w-]+):\s*light-dark\(([^,]+(?:\([^)]*\))?[^,]*),/g)]
   expect(themed.length).toBeGreaterThan(0)
-  for (const line of themed) {
-    const name = line.match(/--([\w-]+)\s*:/)?.[1]
-    expect(name, line).toBeTruthy()
-    const previous = [...lines.slice(0, lines.indexOf(line))].reverse().find(value => value.trim().length > 0)
-    expect(previous, `fallback for ${name}`).toContain(`--${name}:`)
+  for (const [, name, light] of themed) {
+    expect(outside, `plain value for --${name}`).toContain(`--${name}: ${light.trim()};`)
   }
 })
 

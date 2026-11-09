@@ -3,41 +3,49 @@
    black and e-ink, set on <html> and, for the article surface, on .reader so
    the pane always matches the article frame's own palette. */
 
+/* Plain light values first, for browsers without light-dark(). Custom
+   properties accept any value, so a light-dark() declaration in this same rule
+   would replace the plain one and then fail wherever var() uses it; the
+   themed values therefore live behind @supports. */
 :root, [data-theme=light], [data-theme=dark] {
   --paper: #f8f6ef;
-  --paper: light-dark(#f8f6ef, #1c1c1a);
   --surface: #ffffff;
-  --surface: light-dark(#ffffff, #242424);
   --surface-2: #f0ede3;
-  --surface-2: light-dark(#f0ede3, #2c2c2a);
   --raised: #ffffff;
-  --raised: light-dark(#ffffff, #2b2b29);
   --hover: #f0ece1;
-  --hover: light-dark(#f0ece1, #2a2a28);
   --selected: #e9e3d3;
-  --selected: light-dark(#e9e3d3, #353430);
   --ink: #26241f;
-  --ink: light-dark(#26241f, #ecebe7);
   --ink-muted: #5e5a51;
-  --ink-muted: light-dark(#5e5a51, #aaa79f);
   --line: #e1dccf;
-  --line: light-dark(#e1dccf, #383733);
   --line-strong: #8e897d;
-  --line-strong: light-dark(#8e897d, #7a776f);
   --brand: #07566e;
-  --brand: light-dark(#07566e, #8bd0ef);
   --brand-soft: #e1eef2;
-  --brand-soft: light-dark(#e1eef2, #1e3640);
   --on-brand: #ffffff;
-  --on-brand: light-dark(#ffffff, #08232d);
   --danger: #a3261c;
-  --danger: light-dark(#a3261c, #ff9d90);
   --danger-soft: #fbebe8;
-  --danger-soft: light-dark(#fbebe8, #3b2321);
   --warning: #8a5300;
-  --warning: light-dark(#8a5300, #f0c06a);
   --shadow: 0 1px 2px rgb(40 36 30 / .08), 0 10px 32px rgb(40 36 30 / .14);
-  --shadow: 0 1px 2px light-dark(rgb(40 36 30 / .08), rgb(0 0 0 / .4)), 0 10px 32px light-dark(rgb(40 36 30 / .14), rgb(0 0 0 / .45));
+}
+@supports (color: light-dark(#000, #fff)) {
+  :root, [data-theme=light], [data-theme=dark] {
+    --paper: light-dark(#f8f6ef, #1c1c1a);
+    --surface: light-dark(#ffffff, #242424);
+    --surface-2: light-dark(#f0ede3, #2c2c2a);
+    --raised: light-dark(#ffffff, #2b2b29);
+    --hover: light-dark(#f0ece1, #2a2a28);
+    --selected: light-dark(#e9e3d3, #353430);
+    --ink: light-dark(#26241f, #ecebe7);
+    --ink-muted: light-dark(#5e5a51, #aaa79f);
+    --line: light-dark(#e1dccf, #383733);
+    --line-strong: light-dark(#8e897d, #7a776f);
+    --brand: light-dark(#07566e, #8bd0ef);
+    --brand-soft: light-dark(#e1eef2, #1e3640);
+    --on-brand: light-dark(#ffffff, #08232d);
+    --danger: light-dark(#a3261c, #ff9d90);
+    --danger-soft: light-dark(#fbebe8, #3b2321);
+    --warning: light-dark(#8a5300, #f0c06a);
+    --shadow: 0 1px 2px light-dark(rgb(40 36 30 / .08), rgb(0 0 0 / .4)), 0 10px 32px light-dark(rgb(40 36 30 / .14), rgb(0 0 0 / .45));
+  }
 }
 :root {
   color-scheme: light dark;
