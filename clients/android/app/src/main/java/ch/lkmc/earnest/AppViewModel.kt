@@ -8,6 +8,9 @@ import ch.lkmc.earnest.core.Activity
 import ch.lkmc.earnest.core.Annotation
 import ch.lkmc.earnest.core.ApiException
 import ch.lkmc.earnest.core.EarnestApi
+import ch.lkmc.earnest.core.KeptImportReport
+import ch.lkmc.earnest.core.MAX_KEPT_IMPORT_BYTES
+import ch.lkmc.earnest.core.summarizeKeptImport
 import ch.lkmc.earnest.core.ReaderSettings
 import ch.lkmc.earnest.core.ReadingMode
 import ch.lkmc.earnest.core.RejectedOperation
@@ -59,6 +62,7 @@ data class UiState(
     val readerSettings: ReaderSettings = ReaderSettings(),
     val readerSettingsRev: Long = 0,
     val readerSettingsUi: ReaderSettingsUi = ReaderSettingsUi(),
+    val keptImport: KeptImportUi = KeptImportUi(),
     val unreadCounts: UnreadCounts? = null,
     val unreadCountsSyncedAt: Long? = null,
     val unreadCountsError: String? = null,
@@ -97,6 +101,16 @@ data class FrozenReaderSettings(
 )
 
 /**
+ * The starred-article import's transient state. The picked file's bytes stay
+ * with the view model so the report's retry repeats the same import.
+ */
+data class KeptImportUi(
+    val busy: Boolean = false,
+    val error: String? = null,
+    val report: KeptImportReport? = null,
+)
+
+/**
  * Publishes account-scoped reader state. Foreground and background writers
  * share the reload-through-flush critical section in [SessionCache].
  */
@@ -113,6 +127,7 @@ class AppViewModel internal constructor(
 
     @Volatile private var account: SessionCache? = null
     @Volatile private var activeSession: AuthenticatedSession? = null
+    @Volatile private var keptImportDocument: ByteArray? = null
     private var sessionStartedAt = Instant.now()
     private var changesSince = Instant.EPOCH.toString()
     private val json = Json { ignoreUnknownKeys = true }
@@ -173,6 +188,7 @@ class AppViewModel internal constructor(
         search.reset()
         account = null
         activeSession = null
+        keptImportDocument = null
         _sessionNotice.value = null
         _state.value = UiState(readerSettingsUi = ReaderSettingsUi(epoch = epoch))
         viewModelScope.launch(Dispatchers.IO) {
@@ -270,6 +286,7 @@ class AppViewModel internal constructor(
         sessions.clearToken()
         activeSession = null
         account = null
+        keptImportDocument = null
         _state.value = UiState(readerSettingsUi = ReaderSettingsUi(epoch = readerEpoch.incrementAndGet()))
         _loggedIn.value = false
     }
@@ -640,6 +657,70 @@ class AppViewModel internal constructor(
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Imports the starred articles of a Google Reader JSON export. [document]
+     * is the picked file's raw bytes; the view model keeps them so the report's
+     * retry can repeat the import without the file being picked again. The
+     * result is published only while the captured account still owns the UI.
+     */
+    fun importKept(document: ByteArray, subscribeMissing: Boolean) {
+        val (cache, session) = activeAccount("Still signing in; the import did not run.") ?: return
+        if (document.size > MAX_KEPT_IMPORT_BYTES) {
+            keptImportDocument = null
+            _state.update { current ->
+                current.copy(keptImport = KeptImportUi(error = "The export is larger than 64 MiB."))
+            }
+            return
+        }
+        keptImportDocument = document
+        _state.update { current ->
+            current.copy(keptImport = current.keptImport.copy(busy = true, error = null, report = null))
+        }
+        viewModelScope.launch(readerDispatcher) {
+            try {
+                val report = apiFactory(session).importKept(document, subscribeMissing)
+                // Keep the bytes only while the report offers a retry; an
+                // export can be 64 MiB.
+                if (summarizeKeptImport(report).skipped.isEmpty()) keptImportDocument = null
+                if (!currentOrExpired(session, cache)) return@launch
+                _state.update { current ->
+                    current.copy(keptImport = current.keptImport.copy(busy = false, report = report))
+                }
+            } catch (error: ApiException) {
+                // A failed import shows an error, not a retry, so its file goes.
+                keptImportDocument = null
+                if (!currentOrExpired(session, cache)) return@launch
+                _state.update { current ->
+                    current.copy(keptImport = current.keptImport.copy(busy = false, error = failureText("Could not import that file", error)))
+                }
+                if (error.isUnauthorized) expireSessionIfCurrent(session)
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                keptImportDocument = null
+                if (currentOrExpired(session, cache)) {
+                    _state.update { current ->
+                        current.copy(keptImport = current.keptImport.copy(busy = false, error = failureText("Could not import that file", error)))
+                    }
+                }
+            }
+        }
+    }
+
+    /** Repeats the last import with `missing_feeds=subscribe`. */
+    fun importKeptAgain() {
+        val document = keptImportDocument ?: return
+        importKept(document, subscribeMissing = true)
+    }
+
+    /** Surfaces a picked export the client could not read; no import ran. */
+    fun keptImportReadFailed(message: String) {
+        keptImportDocument = null
+        _state.update { current ->
+            current.copy(keptImport = KeptImportUi(error = message))
         }
     }
 
@@ -1041,6 +1122,7 @@ class AppViewModel internal constructor(
         search.reset()
         account = null
         activeSession = null
+        keptImportDocument = null
         _state.value = UiState(readerSettingsUi = ReaderSettingsUi(epoch = readerEpoch.incrementAndGet()))
         if (_loggedIn.value) _sessionNotice.value = "Your session expired. Sign in again."
         _loggedIn.value = false

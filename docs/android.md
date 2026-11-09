@@ -213,3 +213,11 @@ Exact unread totals are requested and shown only in unread-count mode,
 labelled with the last-synced time. Fetch failures retain the last successful
 totals. When none are cached, counts are unavailable, not zero. Cached reading typography respects the safe enums and the existing
 image and origin restrictions.
+
+Settings can also bring starred articles from another reader into Kept. Pick a
+Google Reader JSON export, for example from FreshRSS or Inoreader, and Earnest
+keeps the articles you starred there. Articles already in Earnest, and articles
+you removed from Kept, are left alone. Articles whose feed you do not follow
+are skipped unless you ask Earnest to subscribe to those feeds first, and the
+report names what was added, what was already there, what was left out and
+what could not be imported.
