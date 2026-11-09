@@ -149,7 +149,8 @@ func NewContent(svc *service.Service, auth *service.Auth, proxy *imageproxy.Prox
 // inside a scrolling pane. The page reports its height, so the reader can
 // size the frame to the article, and forwards scrolling and single-key
 // presses made while focus is in the frame, so Space and the reading
-// shortcuts work after a click in the article. Messages go only to the app
+// shortcuts work after a click in the article; Space on a focused summary
+// still opens its details. Messages go only to the app
 // origin, and only when the page is framed; native clients run no script.
 func frameScript(appOrigin string) string {
 	target, _ := json.Marshal(appOrigin)
@@ -158,6 +159,7 @@ func frameScript(appOrigin string) string {
 		`new ResizeObserver(send).observe(document.documentElement);addEventListener("load",send);` +
 		`const scroll=new Set([" ","PageDown","PageUp","Home","End","ArrowDown","ArrowUp"]);` +
 		`addEventListener("keydown",e=>{if(e.defaultPrevented||e.ctrlKey||e.metaKey||e.altKey||e.isComposing)return;const k=e.key;` +
+		`if(k===" "&&e.target instanceof Element&&e.target.closest("summary"))return;` +
 		`if(scroll.has(k))e.preventDefault();else if(k!=="Escape"&&k.length!==1)return;` +
 		`parent.postMessage({earnest:"key",key:k,shift:e.shiftKey},app)})})()`
 }

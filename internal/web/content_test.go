@@ -164,6 +164,10 @@ func TestContentScriptHashMatchesScript(t *testing.T) {
 	if !strings.Contains(script, `const app="https://app.example"`) || strings.Count(script, "postMessage(") != 2 || strings.Count(script, ",app)") != 2 {
 		t.Fatalf("script must post only to the app origin: %q", script)
 	}
+	// Space on a focused summary must still open its details.
+	if !strings.Contains(script, `closest("summary")`) {
+		t.Fatalf("script must leave Space on a summary alone: %q", script)
+	}
 }
 
 // Without an app origin the page stays script-free and scrolls in its frame.
