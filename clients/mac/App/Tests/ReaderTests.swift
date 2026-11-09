@@ -81,6 +81,26 @@ import EarnestKit
         XCTAssertTrue(buttons.contains { attribute($0, "accessibilityLabel") as? String == "Cancel notification for Article title" })
     }
 
+    func testClosingFindDismissesTheMatchIndicator() {
+        final class RecordingWebView: WKWebView {
+            var searches: [String] = []
+            // WebKit's Swift `find` calls this Objective-C method.
+            override func __find(_ string: String, with configuration: WKFindConfiguration?,
+                                 completionHandler: @escaping @MainActor (WKFindResult) -> Void) {
+                searches.append(string)
+            }
+        }
+        let web = RecordingWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        let reader = ReaderController()
+        reader.webView = web
+        reader.showFind()
+        reader.findQuery = "ladder"
+        reader.find()
+        reader.hideFind()
+        XCTAssertEqual(web.searches, ["ladder", ReaderController.unmatchable])
+        XCTAssertFalse(reader.findVisible)
+    }
+
     private func attribute(_ value: NSObject, _ name: String) -> Any? {
         let selector = NSSelectorFromString(name)
         guard value.responds(to: selector) else { return nil }

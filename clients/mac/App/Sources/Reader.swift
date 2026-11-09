@@ -124,8 +124,19 @@ final class ArticleScheme: NSObject, WKURLSchemeHandler {
     func hideFind() {
         findVisible = false
         findMatched = nil
+        clearFindHighlight()
         // Return focus to the article so the keyboard keeps scrolling it.
         webView?.window?.makeFirstResponder(webView)
+    }
+
+    /// Two private-use characters, which article text does not contain.
+    static let unmatchable = "\u{E000}\u{E001}"
+
+    /// WebKit keeps its yellow match indicator up after the find bar closes,
+    /// and has no public call to hide it; a search that finds nothing does.
+    /// (An empty search is ignored and leaves the indicator up.)
+    private func clearFindHighlight() {
+        webView?.find(Self.unmatchable, configuration: WKFindConfiguration()) { _ in }
     }
 
     func find(backwards: Bool = false) {
