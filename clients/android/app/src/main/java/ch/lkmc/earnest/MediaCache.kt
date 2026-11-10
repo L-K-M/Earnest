@@ -11,6 +11,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
@@ -26,6 +27,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
@@ -103,6 +106,10 @@ internal class MediaCache(
             if (cached != null) return cached
         }
         val bytes = fetch(path) ?: return null
+        // Bodies over the cap never reach the decoder or the disk: the HTTP
+        // layer already bounds a response, and this keeps that promise even
+        // for a fetch from somewhere else.
+        if (bytes.size > MAX_BYTES) return null
         val bitmap = bytes.decode() ?: return null
         if (target != null) {
             runCatching { writeDisk(target, bytes) }
@@ -131,9 +138,9 @@ internal class MediaCache(
     }
 
     /**
-     * Decodes a stored image. The server only stores images of at most 192
-     * pixels, but the size is checked first so an oversized body cannot
-     * exhaust memory.
+     * Decodes a stored image. The body is capped before this runs, and the
+     * dimensions are checked first so an oversized frame cannot exhaust
+     * memory: the server only stores images of at most 192 pixels.
      */
     private fun ByteArray.decode(): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -154,6 +161,7 @@ internal class MediaCache(
 
     companion object {
         private const val MEMORY_BYTES = 8 * 1024 * 1024
+        private const val MAX_BYTES = 512 * 1024
         private const val MAX_DISK_FILES = 2000
         private const val MAX_SIDE = 1024
         private const val RETRY_DELAY_MS = 60_000L
@@ -167,11 +175,20 @@ internal class MediaCache(
  * content description.
  */
 @Composable
-internal fun MediaImage(path: String?, modifier: Modifier = Modifier, shape: Shape = RectangleShape) {
+internal fun MediaImage(
+    path: String?,
+    modifier: Modifier = Modifier,
+    shape: Shape = RectangleShape,
+    model: AppViewModel = viewModel(),
+) {
     if (path.isNullOrEmpty()) return
-    val model: AppViewModel = viewModel()
-    val uiState by model.state.collectAsState()
-    val bitmap by produceState<ImageBitmap?>(null, path, uiState.accountKey) {
+    // Only the account key matters here: collecting the whole state would
+    // recompose every image in a list on each register write. Seeded from the
+    // current state so the load below is not started twice, once for a null
+    // key and once for the first value.
+    val accountKey by remember(model) { model.state.map { it.accountKey }.distinctUntilChanged() }
+        .collectAsState(remember(model) { model.state.value.accountKey })
+    val bitmap by produceState<ImageBitmap?>(null, path, accountKey) {
         value = model.mediaBitmap(path)
     }
     val image = bitmap

@@ -242,6 +242,26 @@ class SyncRepositoryTest {
     }
 
     @Test
+    fun oneBadMetadataFieldCannotDropAnEntry() = runBlocking {
+        val engine = engine()
+        val api = api { request ->
+            when (val path = request.url.encodedPath) {
+                "/v1/bootstrap" -> 200 to """{"generation":"g1","rev":0}"""
+                "/v1/bootstrap/entries" -> 200 to """{"items":[{"id":2,"subscription_id":3,"seq":4,"first_seen_at":"2026-11-03T00:00:00Z","rev":1,"deleted":false,"thumbnail_url":{"url":"/v1/entries/2/thumbnail"},"published_at":[1,2]}],"next_id":0,"next_principal":0,"next_view":"","has_more":false}"""
+                else -> {
+                    check(path.startsWith("/v1/bootstrap/")) { "unexpected request $path" }
+                    200 to """{"items":[],"next_id":0,"next_principal":0,"next_view":"","has_more":false}"""
+                }
+            }
+        }
+        SyncRepository(api, engine).bootstrap()
+        val entry = engine.entry(2)
+        assertNotNull("a cosmetic field of the wrong shape must not drop the entry", entry)
+        assertNull("a non-string thumbnail must be ignored", entry?.thumbnailUrl)
+        assertNull("a non-string date must be ignored", entry?.publishedAt)
+    }
+
+    @Test
     fun hydratedThumbnailIsReplacedByNewerRevisions() = runBlocking {
         val engine = engine()
         var second = false

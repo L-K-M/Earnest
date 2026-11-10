@@ -70,22 +70,31 @@ class MediaCacheTest {
     @Test
     fun evictionDropsLeastRecentlyUsed() = runBlocking {
         val cache = cache()
-        val dir = File(context.cacheDir, "media/$account")
-        dir.mkdirs()
-        val oldest = File(dir, "0".repeat(64)).apply {
+        // The fixture files use the cache's own layout; the trim runs
+        // synchronously inside the write, so the assertions cannot race it.
+        val oldest = cache.fileFor(account, "/v1/entries/1/thumbnail?v=old").apply {
+            parentFile!!.mkdirs()
             writeBytes(png)
             setLastModified(1)
         }
-        for (i in 1..1999) {
-            File(dir, "%064x".format(i)).apply {
+        for (i in 2..2000) {
+            cache.fileFor(account, "/v1/entries/$i/thumbnail?v=$i").apply {
                 writeBytes(png)
                 setLastModified(1000 + i.toLong())
             }
         }
-        cache.load(account, "/v1/entries/2/thumbnail?v=new") { png }
+        cache.load(account, "/v1/entries/2001/thumbnail?v=new") { png }
         assertFalse("the oldest copy survived eviction", oldest.isFile)
-        assertTrue(cache.fileFor(account, "/v1/entries/2/thumbnail?v=new").isFile)
-        assertEquals(2000, dir.listFiles().orEmpty().filter { it.isFile }.size)
+        assertTrue(cache.fileFor(account, "/v1/entries/2001/thumbnail?v=new").isFile)
+        assertEquals(2000, oldest.parentFile!!.listFiles().orEmpty().filter { it.isFile }.size)
+    }
+
+    @Test
+    fun anOversizedBodyIsRefusedBeforeItIsCached() = runBlocking {
+        val cache = cache()
+        val path = "/v1/entries/9/thumbnail?v=1"
+        assertNull(cache.load(account, path) { ByteArray(600 * 1024) })
+        assertFalse("an oversized body reached the disk", cache.fileFor(account, path).isFile)
     }
 
     @Test

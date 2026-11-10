@@ -335,22 +335,29 @@ class SyncRepository(
         feedId = long(item, "feed_id"),
         seq = long(item, "seq"),
         firstSeenAt = string(item, "first_seen_at"),
-        publishedAt = item["published_at"]?.jsonPrimitive?.contentOrNull,
-        updatedAt = item["updated_at"]?.jsonPrimitive?.contentOrNull,
+        publishedAt = optional(item, "published_at"),
+        updatedAt = optional(item, "updated_at"),
         title = string(item, "title"),
         url = string(item, "url"),
         author = string(item, "author"),
         rev = long(item, "rev"),
         deleted = boolean(item, "deleted"),
         raw = raw.toString(),
-        thumbnailUrl = item["thumbnail_url"]?.jsonPrimitive?.contentOrNull,
+        thumbnailUrl = optional(item, "thumbnail_url"),
     )
 
-    private fun long(item: JsonObject, key: String): Long = item[key]?.jsonPrimitive?.longOrNull ?: 0L
+    // A metadata field of the wrong shape is one feed's bad data, not a
+    // reason to drop the whole page of entries it arrived in.
+    private fun primitive(item: JsonObject, key: String): JsonPrimitive? =
+        runCatching { item[key]?.jsonPrimitive }.getOrNull()
 
-    private fun string(item: JsonObject, key: String): String = item[key]?.jsonPrimitive?.contentOrNull ?: ""
+    private fun long(item: JsonObject, key: String): Long = primitive(item, key)?.longOrNull ?: 0L
 
-    private fun boolean(item: JsonObject, key: String): Boolean = item[key]?.jsonPrimitive?.booleanOrNull ?: false
+    private fun string(item: JsonObject, key: String): String = primitive(item, key)?.contentOrNull ?: ""
+
+    private fun optional(item: JsonObject, key: String): String? = primitive(item, key)?.contentOrNull
+
+    private fun boolean(item: JsonObject, key: String): Boolean = primitive(item, key)?.booleanOrNull ?: false
 
     companion object {
         private val BOOTSTRAP_KINDS = listOf(

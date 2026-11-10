@@ -508,6 +508,21 @@ class AppViewModelTest {
         withTimeout(15000) { while (sessions.value != null) delay(10) }
     }
 
+    @Test fun concurrentImageLoadsShareOneApiClient() = runBlocking(Dispatchers.IO) {
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val created = java.util.concurrent.atomic.AtomicInteger()
+        val model = AppViewModel(app, Sessions(AuthenticatedSession(identity, "token"))) {
+            created.incrementAndGet()
+            api()
+        }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        created.set(0)
+        kotlinx.coroutines.coroutineScope {
+            repeat(8) { launch { model.mediaBitmap("/v1/entries/2/thumbnail?v=1") } }
+        }
+        assertEquals("a list's image loads must share one client", 1, created.get())
+    }
+
     @Test fun notificationMissingFromSnapshotFetchesMetadata() = runBlocking(Dispatchers.IO) {
         val model = model()
         val entry = model.loadEntry(2)

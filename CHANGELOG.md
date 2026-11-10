@@ -93,6 +93,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A feed's malformed icon or thumbnail metadata no longer drops the
+  entries it arrives with. The Android media loader shares one HTTP
+  client across a list's image loads, refuses oversized bodies before
+  caching them, and no longer recomposes every image on each state
+  change.
 - "Mark all as read" and "Mark the rest read" on Today in the web client
   leave muted feeds alone, as the Today list already does. Subscriptions
   in the API now carry `muted`, which the sync feed already reported.
