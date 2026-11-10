@@ -159,6 +159,8 @@ articles. Notes and snippets remain plain text.
 Feeds subscribes by URL, changes a subscription's cadence (Now, Today, This
 week) and unsubscribes. The current cadence is selected in the row. A saved
 cadence change offers an undo snackbar that restores the previous cadence.
+Feeds groups subscriptions by folder and shows a failing feed's fetch error
+with the time of its last attempt.
 Activity groups agent changes by principal, shows a readable description with the
 article title where there is one, and offers Revert where the server reports
 that the action can still be undone.
