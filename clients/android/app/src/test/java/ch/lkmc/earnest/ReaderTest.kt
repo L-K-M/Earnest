@@ -192,15 +192,8 @@ class ReaderTest {
         assertEquals("https://example.com/article", clipboard.primaryClip?.getItemAt(0)?.text?.toString())
     }
 
-    /** Registers an app handling ACTION_SEND, as a device with a share target has. */
-    private fun canShare(application: Application) {
-        val send = Intent(Intent.ACTION_SEND).setType("text/plain")
-        shadowOf(application.packageManager).addResolveInfoForIntent(send, android.content.pm.ResolveInfo())
-    }
-
     @Test fun shareLinkOpensTheSystemShareSheet() {
         val application = ApplicationProvider.getApplicationContext<Application>()
-        canShare(application)
         assertTrue(shareLink(application, "An article", "https://example.com/article"))
         val intent = shadowOf(application).nextStartedActivity
         assertEquals(Intent.ACTION_CHOOSER, intent.action)
@@ -212,16 +205,10 @@ class ReaderTest {
         assertTrue(intent.flags and Intent.FLAG_ACTIVITY_NEW_TASK != 0)
     }
 
-    @Test fun shareLinkReturnsFalseWhenNothingCanShare() {
-        val application = ApplicationProvider.getApplicationContext<Application>()
-        assertFalse(shareLink(application, "An article", "https://example.com/article"))
-    }
-
-    // ACTION_CHOOSER itself always resolves on a real device, so this covers
-    // only the share sheet failing to start once a share target exists.
+    // The system chooser reports its own empty state when no app can share,
+    // so this covers only the share sheet failing to start.
     @Test fun shareLinkReturnsFalseWhenTheShareSheetCannotBeStarted() {
         val application = ApplicationProvider.getApplicationContext<Application>()
-        canShare(application)
         shadowOf(application).checkActivities(true)
         assertFalse(shareLink(application, "An article", "https://example.com/article"))
     }

@@ -75,27 +75,24 @@ internal fun copyLink(context: Context, url: String): Boolean {
 
 /**
  * Shares the article link through the system share sheet, reporting false
- * when no app can share or the sheet cannot start. The chooser itself always
- * resolves on a real device, so availability is decided on the underlying
- * ACTION_SEND intent first.
+ * when the sheet cannot start. The chooser reports its own empty state when
+ * no app can share, so availability is not checked here: such a query would
+ * need a package-visibility declaration and can fail open on Android 11+.
  */
-internal fun shareLink(context: Context, title: String, url: String): Boolean {
+internal fun shareLink(context: Context, title: String, url: String): Boolean = try {
     val send = Intent(Intent.ACTION_SEND).apply {
         type = "text/plain"
         putExtra(Intent.EXTRA_SUBJECT, title)
         putExtra(Intent.EXTRA_TEXT, url)
     }
-    if (context.packageManager.resolveActivity(send, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY) == null) return false
-    return try {
-        val chooser = Intent.createChooser(send, null)
-        if (context !is Activity) chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(chooser)
-        true
-    } catch (_: ActivityNotFoundException) {
-        false
-    } catch (_: SecurityException) {
-        false
-    }
+    val chooser = Intent.createChooser(send, null)
+    if (context !is Activity) chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    context.startActivity(chooser)
+    true
+} catch (_: ActivityNotFoundException) {
+    false
+} catch (_: SecurityException) {
+    false
 }
 
 /**

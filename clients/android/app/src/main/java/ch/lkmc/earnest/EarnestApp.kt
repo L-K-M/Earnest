@@ -487,7 +487,7 @@ private fun MainScaffold(
                                         onShare = {
                                             original?.let { url ->
                                                 if (!shareLink(context, entry.title, url)) {
-                                                    scope.launch { snackbar.showSnackbar("No app can share this link.") }
+                                                    scope.launch { snackbar.showSnackbar("Could not share this link.") }
                                                 }
                                             }
                                         },
