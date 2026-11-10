@@ -15,6 +15,9 @@ class ViewSaverTest {
         val scope = SaverScope { true }
         for (view in View.entries) {
             val saved = with(ViewSaver) { scope.save(mutableStateOf(view)) }
+            // The persisted format is the enum name; changing it would
+            // silently reset a reader's section after an app update.
+            assertEquals(view.name, saved)
             assertEquals(view, ViewSaver.restore(requireNotNull(saved))?.value)
         }
     }
