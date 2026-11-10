@@ -404,6 +404,18 @@ class AppViewModelTest {
         assertEquals("Could not import that file.", model.state.value.opml.error)
     }
 
+    @Test fun exportFailureIsReportedHonestly() = runBlocking(Dispatchers.IO) {
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        var factory: () -> EarnestApi = { api() }
+        val model = AppViewModel(app, Sessions(AuthenticatedSession(identity, "token"))) { factory() }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        factory = {
+            EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { throw java.io.IOException() }.build())
+        }
+        assertNull(model.exportOpml())
+        assertEquals("Could not export subscriptions.", model.state.value.opml.error)
+    }
+
     @Test fun unauthorizedExportExpiresTheOwningSession() = runBlocking(Dispatchers.IO) {
         SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
         val sessions = Sessions(AuthenticatedSession(identity, "token"))

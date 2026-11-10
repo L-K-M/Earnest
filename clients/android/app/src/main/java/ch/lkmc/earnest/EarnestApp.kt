@@ -977,17 +977,20 @@ private fun FeedsScreen(
         val accountAtPick = state.accountKey
         readingOpml = true
         scope.launch {
-            val xml = try { model.exportOpml() } finally { readingOpml = false }
-            if (xml == null) return@launch
-            if (model.state.value.accountKey != accountAtPick) return@launch
-            val written = withContext(Dispatchers.IO) {
-                runCatching {
-                    // "wt" truncates: a reused document must not keep the
-                    // tail of whatever it held before.
-                    context.contentResolver.openOutputStream(uri, "wt")?.use { it.write(xml.toByteArray()) } != null
-                }.getOrDefault(false)
+            try {
+                val xml = model.exportOpml() ?: return@launch
+                if (model.state.value.accountKey != accountAtPick) return@launch
+                val written = withContext(Dispatchers.IO) {
+                    runCatching {
+                        // "wt" truncates: a reused document must not keep the
+                        // tail of whatever it held before.
+                        context.contentResolver.openOutputStream(uri, "wt")?.use { it.write(xml.toByteArray()) } != null
+                    }.getOrDefault(false)
+                }
+                if (!written) model.opmlFileFailed("Could not write that file.")
+            } finally {
+                readingOpml = false
             }
-            if (!written) model.opmlFileFailed("Could not write that file.")
         }
     }
     val subscriptions = state.snapshot.objects.filter { it.kind == SyncEngine.OBJECT_SUBSCRIPTION && !it.deleted }
@@ -1008,7 +1011,7 @@ private fun FeedsScreen(
             }
         }
         item {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = onSubscribe) {
                     Icon(Icons.Filled.Add, contentDescription = null)
                     Text("Subscribe by URL")
