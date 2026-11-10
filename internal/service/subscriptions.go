@@ -326,11 +326,14 @@ func (s *Service) subscribeTx(ctx context.Context, tx pgx.Tx, a Actor, rawURL st
 	}
 	// One URL can back two feed rows: the shared public row and the user's
 	// own credential-bearing row. Deduplicate subscriptions by URL so a second
-	// subscribe cannot stack a parallel feed showing every item twice.
+	// subscribe cannot stack a parallel feed showing every item twice. A
+	// recorded permanent redirect is an alias of the canonical URL, so match
+	// it too; an exact canonical match outranks an alias.
 	var existing int64
 	err := tx.QueryRow(ctx, `SELECT s.id FROM subscriptions s JOIN feeds f ON f.id=s.feed_id
-  WHERE s.user_id=$1 AND s.deleted_at IS NULL AND f.url=$2
-  AND (f.owner_user_id IS NULL OR f.owner_user_id=$1) ORDER BY f.owner_user_id NULLS LAST,s.id`, a.UserID, rawURL).Scan(&existing)
+  WHERE s.user_id=$1 AND s.deleted_at IS NULL AND (f.url=$2 OR f.permanent_redirect_url=$2)
+  AND (f.owner_user_id IS NULL OR f.owner_user_id=$1)
+  ORDER BY f.url=$2 DESC,f.owner_user_id NULLS LAST,s.id`, a.UserID, rawURL).Scan(&existing)
 	if err == nil {
 		sub, err := s.resubscribeTx(ctx, tx, a, rawURL, meta, encrypted, existing)
 		return sub, false, err
