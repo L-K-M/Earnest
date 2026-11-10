@@ -2,6 +2,8 @@ package ch.lkmc.earnest
 
 import android.app.Activity
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.os.Build
@@ -57,6 +59,35 @@ internal fun openOriginal(context: Context, url: String): Boolean = try {
     // Non-activity callers need a task; preserve the reader's back stack otherwise.
     if (context !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     context.startActivity(intent)
+    true
+} catch (_: ActivityNotFoundException) {
+    false
+} catch (_: SecurityException) {
+    false
+}
+
+/** Copies the article link to the clipboard, reporting false without one. */
+internal fun copyLink(context: Context, url: String): Boolean {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return false
+    clipboard.setPrimaryClip(ClipData.newPlainText("Link", url))
+    return true
+}
+
+/**
+ * Shares the article link through the system share sheet, reporting false
+ * when the sheet cannot start. The chooser reports its own empty state when
+ * no app can share, so availability is not checked here: such a query would
+ * need a package-visibility declaration and can fail open on Android 11+.
+ */
+internal fun shareLink(context: Context, title: String, url: String): Boolean = try {
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, title)
+        putExtra(Intent.EXTRA_TEXT, url)
+    }
+    val chooser = Intent.createChooser(send, null)
+    if (context !is Activity) chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    context.startActivity(chooser)
     true
 } catch (_: ActivityNotFoundException) {
     false

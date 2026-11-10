@@ -185,6 +185,34 @@ class ReaderTest {
         }
     }
 
+    @Test fun copyLinkPutsTheUrlOnTheClipboard() {
+        val application = ApplicationProvider.getApplicationContext<Application>()
+        assertTrue(copyLink(application, "https://example.com/article"))
+        val clipboard = application.getSystemService(android.content.ClipboardManager::class.java)
+        assertEquals("https://example.com/article", clipboard.primaryClip?.getItemAt(0)?.text?.toString())
+    }
+
+    @Test fun shareLinkOpensTheSystemShareSheet() {
+        val application = ApplicationProvider.getApplicationContext<Application>()
+        assertTrue(shareLink(application, "An article", "https://example.com/article"))
+        val intent = shadowOf(application).nextStartedActivity
+        assertEquals(Intent.ACTION_CHOOSER, intent.action)
+        val send = intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
+        assertEquals(Intent.ACTION_SEND, send?.action)
+        assertEquals("text/plain", send?.type)
+        assertEquals("An article", send?.getStringExtra(Intent.EXTRA_SUBJECT))
+        assertEquals("https://example.com/article", send?.getStringExtra(Intent.EXTRA_TEXT))
+        assertTrue(intent.flags and Intent.FLAG_ACTIVITY_NEW_TASK != 0)
+    }
+
+    // The system chooser reports its own empty state when no app can share,
+    // so this covers only the share sheet failing to start.
+    @Test fun shareLinkReturnsFalseWhenTheShareSheetCannotBeStarted() {
+        val application = ApplicationProvider.getApplicationContext<Application>()
+        shadowOf(application).checkActivities(true)
+        assertFalse(shareLink(application, "An article", "https://example.com/article"))
+    }
+
     @Test fun noCacheDoesNotLoadEmptyFallback() {
         val view = createReaderWebView(ApplicationProvider.getApplicationContext<Context>(), url, null)
         view.loadUrl(url)

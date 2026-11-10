@@ -129,6 +129,13 @@ class AppViewModel internal constructor(
     @Volatile private var account: SessionCache? = null
     @Volatile private var activeSession: AuthenticatedSession? = null
     @Volatile private var keptImportDocument: ByteArray? = null
+    // Entries the reader explicitly marked unread. The passive seen heuristic
+    // from scrolling never overrides that choice (the web client's rule);
+    // opening the article reads it again.
+    private val markedUnread: MutableSet<Long> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    // The cadence this client last saved per subscription, so an undo can
+    // leave one a later change replaced alone.
+    private val savedCadence = java.util.concurrent.ConcurrentHashMap<Long, String>()
     private val mediaCache = MediaCache(getApplication())
     @Volatile private var mediaClient: Pair<AuthenticatedSession, EarnestApi>? = null
     private var sessionStartedAt = Instant.now()
@@ -194,6 +201,8 @@ class AppViewModel internal constructor(
         activeSession = null
         mediaClient = null
         keptImportDocument = null
+        markedUnread.clear()
+        savedCadence.clear()
         _sessionNotice.value = null
         _state.value = UiState(readerSettingsUi = ReaderSettingsUi(epoch = epoch))
         viewModelScope.launch(Dispatchers.IO) {
@@ -291,6 +300,8 @@ class AppViewModel internal constructor(
         sessions.clearToken()
         activeSession = null
         mediaClient = null
+        markedUnread.clear()
+        savedCadence.clear()
         account = null
         keptImportDocument = null
         _state.value = UiState(readerSettingsUi = ReaderSettingsUi(epoch = readerEpoch.incrementAndGet()))
@@ -774,37 +785,99 @@ class AppViewModel internal constructor(
         }
     }
 
+    /** Marks the entry read, as opening an article does, and releases the mark-unread guard. */
     fun markSeen(entryId: Long) {
-        queue(entryId, SyncEngine.REGISTER_SEEN, JsonPrimitive(SyncEngine.VALUE_SEEN), SyncEngine.KIND_PASSIVE, "seen")
+        markedUnread -= entryId
+        queue(entryId, "seen", SyncEngine.KIND_PASSIVE) { state ->
+            listOf(RegisterIntent(SyncEngine.REGISTER_SEEN, JsonPrimitive(SyncEngine.VALUE_SEEN), state.seen.value))
+        }
     }
 
-    fun later(entryId: Long, onSaved: () -> Unit = {}) {
-        queue(entryId, SyncEngine.REGISTER_SHELF, JsonPrimitive(SyncEngine.VALUE_LATER), SyncEngine.KIND_EXPLICIT, "later", onSaved)
+    /**
+     * Records reading progress from scrolling past a row. Returns false, and
+     * writes nothing, for an entry the reader explicitly marked unread: the
+     * passive heuristic never overrides that choice until the article is
+     * opened.
+     */
+    fun markScrolledPast(entryId: Long): Boolean {
+        if (entryId in markedUnread) return false
+        markSeen(entryId)
+        return true
     }
 
-    fun done(entryId: Long, onSaved: () -> Unit = {}) {
-        queue(entryId, SyncEngine.REGISTER_SHELF, JsonPrimitive(SyncEngine.VALUE_DONE), SyncEngine.KIND_EXPLICIT, "done", onSaved)
+    internal fun later(entryId: Long, onSaved: (ReversibleAction) -> Unit = {}) {
+        act(entryId, EntryActionName.LATER, SyncEngine.REGISTER_SHELF, JsonPrimitive(SyncEngine.VALUE_LATER), onSaved)
     }
 
-    fun keep(entryId: Long) {
-        queue(entryId, SyncEngine.REGISTER_KEPT, JsonPrimitive(true), SyncEngine.KIND_EXPLICIT, "keep")
+    internal fun done(entryId: Long, onSaved: (ReversibleAction) -> Unit = {}) {
+        act(entryId, EntryActionName.DONE, SyncEngine.REGISTER_SHELF, JsonPrimitive(SyncEngine.VALUE_DONE), onSaved)
     }
 
-    fun unkeep(entryId: Long) {
-        queue(entryId, SyncEngine.REGISTER_KEPT, JsonPrimitive(false), SyncEngine.KIND_EXPLICIT, "unkeep")
+    internal fun keep(entryId: Long, onSaved: (ReversibleAction) -> Unit = {}) {
+        act(entryId, EntryActionName.KEEP, SyncEngine.REGISTER_KEPT, JsonPrimitive(true), onSaved)
     }
 
-    fun undoShelf(entryId: Long) {
-        queue(entryId, SyncEngine.REGISTER_SHELF, JsonPrimitive(SyncEngine.VALUE_NONE), SyncEngine.KIND_EXPLICIT, "undo")
+    internal fun unkeep(entryId: Long, onSaved: (ReversibleAction) -> Unit = {}) {
+        act(entryId, EntryActionName.UNKEEP, SyncEngine.REGISTER_KEPT, JsonPrimitive(false), onSaved)
     }
 
-    fun undoDone(entryId: Long) {
-        queue(entryId, SyncEngine.REGISTER_SHELF, JsonPrimitive(SyncEngine.VALUE_NONE), SyncEngine.KIND_EXPLICIT, "undo")
+    /**
+     * Marks a read article unread again. A Done shelf is cleared with it (the
+     * server rule the engine enforces), and [undo] restores both registers.
+     * Scrolling past the row never marks it read again (see [markScrolledPast]).
+     */
+    internal fun markUnread(entryId: Long, onSaved: (ReversibleAction) -> Unit = {}) {
+        markedUnread += entryId
+        queue(
+            entryId, EntryActionName.UNREAD.id, SyncEngine.KIND_EXPLICIT, EntryActionName.UNREAD, onSaved,
+            onNotSaved = { markedUnread -= entryId }, build = ::unreadIntents,
+        )
     }
 
-    private fun queue(entryId: Long, register: String, value: JsonElement, kind: String, action: String, onSaved: () -> Unit = {}) {
+    /** Writes back the registers [action] wrote and nothing has changed since. */
+    internal fun undo(action: ReversibleAction, onSaved: (ReversibleAction) -> Unit = {}) {
+        queue(
+            action.entryId, "undo", SyncEngine.KIND_EXPLICIT,
+            onSaved = { saved ->
+                // The entry is read again (or the restore was moot because
+                // the register moved on), so the mark-unread guard goes with
+                // it. A failed undo keeps the guard.
+                if (SyncEngine.REGISTER_SEEN in action.written) markedUnread -= action.entryId
+                onSaved(saved)
+            },
+        ) { state -> undoIntents(action, state) }
+    }
+
+    private fun act(entryId: Long, name: EntryActionName, register: String, value: JsonElement, onSaved: (ReversibleAction) -> Unit) {
+        queue(entryId, name.id, SyncEngine.KIND_EXPLICIT, name, onSaved) { state ->
+            listOf(RegisterIntent(register, value, valueOf(state, register)))
+        }
+    }
+
+    /**
+     * Queues the register writes [build] derives from the entry's current
+     * state, as one action. [undoable] names the action for its undo snackbar.
+     * [onSaved] reports success only after the writes are durably queued,
+     * carrying the values undo must restore; [onNotSaved] reports an action
+     * that never reached the durable queue.
+     */
+    private fun queue(
+        entryId: Long,
+        opId: String,
+        kind: String,
+        undoable: EntryActionName? = null,
+        onSaved: (ReversibleAction) -> Unit = {},
+        onNotSaved: () -> Unit = {},
+        build: (ch.lkmc.earnest.core.State) -> List<RegisterIntent>,
+    ) {
         viewModelScope.launch(Dispatchers.IO) {
-            val (cache, session) = activeAccount("Still signing in; the action was not saved.") ?: return@launch
+            var saved = false
+            val active = activeAccount("Still signing in; the action was not saved.")
+            if (active == null) {
+                onNotSaved()
+                return@launch
+            }
+            val (cache, session) = active
             try {
                 cache.withEngine { syncEngine ->
                     if (!currentOrExpired(session, cache)) return@withEngine
@@ -814,23 +887,28 @@ class AppViewModel internal constructor(
                         return@withEngine
                     }
                     val current = syncEngine.state(principal, entryId)
-                    val base = when (register) {
-                        SyncEngine.REGISTER_SHELF -> current.shelf.rev
-                        SyncEngine.REGISTER_KEPT -> current.kept.rev
-                        else -> current.seen.rev
+                    val intents = build(current)
+                    intents.forEachIndexed { index, intent ->
+                        val write = StateWrite(
+                            opId = "$opId-$entryId-${java.util.UUID.randomUUID()}-$index",
+                            principal = principal,
+                            entryId = entryId,
+                            register = intent.register,
+                            value = intent.value,
+                            base = Revision(syncEngine.snapshot().cursor.generation, revOf(current, intent.register)),
+                            occurredAt = Instant.now().toString(),
+                            kind = kind,
+                        )
+                        syncEngine.queue(write)
                     }
-                    val write = StateWrite(
-                        opId = "$action-$entryId-${java.util.UUID.randomUUID()}",
-                        principal = principal,
-                        entryId = entryId,
-                        register = register,
-                        value = value,
-                        base = Revision(syncEngine.snapshot().cursor.generation, base),
-                        occurredAt = Instant.now().toString(),
-                        kind = kind,
-                    )
-                    syncEngine.queue(write)
                     syncEngine.flush()
+                    saved = true
+                    onSaved(ReversibleAction(
+                        entryId = entryId,
+                        message = undoable?.message.orEmpty(),
+                        prior = intents.associate { it.register to it.prior },
+                        written = intents.associate { it.register to it.value },
+                    ))
                     val restored = restoredState(syncEngine, principal)
                     search.invalidateForGeneration(restored.snapshot.cursor.generation)
                     val agentChanges = cache.agentChanges()
@@ -841,15 +919,19 @@ class AppViewModel internal constructor(
                         agentChanges = agentChanges,
                         sessionAgentChanges = activitySince(agentChanges, sessionStartedAt),
                     ) }
-                    onSaved()
                     flushScheduler.request()
                 }
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
             } catch (error: Exception) {
                 if (currentOrExpired(session, cache)) {
-                    _state.update { current -> current.copy(error = failureText("Could not save the action", error)) }
+                    // A failure after the flush is a refresh problem, not a
+                    // save problem: the writes are already durable.
+                    val what = if (saved) "The action was saved, but the view could not refresh" else "Could not save the action"
+                    _state.update { current -> current.copy(error = failureText(what, error)) }
                 }
+            } finally {
+                if (!saved) onNotSaved()
             }
         }
     }
@@ -933,14 +1015,30 @@ class AppViewModel internal constructor(
         }
     }
 
-    fun setCadence(subscriptionId: Long, cadence: String) {
+    fun setCadence(subscriptionId: Long, cadence: String, onSaved: () -> Unit = {}) {
         viewModelScope.launch(Dispatchers.IO) {
             val api = api() ?: return@launch
             runCatching {
                 api.updateSubscription(subscriptionId, SubscriptionPatch(opId = opId("cadence"), cadence = cadence))
-            }.onSuccess { refresh() }
+            }.onSuccess {
+                savedCadence[subscriptionId] = cadence
+                onSaved()
+                refresh()
+            }
             .onFailure { _state.update { current -> current.copy(error = failureText("Could not save the cadence", it)) } }
         }
+    }
+
+    /**
+     * Restores the cadence [written] replaced, leaving one alone that a later
+     * change of this client's replaced it with. The snapshot cannot be the
+     * reference: it refreshes only after a change round-trips, so undoing on a
+     * slow link would skip the restore entirely. Returns whether it started.
+     */
+    fun undoCadence(subscriptionId: Long, restore: String, written: String): Boolean {
+        if (savedCadence[subscriptionId] != written) return false
+        setCadence(subscriptionId, restore)
+        return true
     }
 
     fun revert(activityId: Long) {
@@ -1129,6 +1227,8 @@ class AppViewModel internal constructor(
         account = null
         activeSession = null
         mediaClient = null
+        markedUnread.clear()
+        savedCadence.clear()
         keptImportDocument = null
         _state.value = UiState(readerSettingsUi = ReaderSettingsUi(epoch = readerEpoch.incrementAndGet()))
         if (_loggedIn.value) _sessionNotice.value = "Your session expired. Sign in again."

@@ -76,6 +76,7 @@ class AppViewModelTest {
             "/v1/changes" -> """{"changes":[],"next":{"generation":"g1","rev":0},"next_cursor":"g1:0"}"""
             "/v1/activity/agent-changes" -> """[{"id":7,"principal_id":9,"principal_name":"Morning Agent","action":"state.updated","target":{"entry_id":2,"register":"shelf"},"before":null,"after":{"shelf":{"value":"done"}},"generation":"g1","created_at":"${java.time.Instant.now()}","next_action":"revert"}]"""
             "/v1/entries/2" -> """{"id":2,"subscription_id":3,"feed_id":5,"seq":4,"first_seen_at":"2026-11-03T00:00:00Z","title":"Notification headline","url":"https://news.test/article","author":"Author","rev":2,"deleted":false}"""
+            "/v1/subscriptions/3" -> """{"id":3,"feed_id":5,"title":"Feed","url":"https://feed.test/rss","site_url":"https://feed.test","folder_id":0,"cadence":"today","extract":"none","rev":1,"deleted":false,"private":false,"initial_through_seq":0,"initial_fetch_pending":false,"health":{"next_fetch_at":"2026-11-10T00:00:00Z","consecutive_failures":0,"http_status":200,"posts_per_day":1.0,"firehose":false}}"""
             else -> "[]"
         }
         val status = when (path) {
@@ -198,6 +199,185 @@ class AppViewModelTest {
         model.done(2) { saved.incrementAndGet() }
         withTimeout(15000) { model.state.first { it.error?.contains("action was not saved") == true } }
         assertEquals("failed action reported success", 0, saved.get())
+    }
+
+    @Test fun markUnreadClearsDoneAndUndoRestoresBothRegisters() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadEntry(2)
+        SessionCache(app, identity).withEngine {
+            it.queue(StateWrite("seed-seen", 1, 2, SyncEngine.REGISTER_SEEN, kotlinx.serialization.json.JsonPrimitive("seen"), Revision("g1", 0), "2026-11-03T00:00:00Z", "explicit"))
+            it.queue(StateWrite("seed-shelf", 1, 2, SyncEngine.REGISTER_SHELF, kotlinx.serialization.json.JsonPrimitive("done"), Revision("g1", 0), "2026-11-03T00:00:00Z", "explicit"))
+        }
+        val action = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
+        model.markUnread(2) { action.set(it) }
+        withTimeout(15000) { while (action.get() == null) delay(10) }
+        var state = SessionCache(app, identity).withEngine { it.state(1, 2) }
+        assertEquals(kotlinx.serialization.json.JsonPrimitive("unseen"), state.seen.value)
+        assertEquals(kotlinx.serialization.json.JsonPrimitive("none"), state.shelf.value)
+
+        val undone = java.util.concurrent.atomic.AtomicInteger()
+        model.undo(action.get()) { undone.incrementAndGet() }
+        withTimeout(15000) { while (undone.get() == 0) delay(10) }
+        state = SessionCache(app, identity).withEngine { it.state(1, 2) }
+        assertEquals(kotlinx.serialization.json.JsonPrimitive("seen"), state.seen.value)
+        assertEquals(kotlinx.serialization.json.JsonPrimitive("done"), state.shelf.value)
+    }
+
+    @Test fun keepIsUndoableWithTheValuesItReplaced() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadEntry(2)
+        val action = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
+        model.keep(2) { action.set(it) }
+        withTimeout(15000) { while (action.get() == null) delay(10) }
+        assertEquals("Kept", action.get().message)
+        assertEquals(kotlinx.serialization.json.JsonPrimitive(false), action.get().prior[SyncEngine.REGISTER_KEPT])
+        assertEquals(kotlinx.serialization.json.JsonPrimitive(true), action.get().written[SyncEngine.REGISTER_KEPT])
+        assertEquals(kotlinx.serialization.json.JsonPrimitive(true), SessionCache(app, identity).withEngine { it.state(1, 2) }.kept.value)
+
+        val undone = java.util.concurrent.atomic.AtomicInteger()
+        model.undo(action.get()) { undone.incrementAndGet() }
+        withTimeout(15000) { while (undone.get() == 0) delay(10) }
+        assertEquals(kotlinx.serialization.json.JsonPrimitive(false), SessionCache(app, identity).withEngine { it.state(1, 2) }.kept.value)
+    }
+
+    @Test fun undoLeavesAnActionAnotherWriteChanged() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadEntry(2)
+        val first = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
+        model.later(2) { first.set(it) }
+        withTimeout(15000) { while (first.get() == null) delay(10) }
+        val second = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
+        model.done(2) { second.set(it) }
+        withTimeout(15000) { while (second.get() == null) delay(10) }
+
+        val undone = java.util.concurrent.atomic.AtomicInteger()
+        model.undo(first.get()) { undone.incrementAndGet() }
+        withTimeout(15000) { while (undone.get() == 0) delay(10) }
+        // The Later action's write is gone from the article; undo must not
+        // drag it out of Done back to no shelf.
+        assertEquals(kotlinx.serialization.json.JsonPrimitive("done"), SessionCache(app, identity).withEngine { it.state(1, 2) }.shelf.value)
+    }
+
+    @Test fun markUnreadSticksThroughScrollingPast() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadEntry(2)
+        // Opening the article reads it.
+        model.markSeen(2)
+        withTimeout(15000) {
+            while (SessionCache(app, identity).withEngine { it.state(1, 2) }.seen.value != kotlinx.serialization.json.JsonPrimitive("seen")) delay(10)
+        }
+        val action = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
+        model.markUnread(2) { action.set(it) }
+        withTimeout(15000) { while (action.get() == null) delay(10) }
+
+        // Scrolling past the row afterwards never re-marks it read.
+        assertFalse(model.markScrolledPast(2))
+        delay(250)
+        assertEquals(kotlinx.serialization.json.JsonPrimitive("unseen"), SessionCache(app, identity).withEngine { it.state(1, 2) }.seen.value)
+
+        // Opening the article reads it again.
+        model.markSeen(2)
+        withTimeout(15000) {
+            while (SessionCache(app, identity).withEngine { it.state(1, 2) }.seen.value != kotlinx.serialization.json.JsonPrimitive("seen")) delay(10)
+        }
+
+        // Opening released the guard: after another writer leaves the row
+        // unread again, scrolling past it marks it read.
+        SessionCache(app, identity).withEngine {
+            it.queue(StateWrite("external-unread", 1, 2, SyncEngine.REGISTER_SEEN, kotlinx.serialization.json.JsonPrimitive("unseen"), Revision("g1", 0), "2026-11-03T00:00:00Z", "explicit"))
+        }
+        withTimeout(15000) {
+            while (SessionCache(app, identity).withEngine { it.state(1, 2) }.seen.value != kotlinx.serialization.json.JsonPrimitive("unseen")) delay(10)
+        }
+        assertTrue(model.markScrolledPast(2))
+        withTimeout(15000) {
+            while (SessionCache(app, identity).withEngine { it.state(1, 2) }.seen.value != kotlinx.serialization.json.JsonPrimitive("seen")) delay(10)
+        }
+    }
+
+    @Test fun signingOutClearsTheMarkUnreadGuard() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadEntry(2)
+        val action = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
+        model.markUnread(2) { action.set(it) }
+        withTimeout(15000) { while (action.get() == null) delay(10) }
+        assertFalse(model.markScrolledPast(2))
+        model.logout()
+        assertTrue(model.markScrolledPast(2))
+    }
+
+    @Test fun undoReleasesTheMarkUnreadGuard() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadEntry(2)
+        val action = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
+        model.markUnread(2) { action.set(it) }
+        withTimeout(15000) { while (action.get() == null) delay(10) }
+        assertFalse(model.markScrolledPast(2))
+
+        val undone = java.util.concurrent.atomic.AtomicInteger()
+        model.undo(action.get()) { undone.incrementAndGet() }
+        withTimeout(15000) { while (undone.get() == 0) delay(10) }
+        assertTrue(model.markScrolledPast(2))
+    }
+
+    @Test fun failedMarkUnreadReleasesTheGuard() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadEntry(2)
+        SessionCache(app, identity).db.snapshot().save(ch.lkmc.earnest.db.SyncSnapshotEntity(json = "invalid snapshot"))
+        val action = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
+        model.markUnread(2) { action.set(it) }
+        withTimeout(15000) { model.state.first { it.error?.startsWith("Could not save the action") == true } }
+        assertNull(action.get())
+        // No unread write landed, so scrolling may mark the row read. The
+        // guard is released in queue()'s finally, after the error publishes,
+        // so wait for the release rather than assuming it already happened.
+        withTimeout(15000) { while (!model.markScrolledPast(2)) delay(10) }
+    }
+
+    @Test fun failedUndoKeepsTheMarkUnreadGuard() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadEntry(2)
+        val action = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
+        model.markUnread(2) { action.set(it) }
+        withTimeout(15000) { while (action.get() == null) delay(10) }
+        SessionCache(app, identity).db.snapshot().save(ch.lkmc.earnest.db.SyncSnapshotEntity(json = "invalid snapshot"))
+
+        val undone = java.util.concurrent.atomic.AtomicInteger()
+        model.undo(action.get()) { undone.incrementAndGet() }
+        withTimeout(15000) { model.state.first { it.error?.startsWith("Could not save the action") == true } }
+        assertEquals(0, undone.get())
+        // The article is still unread: the guard stands.
+        assertFalse(model.markScrolledPast(2))
+    }
+
+    @Test fun scrollingPastMarksUnseenRowsRead() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadEntry(2)
+        assertTrue(model.markScrolledPast(2))
+        withTimeout(15000) {
+            while (SessionCache(app, identity).withEngine { it.state(1, 2) }.seen.value != kotlinx.serialization.json.JsonPrimitive("seen")) delay(10)
+        }
+    }
+
+    @Test fun cadenceUndoLeavesOneChangedSinceAlone() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        // The user changes the cadence twice in a row.
+        val first = java.util.concurrent.atomic.AtomicInteger()
+        model.setCadence(3, "week") { first.incrementAndGet() }
+        withTimeout(15000) { while (first.get() == 0) delay(10) }
+        val second = java.util.concurrent.atomic.AtomicInteger()
+        model.setCadence(3, "now") { second.incrementAndGet() }
+        withTimeout(15000) { while (second.get() == 0) delay(10) }
+
+        // The first change's undo must not drag the feed back past the second.
+        calls.clear()
+        assertFalse(model.undoCadence(3, restore = "today", written = "week"))
+        delay(250)
+        assertTrue("undo clobbered the later change", calls.none { it.startsWith("/v1/subscriptions/") })
+
+        // The second change's undo restores what it replaced.
+        assertTrue(model.undoCadence(3, restore = "today", written = "now"))
+        withTimeout(15000) { while (calls.none { it.startsWith("/v1/subscriptions/") }) delay(10) }
     }
 
     @Test fun notificationMissingFromSnapshotFetchesMetadata() = runBlocking(Dispatchers.IO) {

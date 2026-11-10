@@ -7,6 +7,8 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -278,15 +280,20 @@ private fun MainScaffold(
         )
     }
 
-    fun undo(entryId: Long, target: SwipeTarget) {
+    /** Offers one undo for a completed action; the snackbar names the action. */
+    fun offerUndo(message: String, onUndo: () -> Unit) {
         scope.launch {
             val result = snackbar.showSnackbar(
-                message = target.message,
+                message = message,
                 actionLabel = "Undo",
                 duration = SnackbarDuration.Short,
             )
-            if (result == SnackbarResult.ActionPerformed) model.undoShelf(entryId)
+            if (result == SnackbarResult.ActionPerformed) onUndo()
         }
+    }
+
+    val undoable = { action: ReversibleAction ->
+        offerUndo(action.message) { model.undo(action) }
     }
 
     // Every destination draws its icon in its own tone. Labels stay ink: the
@@ -389,7 +396,19 @@ private fun MainScaffold(
                                     unreadMode = state.readerSettings.readingMode == ch.lkmc.earnest.core.ReadingMode.UNREAD_COUNTS,
                                     onSubscribe = { showSubscribe = true },
                                     onUnsubscribe = { model.unsubscribe(it) },
-                                    onCadence = { id, cadence -> model.setCadence(id, cadence) },
+                                    onCadence = { id, cadence ->
+                                        val prior = state.snapshot.objects
+                                            .firstOrNull { it.kind == SyncEngine.OBJECT_SUBSCRIPTION && it.id == id }
+                                            ?.let(River::cadence)
+                                        model.setCadence(id, cadence) {
+                                            // Undo only when the cadence this
+                                            // change replaced is actually
+                                            // known; never guess one.
+                                            if (prior != null) {
+                                                offerUndo("Cadence set to ${cadenceOf(cadence).label}") { model.undoCadence(id, prior, cadence) }
+                                            }
+                                        }
+                                    },
                                 )
                                 View.ACTIVITY -> ActivityScreen(
                                     groups = activityGroups,
@@ -420,11 +439,12 @@ private fun MainScaffold(
                                         agentSelected = agentSelected + entryId
                                         scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
                                     },
-                                    onLater = { id -> model.later(id) { undo(id, SwipeTarget.LATER) } },
-                                    onDone = { id -> model.done(id) { undo(id, SwipeTarget.DONE) } },
-                                    onSeen = model::markSeen,
-                                    onKeep = { model.keep(it) },
-                                    onUnkeep = { model.unkeep(it) },
+                                    onLater = { id -> model.later(id, undoable) },
+                                    onDone = { id -> model.done(id, undoable) },
+                                    onSeen = { id -> model.markScrolledPast(id) },
+                                    onKeep = { id -> model.keep(id, undoable) },
+                                    onUnkeep = { id -> model.unkeep(id, undoable) },
+                                    onMarkUnread = { id -> model.markUnread(id, undoable) },
                                 )
                             }
                         }
@@ -443,9 +463,12 @@ private fun MainScaffold(
                             } else {
                                 Column(Modifier.fillMaxSize()) {
                                     val original = originalUrl(entry)
+                                    val entryState = state.states[entry.id]
+                                        ?: SyncEngine.initialState(state.principalId, entry.id)
                                     ReaderHeader(
                                         entry = entry,
                                         source = subscriptionTitles[entry.subscriptionId].orEmpty(),
+                                        isRead = canMarkUnread(entryState),
                                         onOpenOriginal = {
                                             original?.let { url ->
                                                 if (!openOriginal(context, url)) {
@@ -453,6 +476,22 @@ private fun MainScaffold(
                                                 }
                                             }
                                         },
+                                        onCopyLink = {
+                                            original?.let { url ->
+                                                // One notice keeps feedback identical on every supported
+                                                // version; Android 13+ also shows its own clipboard toast.
+                                                val message = if (copyLink(context, url)) "Link copied." else "Could not copy the link."
+                                                scope.launch { snackbar.showSnackbar(message) }
+                                            }
+                                        },
+                                        onShare = {
+                                            original?.let { url ->
+                                                if (!shareLink(context, entry.title, url)) {
+                                                    scope.launch { snackbar.showSnackbar("Could not share this link.") }
+                                                }
+                                            }
+                                        },
+                                        onMarkUnread = { model.markUnread(entry.id, undoable) },
                                     )
                                     val content = reader.content
                                     when {
@@ -587,31 +626,42 @@ private fun ThemeDialog(
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ReaderHeader(entry: CachedEntry, source: String, onOpenOriginal: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 16.dp),
-        verticalAlignment = Alignment.Top,
-    ) {
-        Column(Modifier.weight(1f)) {
+private fun ReaderHeader(
+    entry: CachedEntry,
+    source: String,
+    isRead: Boolean,
+    onOpenOriginal: () -> Unit,
+    onCopyLink: () -> Unit,
+    onShare: () -> Unit,
+    onMarkUnread: () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 16.dp)) {
+        Text(
+            entry.title,
+            style = MaterialTheme.typography.titleMedium,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+        )
+        val date = entryDateLabel(entry)
+        val meta = listOfNotNull(source.takeIf { it.isNotBlank() }, date.takeIf { it.isNotBlank() })
+        if (meta.isNotEmpty()) {
             Text(
-                entry.title,
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
+                meta.joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            val date = entryDateLabel(entry)
-            val meta = listOfNotNull(source.takeIf { it.isNotBlank() }, date.takeIf { it.isNotBlank() })
-            if (meta.isNotEmpty()) {
-                Text(
-                    meta.joinToString(" · "),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
         }
-        if (originalUrl(entry) != null) {
-            TextButton(onClick = onOpenOriginal) { Text("Open original") }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (originalUrl(entry) != null) {
+                TextButton(onClick = onOpenOriginal) { Text("Open original") }
+                TextButton(onClick = onCopyLink) { Text("Copy link") }
+                TextButton(onClick = onShare) { Text("Share") }
+            }
+            if (isRead) {
+                TextButton(onClick = onMarkUnread) { Text("Mark unread") }
+            }
         }
     }
 }
@@ -641,6 +691,7 @@ private fun EntryListScreen(
     onSeen: (Long) -> Unit,
     onKeep: (Long) -> Unit,
     onUnkeep: (Long) -> Unit,
+    onMarkUnread: (Long) -> Unit,
 ) {
     val listState = rememberLazyListState()
     MarkSeenOnScroll(entries, principalId, listState, onSeen)
@@ -690,19 +741,23 @@ private fun EntryListScreen(
                     onClick = { onOpen(entry.id) },
                 )
             }
-            if (effective.kept.value == kotlinx.serialization.json.JsonPrimitive(true)) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (effective.kept.value == kotlinx.serialization.json.JsonPrimitive(true)) {
                     TextButton(
                         onClick = { onUnkeep(entry.id) },
                         colors = ButtonDefaults.textButtonColors(contentColor = LocalTones.current.plum),
                     ) { Text("Unkeep") }
-                }
-            } else {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                } else {
                     TextButton(
                         onClick = { onKeep(entry.id) },
                         colors = ButtonDefaults.textButtonColors(contentColor = LocalTones.current.plum),
                     ) { Text("Keep") }
+                }
+                if (canMarkUnread(effective)) {
+                    TextButton(onClick = { onMarkUnread(entry.id) }) { Text("Mark unread") }
                 }
             }
         }

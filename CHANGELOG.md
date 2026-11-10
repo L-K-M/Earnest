@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Android row and reader actions undo: Later, Done, Keep, Unkeep and Mark
+  unread name themselves in an undo snackbar that writes back the
+  registers they changed and leaves alone one changed since, and a
+  cadence change offers the same: its undo leaves alone one a later
+  change replaced. Mark unread returns a read article to unread
+  and clears Done with it; scrolling never reverses it, only opening the
+  article reads it again. The reader header gained Copy link and Share
+  for the entry URL.
 - Context menus in the web client. Right-click, long-press or press
   Shift+F10 on Today, a folder or a feed for "Mark all as read", a
   refresh and its settings, or on an article for its reading actions and
