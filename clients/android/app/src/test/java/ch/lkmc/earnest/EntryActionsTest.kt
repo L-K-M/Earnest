@@ -116,6 +116,8 @@ class EntryActionsTest {
 
     @Test fun canMarkUnreadOnlyForReadArticles() {
         assertTrue(canMarkUnread(stateOf(seen = "seen", shelf = "none")))
+        assertTrue(canMarkUnread(stateOf(seen = "seen", shelf = "later")))
+        assertTrue(canMarkUnread(stateOf(seen = "seen", shelf = "done")))
         assertFalse(canMarkUnread(stateOf(seen = "unseen", shelf = "none")))
         assertFalse(canMarkUnread(stateOf(seen = "none", shelf = "none")))
     }

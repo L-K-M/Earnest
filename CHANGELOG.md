@@ -11,8 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Android row and reader actions undo: Later, Done, Keep, Unkeep and Mark
   unread name themselves in an undo snackbar that writes back the
-  registers they changed and leaves alone one changed since, and a cadence
-  change offers the same. Mark unread returns a read article to unread
+  registers they changed and leaves alone one changed since, and a
+  cadence change offers the same: its undo leaves alone one a later
+  change replaced. Mark unread returns a read article to unread
   and clears Done with it; scrolling never reverses it, only opening the
   article reads it again. The reader header gained Copy link and Share
   for the entry URL.

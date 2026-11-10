@@ -133,6 +133,9 @@ class AppViewModel internal constructor(
     // from scrolling never overrides that choice (the web client's rule);
     // opening the article reads it again.
     private val markedUnread: MutableSet<Long> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    // The cadence this client last saved per subscription, so an undo can
+    // leave one a later change replaced alone.
+    private val savedCadence = java.util.concurrent.ConcurrentHashMap<Long, String>()
     private val mediaCache = MediaCache(getApplication())
     @Volatile private var mediaClient: Pair<AuthenticatedSession, EarnestApi>? = null
     private var sessionStartedAt = Instant.now()
@@ -199,6 +202,7 @@ class AppViewModel internal constructor(
         mediaClient = null
         keptImportDocument = null
         markedUnread.clear()
+        savedCadence.clear()
         _sessionNotice.value = null
         _state.value = UiState(readerSettingsUi = ReaderSettingsUi(epoch = epoch))
         viewModelScope.launch(Dispatchers.IO) {
@@ -297,6 +301,7 @@ class AppViewModel internal constructor(
         activeSession = null
         mediaClient = null
         markedUnread.clear()
+        savedCadence.clear()
         account = null
         keptImportDocument = null
         _state.value = UiState(readerSettingsUi = ReaderSettingsUi(epoch = readerEpoch.incrementAndGet()))
@@ -1016,11 +1021,24 @@ class AppViewModel internal constructor(
             runCatching {
                 api.updateSubscription(subscriptionId, SubscriptionPatch(opId = opId("cadence"), cadence = cadence))
             }.onSuccess {
+                savedCadence[subscriptionId] = cadence
                 onSaved()
                 refresh()
             }
             .onFailure { _state.update { current -> current.copy(error = failureText("Could not save the cadence", it)) } }
         }
+    }
+
+    /**
+     * Restores the cadence [written] replaced, leaving one alone that a later
+     * change of this client's replaced it with. The snapshot cannot be the
+     * reference: it refreshes only after a change round-trips, so undoing on a
+     * slow link would skip the restore entirely. Returns whether it started.
+     */
+    fun undoCadence(subscriptionId: Long, restore: String, written: String): Boolean {
+        if (savedCadence[subscriptionId] != written) return false
+        setCadence(subscriptionId, restore)
+        return true
     }
 
     fun revert(activityId: Long) {
@@ -1210,6 +1228,7 @@ class AppViewModel internal constructor(
         activeSession = null
         mediaClient = null
         markedUnread.clear()
+        savedCadence.clear()
         keptImportDocument = null
         _state.value = UiState(readerSettingsUi = ReaderSettingsUi(epoch = readerEpoch.incrementAndGet()))
         if (_loggedIn.value) _sessionNotice.value = "Your session expired. Sign in again."

@@ -405,7 +405,7 @@ private fun MainScaffold(
                                             // change replaced is actually
                                             // known; never guess one.
                                             if (prior != null) {
-                                                offerUndo("Cadence set to ${cadenceOf(cadence).label}") { model.setCadence(id, prior) }
+                                                offerUndo("Cadence set to ${cadenceOf(cadence).label}") { model.undoCadence(id, prior, cadence) }
                                             }
                                         }
                                     },

@@ -76,6 +76,7 @@ class AppViewModelTest {
             "/v1/changes" -> """{"changes":[],"next":{"generation":"g1","rev":0},"next_cursor":"g1:0"}"""
             "/v1/activity/agent-changes" -> """[{"id":7,"principal_id":9,"principal_name":"Morning Agent","action":"state.updated","target":{"entry_id":2,"register":"shelf"},"before":null,"after":{"shelf":{"value":"done"}},"generation":"g1","created_at":"${java.time.Instant.now()}","next_action":"revert"}]"""
             "/v1/entries/2" -> """{"id":2,"subscription_id":3,"feed_id":5,"seq":4,"first_seen_at":"2026-11-03T00:00:00Z","title":"Notification headline","url":"https://news.test/article","author":"Author","rev":2,"deleted":false}"""
+            "/v1/subscriptions/3" -> """{"id":3,"feed_id":5,"title":"Feed","url":"https://feed.test/rss","site_url":"https://feed.test","folder_id":0,"cadence":"today","extract":"none","rev":1,"deleted":false,"private":false,"initial_through_seq":0,"initial_fetch_pending":false,"health":{"next_fetch_at":"2026-11-10T00:00:00Z","consecutive_failures":0,"http_status":200,"posts_per_day":1.0,"firehose":false}}"""
             else -> "[]"
         }
         val status = when (path) {
@@ -356,6 +357,27 @@ class AppViewModelTest {
         withTimeout(15000) {
             while (SessionCache(app, identity).withEngine { it.state(1, 2) }.seen.value != kotlinx.serialization.json.JsonPrimitive("seen")) delay(10)
         }
+    }
+
+    @Test fun cadenceUndoLeavesOneChangedSinceAlone() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        // The user changes the cadence twice in a row.
+        val first = java.util.concurrent.atomic.AtomicInteger()
+        model.setCadence(3, "week") { first.incrementAndGet() }
+        withTimeout(15000) { while (first.get() == 0) delay(10) }
+        val second = java.util.concurrent.atomic.AtomicInteger()
+        model.setCadence(3, "now") { second.incrementAndGet() }
+        withTimeout(15000) { while (second.get() == 0) delay(10) }
+
+        // The first change's undo must not drag the feed back past the second.
+        calls.clear()
+        assertFalse(model.undoCadence(3, restore = "today", written = "week"))
+        delay(250)
+        assertTrue("undo clobbered the later change", calls.none { it.startsWith("/v1/subscriptions/") })
+
+        // The second change's undo restores what it replaced.
+        assertTrue(model.undoCadence(3, restore = "today", written = "now"))
+        withTimeout(15000) { while (calls.none { it.startsWith("/v1/subscriptions/") }) delay(10) }
     }
 
     @Test fun notificationMissingFromSnapshotFetchesMetadata() = runBlocking(Dispatchers.IO) {
