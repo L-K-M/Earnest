@@ -59,15 +59,22 @@ export function frameMessage(data: unknown, nonce: string): FrameMessage | null 
 
 export function ArticleFrame({src}: {src: string}) {
   const frame = useRef<HTMLIFrameElement>(null)
-  const [sized, setSized] = useState<{src: string; height: number} | null>(null)
+  const [sized, setSized] = useState<{nonce: string; height: number} | null>(null)
   // A fresh token per article, echoed by the page it loads. The height is
   // kept with the article it measured: a new article starts unsized until
   // its own page reports.
   const {nonce, framed} = useMemo(() => {
-    const token = crypto.randomUUID()
+    // randomUUID needs a secure context and a current browser; the sync
+    // layer needs the same, but a fallback keeps the reader rendering where
+    // only this API is missing (Chrome before 92).
+    const token = typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('')
     return {nonce: token, framed: `${src}${src.includes('?') ? '&' : '?'}frame_nonce=${encodeURIComponent(token)}`}
   }, [src])
-  const height = sized && sized.src === src ? sized.height : null
+  // The height belongs to the load that measured it, not just the address:
+  // a later visit to the same article starts unsized like any other load.
+  const height = sized && sized.nonce === nonce ? sized.height : null
   useEffect(() => {
     function receive(event: MessageEvent) {
       const node = frame.current
@@ -77,7 +84,7 @@ export function ArticleFrame({src}: {src: string}) {
       const message = frameMessage(event.data, nonce)
       if (!message) return
       if (message.earnest === 'height') {
-        setSized({src, height: message.height})
+        setSized({nonce, height: message.height})
         return
       }
       const pane = node.closest<HTMLElement>('.reader-scroll')
