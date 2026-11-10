@@ -32,6 +32,14 @@ type loginAttempts struct {
 	until time.Time
 }
 
+type loginOutcome uint8
+
+const (
+	loginAborted loginOutcome = iota
+	loginFailed
+	loginSucceeded
+)
+
 // Auth manages identity and credentials independently of the reader service.
 type Auth struct {
 	db        *store.Store
@@ -40,6 +48,9 @@ type Auth struct {
 	events    broker
 	mu        sync.Mutex
 	attempts  map[string]loginAttempts
+	// In-flight reservations are separate from expiring failure counters:
+	// a slow password check must retain its slot across a window boundary.
+	pendingLogins map[string]int
 }
 
 // NewAuth constructs an identity service. clock may be nil for the system clock.
@@ -47,7 +58,7 @@ func NewAuth(db *store.Store, clock func() time.Time, secretKey []byte) *Auth {
 	if clock == nil {
 		clock = time.Now
 	}
-	return &Auth{db: db, now: clock, secretKey: append([]byte(nil), secretKey...), attempts: make(map[string]loginAttempts)}
+	return &Auth{db: db, now: clock, secretKey: append([]byte(nil), secretKey...), attempts: make(map[string]loginAttempts), pendingLogins: make(map[string]int)}
 }
 
 func passwordHash(password string) (string, error) {
@@ -153,55 +164,61 @@ func (a *Auth) pruneExpired(now time.Time) {
 	}
 }
 
-// throttle reports whether the username or client is currently locked out.
-// Only failures count, so a user who signs in successfully several times in a
-// row is not locked out by their own activity.
-func (a *Auth) throttle(username, client string) bool {
+// startLogin reserves an attempt before database I/O and password hashing.
+// Failures plus in-flight checks share the limit for both username and client.
+// Every accepted reservation must be completed once with finishLogin.
+// Counters are local to this Auth instance and do not survive a restart.
+func (a *Auth) startLogin(username, client string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.pruneExpired(a.now())
+	keys := failureKeys(username, client)
+	for _, key := range keys {
+		if a.attempts[key].count+a.pendingLogins[key] >= loginLimit {
+			return false
+		}
+	}
+	for _, key := range keys {
+		a.pendingLogins[key]++
+	}
+	return true
+}
+
+// finishLogin releases the reservation and records its outcome atomically.
+// Success forgives account failures, but never the client's spray counter.
+// Database errors release their slot without counting as a wrong password.
+func (a *Auth) finishLogin(username, client string, outcome loginOutcome) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	now := a.now()
 	a.pruneExpired(now)
 	for _, key := range failureKeys(username, client) {
-		if a.attempts[key].count >= loginLimit {
-			return true
+		if a.pendingLogins[key] == 1 {
+			delete(a.pendingLogins, key)
+		} else {
+			a.pendingLogins[key]--
+		}
+		if outcome == loginFailed {
+			v := a.attempts[key]
+			if v.until.IsZero() {
+				v.until = now.Add(loginWindow)
+			}
+			v.count++
+			a.attempts[key] = v
 		}
 	}
-	return false
-}
-
-// recordFailure counts a failed attempt against the username and client.
-// Counters are in-process only: they are neither shared across service
-// instances nor persisted across restarts.
-func (a *Auth) recordFailure(username, client string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	now := a.now()
-	a.pruneExpired(now)
-	for _, key := range failureKeys(username, client) {
-		v := a.attempts[key]
-		if v.until.IsZero() {
-			v.until = now.Add(loginWindow)
-		}
-		v.count++
-		a.attempts[key] = v
+	if outcome == loginSucceeded {
+		delete(a.attempts, "u:"+username)
 	}
-}
-
-// clearFailures forgets the account's recorded failures once a successful
-// login proves knowledge of its password. The client counter stays: it bounds
-// password spraying across accounts, and a valid login for one account must
-// not reset it for the next guesses against others.
-func (a *Auth) clearFailures(username string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	delete(a.attempts, "u:"+username)
 }
 
 // Authenticate checks a password and rate limits attempts by username and client key.
 func (a *Auth) Authenticate(ctx context.Context, username, password, clientKey string) (Actor, error) {
-	if a.throttle(username, clientKey) {
+	if !a.startLogin(username, clientKey) {
 		return Actor{}, ErrRateLimited
 	}
+	outcome := loginAborted
+	defer func() { a.finishLogin(username, clientKey, outcome) }()
 	var actor Actor
 	var hash string
 	err := a.db.Pool().QueryRow(ctx, "SELECT u.id,p.id,u.password_hash FROM users u JOIN principals p ON p.user_id=u.id AND p.kind='human' WHERE u.username=$1", username).Scan(&actor.UserID, &actor.PrincipalID, &hash)
@@ -213,10 +230,10 @@ func (a *Auth) Authenticate(ctx context.Context, username, password, clientKey s
 	}
 	ok := checkPassword(hash, password)
 	if !ok || err != nil {
-		a.recordFailure(username, clientKey)
+		outcome = loginFailed
 		return Actor{}, ErrUnauthorized
 	}
-	a.clearFailures(username)
+	outcome = loginSucceeded
 	actor.Kind = PrincipalHuman
 	actor.Scopes = append([]Scope(nil), HumanScopes...)
 	return actor, nil
