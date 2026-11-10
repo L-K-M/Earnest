@@ -1,6 +1,8 @@
 # Review and improvement plan, 2026-11-10
 
-Status: implementation in progress. Baseline commit `f8adbdb` (merge of PR #143).
+Status: first improvement batch implemented and submitted for merge.
+Baseline commit `f8adbdb` (merge of PR #143). The linked PRs track CI,
+review and merge gates; local implementation alone does not complete a task.
 
 This plan covers one pass over the whole app: the Go server, the web
 client, the Android and Mac clients, deployment, CI and the docs. It
@@ -17,7 +19,7 @@ all eight backlog sections completed. Missing slices are a coverage gap,
 not a clean review. The current batch prioritizes reproducible safety and
 reliability fixes from the recovered reports.
 
-## Where the app stands
+## Where the app stood at the baseline
 
 - Two tagged releases, v0.1.0 and v0.2.0. Fifty-four pull requests merged
   since 2026-11-06, most of them client work: Android reader tools, undo,
@@ -81,17 +83,16 @@ Everything else is deferred and listed with a reason.
 
 - Work happens in dedicated worktrees under `/private/tmp`, never in the
   shared Paseo worktree, which other agents switch branches in.
-- Two web branches are in flight by other agents:
-  `fix/web-frame-channel` and `fix/web-today-muted-sync-flicker`. Fixes
-  in this plan avoid the article frame channel and the Today muted
-  filter, or wait for those to merge.
+- Other agents own the article frame channel and Today muted filter.
+  The frame fix #146 has merged; its follow-up #157 and the Today work
+  #153 remain separate. This batch avoids those implementation areas.
 - Review and bounded verification jobs run directly on LongCat 2.5 through
   Pi. Each job has one small task and a timeout. Failed or missing reports
   are disclosed rather than treated as approval.
 - Every fix follows the bug-fix rule in `AGENTS.md`: a regression test
   that fails first, then the fix.
-- Review helpers read the working tree live, so the tree they read is a
-  detached checkout at the baseline that nobody edits.
+- Review helpers used a detached checkout at the baseline that nobody
+  edited. It was removed after the reports were recovered.
 
 ## Risks
 
@@ -100,13 +101,15 @@ Everything else is deferred and listed with a reason.
   before investigating.
 - The GLM reviewer may hit the `pull_request_target` brownout; wait for
   the window, then retrigger.
-- The system volume has little free space. The isolated validation
-  database and large test scratch files live on the data volume. Owned
+- System disk space is shared with other jobs. Large build scratch files
+  live on the data volume. The isolated test database moved to an external
+  SSD after slow database cloning caused test-harness timeouts. Owned
   worktrees and test services are removed when their work ends.
 
 ## Status
 
-Updated as work lands. PR numbers link the record.
+Execution checkpoint after local verification. PR links are the source of
+truth for the latest CI, review and merge state.
 
 | Item | State | PR |
 | --- | --- | --- |
@@ -114,8 +117,12 @@ Updated as work lands. PR numbers link the record.
 | Review fan-out | 8/19 reports recovered; gaps recorded | see findings.md |
 | Dependabot: merge green PRs #133 to #137 | merged | #133, #134, #135, #136, #137 |
 | Dependabot: rerun #138 | rerun passed, merged | [#138](https://github.com/L-K-M/Earnest/pull/138) |
-| Dependabot: fix #139 corepack on Node 26 | local Node 24/26 web-stage builds passed; fix PR open | [#150](https://github.com/L-K-M/Earnest/pull/150) |
-| Retention overflow | regression reproduced and fixed; PR open | [#155](https://github.com/L-K-M/Earnest/pull/155) |
-| Redirect-triggered shutdown | Postgres regressions reproduced and fixed; PR open | [#156](https://github.com/L-K-M/Earnest/pull/156) |
-| Further fixes | verification in progress | see findings.md |
-| Backlog reconciliation | all 134 headings assessed, original preserved; follow-up PR pending | see backlog.md |
+| Docker pnpm install | merged; local Node 24/26 web-stage builds passed | [#150](https://github.com/L-K-M/Earnest/pull/150) |
+| Dependabot: Node 26 | refreshed with current main without force-pushing | [#139](https://github.com/L-K-M/Earnest/pull/139) |
+| Retention overflow | regression verified, implementation submitted | [#155](https://github.com/L-K-M/Earnest/pull/155) |
+| Redirect-triggered shutdown | Postgres regressions verified, implementation submitted | [#156](https://github.com/L-K-M/Earnest/pull/156) |
+| Uncertain LLM billing | completion, embedding and Postgres regressions verified | [#159](https://github.com/L-K-M/Earnest/pull/159) |
+| Duplicate redirected subscriptions | reuse, precedence and credential regressions verified | [#160](https://github.com/L-K-M/Earnest/pull/160) |
+| Concurrent login throttle | mixed-endpoint concurrency regression verified; Go race suite passed | [#161](https://github.com/L-K-M/Earnest/pull/161) |
+| Portable backup pruning | regression verified on macOS and Alpine | [#162](https://github.com/L-K-M/Earnest/pull/162) |
+| Backlog reconciliation | all 134 headings assessed, original preserved | [#158](https://github.com/L-K-M/Earnest/pull/158) |

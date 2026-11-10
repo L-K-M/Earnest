@@ -4,9 +4,11 @@ Baseline: `f8adbdb`. This is a partial review, not a clean bill of health.
 The first fan-out returned eight of nineteen review reports, with 28 candidate
 findings. All 134 historical backlog items were assessed separately.
 
-States: **open** means not fixed, **implemented** means a fix is awaiting
-merge, **fixed** requires a merged PR, **refuted** requires contrary evidence,
-and **deferred** gives the reason. Unverified claims are labeled explicitly.
+States: **open** means not fixed, **implemented** means regression-tested
+code has been submitted, **fixed** explicitly records a merged PR,
+**refuted** requires contrary evidence, and **deferred** gives the reason.
+The linked PR is authoritative for CI, review and merge status. Unverified
+claims are labeled explicitly.
 
 ## Coverage and recovery
 
@@ -32,7 +34,7 @@ not claimed as implementations by this review.
 
 ### S1-1: Retention duration overflow
 
-**Implemented, unmerged:** [#155](https://github.com/L-K-M/Earnest/pull/155),
+**Implemented:** [#155](https://github.com/L-K-M/Earnest/pull/155),
 branch `fix/retention-day-overflow`.
 
 `config.loadRetentionDays` accepted arbitrary positive integers, while
@@ -49,7 +51,7 @@ Postgres configured, so its database tests skipped; config tests need none.
 
 ### S7-1: A feed redirect can shut down the server
 
-**Implemented, unmerged:** [#156](https://github.com/L-K-M/Earnest/pull/156),
+**Implemented:** [#156](https://github.com/L-K-M/Earnest/pull/156),
 branch `fix/feed-redirect-fragments`.
 
 A permanent redirect preserves its fragment in `outbound.Result.FinalURL`.
@@ -68,30 +70,53 @@ credential scoping and SSRF checks are unchanged.
 
 ### S10-1: Lost LLM responses can refund billable requests
 
-**Open, independently confirmed by code reading.** `internal/llm/client.go:billingUnknown`
-refunds every `outbound.Connect` failure. The outbound classification also
-covers read/write failures after a provider may have received the request.
-The push transport already distinguishes dial failures from uncertain
-mid-request failures. Acceptance: completion and embedding calls must retain
-the estimate on connection resets, while proven pre-send failures refund it.
+**Implemented:** [#159](https://github.com/L-K-M/Earnest/pull/159), branch
+`fix/llm-uncertain-billing`.
+
+`billingUnknown` refunded every `outbound.Connect` failure, including
+read/write failures after a provider may have received the request. The fix
+refunds a connection-class error only when a failed dial proves it was not
+sent. Completion and embedding regressions failed before the fix for resets
+and unexpected EOF, then passed while preserving pre-send refunds. A real
+local HTTP server receives the request and drops its response; Postgres
+settlement now retains the estimate and blocks another call at the cap.
+Race tests for `internal/llm` and `internal/pipeline` pass. No real provider
+was contacted. The stale budget paragraph in `docs/llm-providers.md` now
+describes atomic reservation and reconciliation.
 
 ### S2-1: Concurrent password checks bypass the failure limit
 
-**Open, independently confirmed by code reading.** `Auth.Authenticate` and `CompatLogin`
-check the throttle before password hashing, then record failures afterward.
-The two critical sections do not reserve in-flight attempts. A simultaneous
-burst can pass the check before any failure is recorded, multiplying both
-password guesses and Argon2 memory use. A fix must preserve successful-login
-semantics and not hold a process-wide mutex during hashing or database I/O.
+**Implemented:** [#161](https://github.com/L-K-M/Earnest/pull/161), branch
+`fix/concurrent-login-throttle`.
+
+`Authenticate` and `CompatLogin` checked the throttle before hashing, then
+recorded failures afterward. A deterministic Postgres table lock demonstrated
+seven password checks passing a five-attempt limit. The fix atomically
+reserves username and client slots before I/O, without holding the mutex
+during hashing or queries. It separately tracks in-flight checks so a window
+boundary cannot discard them. Aborted queries release slots without counting
+failures; success still forgives only account failures, not client spraying.
+
+Mixed-endpoint bursts now run five checks and refuse two, for both username
+and client limits. Concurrency, cleanup and cancellation race tests pass
+three consecutive runs. Existing success/spray/expiry tests pass, as do the
+full Go race suite, vet and all 18 packaging tests. See the validation note
+below for the separately discovered shell portability failure.
 
 ### S4-1: Redirect-target subscriptions can duplicate a feed
 
-**Open, independently confirmed by code reading; runtime test pending.**
-`subscribeTx` matches only `feeds.url`, unlike `resolveKeptFeed`, which also
-matches `permanent_redirect_url`. Subscribing to the target of a previously
-recorded permanent redirect can create a second subscription and split state
-between duplicate articles. A fix must prefer exact matches and preserve
-private-feed credential rebinding. Alias ambiguity needs regression coverage.
+**Implemented:** [#160](https://github.com/L-K-M/Earnest/pull/160), branch
+`fix/subscription-redirect-dedup`.
+
+`subscribeTx` matched only the canonical URL, creating a second feed and
+subscription for an existing redirect target. It now matches recorded aliases
+while preferring exact canonical matches and preserving ownership ordering.
+With the original query restored, the new regressions failed for public
+reuse, target resubscription and credential rebinding; they pass with the
+fix. Additional cases cover exact-match precedence, deleted subscriptions,
+foreign private feeds, one river item after repeated fetches, and secrets
+remaining off the public feed. Subscription, rebinding and kept-import race
+tests pass. Existing duplicates are not automatically merged or deleted.
 
 ### S1-2: Agents can request paid summaries
 
@@ -166,6 +191,42 @@ New features, redesigns and novel ideas remain deferred. Open assessments
 must be rechecked against current code before implementation. In particular,
 backlog labels are not a claim that every historical security or concurrency
 finding is correct.
+
+## Additional execution finding: portable backup pruning
+
+**Implemented:** [#162](https://github.com/L-K-M/Earnest/pull/162), branch
+`fix/portable-backup-pruning`.
+
+The full local `make test` run passed the Go suite, then failed because
+`scripts/backup.sh` used GNU `find -printf`. BSD/macOS and BusyBox find reject
+that option; the pipeline can report success while leaving old backups
+unpruned. Replace it with `find -exec basename`, retaining the UTC-name
+ordering and retention policy. A test shim rejects `-printf` even on GNU
+hosts: the old implementation fails, and the fix passes on macOS and inside
+Alpine 3.24. Only dummy dumps were used.
+
+## Validation and review checkpoint
+
+- Full `go test -race -count=1 ./...` passed with Postgres 18 and pgvector,
+  with packages serialized using `GOFLAGS=-p=1`. Vet and gofmt checks passed.
+- The first broad run hit database-clone/cleanup timeouts on slow storage;
+  it was stopped and rerun using an isolated database on an external SSD.
+  This was a test-harness failure, not a passing check.
+- `make test` on the authentication branch then stopped at the pre-existing
+  backup portability bug. Its shell regression passes with #162; all 18
+  Python packaging tests also passed separately. Do not read this as a claim
+  that the combined local `make check` gate ran successfully.
+- Every submitted fix has targeted red/green regression evidence. CI and
+  completed feedback on each linked PR still determine merge eligibility.
+- #155 review round 1: the alleged Config formatting leak is refuted by
+  `Config.String`/`GoString` redaction. A hypothetical future constructor
+  guard is deferred, not implemented as duplicate validation.
+- #156 review round 1: nil FinalURL is refuted by the concrete outbound
+  client's sole validated result constructor; the previous `URL.String`
+  was not nil-safe either. Extra redirect-chain coverage is deferred.
+- #150 merged after one minor-only review. Suggestions about a future
+  missing packageManager field or hash suffix were not necessary for the
+  actual pinned value and verified Node 24/26 builds.
 
 ## Review boundaries
 
