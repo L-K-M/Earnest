@@ -16,3 +16,4 @@
 - [Mac](mac.md): building and testing the Mac client.
 - [Android](android.md): building, connecting and push for the Android client.
 - [Research](research/README.md): preliminary research and its index; [decisions](research/decisions.md) override it.
+- [Plans](plans/2026-11-10-review/README.md): the 2026-11-10 review and improvement plan, its method and findings.
