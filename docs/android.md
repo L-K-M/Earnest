@@ -120,9 +120,12 @@ The reader shows the feed title and the published date (falling back to
 first seen) under the article title, with Open original, Copy link and Share
 actions for the entry URL; a read article's header also offers Mark unread.
 Open original opens the URL in the browser, Copy link places it on the
-clipboard and Share opens the system share sheet. It loads the signed
-content URL in a WebView with JavaScript, file access and content access
-disabled, and allows only
+clipboard and Share opens the system share sheet. The header also offers
+Find in article, with match counts and next/previous steps, and Smaller and
+Larger text, a device-local zoom from 80% to 200% that persists. When the
+cached copy is shown instead of the live article, the header says so.
+It loads the signed content URL in a WebView with JavaScript, file access
+and content access disabled, and allows only
 that origin; other links open in the browser. Articles you open from your lists
 load images through the image proxy. Articles an agent surfaced (a
 notification, a deep link or an agent-change notice) request `mode=click`, so

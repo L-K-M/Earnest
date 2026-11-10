@@ -3,6 +3,7 @@ package ch.lkmc.earnest
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import android.webkit.WebView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -480,10 +481,41 @@ private fun MainScaffold(
                                     val original = originalUrl(entry)
                                     val entryState = state.states[entry.id]
                                         ?: SyncEngine.initialState(state.principalId, entry.id)
+                                    var readerWebView by remember { mutableStateOf<WebView?>(null) }
+                                    var offlineCopy by remember { mutableStateOf(false) }
+                                    var findOpen by remember { mutableStateOf(false) }
+                                    var findQuery by remember { mutableStateOf("") }
+                                    var findLabel by remember { mutableStateOf("") }
+                                    var textZoom by remember { mutableStateOf(context.readerZoom()) }
+                                    DisposableEffect(readerWebView) {
+                                        val listener = WebView.FindListener { active, matches, done ->
+                                            if (done) findLabel = findCountLabel(active, matches)
+                                        }
+                                        readerWebView?.setFindListener(listener)
+                                        onDispose { readerWebView?.setFindListener(null) }
+                                    }
+                                    LaunchedEffect(findQuery, readerWebView) {
+                                        val view = readerWebView ?: return@LaunchedEffect
+                                        if (findQuery.isBlank()) {
+                                            view.clearMatches()
+                                            findLabel = ""
+                                        } else {
+                                            view.findAllAsync(findQuery)
+                                        }
+                                    }
+                                    // A new article starts clean: no offline
+                                    // notice and no find session from the last.
+                                    LaunchedEffect(entry.id) {
+                                        offlineCopy = false
+                                        findOpen = false
+                                        findQuery = ""
+                                        findLabel = ""
+                                    }
                                     ReaderHeader(
                                         entry = entry,
                                         source = subscriptionTitles[entry.subscriptionId].orEmpty(),
                                         isRead = canMarkUnread(entryState),
+                                        offlineCopy = offlineCopy,
                                         onOpenOriginal = {
                                             original?.let { url ->
                                                 if (!openOriginal(context, url)) {
@@ -507,7 +539,31 @@ private fun MainScaffold(
                                             }
                                         },
                                         onMarkUnread = { model.markUnread(entry.id, undoable) },
+                                        onFind = { findOpen = !findOpen },
+                                        onSmallerText = {
+                                            textZoom = zoomStep(textZoom, false)
+                                            context.setReaderZoom(textZoom)
+                                        },
+                                        onLargerText = {
+                                            textZoom = zoomStep(textZoom, true)
+                                            context.setReaderZoom(textZoom)
+                                        },
                                     )
+                                    if (findOpen) {
+                                        FindBar(
+                                            query = findQuery,
+                                            label = findLabel,
+                                            onQuery = { findQuery = it },
+                                            onPrevious = { readerWebView?.findNext(false) },
+                                            onNext = { readerWebView?.findNext(true) },
+                                            onClose = {
+                                                findOpen = false
+                                                findQuery = ""
+                                                findLabel = ""
+                                                readerWebView?.clearMatches()
+                                            },
+                                        )
+                                    }
                                     val content = reader.content
                                     when {
                                         reader.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -520,7 +576,10 @@ private fun MainScaffold(
                                             url = content.url,
                                             cachedHtml = content.cachedHtml,
                                             typography = state.readerSettings.typographyFor(entry.feedId),
+                                            textZoom = textZoom,
                                             modifier = Modifier.fillMaxSize(),
+                                            onFallback = { offlineCopy = true },
+                                            onWebView = { readerWebView = it },
                                         )
                                     }
                                 }
@@ -647,10 +706,14 @@ private fun ReaderHeader(
     entry: CachedEntry,
     source: String,
     isRead: Boolean,
+    offlineCopy: Boolean,
     onOpenOriginal: () -> Unit,
     onCopyLink: () -> Unit,
     onShare: () -> Unit,
     onMarkUnread: () -> Unit,
+    onFind: () -> Unit,
+    onSmallerText: () -> Unit,
+    onLargerText: () -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 16.dp)) {
         Text(
@@ -660,7 +723,11 @@ private fun ReaderHeader(
             overflow = TextOverflow.Ellipsis,
         )
         val date = entryDateLabel(entry)
-        val meta = listOfNotNull(source.takeIf { it.isNotBlank() }, date.takeIf { it.isNotBlank() })
+        val meta = listOfNotNull(
+            source.takeIf { it.isNotBlank() },
+            date.takeIf { it.isNotBlank() },
+            "Offline copy".takeIf { offlineCopy },
+        )
         if (meta.isNotEmpty()) {
             Text(
                 meta.joinToString(" · "),
@@ -674,10 +741,41 @@ private fun ReaderHeader(
                 TextButton(onClick = onCopyLink) { Text("Copy link") }
                 TextButton(onClick = onShare) { Text("Share") }
             }
+            TextButton(onClick = onFind) { Text("Find in article") }
+            TextButton(onClick = onSmallerText) { Text("Smaller text") }
+            TextButton(onClick = onLargerText) { Text("Larger text") }
             if (isRead) {
                 TextButton(onClick = onMarkUnread) { Text("Mark unread") }
             }
         }
+    }
+}
+
+@Composable
+private fun FindBar(
+    query: String,
+    label: String,
+    onQuery: (String) -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onClose: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        OutlinedTextField(
+            value = query,
+            onValueChange = onQuery,
+            label = { Text("Find in article") },
+            singleLine = true,
+            modifier = Modifier.weight(1f),
+        )
+        Text(label, style = MaterialTheme.typography.bodySmall)
+        TextButton(onClick = onPrevious) { Text("Previous") }
+        TextButton(onClick = onNext) { Text("Next") }
+        TextButton(onClick = onClose) { Text("Close") }
     }
 }
 

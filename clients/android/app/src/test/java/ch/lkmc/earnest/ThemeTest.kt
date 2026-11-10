@@ -25,6 +25,14 @@ class ThemeTest {
         assertEquals(ThemeSetting.SYSTEM, context.themeSetting())
     }
 
+    @Test fun readerZoomRoundTripsAndStaysClamped() {
+        assertEquals(100, context.readerZoom())
+        context.setReaderZoom(120)
+        assertEquals(120, context.readerZoom())
+        context.setReaderZoom(1000)
+        assertEquals(MAX_READER_ZOOM, context.readerZoom())
+    }
+
     @Test fun everySettingRoundTrips() {
         ThemeSetting.entries.forEach { setting ->
             context.setThemeSetting(setting)

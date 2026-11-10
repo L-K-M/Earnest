@@ -19,6 +19,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.net.toUri
@@ -102,25 +103,54 @@ internal fun shareLink(context: Context, title: String, url: String): Boolean = 
  * reaches the article page through the content URL and the offline fallback.
  */
 @Composable
-internal fun Reader(url: String?, cachedHtml: String?, typography: ReaderTypography, modifier: Modifier = Modifier) {
+internal fun Reader(
+    url: String?,
+    cachedHtml: String?,
+    typography: ReaderTypography,
+    textZoom: Int = 100,
+    modifier: Modifier = Modifier,
+    onFallback: () -> Unit = {},
+    onWebView: (WebView?) -> Unit = {},
+) {
     val systemDark = isSystemInDarkTheme()
     val displayUrl = url?.let { readerUrl(it, typography, systemDark) }
     val fallbackHtml = cachedHtml?.let { offlineReaderHtml(it, typography, systemDark) }
+    val fallbackCallback = rememberUpdatedState(onFallback)
+    val webViewCallback = rememberUpdatedState(onWebView)
     key(url, fallbackHtml) {
         AndroidView(
             modifier = modifier,
-            factory = { context -> createReaderWebView(context, displayUrl, fallbackHtml) },
+            factory = { context ->
+                createReaderWebView(context, displayUrl, fallbackHtml) { fallbackCallback.value() }
+            },
             update = { webView ->
+                webViewCallback.value(webView)
+                if (webView.settings.textZoom != textZoom) webView.settings.textZoom = textZoom
                 if (webView.tag != (displayUrl ?: fallbackHtml)) {
                     webView.tag = displayUrl ?: fallbackHtml
                     if (displayUrl != null) webView.loadUrl(displayUrl) else webView.loadUrl(ASSET_URL)
                 }
             },
             onReset = null,
-            onRelease = { it.destroy() },
+            onRelease = {
+                it.destroy()
+                webViewCallback.value(null)
+            },
         )
     }
 }
+
+/** The reader's text zoom bounds; [zoomStep] never leaves them. */
+internal const val MIN_READER_ZOOM = 80
+internal const val MAX_READER_ZOOM = 200
+
+/** The next text zoom step, clamped to the supported range. */
+internal fun zoomStep(current: Int, up: Boolean): Int =
+    (current + if (up) 10 else -10).coerceIn(MIN_READER_ZOOM, MAX_READER_ZOOM)
+
+/** The find bar's match label: "3/12", or "No matches" for an empty search. */
+internal fun findCountLabel(active: Int, total: Int): String =
+    if (total <= 0) "No matches" else "${active + 1}/$total"
 
 /** Maps the account's article theme to the content origin's `theme` value (internal/web/content.go). */
 internal fun ReaderTheme.contentTheme(systemDark: Boolean): String = when (this) {
@@ -204,7 +234,7 @@ internal class ReaderLoadState {
     }
 }
 
-internal fun createReaderWebView(context: Context, url: String?, cachedHtml: String?): WebView {
+internal fun createReaderWebView(context: Context, url: String?, cachedHtml: String?, onFallback: () -> Unit = {}): WebView {
     val allowedOrigin = url?.toUri()
     fun allowed(uri: android.net.Uri): Boolean = allowedOrigin != null &&
         uri.scheme == "https" && uri.host.equals(allowedOrigin.host, ignoreCase = true) &&
@@ -240,6 +270,7 @@ internal fun createReaderWebView(context: Context, url: String?, cachedHtml: Str
                 if (usingFallback || cachedHtml == null || !request.isForMainFrame || !allowed(request.url)) return
                 usingFallback = true
                 view.loadUrl(ASSET_URL)
+                onFallback()
             }
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
