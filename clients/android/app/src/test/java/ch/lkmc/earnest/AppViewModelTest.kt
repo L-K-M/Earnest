@@ -70,7 +70,7 @@ class AppViewModelTest {
     private fun api(agentChangesStatus: Int = 200, unauthorizedPath: String? = null, cancelledPath: String? = null) = EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { chain ->
         val path = chain.request().url.encodedPath
         calls += path
-        chain.request().body?.let { body ->
+        chain.request().body?.takeIf { !it.isOneShot() }?.let { body ->
             val buffer = okio.Buffer()
             body.writeTo(buffer)
             payloads += buffer.readUtf8()
@@ -439,7 +439,9 @@ class AppViewModelTest {
         withTimeout(15000) {
             while (model.state.value.snapshot.objects.none { it.id == 3L && ch.lkmc.earnest.core.River.cadence(it) == "today" }) delay(10)
         }
+        payloads.clear()
         assertTrue(model.undoCadence(3, restore = "today", written = "now"))
+        withTimeout(15000) { while (payloads.none { it.contains("\"cadence\":\"today\"") }) delay(10) }
     }
 
     @Test fun opmlImportPublishesASummaryAndRefreshes() = runBlocking(Dispatchers.IO) {
