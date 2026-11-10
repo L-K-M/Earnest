@@ -823,12 +823,24 @@ class AppViewModel internal constructor(
      */
     internal fun markUnread(entryId: Long, onSaved: (ReversibleAction) -> Unit = {}) {
         markedUnread += entryId
-        queue(entryId, EntryActionName.UNREAD.id, SyncEngine.KIND_EXPLICIT, EntryActionName.UNREAD, onSaved, ::unreadIntents)
+        queue(
+            entryId, EntryActionName.UNREAD.id, SyncEngine.KIND_EXPLICIT, EntryActionName.UNREAD, onSaved,
+            onNotSaved = { markedUnread -= entryId }, build = ::unreadIntents,
+        )
     }
 
     /** Writes back the registers [action] wrote and nothing has changed since. */
     internal fun undo(action: ReversibleAction, onSaved: (ReversibleAction) -> Unit = {}) {
-        queue(action.entryId, "undo", SyncEngine.KIND_EXPLICIT, onSaved = onSaved) { state -> undoIntents(action, state) }
+        queue(
+            action.entryId, "undo", SyncEngine.KIND_EXPLICIT,
+            onSaved = { saved ->
+                // The entry is read again (or the restore was moot because
+                // the register moved on), so the mark-unread guard goes with
+                // it. A failed undo keeps the guard.
+                if (SyncEngine.REGISTER_SEEN in action.written) markedUnread -= action.entryId
+                onSaved(saved)
+            },
+        ) { state -> undoIntents(action, state) }
     }
 
     private fun act(entryId: Long, name: EntryActionName, register: String, value: JsonElement, onSaved: (ReversibleAction) -> Unit) {
@@ -841,7 +853,8 @@ class AppViewModel internal constructor(
      * Queues the register writes [build] derives from the entry's current
      * state, as one action. [undoable] names the action for its undo snackbar.
      * [onSaved] reports success only after the writes are durably queued,
-     * carrying the values undo must restore.
+     * carrying the values undo must restore; [onNotSaved] reports an action
+     * that never reached the durable queue.
      */
     private fun queue(
         entryId: Long,
@@ -849,10 +862,17 @@ class AppViewModel internal constructor(
         kind: String,
         undoable: EntryActionName? = null,
         onSaved: (ReversibleAction) -> Unit = {},
+        onNotSaved: () -> Unit = {},
         build: (ch.lkmc.earnest.core.State) -> List<RegisterIntent>,
     ) {
         viewModelScope.launch(Dispatchers.IO) {
-            val (cache, session) = activeAccount("Still signing in; the action was not saved.") ?: return@launch
+            var saved = false
+            val active = activeAccount("Still signing in; the action was not saved.")
+            if (active == null) {
+                onNotSaved()
+                return@launch
+            }
+            val (cache, session) = active
             try {
                 cache.withEngine { syncEngine ->
                     if (!currentOrExpired(session, cache)) return@withEngine
@@ -877,6 +897,7 @@ class AppViewModel internal constructor(
                         syncEngine.queue(write)
                     }
                     syncEngine.flush()
+                    saved = true
                     val restored = restoredState(syncEngine, principal)
                     search.invalidateForGeneration(restored.snapshot.cursor.generation)
                     val agentChanges = cache.agentChanges()
@@ -901,6 +922,8 @@ class AppViewModel internal constructor(
                 if (currentOrExpired(session, cache)) {
                     _state.update { current -> current.copy(error = failureText("Could not save the action", error)) }
                 }
+            } finally {
+                if (!saved) onNotSaved()
             }
         }
     }

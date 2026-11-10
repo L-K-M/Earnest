@@ -305,6 +305,48 @@ class AppViewModelTest {
         assertTrue(model.markScrolledPast(2))
     }
 
+    @Test fun undoReleasesTheMarkUnreadGuard() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadEntry(2)
+        val action = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
+        model.markUnread(2) { action.set(it) }
+        withTimeout(15000) { while (action.get() == null) delay(10) }
+        assertFalse(model.markScrolledPast(2))
+
+        val undone = java.util.concurrent.atomic.AtomicInteger()
+        model.undo(action.get()) { undone.incrementAndGet() }
+        withTimeout(15000) { while (undone.get() == 0) delay(10) }
+        assertTrue(model.markScrolledPast(2))
+    }
+
+    @Test fun failedMarkUnreadReleasesTheGuard() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadEntry(2)
+        SessionCache(app, identity).db.snapshot().save(ch.lkmc.earnest.db.SyncSnapshotEntity(json = "invalid snapshot"))
+        val action = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
+        model.markUnread(2) { action.set(it) }
+        withTimeout(15000) { model.state.first { it.error?.startsWith("Could not save the action") == true } }
+        assertNull(action.get())
+        // No unread write landed, so scrolling may mark the row read.
+        assertTrue(model.markScrolledPast(2))
+    }
+
+    @Test fun failedUndoKeepsTheMarkUnreadGuard() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadEntry(2)
+        val action = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
+        model.markUnread(2) { action.set(it) }
+        withTimeout(15000) { while (action.get() == null) delay(10) }
+        SessionCache(app, identity).db.snapshot().save(ch.lkmc.earnest.db.SyncSnapshotEntity(json = "invalid snapshot"))
+
+        val undone = java.util.concurrent.atomic.AtomicInteger()
+        model.undo(action.get()) { undone.incrementAndGet() }
+        withTimeout(15000) { model.state.first { it.error?.startsWith("Could not save the action") == true } }
+        assertEquals(0, undone.get())
+        // The article is still unread: the guard stands.
+        assertFalse(model.markScrolledPast(2))
+    }
+
     @Test fun scrollingPastMarksUnseenRowsRead() = runBlocking(Dispatchers.IO) {
         val model = model()
         model.loadEntry(2)
