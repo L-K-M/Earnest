@@ -102,7 +102,8 @@ describe('ArticleFrame', () => {
     Object.defineProperty(crypto, 'randomUUID', {value: undefined, configurable: true})
     try {
       const {frame, nonce} = mount()
-      expect(nonce).toBeTruthy()
+      // 16 random bytes: the token is the message auth.
+      expect(nonce).toMatch(/^[0-9a-f]{32}$/)
       expect(frame.src).toContain(`frame_nonce=${encodeURIComponent(nonce)}`)
     } finally {
       Object.defineProperty(crypto, 'randomUUID', {value: original, configurable: true})
