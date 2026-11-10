@@ -29,6 +29,7 @@ enum class ThemeSetting(val label: String) {
 
 private const val THEME_PREFS = "appearance"
 private const val THEME_KEY = "theme"
+private const val READER_ZOOM_KEY = "reader_zoom"
 
 fun Context.themeSetting(): ThemeSetting {
     val prefs = getSharedPreferences(THEME_PREFS, Context.MODE_PRIVATE)
@@ -38,6 +39,17 @@ fun Context.themeSetting(): ThemeSetting {
 
 fun Context.setThemeSetting(setting: ThemeSetting) {
     getSharedPreferences(THEME_PREFS, Context.MODE_PRIVATE).edit { putString(THEME_KEY, setting.name) }
+}
+
+/** The reader's text zoom, device-local like the chrome theme. */
+fun Context.readerZoom(): Int =
+    getSharedPreferences(THEME_PREFS, Context.MODE_PRIVATE).getInt(READER_ZOOM_KEY, 100)
+        .coerceIn(MIN_READER_ZOOM, MAX_READER_ZOOM)
+
+fun Context.setReaderZoom(zoom: Int) {
+    getSharedPreferences(THEME_PREFS, Context.MODE_PRIVATE).edit {
+        putInt(READER_ZOOM_KEY, zoom.coerceIn(MIN_READER_ZOOM, MAX_READER_ZOOM))
+    }
 }
 
 // Earnest's reading palette: a warm paper surface with ink text and the

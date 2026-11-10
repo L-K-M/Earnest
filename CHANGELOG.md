@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The Android reader finds text in an article with match counts and
+  steps, zooms its text from 80% to 200% with a device-local setting,
+  and says so when it shows a cached copy of an article.
 - The Android Feeds screen imports and exports OPML subscriptions. The
   import reports each outline's outcome and the export writes the
   account's subscriptions to a picked file.
