@@ -98,6 +98,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   client across a list's image loads, refuses oversized bodies before
   caching them, and no longer recomposes every image on each state
   change.
+- The web article frame binds its page's messages to the load that
+  asked for them with a per-load token, ignores keys typed into a form
+  control inside an article, and starts every article unsized instead
+  of keeping the previous one's height.
 - The Android app remembers its section and open Settings screen across
   rotation and process death, like the open article already did, so the
   reader no longer reopens on Today after a configuration change.

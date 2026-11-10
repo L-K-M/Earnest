@@ -93,7 +93,9 @@ describe('articleMenu', () => {
     expect(d.act.mock.calls).toEqual([['shelf', 'none'], ['kept', false], ['seen', 'unseen'], ['shelf', 'none']])
   })
 
-  it('treats a Done article as read', () => {
+  it('treats a Done article as read, like the row does', () => {
+    // Marking it unread delegates to the shared model, which clears Done
+    // atomically with the unseen write; the item cannot get stuck.
     expect(item(articleMenu(state('unseen', 'done', false), deps()), 'read').label).toBe('Mark unread')
   })
 })
