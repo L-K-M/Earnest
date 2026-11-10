@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 
 	"github.com/L-K-M/Earnest/internal/outbound"
 )
@@ -142,8 +143,13 @@ func billingUnknown(err error) bool {
 		return false
 	}
 	switch outbound.ErrorClass(err) {
-	case outbound.DNS, outbound.Connect, outbound.TLS, outbound.DeniedAddress:
+	case outbound.DNS, outbound.TLS, outbound.DeniedAddress:
 		return false
+	case outbound.Connect:
+		// Connect also covers read/write failures after a request was sent.
+		// Only a failed dial proves the provider could not have billed it.
+		var op *net.OpError
+		return !errors.As(err, &op) || op.Op != "dial"
 	}
 	var providerErr *Error
 	if errors.As(err, &providerErr) {
