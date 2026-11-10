@@ -101,6 +101,15 @@ class AppViewModelTest {
         return model
     }
 
+    /** Waits for [condition], naming [what] when time runs out. */
+    private suspend fun await(what: String, condition: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + 15_000
+        while (!condition()) {
+            if (System.currentTimeMillis() > deadline) throw AssertionError("timed out waiting for $what")
+            delay(10)
+        }
+    }
+
     @Test fun agentSelectedEntriesOpenWithClickToLoadImages() = runBlocking(Dispatchers.IO) {
         val model = model()
         assertEquals("https://content.test/signed", model.openEntry(2)?.url)
@@ -330,7 +339,7 @@ class AppViewModelTest {
         // The guard is released in queue()'s finally once the failed write is
         // known not to have landed; the release is the completion signal, not
         // the shared error text, which a concurrent flush may replace.
-        withTimeout(15000) { while (!model.markScrolledPast(2)) delay(10) }
+        await("the failed save to release the guard") { model.markScrolledPast(2) }
         assertNull("a failed save must not report success", action.get())
     }
 
@@ -339,7 +348,7 @@ class AppViewModelTest {
         model.loadEntry(2)
         val action = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
         model.markUnread(2) { action.set(it) }
-        withTimeout(15000) { while (action.get() == null) delay(10) }
+        await("the mark-unread save") { action.get() != null }
         SessionCache(app, identity).db.snapshot().save(ch.lkmc.earnest.db.SyncSnapshotEntity(json = "invalid snapshot"))
 
         val undone = java.util.concurrent.atomic.AtomicInteger()
@@ -348,7 +357,7 @@ class AppViewModelTest {
         // The failure callback is the completion signal; the shared error text
         // is not, because the debounced outbox flush fails on the same corrupt
         // snapshot and replaces the text while this would wait for it.
-        withTimeout(15000) { while (failed.get() == 0) delay(10) }
+        await("the failed undo to report") { failed.get() > 0 }
         assertEquals(0, undone.get())
         // The article is still unread: the guard stands.
         assertFalse(model.markScrolledPast(2))
