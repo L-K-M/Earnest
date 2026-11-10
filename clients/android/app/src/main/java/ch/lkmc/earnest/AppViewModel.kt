@@ -914,7 +914,11 @@ class AppViewModel internal constructor(
     }
 
     /** Writes back the registers [action] wrote and nothing has changed since. */
-    internal fun undo(action: ReversibleAction, onSaved: (ReversibleAction) -> Unit = {}) {
+    internal fun undo(
+        action: ReversibleAction,
+        onSaved: (ReversibleAction) -> Unit = {},
+        onNotSaved: () -> Unit = {},
+    ) {
         queue(
             action.entryId, "undo", SyncEngine.KIND_EXPLICIT,
             onSaved = { saved ->
@@ -924,6 +928,7 @@ class AppViewModel internal constructor(
                 if (SyncEngine.REGISTER_SEEN in action.written) markedUnread -= action.entryId
                 onSaved(saved)
             },
+            onNotSaved = onNotSaved,
         ) { state -> undoIntents(action, state) }
     }
 

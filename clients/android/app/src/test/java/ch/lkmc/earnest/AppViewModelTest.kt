@@ -217,7 +217,7 @@ class AppViewModelTest {
         assertEquals(kotlinx.serialization.json.JsonPrimitive("none"), state.shelf.value)
 
         val undone = java.util.concurrent.atomic.AtomicInteger()
-        model.undo(action.get()) { undone.incrementAndGet() }
+        model.undo(action.get(), onSaved = { undone.incrementAndGet() })
         withTimeout(15000) { while (undone.get() == 0) delay(10) }
         state = SessionCache(app, identity).withEngine { it.state(1, 2) }
         assertEquals(kotlinx.serialization.json.JsonPrimitive("seen"), state.seen.value)
@@ -236,7 +236,7 @@ class AppViewModelTest {
         assertEquals(kotlinx.serialization.json.JsonPrimitive(true), SessionCache(app, identity).withEngine { it.state(1, 2) }.kept.value)
 
         val undone = java.util.concurrent.atomic.AtomicInteger()
-        model.undo(action.get()) { undone.incrementAndGet() }
+        model.undo(action.get(), onSaved = { undone.incrementAndGet() })
         withTimeout(15000) { while (undone.get() == 0) delay(10) }
         assertEquals(kotlinx.serialization.json.JsonPrimitive(false), SessionCache(app, identity).withEngine { it.state(1, 2) }.kept.value)
     }
@@ -252,7 +252,7 @@ class AppViewModelTest {
         withTimeout(15000) { while (second.get() == null) delay(10) }
 
         val undone = java.util.concurrent.atomic.AtomicInteger()
-        model.undo(first.get()) { undone.incrementAndGet() }
+        model.undo(first.get(), onSaved = { undone.incrementAndGet() })
         withTimeout(15000) { while (undone.get() == 0) delay(10) }
         // The Later action's write is gone from the article; undo must not
         // drag it out of Done back to no shelf.
@@ -316,7 +316,7 @@ class AppViewModelTest {
         assertFalse(model.markScrolledPast(2))
 
         val undone = java.util.concurrent.atomic.AtomicInteger()
-        model.undo(action.get()) { undone.incrementAndGet() }
+        model.undo(action.get(), onSaved = { undone.incrementAndGet() })
         withTimeout(15000) { while (undone.get() == 0) delay(10) }
         assertTrue(model.markScrolledPast(2))
     }
@@ -327,12 +327,11 @@ class AppViewModelTest {
         SessionCache(app, identity).db.snapshot().save(ch.lkmc.earnest.db.SyncSnapshotEntity(json = "invalid snapshot"))
         val action = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
         model.markUnread(2) { action.set(it) }
-        withTimeout(15000) { model.state.first { it.error?.startsWith("Could not save the action") == true } }
-        assertNull(action.get())
-        // No unread write landed, so scrolling may mark the row read. The
-        // guard is released in queue()'s finally, after the error publishes,
-        // so wait for the release rather than assuming it already happened.
+        // The guard is released in queue()'s finally once the failed write is
+        // known not to have landed; the release is the completion signal, not
+        // the shared error text, which a concurrent flush may replace.
         withTimeout(15000) { while (!model.markScrolledPast(2)) delay(10) }
+        assertNull("a failed save must not report success", action.get())
     }
 
     @Test fun failedUndoKeepsTheMarkUnreadGuard() = runBlocking(Dispatchers.IO) {
@@ -344,8 +343,12 @@ class AppViewModelTest {
         SessionCache(app, identity).db.snapshot().save(ch.lkmc.earnest.db.SyncSnapshotEntity(json = "invalid snapshot"))
 
         val undone = java.util.concurrent.atomic.AtomicInteger()
-        model.undo(action.get()) { undone.incrementAndGet() }
-        withTimeout(15000) { model.state.first { it.error?.startsWith("Could not save the action") == true } }
+        val failed = java.util.concurrent.atomic.AtomicInteger()
+        model.undo(action.get(), onSaved = { undone.incrementAndGet() }, onNotSaved = { failed.incrementAndGet() })
+        // The failure callback is the completion signal; the shared error text
+        // is not, because the debounced outbox flush fails on the same corrupt
+        // snapshot and replaces the text while this would wait for it.
+        withTimeout(15000) { while (failed.get() == 0) delay(10) }
         assertEquals(0, undone.get())
         // The article is still unread: the guard stands.
         assertFalse(model.markScrolledPast(2))
