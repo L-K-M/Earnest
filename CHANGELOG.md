@@ -85,6 +85,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The Android app remembers its section and open Settings screen across
+  rotation and process death, like the open article already did, so the
+  reader no longer reopens on Today after a configuration change.
 - The web reader scrolls an article in one place. The article frame now
   takes the article's height instead of the pane's, so Space, Page Down
   and the arrow keys move through the whole article, also after a click
