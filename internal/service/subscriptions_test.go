@@ -751,3 +751,39 @@ func TestSubscriptionValidation(t *testing.T) {
 		}
 	}
 }
+
+// The REST projection reports a muted subscription so clients can leave it
+// out of Today-wide range marks, as the sync projection already lets the
+// native clients do.
+func TestSubscriptionsReportMuted(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	f.s.prober = &subscriptionsProber{}
+	ctx := t.Context()
+	sub, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/muted", SubscribeOptions{OpID: "muted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sub.Muted {
+		t.Fatalf("new subscription reported muted: %+v", sub)
+	}
+	if _, err := f.db.Pool().Exec(ctx, `UPDATE subscriptions SET muted=true WHERE id=$1`, sub.ID); err != nil {
+		t.Fatal(err)
+	}
+	subs, err := f.s.Subscriptions(ctx, f.a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, got := range subs {
+		if got.ID != sub.ID {
+			continue
+		}
+		found = true
+		if !got.Muted {
+			t.Fatalf("muted subscription listed as unmuted: %+v", got)
+		}
+	}
+	if !found {
+		t.Fatalf("subscription %d missing from the list", sub.ID)
+	}
+}

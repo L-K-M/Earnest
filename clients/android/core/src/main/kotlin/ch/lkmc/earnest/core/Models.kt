@@ -166,6 +166,8 @@ data class Subscription(
     val rev: Long,
     val deleted: Boolean,
     val private: Boolean,
+    // Older servers do not project the flag; absent means not muted.
+    val muted: Boolean = false,
     val health: FeedHealth,
     @SerialName("icon_url") val iconUrl: String? = null,
 )

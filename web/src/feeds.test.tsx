@@ -28,7 +28,7 @@ const bodyOf = (call: [string, RequestInit?]) => JSON.parse(String(call[1]?.body
 
 const baseHealth = {next_fetch_at: '2026-11-02T01:00:00Z', consecutive_failures: 0, http_status: 200, posts_per_day: 2, firehose: false, last_attempt_at: '2026-11-02T00:00:00Z', last_success_at: '2026-11-02T00:00:00Z'}
 function sub(overrides: Partial<Subscription> = {}): Subscription {
-  return {id: 1, feed_id: 11, title: 'Feed One', url: 'https://a.example/feed', site_url: 'https://a.example/', folder_id: 0, cadence: 'today', extract: '', rev: 1, deleted: false, private: false, initial_through_seq: 0, initial_fetch_pending: false, health: {...baseHealth}, ...overrides}
+  return {id: 1, feed_id: 11, title: 'Feed One', url: 'https://a.example/feed', site_url: 'https://a.example/', folder_id: 0, cadence: 'today', extract: '', rev: 1, deleted: false, private: false, muted: false, initial_through_seq: 0, initial_fetch_pending: false, health: {...baseHealth}, ...overrides}
 }
 function folder(overrides: Partial<Folder> = {}): Folder {
   return {id: 3, name: 'Tech', rev: 1, deleted: false, ...overrides}

@@ -36,12 +36,15 @@ describe('reader rules', () => {
     expect(url.searchParams.get('measure')).toBe('64')
   })
   it('maps views to sync range scopes', () => {
-    const subs = [{id:1, cadence:'today'}, {id:2, cadence:'week'}, {id:3, cadence:'now'}, {id:4, cadence:'today', deleted:true}] as unknown as Subscription[]
+    const subs = [{id:1, cadence:'today'}, {id:2, cadence:'week'}, {id:3, cadence:'now'}, {id:4, cadence:'today', deleted:true}, {id:5, cadence:'today', muted:true}] as unknown as Subscription[]
     expect(viewScope({kind:'feed', id:7, title:'F'}, subs)).toEqual({kind:'subscriptions', ids:[7]})
     expect(viewScope({kind:'folder', id:3, title:'G'}, subs)).toEqual({kind:'folder', ids:[3]})
-    // Today covers what it shows: not This week's feeds, not deleted ones.
+    // Today covers what it shows: not This week's feeds, not deleted ones, not
+    // muted ones, which the river hides.
     expect(viewScope({kind:'today', title:'Today'}, subs)).toEqual({kind:'subscriptions', ids:[1, 3]})
     expect(viewScope({kind:'today', title:'Today'}, [])).toBeNull()
+    // A muted feed still covers itself when you ask for it by name.
+    expect(viewScope({kind:'feed', id:5, title:'M'}, subs)).toEqual({kind:'subscriptions', ids:[5]})
     expect(viewScope({kind:'label', id:2, title:'L'}, subs)).toBeNull()
     expect(viewScope({kind:'later', title:'Later'}, subs)).toBeNull()
   })

@@ -30,6 +30,9 @@ placeholder until the web bundle has been copied into `internal/web/dist`.
    [Addresses](#addresses)), so refresh, Back and Forward and bookmarks keep
    your place. Lists use ingest sequence, with
    explicit earlier/later pagination and an independent resume position per view.
+   A list starts from the position saved when it opened and keeps that start
+   while it is open, so reading the position again (a tab refocus, the offline
+   worker's first install) never blanks the list or moves it.
    Edition groups by subscription ID, then sequence, for deterministic order.
    Each row shows the feed's icon, or its letter mark when the site has none,
    and a square thumbnail when the article has an image. Earnest downloads

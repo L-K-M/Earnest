@@ -192,7 +192,7 @@ class EarnestApiTest {
             val body = if (chain.request().url.encodedPath == "/v1/opml") {
                 """<opml version="2.0"><body/></opml>"""
             } else {
-                """[{"path":[],"deferred":true,"subscription":{"id":3,"feed_id":5,"title":"Feed","url":"https://feed.test/rss","site_url":"","folder_id":0,"cadence":"today","extract":"none","rev":1,"deleted":false,"private":false,"initial_through_seq":0,"initial_fetch_pending":false,"health":{"next_fetch_at":"2026-11-10T01:00:00Z","consecutive_failures":0,"http_status":200,"posts_per_day":1.0,"firehose":false}}}]"""
+                """[{"path":[],"deferred":true,"subscription":{"id":3,"feed_id":5,"title":"Feed","url":"https://feed.test/rss","site_url":"","folder_id":0,"cadence":"today","extract":"none","rev":1,"deleted":false,"private":false,"muted":false,"initial_through_seq":0,"initial_fetch_pending":false,"health":{"next_fetch_at":"2026-11-10T01:00:00Z","consecutive_failures":0,"http_status":200,"posts_per_day":1.0,"firehose":false}}}]"""
             }
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
                 .code(200).message("test").body(body.toResponseBody()).build()
@@ -213,5 +213,18 @@ class EarnestApiTest {
         val api = EarnestApi("https://earnest.test", client = OkHttpClient.Builder().build())
         val error = runCatching { api.importOpml(ByteArray(MAX_OPML_IMPORT_BYTES + 1)) }.exceptionOrNull()
         assertTrue(error is IllegalArgumentException)
+    }
+
+    // A subscription payload from a server that predates the muted field must
+    // still decode: version skew may not break the whole subscription list.
+    @Test
+    fun subscriptionsTolerateAPayloadWithoutMuted() = runBlocking {
+        val api = EarnestApi("https://earnest.test", "secret", OkHttpClient.Builder().addInterceptor { chain ->
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                .code(200).message("test").body("""[{"id":3,"feed_id":5,"title":"Feed","url":"https://feed.test/rss","site_url":"","folder_id":0,"cadence":"today","extract":"none","rev":1,"deleted":false,"private":false,"initial_through_seq":0,"initial_fetch_pending":false,"health":{"next_fetch_at":"2026-11-10T01:00:00Z","consecutive_failures":0,"http_status":200,"posts_per_day":1.0,"firehose":false}}]""".toResponseBody()).build()
+        }.build())
+        val subscriptions = api.subscriptions()
+        assertEquals(1, subscriptions.size)
+        assertEquals(false, subscriptions[0].muted)
     }
 }
