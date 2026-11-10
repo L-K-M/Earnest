@@ -97,6 +97,13 @@ describe('ArticleFrame', () => {
     expect(again.style.height).toBe('900px')
   })
 
+  it('places the token in the query even for a relative source', () => {
+    const {frame, nonce} = mount('/article/1#section')
+    const resolved = new URL(frame.src, window.location.href)
+    expect(resolved.searchParams.get('frame_nonce')).toBe(nonce)
+    expect(resolved.hash).toBe('#section')
+  })
+
   it('renders without randomUUID, for browsers that lack it', () => {
     const original = crypto.randomUUID
     Object.defineProperty(crypto, 'randomUUID', {value: undefined, configurable: true})

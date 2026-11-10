@@ -76,7 +76,7 @@ export function ArticleFrame({src}: {src: string}) {
   const [load, setLoad] = useState(() => ({src, nonce: freshToken()}))
   if (load.src !== src) setLoad({src, nonce: freshToken()})
   const nonce = load.nonce
-  const url = new URL(src)
+  const url = new URL(src, window.location.href)
   url.searchParams.set('frame_nonce', nonce)
   const framed = url.href
   // The height belongs to the load that measured it, not just the address:
