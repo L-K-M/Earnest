@@ -35,6 +35,7 @@ class AppViewModelTest {
     private val app get() = ApplicationProvider.getApplicationContext<Application>()
     private val identity = AccountIdentity("https://nas.test", 1, 1)
     private val calls = CopyOnWriteArrayList<String>()
+    private val payloads = CopyOnWriteArrayList<String>()
     private val contentUrlQueries = CopyOnWriteArrayList<String?>()
     private class Sessions(initial: AuthenticatedSession?) : SessionStore {
         private val stored = java.util.concurrent.atomic.AtomicReference(initial)
@@ -69,6 +70,11 @@ class AppViewModelTest {
     private fun api(agentChangesStatus: Int = 200, unauthorizedPath: String? = null, cancelledPath: String? = null) = EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { chain ->
         val path = chain.request().url.encodedPath
         calls += path
+        chain.request().body?.takeIf { !it.isOneShot() }?.let { body ->
+            val buffer = okio.Buffer()
+            body.writeTo(buffer)
+            payloads += buffer.readUtf8()
+        }
         if (path.endsWith("/content-url")) contentUrlQueries += chain.request().url.query
         val body = when (path) {
             "/v1/entries/2/content-url" -> """{"url":"https://content.test/signed","expires_at":"2026-11-03T01:00:00Z"}"""
@@ -390,9 +396,52 @@ class AppViewModelTest {
         delay(250)
         assertTrue("undo clobbered the later change", calls.none { it.startsWith("/v1/subscriptions/") })
 
-        // The second change's undo restores what it replaced.
+        // The second change's undo restores exactly what it replaced:
+        // "now" had replaced "week".
+        payloads.clear()
+        assertTrue(model.undoCadence(3, restore = "week", written = "now"))
+        withTimeout(15000) { while (payloads.none { it.contains("\"cadence\":\"week\"") }) delay(10) }
+    }
+
+    @Test fun cadenceUndoLeavesAForeignChangeAlone() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        val saved = java.util.concurrent.atomic.AtomicInteger()
+        model.setCadence(3, "now") { saved.incrementAndGet() }
+        withTimeout(15000) { while (saved.get() == 0) delay(10) }
+
+        // Someone else changed the feed after us; the refreshed snapshot
+        // carries a third value the guard must leave alone.
+        val cache = SessionCache(app, identity)
+        cache.withEngine {
+            it.mergeObject(ch.lkmc.earnest.core.SyncObject(
+                kind = SyncEngine.OBJECT_SUBSCRIPTION, id = 3, name = "Feed", rev = 2,
+                raw = """{"cadence":"week"}""",
+            ))
+        }
+        model.refresh()
+        withTimeout(15000) {
+            while (model.state.value.snapshot.objects.none { it.id == 3L && ch.lkmc.earnest.core.River.cadence(it) == "week" }) delay(10)
+        }
+        calls.clear()
+        assertFalse("undo clobbered a foreign change", model.undoCadence(3, restore = "today", written = "now"))
+        delay(250)
+        assertTrue(calls.none { it.startsWith("/v1/subscriptions/") })
+
+        // A snapshot still showing what the change replaced (a slow refresh)
+        // must not block the restore.
+        cache.withEngine {
+            it.mergeObject(ch.lkmc.earnest.core.SyncObject(
+                kind = SyncEngine.OBJECT_SUBSCRIPTION, id = 3, name = "Feed", rev = 3,
+                raw = """{"cadence":"today"}""",
+            ))
+        }
+        model.refresh()
+        withTimeout(15000) {
+            while (model.state.value.snapshot.objects.none { it.id == 3L && ch.lkmc.earnest.core.River.cadence(it) == "today" }) delay(10)
+        }
+        payloads.clear()
         assertTrue(model.undoCadence(3, restore = "today", written = "now"))
-        withTimeout(15000) { while (calls.none { it.startsWith("/v1/subscriptions/") }) delay(10) }
+        withTimeout(15000) { while (payloads.none { it.contains("\"cadence\":\"today\"") }) delay(10) }
     }
 
     @Test fun opmlImportPublishesASummaryAndRefreshes() = runBlocking(Dispatchers.IO) {
