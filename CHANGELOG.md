@@ -93,6 +93,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A feed's malformed icon or thumbnail metadata no longer drops the
+  entries it arrives with. The Android media loader shares one HTTP
+  client across a list's image loads, refuses oversized bodies before
+  caching them, and no longer recomposes every image on each state
+  change.
 - The Android app remembers its section and open Settings screen across
   rotation and process death, like the open article already did, so the
   reader no longer reopens on Today after a configuration change.
