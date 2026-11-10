@@ -1,4 +1,4 @@
-import {useEffect, useRef, useState} from 'react'
+import {useEffect, useMemo, useRef, useState} from 'react'
 
 // The article page reports its height and forwards keys pressed while focus
 // is inside it (frameScript in internal/web/content.go). Sizing the frame to
@@ -29,16 +29,29 @@ export function scrollMove(key: string, shift: boolean, page: number): ScrollMov
   }
 }
 
+// The keys frameScript forwards: its scroll keys, single characters and
+// Escape. Nothing else reaches the app's shortcuts.
+const SCROLL_KEYS = new Set([' ', 'PageDown', 'PageUp', 'Home', 'End', 'ArrowDown', 'ArrowUp'])
+
+function forwardedKey(key: string): boolean {
+  return key.length === 1 || key === 'Escape' || SCROLL_KEYS.has(key)
+}
+
 export type FrameMessage = {earnest: 'height'; height: number} | {earnest: 'key'; key: string; shift: boolean}
 
 // Validates a message from the article page. Anything unexpected is ignored.
-export function frameMessage(data: unknown): FrameMessage | null {
-  if (!data || typeof data !== 'object') return null
+// The nonce binds the message to the document the frame was pointed at: the
+// page echoes it from frameScript's closure, so a message from an earlier
+// article, another window, or a page that is not the one this component
+// asked for carries the wrong token and is dropped.
+export function frameMessage(data: unknown, nonce: string): FrameMessage | null {
+  if (!nonce || !data || typeof data !== 'object') return null
   const value = data as Record<string, unknown>
+  if (value.nonce !== nonce) return null
   if (value.earnest === 'height' && typeof value.height === 'number' && Number.isFinite(value.height) && value.height >= 0) {
     return {earnest: 'height', height: Math.min(Math.ceil(value.height), MAX_FRAME_HEIGHT)}
   }
-  if (value.earnest === 'key' && typeof value.key === 'string' && value.key.length > 0 && value.key.length <= 16) {
+  if (value.earnest === 'key' && typeof value.key === 'string' && forwardedKey(value.key)) {
     return {earnest: 'key', key: value.key, shift: value.shift === true}
   }
   return null
@@ -46,17 +59,25 @@ export function frameMessage(data: unknown): FrameMessage | null {
 
 export function ArticleFrame({src}: {src: string}) {
   const frame = useRef<HTMLIFrameElement>(null)
-  const [height, setHeight] = useState<number | null>(null)
+  const [sized, setSized] = useState<{src: string; height: number} | null>(null)
+  // A fresh token per article, echoed by the page it loads. The height is
+  // kept with the article it measured: a new article starts unsized until
+  // its own page reports.
+  const {nonce, framed} = useMemo(() => {
+    const token = crypto.randomUUID()
+    return {nonce: token, framed: `${src}${src.includes('?') ? '&' : '?'}frame_nonce=${encodeURIComponent(token)}`}
+  }, [src])
+  const height = sized && sized.src === src ? sized.height : null
   useEffect(() => {
     function receive(event: MessageEvent) {
       const node = frame.current
       // The sandboxed page has an opaque origin ("null"), so its window, not
       // its origin, identifies it.
       if (!node || event.source === null || event.source !== node.contentWindow) return
-      const message = frameMessage(event.data)
+      const message = frameMessage(event.data, nonce)
       if (!message) return
       if (message.earnest === 'height') {
-        setHeight(message.height)
+        setSized({src, height: message.height})
         return
       }
       const pane = node.closest<HTMLElement>('.reader-scroll')
@@ -73,6 +94,6 @@ export function ArticleFrame({src}: {src: string}) {
     }
     window.addEventListener('message', receive)
     return () => window.removeEventListener('message', receive)
-  }, [])
-  return <iframe ref={frame} title="Article body" src={src} sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" style={height === null ? undefined : {height}} />
+  }, [src, nonce])
+  return <iframe ref={frame} title="Article body" src={framed} sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" style={height === null ? undefined : {height}} />
 }
