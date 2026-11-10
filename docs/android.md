@@ -160,7 +160,9 @@ Feeds subscribes by URL, changes a subscription's cadence (Now, Today, This
 week) and unsubscribes. The current cadence is selected in the row. A saved
 cadence change offers an undo snackbar that restores the previous cadence.
 Feeds groups subscriptions by folder and shows a failing feed's fetch error
-with the time of its last attempt.
+with the time of its last attempt. Import OPML brings in a subscription
+export from another reader and reports each outline's outcome; Export OPML
+writes the account's subscriptions to a file.
 Activity groups agent changes by principal, shows a readable description with the
 article title where there is one, and offers Revert where the server reports
 that the action can still be undone.

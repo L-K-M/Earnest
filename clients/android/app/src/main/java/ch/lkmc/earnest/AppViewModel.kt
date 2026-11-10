@@ -11,7 +11,10 @@ import ch.lkmc.earnest.core.ApiException
 import ch.lkmc.earnest.core.EarnestApi
 import ch.lkmc.earnest.core.KeptImportReport
 import ch.lkmc.earnest.core.MAX_KEPT_IMPORT_BYTES
+import ch.lkmc.earnest.core.MAX_OPML_IMPORT_BYTES
+import ch.lkmc.earnest.core.OpmlSummary
 import ch.lkmc.earnest.core.summarizeKeptImport
+import ch.lkmc.earnest.core.summarizeOpml
 import ch.lkmc.earnest.core.ReaderSettings
 import ch.lkmc.earnest.core.ReadingMode
 import ch.lkmc.earnest.core.RejectedOperation
@@ -64,6 +67,7 @@ data class UiState(
     val readerSettingsRev: Long = 0,
     val readerSettingsUi: ReaderSettingsUi = ReaderSettingsUi(),
     val keptImport: KeptImportUi = KeptImportUi(),
+    val opml: OpmlUi = OpmlUi(),
     val unreadCounts: UnreadCounts? = null,
     val unreadCountsSyncedAt: Long? = null,
     val unreadCountsError: String? = null,
@@ -109,6 +113,13 @@ data class KeptImportUi(
     val busy: Boolean = false,
     val error: String? = null,
     val report: KeptImportReport? = null,
+)
+
+/** The OPML import and export's transient state. */
+data class OpmlUi(
+    val busy: Boolean = false,
+    val error: String? = null,
+    val summary: OpmlSummary? = null,
 )
 
 /**
@@ -738,6 +749,74 @@ class AppViewModel internal constructor(
         keptImportDocument = null
         _state.update { current ->
             current.copy(keptImport = KeptImportUi(error = message))
+        }
+    }
+
+    /**
+     * Imports an OPML subscription export. Every outline reports its own
+     * outcome in the summary; a refresh picks the results up afterwards.
+     */
+    fun importOpml(document: ByteArray) {
+        val (cache, session) = activeAccount("Still signing in; the import did not run.") ?: return
+        if (document.size > MAX_OPML_IMPORT_BYTES) {
+            _state.update { current -> current.copy(opml = OpmlUi(error = "The OPML file is larger than 8 MiB.")) }
+            return
+        }
+        _state.update { current -> current.copy(opml = OpmlUi(busy = true)) }
+        viewModelScope.launch(readerDispatcher) {
+            try {
+                val results = apiFactory(session).importOpml(document)
+                if (!currentOrExpired(session, cache)) return@launch
+                _state.update { current -> current.copy(opml = OpmlUi(summary = summarizeOpml(results))) }
+                refresh()
+            } catch (error: ApiException) {
+                if (currentOrExpired(session, cache)) {
+                    _state.update { current -> current.copy(opml = OpmlUi(error = failureText("Could not import that file", error))) }
+                }
+                if (error.isUnauthorized) expireSessionIfCurrent(session)
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (currentOrExpired(session, cache)) {
+                    _state.update { current -> current.copy(opml = OpmlUi(error = failureText("Could not import that file", error))) }
+                }
+            }
+        }
+    }
+
+    /** Surfaces a picked OPML file the client could not read or write; no import ran. */
+    fun opmlFileFailed(message: String) {
+        _state.update { current -> current.copy(opml = OpmlUi(error = message)) }
+    }
+
+    /** Dismisses the import report and any stale error with it. */
+    fun dismissOpmlReport() {
+        _state.update { current -> current.copy(opml = OpmlUi()) }
+    }
+
+    /** The account's subscriptions as OPML, or null when the export failed. */
+    suspend fun exportOpml(): String? = withContext(Dispatchers.IO) {
+        val (cache, session) = activeAccount("Still signing in; the export did not run.") ?: return@withContext null
+        try {
+            val xml = apiFactory(session).exportOpml()
+            if (currentOrExpired(session, cache)) {
+                // A stale failure must not outlive the export that succeeds.
+                _state.update { current -> current.copy(opml = current.opml.copy(error = null)) }
+            }
+            xml
+        } catch (error: ApiException) {
+            if (currentOrExpired(session, cache)) {
+                _state.update { current -> current.copy(opml = current.opml.copy(error = failureText("Could not export subscriptions", error))) }
+            }
+            if (error.isUnauthorized) expireSessionIfCurrent(session)
+            null
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            if (currentOrExpired(session, cache)) {
+                _state.update { current -> current.copy(opml = current.opml.copy(error = failureText("Could not export subscriptions", error))) }
+            }
+            null
         }
     }
 

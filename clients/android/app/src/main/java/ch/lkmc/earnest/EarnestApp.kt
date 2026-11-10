@@ -1,6 +1,8 @@
 package ch.lkmc.earnest
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -18,6 +20,8 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -97,6 +101,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import ch.lkmc.earnest.core.CachedEntry
+import ch.lkmc.earnest.core.MAX_OPML_IMPORT_BYTES
+import ch.lkmc.earnest.core.OpmlSummary
 import ch.lkmc.earnest.core.River
 import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.core.SyncObject
@@ -104,10 +110,13 @@ import ch.lkmc.earnest.core.SyncSnapshot
 import ch.lkmc.earnest.core.UnreadCounts
 import ch.lkmc.earnest.core.health
 import ch.lkmc.earnest.core.iconUrl
+import ch.lkmc.earnest.core.readAtMost
 import ch.lkmc.earnest.core.typographyFor
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -395,6 +404,7 @@ private fun MainScaffold(
                                     },
                                 )
                                 View.FEEDS -> FeedsScreen(
+                                    model = model,
                                     state = state,
                                     unreadCounts = state.unreadCounts,
                                     unreadSyncedAt = state.unreadCountsSyncedAt,
@@ -924,7 +934,9 @@ private fun SwipeActionRow(
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun FeedsScreen(
+    model: AppViewModel,
     state: UiState,
     unreadCounts: UnreadCounts?,
     unreadSyncedAt: Long?,
@@ -933,6 +945,54 @@ private fun FeedsScreen(
     onUnsubscribe: (Long) -> Unit,
     onCadence: (Long, String) -> Unit,
 ) {
+    val opml = state.opml
+    var readingOpml by remember(state.accountKey) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val accountAtPick = state.accountKey
+        readingOpml = true
+        scope.launch {
+            // Read at most one byte past the limit, so a huge file picked by
+            // mistake is refused without loading it all into memory.
+            val document = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { readAtMost(it, MAX_OPML_IMPORT_BYTES) }
+                }.getOrNull()
+            }
+            readingOpml = false
+            // The file was picked for one account; never import it into an
+            // account that signed in while it was being read.
+            if (model.state.value.accountKey != accountAtPick) return@launch
+            when {
+                document == null -> model.opmlFileFailed("Could not read that file.")
+                document.size > MAX_OPML_IMPORT_BYTES -> model.opmlFileFailed("The OPML file is larger than 8 MiB.")
+                else -> model.importOpml(document)
+            }
+        }
+    }
+    val exportPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/x-opml")) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val accountAtPick = state.accountKey
+        readingOpml = true
+        scope.launch {
+            try {
+                val xml = model.exportOpml() ?: return@launch
+                if (model.state.value.accountKey != accountAtPick) return@launch
+                val written = withContext(Dispatchers.IO) {
+                    runCatching {
+                        // "wt" truncates: a reused document must not keep the
+                        // tail of whatever it held before.
+                        context.contentResolver.openOutputStream(uri, "wt")?.use { it.write(xml.toByteArray()) } != null
+                    }.getOrDefault(false)
+                }
+                if (!written) model.opmlFileFailed("Could not write that file.")
+            } finally {
+                readingOpml = false
+            }
+        }
+    }
     val subscriptions = state.snapshot.objects.filter { it.kind == SyncEngine.OBJECT_SUBSCRIPTION && !it.deleted }
     LazyColumn(Modifier.fillMaxSize()) {
         if (unreadMode) {
@@ -951,9 +1011,38 @@ private fun FeedsScreen(
             }
         }
         item {
-            TextButton(onClick = onSubscribe) {
-                Icon(Icons.Filled.Add, contentDescription = null)
-                Text("Subscribe by URL")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onSubscribe) {
+                    Icon(Icons.Filled.Add, contentDescription = null)
+                    Text("Subscribe by URL")
+                }
+                TextButton(
+                    onClick = { importPicker.launch(arrayOf("text/x-opml", "application/xml", "text/xml", "*/*")) },
+                    enabled = !opml.busy && !readingOpml,
+                ) { Text("Import OPML") }
+                TextButton(
+                    onClick = { exportPicker.launch("earnest.opml") },
+                    enabled = !opml.busy && !readingOpml,
+                ) { Text("Export OPML") }
+            }
+        }
+        if (opml.busy || readingOpml) {
+            item {
+                Text(
+                    "Working on OPML…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
+        }
+        opml.error?.let { message ->
+            item {
+                Text(
+                    message,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
             }
         }
         val folders = state.snapshot.objects.filter { it.kind == SyncEngine.OBJECT_FOLDER && !it.deleted }
@@ -978,6 +1067,36 @@ private fun FeedsScreen(
             }
         }
     }
+
+    state.opml.summary?.let { summary ->
+        OpmlReportDialog(summary = summary, onDismiss = model::dismissOpmlReport)
+    }
+}
+
+@Composable
+private fun OpmlReportDialog(summary: OpmlSummary, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("OPML import") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(opmlSummaryLine(summary), style = MaterialTheme.typography.bodyMedium)
+                if (summary.deferred > 0) {
+                    Text(
+                        "${summary.deferred} ${if (summary.deferred == 1) "feed is" else "feeds are"} fetched in the background soon.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                summary.errors.forEach { error ->
+                    Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
 }
 
 @Composable

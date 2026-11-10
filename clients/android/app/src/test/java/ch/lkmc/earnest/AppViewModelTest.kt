@@ -77,6 +77,7 @@ class AppViewModelTest {
             "/v1/activity/agent-changes" -> """[{"id":7,"principal_id":9,"principal_name":"Morning Agent","action":"state.updated","target":{"entry_id":2,"register":"shelf"},"before":null,"after":{"shelf":{"value":"done"}},"generation":"g1","created_at":"${java.time.Instant.now()}","next_action":"revert"}]"""
             "/v1/entries/2" -> """{"id":2,"subscription_id":3,"feed_id":5,"seq":4,"first_seen_at":"2026-11-03T00:00:00Z","title":"Notification headline","url":"https://news.test/article","author":"Author","rev":2,"deleted":false}"""
             "/v1/subscriptions/3" -> """{"id":3,"feed_id":5,"title":"Feed","url":"https://feed.test/rss","site_url":"https://feed.test","folder_id":0,"cadence":"today","extract":"none","rev":1,"deleted":false,"private":false,"initial_through_seq":0,"initial_fetch_pending":false,"health":{"next_fetch_at":"2026-11-10T00:00:00Z","consecutive_failures":0,"http_status":200,"posts_per_day":1.0,"firehose":false}}"""
+            "/v1/opml:import" -> """[{"path":[],"deferred":true,"subscription":{"id":3,"feed_id":5,"title":"Feed","url":"https://feed.test/rss","site_url":"https://feed.test","folder_id":0,"cadence":"today","extract":"none","rev":1,"deleted":false,"private":false,"initial_through_seq":0,"initial_fetch_pending":false,"health":{"next_fetch_at":"2026-11-10T00:00:00Z","consecutive_failures":0,"http_status":200,"posts_per_day":1.0,"firehose":false}}}]"""
             else -> "[]"
         }
         val status = when (path) {
@@ -378,6 +379,70 @@ class AppViewModelTest {
         // The second change's undo restores what it replaced.
         assertTrue(model.undoCadence(3, restore = "today", written = "now"))
         withTimeout(15000) { while (calls.none { it.startsWith("/v1/subscriptions/") }) delay(10) }
+    }
+
+    @Test fun opmlImportPublishesASummaryAndRefreshes() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        calls.clear()
+        model.importOpml("""<opml version="2.0"/>""".toByteArray())
+        withTimeout(15000) { model.state.first { it.opml.summary != null } }
+        assertEquals(1, model.state.value.opml.summary?.subscriptions)
+        assertEquals(0, model.state.value.opml.summary?.errors?.size)
+        withTimeout(15000) { while (calls.none { it == "/v1/changes" }) delay(10) }
+    }
+
+    @Test fun opmlImportFailureIsReportedHonestly() = runBlocking(Dispatchers.IO) {
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        var factory: () -> EarnestApi = { api() }
+        val model = AppViewModel(app, Sessions(AuthenticatedSession(identity, "token"))) { factory() }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        factory = {
+            EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { throw java.io.IOException() }.build())
+        }
+        model.importOpml("""<opml/>""".toByteArray())
+        withTimeout(15000) { model.state.first { it.opml.error != null } }
+        assertEquals("Could not import that file.", model.state.value.opml.error)
+    }
+
+    @Test fun exportFailureIsReportedHonestly() = runBlocking(Dispatchers.IO) {
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        var factory: () -> EarnestApi = { api() }
+        val model = AppViewModel(app, Sessions(AuthenticatedSession(identity, "token"))) { factory() }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        factory = {
+            EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { throw java.io.IOException() }.build())
+        }
+        assertNull(model.exportOpml())
+        assertEquals("Could not export subscriptions.", model.state.value.opml.error)
+    }
+
+    @Test fun aSuccessfulExportClearsAPreviousError() = runBlocking(Dispatchers.IO) {
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        var factory: () -> EarnestApi = { api() }
+        val model = AppViewModel(app, Sessions(AuthenticatedSession(identity, "token"))) { factory() }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        var failing = true
+        factory = {
+            EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { chain ->
+                if (failing) throw java.io.IOException()
+                Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                    .code(200).message("test").body("""<opml version="2.0"><body/></opml>""".toResponseBody()).build()
+            }.build())
+        }
+        assertNull(model.exportOpml())
+        assertEquals("Could not export subscriptions.", model.state.value.opml.error)
+        failing = false
+        assertEquals("""<opml version="2.0"><body/></opml>""", model.exportOpml())
+        assertNull(model.state.value.opml.error)
+    }
+
+    @Test fun unauthorizedExportExpiresTheOwningSession() = runBlocking(Dispatchers.IO) {
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val sessions = Sessions(AuthenticatedSession(identity, "token"))
+        val model = AppViewModel(app, sessions) { api(unauthorizedPath = "/v1/opml") }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        assertNull(model.exportOpml())
+        withTimeout(15000) { while (sessions.value != null) delay(10) }
     }
 
     @Test fun notificationMissingFromSnapshotFetchesMetadata() = runBlocking(Dispatchers.IO) {
