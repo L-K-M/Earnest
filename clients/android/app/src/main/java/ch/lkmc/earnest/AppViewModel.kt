@@ -784,8 +784,8 @@ class AppViewModel internal constructor(
         }
     }
 
-    /** Surfaces a picked OPML file the client could not read; no import ran. */
-    fun opmlReadFailed(message: String) {
+    /** Surfaces a picked OPML file the client could not read or write; no import ran. */
+    fun opmlFileFailed(message: String) {
         _state.update { current -> current.copy(opml = OpmlUi(error = message)) }
     }
 
@@ -799,6 +799,12 @@ class AppViewModel internal constructor(
         val (cache, session) = activeAccount("Still signing in; the export did not run.") ?: return@withContext null
         try {
             apiFactory(session).exportOpml()
+        } catch (error: ApiException) {
+            if (currentOrExpired(session, cache)) {
+                _state.update { current -> current.copy(opml = current.opml.copy(error = failureText("Could not export subscriptions", error))) }
+            }
+            if (error.isUnauthorized) expireSessionIfCurrent(session)
+            null
         } catch (error: kotlinx.coroutines.CancellationException) {
             throw error
         } catch (error: Exception) {

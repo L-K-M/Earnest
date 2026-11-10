@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -932,6 +934,7 @@ private fun SwipeActionRow(
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun FeedsScreen(
     model: AppViewModel,
     state: UiState,
@@ -948,6 +951,7 @@ private fun FeedsScreen(
     val context = LocalContext.current
     val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
+        val accountAtPick = state.accountKey
         readingOpml = true
         scope.launch {
             // Read at most one byte past the limit, so a huge file picked by
@@ -958,23 +962,32 @@ private fun FeedsScreen(
                 }.getOrNull()
             }
             readingOpml = false
+            // The file was picked for one account; never import it into an
+            // account that signed in while it was being read.
+            if (model.state.value.accountKey != accountAtPick) return@launch
             when {
-                document == null -> model.opmlReadFailed("Could not read that file.")
-                document.size > MAX_OPML_IMPORT_BYTES -> model.opmlReadFailed("The OPML file is larger than 8 MiB.")
+                document == null -> model.opmlFileFailed("Could not read that file.")
+                document.size > MAX_OPML_IMPORT_BYTES -> model.opmlFileFailed("The OPML file is larger than 8 MiB.")
                 else -> model.importOpml(document)
             }
         }
     }
     val exportPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/x-opml")) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
+        val accountAtPick = state.accountKey
+        readingOpml = true
         scope.launch {
-            val xml = model.exportOpml() ?: return@launch
+            val xml = try { model.exportOpml() } finally { readingOpml = false }
+            if (xml == null) return@launch
+            if (model.state.value.accountKey != accountAtPick) return@launch
             val written = withContext(Dispatchers.IO) {
                 runCatching {
-                    context.contentResolver.openOutputStream(uri)?.use { it.write(xml.toByteArray()) } != null
+                    // "wt" truncates: a reused document must not keep the
+                    // tail of whatever it held before.
+                    context.contentResolver.openOutputStream(uri, "wt")?.use { it.write(xml.toByteArray()) } != null
                 }.getOrDefault(false)
             }
-            if (!written) model.opmlReadFailed("Could not write that file.")
+            if (!written) model.opmlFileFailed("Could not write that file.")
         }
     }
     val subscriptions = state.snapshot.objects.filter { it.kind == SyncEngine.OBJECT_SUBSCRIPTION && !it.deleted }
@@ -995,7 +1008,7 @@ private fun FeedsScreen(
             }
         }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = onSubscribe) {
                     Icon(Icons.Filled.Add, contentDescription = null)
                     Text("Subscribe by URL")
@@ -1013,7 +1026,7 @@ private fun FeedsScreen(
         if (opml.busy || readingOpml) {
             item {
                 Text(
-                    "Importing OPML…",
+                    "Working on OPML…",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
@@ -1063,7 +1076,10 @@ private fun OpmlReportDialog(summary: OpmlSummary, onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         title = { Text("OPML import") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Text(opmlSummaryLine(summary), style = MaterialTheme.typography.bodyMedium)
                 if (summary.deferred > 0) {
                     Text(

@@ -404,6 +404,15 @@ class AppViewModelTest {
         assertEquals("Could not import that file.", model.state.value.opml.error)
     }
 
+    @Test fun unauthorizedExportExpiresTheOwningSession() = runBlocking(Dispatchers.IO) {
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val sessions = Sessions(AuthenticatedSession(identity, "token"))
+        val model = AppViewModel(app, sessions) { api(unauthorizedPath = "/v1/opml") }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        assertNull(model.exportOpml())
+        withTimeout(15000) { while (sessions.value != null) delay(10) }
+    }
+
     @Test fun notificationMissingFromSnapshotFetchesMetadata() = runBlocking(Dispatchers.IO) {
         val model = model()
         val entry = model.loadEntry(2)
