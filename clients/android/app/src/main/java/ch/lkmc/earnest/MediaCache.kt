@@ -187,7 +187,7 @@ internal fun MediaImage(
     // current state so the load below is not started twice, once for a null
     // key and once for the first value.
     val accountKey by remember(model) { model.state.map { it.accountKey }.distinctUntilChanged() }
-        .collectAsState(model.state.value.accountKey)
+        .collectAsState(remember(model) { model.state.value.accountKey })
     val bitmap by produceState<ImageBitmap?>(null, path, accountKey) {
         value = model.mediaBitmap(path)
     }
