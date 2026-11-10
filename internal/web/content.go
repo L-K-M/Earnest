@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -153,21 +154,38 @@ func NewContent(svc *service.Service, auth *service.Auth, proxy *imageproxy.Prox
 // horizontal scrollbar, so the reader can size the frame to the article. It
 // forwards scrolling and single-key presses made while focus is in the
 // frame, so Space and the reading shortcuts work after a click in the
-// article; Space on a focused summary still opens its details, and Shift
-// with an arrow, Home, End or a Page key still extends a selection. Messages go
-// only to the app origin, and only when the page is framed; native clients
-// run no script.
-func frameScript(appOrigin string) string {
+// article; Space on a focused summary still opens its details, keys typed
+// into a form control inside the article stay in that control, and Shift
+// with an arrow, Home, End or a Page key still extends a selection. Every
+// message echoes the host's per-load nonce, so the reader accepts messages
+// only from the document it asked for. Messages go only to the app origin,
+// and only when the page is framed; native clients run no script.
+func frameScript(appOrigin, nonce string) string {
 	target, _ := json.Marshal(appOrigin)
-	return `(()=>{if(parent===self)return;const app=` + string(target) + `;let last=-1;` +
-		`const send=()=>{const d=document.documentElement;const h=Math.ceil(d.getBoundingClientRect().height+innerHeight-d.clientHeight);if(h!==last){last=h;parent.postMessage({earnest:"height",height:h},app)}};` +
+	echo, _ := json.Marshal(nonce)
+	return `(()=>{if(parent===self)return;const app=` + string(target) + `;const n=` + string(echo) + `;let last=-1;` +
+		`const send=()=>{const d=document.documentElement;const h=Math.ceil(d.getBoundingClientRect().height+innerHeight-d.clientHeight);if(h!==last){last=h;parent.postMessage({earnest:"height",nonce:n,height:h},app)}};` +
 		`new ResizeObserver(send).observe(document.documentElement);addEventListener("load",send);addEventListener("resize",send);` +
 		`const scroll=new Set([" ","PageDown","PageUp","Home","End","ArrowDown","ArrowUp"]);` +
 		`addEventListener("keydown",e=>{if(e.defaultPrevented||e.ctrlKey||e.metaKey||e.altKey||e.isComposing)return;const k=e.key;` +
+		`if(e.target instanceof Element&&e.target.closest("input,textarea,select,[contenteditable]"))return;` +
 		`if(k===" "&&e.target instanceof Element&&e.target.closest("summary"))return;` +
 		`if(e.shiftKey&&k!==" "&&scroll.has(k))return;` +
 		`if(scroll.has(k))e.preventDefault();else if(k!=="Escape"&&k.length!==1)return;` +
-		`parent.postMessage({earnest:"key",key:k,shift:e.shiftKey},app)})})()`
+		`parent.postMessage({earnest:"key",nonce:n,key:k,shift:e.shiftKey},app)})})()`
+}
+
+// frameNoncePattern bounds the host-chosen token the page echoes back.
+var frameNoncePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// frameNonce is the host's per-load echo token, or empty for pages whose
+// messages nobody verifies (native clients run no script).
+func frameNonce(r *http.Request) string {
+	nonce := r.URL.Query().Get("frame_nonce")
+	if !frameNoncePattern.MatchString(nonce) {
+		return ""
+	}
+	return nonce
 }
 
 // Signer exposes the signing half so another surface, such as the native API,
@@ -215,11 +233,11 @@ func (c *Content) URLHandler(w http.ResponseWriter, r *http.Request) {
 // framePolicy returns the CSP directive and element for frameScript, or
 // nothing when no app origin is configured. Every page the frame can show
 // carries it, so the reader never keeps an earlier article's height.
-func (c *Content) framePolicy() (directive, element string) {
+func (c *Content) framePolicy(nonce string) (directive, element string) {
 	if c.appOrigin == "" {
 		return "", ""
 	}
-	js := frameScript(c.appOrigin)
+	js := frameScript(c.appOrigin, nonce)
 	sum := sha256.Sum256([]byte(js))
 	return "; script-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'", "<script>" + js + "</script>"
 }
@@ -230,8 +248,8 @@ func (c *Content) framePolicy() (directive, element string) {
 // The status stays honest for monitors and prefetchers; the browser still
 // renders the body inside the frame. Its only script is frameScript, so it
 // can tell the reader what to do but cannot refresh the ticket itself.
-func (c *Content) notice(w http.ResponseWriter, status int, heading, text string) {
-	directive, script := c.framePolicy()
+func (c *Content) notice(w http.ResponseWriter, r *http.Request, status int, heading, text string) {
+	directive, script := c.framePolicy(frameNonce(r))
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'"+directive+"; base-uri 'none'; form-action 'none'")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
@@ -251,7 +269,7 @@ func (c *Content) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(strings.TrimPrefix(r.URL.Path, "/content/"), 10, 64)
 	if !ok || err != nil || id != t.EntryID {
 		// Reopening the article fetches a fresh ticket from the app.
-		c.notice(w, http.StatusGone, "This article link has expired", "Close the article and open it again in Earnest.")
+		c.notice(w, r, http.StatusGone, "This article link has expired", "Close the article and open it again in Earnest.")
 		return
 	}
 	// The content origin only reads stored bodies, so an agent ticket gets
@@ -266,11 +284,11 @@ func (c *Content) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// A missing, hidden or no longer permitted article reads the same to
 		// the reader and stays a 404; anything else is a server fault.
 		if errors.Is(err, service.ErrNotFound) || errors.Is(err, service.ErrForbidden) || errors.Is(err, service.ErrUnauthorized) || errors.Is(err, service.ErrInvalid) {
-			c.notice(w, http.StatusNotFound, "This article is not available", "It may have been removed, or you may no longer follow its feed.")
+			c.notice(w, r, http.StatusNotFound, "This article is not available", "It may have been removed, or you may no longer follow its feed.")
 			return
 		}
 		slog.Error("content: load article", "entry", id, "error", err)
-		c.notice(w, http.StatusInternalServerError, "This article could not be shown", "Close the article and try again.")
+		c.notice(w, r, http.StatusInternalServerError, "This article could not be shown", "Close the article and try again.")
 		return
 	}
 	mode := imageproxy.Proxied
@@ -280,7 +298,7 @@ func (c *Content) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fragment, err := c.proxy.Rewrite(body.HTML, mode)
 	if err != nil {
 		slog.Error("content: rewrite article", "entry", id, "error", err)
-		c.notice(w, http.StatusInternalServerError, "This article could not be shown", "Close the article and try again.")
+		c.notice(w, r, http.StatusInternalServerError, "This article could not be shown", "Close the article and try again.")
 		return
 	}
 	measure := 68
@@ -323,7 +341,7 @@ func (c *Content) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"hr{border:0;border-top:1px solid %s;margin:2em 0}",
 		measure, font, bg, fg, spacing, codeBg, muted, muted, muted, muted)
 	hash := sha256.Sum256([]byte(css))
-	directive, script := c.framePolicy()
+	directive, script := c.framePolicy(frameNonce(r))
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src "+c.signer.origin+"; style-src 'sha256-"+base64.StdEncoding.EncodeToString(hash[:])+"'"+directive+"; base-uri 'none'; form-action 'none'")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><style>%s</style>%s</head><body>%s</body></html>", css, script, fragment)
