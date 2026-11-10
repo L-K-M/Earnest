@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+real_find=$(command -v find)
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT HUP INT TERM
 mkdir "$scratch/bin"
@@ -9,8 +10,19 @@ cat > "$scratch/bin/pg_dump" <<'EOF'
 touch "$DUMP_CALLED"
 printf 'dump' > "$3"
 EOF
-chmod +x "$scratch/bin/pg_dump"
-export PATH="$scratch/bin:$PATH" DUMP_CALLED="$scratch/called"
+# Exercise portable pruning even when the test host has GNU find.
+cat > "$scratch/bin/find" <<'EOF'
+#!/bin/sh
+for argument do
+    if [ "$argument" = '-printf' ]; then
+        echo 'GNU find -printf is not portable' >&2
+        exit 1
+    fi
+done
+exec "$BACKUP_TEST_FIND" "$@"
+EOF
+chmod +x "$scratch/bin/pg_dump" "$scratch/bin/find"
+export PATH="$scratch/bin:$PATH" DUMP_CALLED="$scratch/called" BACKUP_TEST_FIND="$real_find"
 
 for keep in 0 00 01 08 -1 invalid; do
     rm -f "$DUMP_CALLED"
