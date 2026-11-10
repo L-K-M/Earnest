@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The Android Feeds screen groups subscriptions by folder and shows a
+  failing feed's fetch error with the time of its last attempt.
 - Android row and reader actions undo: Later, Done, Keep, Unkeep and Mark
   unread name themselves in an undo snackbar that writes back the
   registers they changed and leaves alone one changed since, and a

@@ -99,8 +99,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import ch.lkmc.earnest.core.CachedEntry
 import ch.lkmc.earnest.core.River
 import ch.lkmc.earnest.core.SyncEngine
+import ch.lkmc.earnest.core.SyncObject
 import ch.lkmc.earnest.core.SyncSnapshot
 import ch.lkmc.earnest.core.UnreadCounts
+import ch.lkmc.earnest.core.health
 import ch.lkmc.earnest.core.iconUrl
 import ch.lkmc.earnest.core.typographyFor
 import kotlinx.coroutines.delay
@@ -954,43 +956,85 @@ private fun FeedsScreen(
                 Text("Subscribe by URL")
             }
         }
-        items(subscriptions, key = { it.id }) { subscription ->
-            Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    subscription.iconUrl()?.let {
-                        MediaImage(it, Modifier.size(24.dp), RoundedCornerShape(4.dp))
-                        Spacer(Modifier.width(8.dp))
-                    }
-                    Text(subscription.name, style = MaterialTheme.typography.bodyLarge)
+        val folders = state.snapshot.objects.filter { it.kind == SyncEngine.OBJECT_FOLDER && !it.deleted }
+        feedGroups(subscriptions, folders).forEach { group ->
+            group.title?.let { title ->
+                item(key = "folder-$title") {
+                    Text(
+                        title,
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
                 }
+            }
+            items(group.subscriptions, key = { it.id }) { subscription ->
+                FeedRow(
+                    subscription = subscription,
+                    unreadMode = unreadMode,
+                    unreadCount = unreadCounts?.bySubscription?.get(subscription.id),
+                    onCadence = onCadence,
+                    onUnsubscribe = onUnsubscribe,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FeedRow(
+    subscription: SyncObject,
+    unreadMode: Boolean,
+    unreadCount: Long?,
+    onCadence: (Long, String) -> Unit,
+    onUnsubscribe: (Long) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            subscription.iconUrl()?.let {
+                MediaImage(it, Modifier.size(24.dp), RoundedCornerShape(4.dp))
+                Spacer(Modifier.width(8.dp))
+            }
+            Text(subscription.name, style = MaterialTheme.typography.bodyLarge)
+        }
+        Text(
+            subscription.raw.url(),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        feedProblem(subscription.health())?.let { problem ->
+            Text(
+                "Fetch failing: ${problem.detail}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            problem.triedAt?.let {
                 Text(
-                    subscription.raw.url(),
+                    "Tried ${it.relativeTime()}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (unreadMode) {
-                    val count = unreadCounts?.bySubscription?.get(subscription.id)
-                    Text(
-                        count?.let { "Unread $it" } ?: "Unread unavailable",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    val selection = cadenceSelection(River.cadence(subscription))
-                    Cadence.entries.forEach { cadence ->
-                        CadenceChip(
-                            cadence = cadence,
-                            selected = selection[cadence] == true,
-                            onSelect = { onCadence(subscription.id, cadence.value) },
-                        )
-                    }
-                    TextButton(onClick = { onUnsubscribe(subscription.id) }) { Text("Unsubscribe") }
-                }
             }
+        }
+        if (unreadMode) {
+            Text(
+                unreadCount?.let { "Unread $it" } ?: "Unread unavailable",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val selection = cadenceSelection(River.cadence(subscription))
+            Cadence.entries.forEach { cadence ->
+                CadenceChip(
+                    cadence = cadence,
+                    selected = selection[cadence] == true,
+                    onSelect = { onCadence(subscription.id, cadence.value) },
+                )
+            }
+            TextButton(onClick = { onUnsubscribe(subscription.id) }) { Text("Unsubscribe") }
         }
     }
 }
