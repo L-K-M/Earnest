@@ -16,6 +16,14 @@ Set `EARNEST_BASE_URL=https://<nas>.<tailnet>.ts.net` and `EARNEST_CONTENT_ORIGI
 
 Login rate limits key on the client address. Under Compose, connections from `tailscale serve` reach the container from the Docker network gateway rather than loopback, so every browser would share one rate-limit bucket and a few failed logins would lock everyone out. Set `EARNEST_TRUSTED_PROXIES` to that gateway, which `docker network inspect earnest_default --format '{{(index .IPAM.Config 0).Gateway}}'` prints (adjust the network name if your Compose project is not called `earnest`). Earnest then reads the client from the `X-Forwarded-For` header the proxy appends; connections from any other address keep their own socket address and their forwarding headers are ignored.
 
+Password logins, including Google Reader ClientLogin, share a limit of five
+failed or currently running checks per username and per client. Failure
+counters expire 15 minutes after the first recorded failure. Successful
+logins clear account failures, not the client's password-spray counter;
+completed successful checks do not consume the allowance. In-flight checks
+keep their slots until completion, even across a window boundary. Counters
+are process-local and reset on restart.
+
 Web Push and UnifiedPush need stable VAPID keys. Compose does not mount the generated key file persistently by default, so supply a persistent mounted key file through a Compose override, or provide the explicit key pair in `.env`; back it up securely. See [configuration](configuration.md).
 
 ## Users and clients
