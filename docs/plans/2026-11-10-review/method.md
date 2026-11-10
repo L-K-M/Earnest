@@ -2,8 +2,10 @@
 
 The review runs as bounded, read-only slices over a detached checkout at
 the baseline commit. Each slice reports findings in one structure. Every
-finding rated important or higher is then handed to an independent
-reviewer told to refute it. Only findings that survive are fixed.
+finding rated important or higher selected for a fix is then handed to an
+independent reviewer told to refute it. A reproduced defect, not a lack of
+refutation, is the acceptance criterion. Coverage gaps are recorded in
+[findings.md](findings.md).
 
 ## Slices
 
@@ -32,8 +34,8 @@ docs against code (A), user-facing behaviour (U).
 | Slice | Files | Lenses |
 | --- | --- | --- |
 | W1 | `web/src/sync`, `web/src/offline`, `web/src/syncBridge.ts` | C, D, P |
-| W2 | `web/src/App.tsx`, `router.tsx`, `routes.ts`, `River.tsx`, `ArticleReader.tsx`, `ArticleFrame.tsx`, `Sidebar.tsx`, `EntryMedia.tsx`, `markRest.ts`, `menus.ts`, `ContextMenu.tsx` | C, U, P |
-| W3 | `Settings*.tsx`, `FeedSettings.tsx`, `Onboarding.tsx`, `Login.tsx`, `rules/`, `search/`, `labels/`, `agents/`, `palette/`, `pipeline/`, `account/`, `request.ts`, `style.css` | C, U, S |
+| W2 | `web/src/App.tsx`, `web/src/router.tsx`, `web/src/routes.ts`, `web/src/River.tsx`, `web/src/ArticleReader.tsx`, `web/src/ArticleFrame.tsx`, `web/src/Sidebar.tsx`, `web/src/EntryMedia.tsx`, `web/src/markRest.ts`, `web/src/menus.ts`, `web/src/ContextMenu.tsx` | C, U, P |
+| W3 | `web/src/Settings.tsx`, `web/src/SettingsPage.tsx`, `web/src/FeedSettings.tsx`, `web/src/Onboarding.tsx`, `web/src/Login.tsx`, `web/src/rules/`, `web/src/search/`, `web/src/labels/`, `web/src/agents/`, `web/src/palette/`, `web/src/pipeline/`, `web/src/account/`, `web/src/request.ts`, `web/src/style.css` | C, U, S |
 
 ### Native clients
 
@@ -81,15 +83,15 @@ Everything else is minor or a nit.
 
 ## Verification
 
-- Each important or blocking finding goes to a second helper with the
-  finding's text and the instruction to refute it from the code and the
-  tests. A finding survives when the refuter confirms it or cannot
-  refute it with evidence.
-- Before a fix starts, the author reads the code at the cited lines and
-  reproduces the failure in a test. A finding that cannot be reproduced
-  is recorded as refuted with the reason.
+- Each important or blocking finding selected for implementation goes to
+  a second helper with its text and the instruction to refute it from the
+  code and tests. Unresolved claims remain unverified, not confirmed.
+- Before a fix starts, the author reads the cited code and reproduces the
+  failure in a test. A claim contradicted by evidence is refuted. A claim
+  that cannot be reproduced remains deferred with the validation gap.
 - Minor findings are not verified individually. They are fixed only when
-  a fix slice already touches the file, or deferred.
+  a fix slice already touches the file, or deferred. Backlog reconciliation
+  is a code-reading assessment, not independent regression verification.
 
 ## Fix slices
 
