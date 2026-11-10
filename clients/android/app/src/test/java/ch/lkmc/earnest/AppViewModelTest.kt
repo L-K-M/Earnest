@@ -416,6 +416,26 @@ class AppViewModelTest {
         assertEquals("Could not export subscriptions.", model.state.value.opml.error)
     }
 
+    @Test fun aSuccessfulExportClearsAPreviousError() = runBlocking(Dispatchers.IO) {
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        var factory: () -> EarnestApi = { api() }
+        val model = AppViewModel(app, Sessions(AuthenticatedSession(identity, "token"))) { factory() }
+        withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        var failing = true
+        factory = {
+            EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { chain ->
+                if (failing) throw java.io.IOException()
+                Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                    .code(200).message("test").body("""<opml version="2.0"><body/></opml>""".toResponseBody()).build()
+            }.build())
+        }
+        assertNull(model.exportOpml())
+        assertEquals("Could not export subscriptions.", model.state.value.opml.error)
+        failing = false
+        assertEquals("""<opml version="2.0"><body/></opml>""", model.exportOpml())
+        assertNull(model.state.value.opml.error)
+    }
+
     @Test fun unauthorizedExportExpiresTheOwningSession() = runBlocking(Dispatchers.IO) {
         SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
         val sessions = Sessions(AuthenticatedSession(identity, "token"))

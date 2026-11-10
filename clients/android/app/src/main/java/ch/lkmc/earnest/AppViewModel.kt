@@ -789,16 +789,21 @@ class AppViewModel internal constructor(
         _state.update { current -> current.copy(opml = OpmlUi(error = message)) }
     }
 
-    /** Dismisses the import report. */
+    /** Dismisses the import report and any stale error with it. */
     fun dismissOpmlReport() {
-        _state.update { current -> current.copy(opml = current.opml.copy(summary = null)) }
+        _state.update { current -> current.copy(opml = OpmlUi()) }
     }
 
     /** The account's subscriptions as OPML, or null when the export failed. */
     suspend fun exportOpml(): String? = withContext(Dispatchers.IO) {
         val (cache, session) = activeAccount("Still signing in; the export did not run.") ?: return@withContext null
         try {
-            apiFactory(session).exportOpml()
+            val xml = apiFactory(session).exportOpml()
+            if (currentOrExpired(session, cache)) {
+                // A stale failure must not outlive the export that succeeds.
+                _state.update { current -> current.copy(opml = current.opml.copy(error = null)) }
+            }
+            xml
         } catch (error: ApiException) {
             if (currentOrExpired(session, cache)) {
                 _state.update { current -> current.copy(opml = current.opml.copy(error = failureText("Could not export subscriptions", error))) }
