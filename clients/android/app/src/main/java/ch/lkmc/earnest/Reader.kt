@@ -18,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
@@ -117,6 +118,9 @@ internal fun Reader(
     val fallbackHtml = cachedHtml?.let { offlineReaderHtml(it, typography, systemDark) }
     val fallbackCallback = rememberUpdatedState(onFallback)
     val webViewCallback = rememberUpdatedState(onWebView)
+    // The last WebView handed out; a release may run after a replacement has
+    // published itself and must not null the newer instance.
+    val published = remember { arrayOfNulls<WebView>(1) }
     key(url, fallbackHtml) {
         AndroidView(
             modifier = modifier,
@@ -124,6 +128,7 @@ internal fun Reader(
                 createReaderWebView(context, displayUrl, fallbackHtml) { fallbackCallback.value() }
             },
             update = { webView ->
+                published[0] = webView
                 webViewCallback.value(webView)
                 if (webView.settings.textZoom != textZoom) webView.settings.textZoom = textZoom
                 if (webView.tag != (displayUrl ?: fallbackHtml)) {
@@ -134,7 +139,10 @@ internal fun Reader(
             onReset = null,
             onRelease = {
                 it.destroy()
-                webViewCallback.value(null)
+                if (published[0] === it) {
+                    published[0] = null
+                    webViewCallback.value(null)
+                }
             },
         )
     }

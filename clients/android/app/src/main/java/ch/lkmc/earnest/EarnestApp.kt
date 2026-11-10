@@ -482,17 +482,27 @@ private fun MainScaffold(
                                     val entryState = state.states[entry.id]
                                         ?: SyncEngine.initialState(state.principalId, entry.id)
                                     var readerWebView by remember { mutableStateOf<WebView?>(null) }
-                                    var offlineCopy by remember { mutableStateOf(false) }
-                                    var findOpen by remember { mutableStateOf(false) }
-                                    var findQuery by remember { mutableStateOf("") }
-                                    var findLabel by remember { mutableStateOf("") }
+                                    // Per-article state starts fresh with the
+                                    // article itself; the device-local zoom
+                                    // survives navigation.
+                                    var offlineCopy by remember(entry.id) { mutableStateOf(false) }
+                                    var findOpen by remember(entry.id) { mutableStateOf(false) }
+                                    var findQuery by remember(entry.id) { mutableStateOf("") }
+                                    var findLabel by remember(entry.id) { mutableStateOf("") }
                                     var textZoom by remember { mutableStateOf(context.readerZoom()) }
+                                    val closeFind: () -> Unit = {
+                                        findOpen = false
+                                        findQuery = ""
+                                        findLabel = ""
+                                        readerWebView?.clearMatches()
+                                    }
                                     DisposableEffect(readerWebView) {
+                                        val view = readerWebView
                                         val listener = WebView.FindListener { active, matches, done ->
                                             if (done) findLabel = findCountLabel(active, matches)
                                         }
-                                        readerWebView?.setFindListener(listener)
-                                        onDispose { readerWebView?.setFindListener(null) }
+                                        view?.setFindListener(listener)
+                                        onDispose { view?.setFindListener(null) }
                                     }
                                     LaunchedEffect(findQuery, readerWebView) {
                                         val view = readerWebView ?: return@LaunchedEffect
@@ -503,14 +513,7 @@ private fun MainScaffold(
                                             view.findAllAsync(findQuery)
                                         }
                                     }
-                                    // A new article starts clean: no offline
-                                    // notice and no find session from the last.
-                                    LaunchedEffect(entry.id) {
-                                        offlineCopy = false
-                                        findOpen = false
-                                        findQuery = ""
-                                        findLabel = ""
-                                    }
+                                    BackHandler(enabled = findOpen, onBack = closeFind)
                                     ReaderHeader(
                                         entry = entry,
                                         source = subscriptionTitles[entry.subscriptionId].orEmpty(),
@@ -539,7 +542,10 @@ private fun MainScaffold(
                                             }
                                         },
                                         onMarkUnread = { model.markUnread(entry.id, undoable) },
-                                        onFind = { findOpen = !findOpen },
+                                        onFind = {
+                                            findOpen = !findOpen
+                                            if (!findOpen) closeFind()
+                                        },
                                         onSmallerText = {
                                             textZoom = zoomStep(textZoom, false)
                                             context.setReaderZoom(textZoom)
@@ -556,12 +562,7 @@ private fun MainScaffold(
                                             onQuery = { findQuery = it },
                                             onPrevious = { readerWebView?.findNext(false) },
                                             onNext = { readerWebView?.findNext(true) },
-                                            onClose = {
-                                                findOpen = false
-                                                findQuery = ""
-                                                findLabel = ""
-                                                readerWebView?.clearMatches()
-                                            },
+                                            onClose = closeFind,
                                         )
                                     }
                                     val content = reader.content
@@ -726,7 +727,7 @@ private fun ReaderHeader(
         val meta = listOfNotNull(
             source.takeIf { it.isNotBlank() },
             date.takeIf { it.isNotBlank() },
-            "Offline copy".takeIf { offlineCopy },
+            "Cached copy".takeIf { offlineCopy },
         )
         if (meta.isNotEmpty()) {
             Text(
@@ -760,22 +761,23 @@ private fun FindBar(
     onNext: () -> Unit,
     onClose: () -> Unit,
 ) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
         OutlinedTextField(
             value = query,
             onValueChange = onQuery,
             label = { Text("Find in article") },
             singleLine = true,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.fillMaxWidth(),
         )
-        Text(label, style = MaterialTheme.typography.bodySmall)
-        TextButton(onClick = onPrevious) { Text("Previous") }
-        TextButton(onClick = onNext) { Text("Next") }
-        TextButton(onClick = onClose) { Text("Close") }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+            TextButton(onClick = onPrevious) { Text("Previous") }
+            TextButton(onClick = onNext) { Text("Next") }
+            TextButton(onClick = onClose) { Text("Close") }
+        }
     }
 }
 

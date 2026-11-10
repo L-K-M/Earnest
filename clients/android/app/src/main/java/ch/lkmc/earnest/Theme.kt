@@ -47,7 +47,9 @@ fun Context.readerZoom(): Int =
         .coerceIn(MIN_READER_ZOOM, MAX_READER_ZOOM)
 
 fun Context.setReaderZoom(zoom: Int) {
-    getSharedPreferences(THEME_PREFS, Context.MODE_PRIVATE).edit { putInt(READER_ZOOM_KEY, zoom) }
+    getSharedPreferences(THEME_PREFS, Context.MODE_PRIVATE).edit {
+        putInt(READER_ZOOM_KEY, zoom.coerceIn(MIN_READER_ZOOM, MAX_READER_ZOOM))
+    }
 }
 
 // Earnest's reading palette: a warm paper surface with ink text and the

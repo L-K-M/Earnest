@@ -94,6 +94,17 @@ class ReaderTest {
         uncached.webViewClient.onReceivedError(uncached, request(), error)
         assertEquals("no offline copy exists to announce", 1, notified)
         uncached.destroy()
+
+        var httpNotified = 0
+        val httpView = createReaderWebView(ApplicationProvider.getApplicationContext<Context>(), url, "<p>cached</p>") { httpNotified++ }
+        httpView.loadUrl(url)
+        httpView.webViewClient.onReceivedHttpError(
+            httpView,
+            request(),
+            WebResourceResponse("text/html", "UTF-8", 503, "Unavailable", emptyMap(), "error".byteInputStream()),
+        )
+        assertEquals("the HTTP-error path must notify too", 1, httpNotified)
+        httpView.destroy()
     }
 
     @Test fun theFindLabelNamesTheMatchPosition() {
