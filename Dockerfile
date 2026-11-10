@@ -7,7 +7,7 @@
 # reproducible-builds "unset".
 ARG VERSION=dev REVISION=unknown CREATED=1970-01-01T00:00:00Z
 
-FROM --platform=$BUILDPLATFORM node:24-alpine AS web
+FROM --platform=$BUILDPLATFORM node:26-alpine AS web
 WORKDIR /src
 COPY web/package.json web/pnpm-lock.yaml ./web/
 WORKDIR /src/web
