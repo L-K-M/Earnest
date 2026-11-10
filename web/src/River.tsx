@@ -71,9 +71,17 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   const [error, setError] = useState('')
   const [cluster, setCluster] = useState(false)
   const position = useQuery({queryKey: ['position', key], queryFn: ({signal}) => request<{seq: number}>(`/v1/positions/${encodeURIComponent(key)}`, {signal})})
+  // The list starts from the position saved when it mounted and keeps that
+  // start while it is open. Later reads of the position (a tab refocus, the
+  // offline worker claiming the tab after its first install) usually find it
+  // advanced by this very list; restarting from there would blank the list
+  // and drop the article being read out of it. Set during render, as React
+  // allows for state derived from the previous render.
+  const [start, setStart] = useState<number | null>(null)
+  if (start === null && position.isSuccess) setStart(position.data.seq)
   const list = useInfiniteQuery({
-    queryKey: ['river', key, position.data?.seq, cluster], enabled: position.isSuccess,
-    initialPageParam: {direction: 'forward', after: position.data?.seq ?? 0} as PageParam,
+    queryKey: ['river', key, start, cluster], enabled: start !== null,
+    initialPageParam: {direction: 'forward', after: start ?? 0} as PageParam,
     queryFn: ({pageParam, signal}) => {
       const query = entryQuery(view, cluster ? 'cluster' : undefined)
       query.set('direction', pageParam.direction)
@@ -82,7 +90,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
       return request<Page>(`/v1/entries?${query}`, {signal})
     },
     getNextPageParam: (last): PageParam | undefined => last.next_cursor ? {direction: 'forward', cursor: String(Math.max(...last.entries.map(e => e.seq)))} : undefined,
-    getPreviousPageParam: (first): PageParam | undefined => first.entries.length ? {direction: 'backward', cursor: String(Math.min(...first.entries.map(e => e.seq)))} : position.data?.seq ? {direction: 'backward', cursor: String(position.data.seq + 1)} : undefined,
+    getPreviousPageParam: (first): PageParam | undefined => first.entries.length ? {direction: 'backward', cursor: String(Math.min(...first.entries.map(e => e.seq)))} : start ? {direction: 'backward', cursor: String(start + 1)} : undefined,
     refetchOnWindowFocus: false, staleTime: Infinity,
   })
   const entries = orderEntries(list.data?.pages.flatMap(page => page.entries) ?? [], view, subscriptions)
