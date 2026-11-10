@@ -183,8 +183,11 @@ internal fun MediaImage(
 ) {
     if (path.isNullOrEmpty()) return
     // Only the account key matters here: collecting the whole state would
-    // recompose every image in a list on each register write.
-    val accountKey by remember { model.state.map { it.accountKey }.distinctUntilChanged() }.collectAsState(null)
+    // recompose every image in a list on each register write. Seeded from the
+    // current state so the load below is not started twice, once for a null
+    // key and once for the first value.
+    val accountKey by remember(model) { model.state.map { it.accountKey }.distinctUntilChanged() }
+        .collectAsState(model.state.value.accountKey)
     val bitmap by produceState<ImageBitmap?>(null, path, accountKey) {
         value = model.mediaBitmap(path)
     }
