@@ -166,6 +166,7 @@ data class Subscription(
     val rev: Long,
     val deleted: Boolean,
     val private: Boolean,
+    val muted: Boolean,
     val health: FeedHealth,
     @SerialName("icon_url") val iconUrl: String? = null,
 )

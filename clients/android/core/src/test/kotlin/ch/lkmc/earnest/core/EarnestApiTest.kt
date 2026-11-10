@@ -192,7 +192,7 @@ class EarnestApiTest {
             val body = if (chain.request().url.encodedPath == "/v1/opml") {
                 """<opml version="2.0"><body/></opml>"""
             } else {
-                """[{"path":[],"deferred":true,"subscription":{"id":3,"feed_id":5,"title":"Feed","url":"https://feed.test/rss","site_url":"","folder_id":0,"cadence":"today","extract":"none","rev":1,"deleted":false,"private":false,"initial_through_seq":0,"initial_fetch_pending":false,"health":{"next_fetch_at":"2026-11-10T01:00:00Z","consecutive_failures":0,"http_status":200,"posts_per_day":1.0,"firehose":false}}}]"""
+                """[{"path":[],"deferred":true,"subscription":{"id":3,"feed_id":5,"title":"Feed","url":"https://feed.test/rss","site_url":"","folder_id":0,"cadence":"today","extract":"none","rev":1,"deleted":false,"private":false,"muted":false,"initial_through_seq":0,"initial_fetch_pending":false,"health":{"next_fetch_at":"2026-11-10T01:00:00Z","consecutive_failures":0,"http_status":200,"posts_per_day":1.0,"firehose":false}}}]"""
             }
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
                 .code(200).message("test").body(body.toResponseBody()).build()

@@ -2669,6 +2669,9 @@
             "minimum": 0,
             "type": "integer"
           },
+          "muted": {
+            "type": "boolean"
+          },
           "private": {
             "type": "boolean"
           },
@@ -2701,6 +2704,7 @@
           "rev",
           "deleted",
           "private",
+          "muted",
           "health"
         ],
         "type": "object"

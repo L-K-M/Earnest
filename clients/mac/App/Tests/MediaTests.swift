@@ -30,7 +30,7 @@ import GRDB
 
     func testRowsCarryThumbnailAndIconPaths() async throws {
         let session = ContentHTTP.install([
-            .init(path: "/v1/subscriptions", body: #"[{"id":1,"feed_id":2,"title":"Feed","url":"https://feed.test/rss","site_url":"https://feed.test","folder_id":0,"cadence":"now","extract":"","rev":1,"deleted":false,"private":false,"initial_fetch_pending":false,"initial_through_seq":0,"icon_url":"/v1/subscriptions/1/icon?v=ffeeddcc","health":{"next_fetch_at":"2026-11-05T00:00:00Z","consecutive_failures":0,"http_status":200,"posts_per_day":0,"firehose":false}}]"#),
+            .init(path: "/v1/subscriptions", body: #"[{"id":1,"feed_id":2,"title":"Feed","url":"https://feed.test/rss","site_url":"https://feed.test","folder_id":0,"cadence":"now","extract":"","rev":1,"deleted":false,"private":false,"muted":false,"initial_fetch_pending":false,"initial_through_seq":0,"icon_url":"/v1/subscriptions/1/icon?v=ffeeddcc","health":{"next_fetch_at":"2026-11-05T00:00:00Z","consecutive_failures":0,"http_status":200,"posts_per_day":0,"firehose":false}}]"#),
         ])
         defer { session.invalidateAndCancel() }
         let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: ContentTokens(), session: session)

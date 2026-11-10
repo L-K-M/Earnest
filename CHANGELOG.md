@@ -93,6 +93,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- "Mark all as read" and "Mark the rest read" on Today in the web client
+  leave muted feeds alone, as the Today list already does. Subscriptions
+  in the API now carry `muted`, which the sync feed already reported.
 - The Android app remembers its section and open Settings screen across
   rotation and process death, like the open article already did, so the
   reader no longer reopens on Today after a configuration change.
