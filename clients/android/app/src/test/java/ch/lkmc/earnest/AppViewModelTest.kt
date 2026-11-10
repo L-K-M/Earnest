@@ -327,8 +327,10 @@ class AppViewModelTest {
         model.markUnread(2) { action.set(it) }
         withTimeout(15000) { model.state.first { it.error?.startsWith("Could not save the action") == true } }
         assertNull(action.get())
-        // No unread write landed, so scrolling may mark the row read.
-        assertTrue(model.markScrolledPast(2))
+        // No unread write landed, so scrolling may mark the row read. The
+        // guard is released in queue()'s finally, after the error publishes,
+        // so wait for the release rather than assuming it already happened.
+        withTimeout(15000) { while (!model.markScrolledPast(2)) delay(10) }
     }
 
     @Test fun failedUndoKeepsTheMarkUnreadGuard() = runBlocking(Dispatchers.IO) {

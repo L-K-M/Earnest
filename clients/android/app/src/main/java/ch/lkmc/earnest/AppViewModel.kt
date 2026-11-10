@@ -898,6 +898,12 @@ class AppViewModel internal constructor(
                     }
                     syncEngine.flush()
                     saved = true
+                    onSaved(ReversibleAction(
+                        entryId = entryId,
+                        message = undoable?.message.orEmpty(),
+                        prior = intents.associate { it.register to it.prior },
+                        written = intents.associate { it.register to it.value },
+                    ))
                     val restored = restoredState(syncEngine, principal)
                     search.invalidateForGeneration(restored.snapshot.cursor.generation)
                     val agentChanges = cache.agentChanges()
@@ -908,19 +914,16 @@ class AppViewModel internal constructor(
                         agentChanges = agentChanges,
                         sessionAgentChanges = activitySince(agentChanges, sessionStartedAt),
                     ) }
-                    onSaved(ReversibleAction(
-                        entryId = entryId,
-                        message = undoable?.message.orEmpty(),
-                        prior = intents.associate { it.register to it.prior },
-                        written = intents.associate { it.register to it.value },
-                    ))
                     flushScheduler.request()
                 }
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
             } catch (error: Exception) {
                 if (currentOrExpired(session, cache)) {
-                    _state.update { current -> current.copy(error = failureText("Could not save the action", error)) }
+                    // A failure after the flush is a refresh problem, not a
+                    // save problem: the writes are already durable.
+                    val what = if (saved) "The action was saved, but the view could not refresh" else "Could not save the action"
+                    _state.update { current -> current.copy(error = failureText(what, error)) }
                 }
             } finally {
                 if (!saved) onNotSaved()
