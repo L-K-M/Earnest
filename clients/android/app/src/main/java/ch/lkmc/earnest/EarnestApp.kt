@@ -959,7 +959,7 @@ private fun FeedsScreen(
         val folders = state.snapshot.objects.filter { it.kind == SyncEngine.OBJECT_FOLDER && !it.deleted }
         feedGroups(subscriptions, folders).forEach { group ->
             group.title?.let { title ->
-                item(key = "folder-$title") {
+                item(key = group.key) {
                     Text(
                         title,
                         style = MaterialTheme.typography.titleSmall,

@@ -32,7 +32,7 @@ class FeedGroupsTest {
 
     @Test fun withoutFoldersTheListStaysFlat() {
         assertEquals(
-            listOf(FeedGroup(null, listOf(sub(1), sub(2)))),
+            listOf(FeedGroup("unfiled", null, listOf(sub(1), sub(2)))),
             feedGroups(listOf(sub(1), sub(2)), emptyList()),
         )
     }
@@ -42,8 +42,33 @@ class FeedGroupsTest {
             listOf(sub(1), sub(2, folderId = 7), sub(3, folderId = 5)),
             listOf(folder(7, "Zoo"), folder(5, "Apple")),
         )
-        assertEquals(listOf("No folder", "Apple", "Zoo"), groups.map { it.title })
+        assertEquals(listOf("unfiled" to "No folder", "folder-5" to "Apple", "folder-7" to "Zoo"), groups.map { it.key to it.title })
         assertEquals(listOf(listOf(1L), listOf(3L), listOf(2L)), groups.map { group -> group.subscriptions.map { it.id } })
+    }
+
+    @Test fun folderNamesSortCaseInsensitively() {
+        val groups = feedGroups(
+            listOf(sub(1, folderId = 5), sub(2, folderId = 6), sub(3, folderId = 7)),
+            listOf(folder(5, "apple"), folder(6, "Zoo"), folder(7, "Banana")),
+        )
+        assertEquals(listOf("apple", "Banana", "Zoo"), groups.map { it.title })
+    }
+
+    @Test fun sameNamedFoldersStaySeparateSections() {
+        val groups = feedGroups(
+            listOf(sub(1, folderId = 5), sub(2, folderId = 7)),
+            listOf(folder(5, "News"), folder(7, "News")),
+        )
+        assertEquals(listOf("folder-5", "folder-7"), groups.map { it.key })
+    }
+
+    @Test fun aFolderNamedNoFolderKeepsItsOwnSection() {
+        val groups = feedGroups(
+            listOf(sub(1), sub(2, folderId = 5)),
+            listOf(folder(5, "No folder")),
+        )
+        assertEquals(listOf("unfiled", "folder-5"), groups.map { it.key })
+        assertEquals(listOf("No folder", "No folder"), groups.map { it.title })
     }
 
     @Test fun aSubscriptionWhoseFolderIsGoneIsUnfiled() {
