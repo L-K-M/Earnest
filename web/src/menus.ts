@@ -61,11 +61,11 @@ export type ArticleMenuServices = {
 }
 
 // Actions for one article row, matching its keyboard shortcuts. Each toggle
-// names what it will do to this article. "Mark unread" writes only the seen
-// register, like its "m" shortcut: the shared sync model clears Done
-// atomically with a deliberate unseen (testdata/vectors/22-native-unread-done),
-// so a Done article becomes genuinely unread and the label flips with it.
-// The label follows the row's display, where Done reads as read.
+// names what it will do to this article. "Mark unread" emits only the seen
+// write, like its "m" shortcut: the shared sync model then clears Done
+// atomically from that deliberate unseen (see the "native-unread-done"
+// vector), so a Done article becomes genuinely unread and the label flips
+// with it. The label follows the row's display, where Done reads as read.
 export function articleMenu(state: EntryState, services: ArticleMenuServices): MenuItem[] {
   const done = state.shelf.value === 'done'
   const later = state.shelf.value === 'later'
