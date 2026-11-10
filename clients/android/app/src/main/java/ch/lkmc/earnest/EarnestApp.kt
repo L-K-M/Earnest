@@ -1200,9 +1200,13 @@ private fun FeedRow(
     onCadence: (Long, String) -> Unit,
     onUnsubscribe: (Long) -> Unit,
 ) {
+    // The icon path and fetch health live in the subscription's raw JSON.
+    // Parse them once per revision, not on every redraw of the list.
+    val iconUrl = remember(subscription.raw) { subscription.iconUrl() }
+    val health = remember(subscription.raw) { subscription.health() }
     Column(Modifier.fillMaxWidth().padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            subscription.iconUrl()?.let {
+            iconUrl?.let {
                 MediaImage(it, Modifier.size(24.dp), RoundedCornerShape(4.dp))
                 Spacer(Modifier.width(8.dp))
             }
@@ -1213,7 +1217,7 @@ private fun FeedRow(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        feedProblem(subscription.health())?.let { problem ->
+        feedProblem(health)?.let { problem ->
             Text(
                 "Fetch failing: ${problem.detail}",
                 style = MaterialTheme.typography.bodySmall,
