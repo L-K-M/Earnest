@@ -496,7 +496,11 @@ private fun MainScaffold(
                                         findLabel = ""
                                         readerWebView?.clearMatches()
                                     }
-                                    DisposableEffect(readerWebView) {
+                                    // Keyed on the article too: the listener
+                                    // must always write the current entry's
+                                    // label, even for a reader that someday
+                                    // reuses its WebView across articles.
+                                    DisposableEffect(readerWebView, entry.id) {
                                         val view = readerWebView
                                         val listener = WebView.FindListener { active, matches, done ->
                                             if (done) findLabel = findCountLabel(active, matches)
