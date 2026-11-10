@@ -19,10 +19,11 @@ internal fun feedGroups(subscriptions: List<SyncObject>, folders: List<SyncObjec
     val unfiled = subscriptions.filter { it.folderId == 0L || it.folderId !in byId }
     val grouped = subscriptions.filter { it.folderId != 0L && it.folderId in byId }
         .groupBy { it.folderId }
+    val ordered = grouped.keys.sortedWith(
+        compareBy(String.CASE_INSENSITIVE_ORDER) { id: Long -> byId.getValue(id).name }.thenBy { it },
+    )
     return (listOf(FeedGroup("unfiled", "No folder", unfiled)) +
-        grouped.entries
-            .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { byId.getValue(it.key).name })
-            .map { (id, rows) -> FeedGroup("folder-$id", byId.getValue(id).name, rows) })
+        ordered.map { id -> FeedGroup("folder-$id", byId.getValue(id).name, grouped.getValue(id)) })
         .filter { it.subscriptions.isNotEmpty() }
 }
 

@@ -55,9 +55,11 @@ class FeedGroupsTest {
     }
 
     @Test fun sameNamedFoldersStaySeparateSections() {
+        // Reverse folder-id input order: the tie-break is the folder id, not
+        // the order subscriptions happen to arrive in.
         val groups = feedGroups(
-            listOf(sub(1, folderId = 5), sub(2, folderId = 7)),
-            listOf(folder(5, "News"), folder(7, "News")),
+            listOf(sub(2, folderId = 7), sub(1, folderId = 5)),
+            listOf(folder(7, "News"), folder(5, "News")),
         )
         assertEquals(listOf("folder-5", "folder-7"), groups.map { it.key })
     }
