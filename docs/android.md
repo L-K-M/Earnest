@@ -204,7 +204,9 @@ notification text, notification permission timing, cadence selection, swipe
 thresholds and action messages, undo restoration and its changed-since
 guard, mark unread clearing Done and surviving passive marking, share
 and clipboard intents, activity descriptions, reader date and original
-URL, and outbox flush debounce.
+URL, outbox flush debounce, state restoration of the section and settings,
+and the find listener's per-article re-registration. The last two run as
+Compose UI tests on Robolectric.
 Core repository tests exercise real wire payloads, batch boundaries, in-flight
 retries, entry hydration and sibling subscription projections. Room regressions
 use Robolectric's native SQLite mode on Apple silicon because legacy SQLite

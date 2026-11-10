@@ -210,8 +210,8 @@ private fun MainScaffold(
     // The section and the settings screen survive rotation and process
     // death like the navigator's open article does; without them the reader
     // would reopen into a list the user was not looking at.
-    var view by rememberSaveable(saver = ViewSaver) { mutableStateOf(View.TODAY) }
-    var showSettings by rememberSaveable { mutableStateOf(false) }
+    var view by rememberSection()
+    var showSettings by rememberSettingsOpen()
     val readerEntry = state.snapshot.entries.firstOrNull { it.id == navigator.currentDestination?.contentKey && !it.deleted }
     val reader = remember { ReaderLoadState() }
     var activityGroups by remember { mutableStateOf<List<ch.lkmc.earnest.core.ActivityGroup>>(emptyList()) }
@@ -496,18 +496,7 @@ private fun MainScaffold(
                                         findLabel = ""
                                         readerWebView?.clearMatches()
                                     }
-                                    // Keyed on the article too: the listener
-                                    // must always write the current entry's
-                                    // label, even for a reader that someday
-                                    // reuses its WebView across articles.
-                                    DisposableEffect(readerWebView, entry.id) {
-                                        val view = readerWebView
-                                        val listener = WebView.FindListener { active, matches, done ->
-                                            if (done) findLabel = findCountLabel(active, matches)
-                                        }
-                                        view?.setFindListener(listener)
-                                        onDispose { view?.setFindListener(null) }
-                                    }
+                                    FindLabelBridge(readerWebView, entry.id) { findLabel = it }
                                     LaunchedEffect(findQuery, readerWebView) {
                                         val view = readerWebView ?: return@LaunchedEffect
                                         if (findQuery.isBlank()) {
@@ -1394,3 +1383,34 @@ internal val ViewSaver: Saver<MutableState<View>, String> = Saver(
     save = { it.value.name },
     restore = { name -> mutableStateOf(View.entries.firstOrNull { it.name == name } ?: View.TODAY) },
 )
+
+/**
+ * The section the user is looking at, kept across recreation. The wiring is
+ * the seam a restoration test drives: reverting it to a plain remember fails
+ * there.
+ */
+@Composable
+internal fun rememberSection(): MutableState<View> =
+    rememberSaveable(saver = ViewSaver) { mutableStateOf(View.TODAY) }
+
+/** Whether Settings covers the sections; survives recreation like [rememberSection]. */
+@Composable
+internal fun rememberSettingsOpen(): MutableState<Boolean> =
+    rememberSaveable { mutableStateOf(false) }
+
+/**
+ * Bridges the reader WebView's find results into [onLabel] for the article
+ * [entryId]. It re-registers whenever either changes, so a result always
+ * names the current article's matches, even for a reader that reuses one
+ * WebView across articles.
+ */
+@Composable
+internal fun FindLabelBridge(webView: WebView?, entryId: Long, onLabel: (String) -> Unit) {
+    DisposableEffect(webView, entryId) {
+        val listener = WebView.FindListener { active, matches, done ->
+            if (done) onLabel(findCountLabel(active, matches))
+        }
+        webView?.setFindListener(listener)
+        onDispose { webView?.setFindListener(null) }
+    }
+}
