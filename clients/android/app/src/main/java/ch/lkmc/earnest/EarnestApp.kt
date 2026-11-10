@@ -122,7 +122,7 @@ import kotlin.math.roundToInt
  */
 private const val FOREGROUND_REFRESH_MS = 3L * 60 * 1000
 
-private enum class View(val label: String, val icon: ImageVector, val tone: ((Tones) -> Color)?) {
+internal enum class View(val label: String, val icon: ImageVector, val tone: ((Tones) -> Color)?) {
     TODAY("Today", Icons.Filled.DateRange, { it.orange }),
     EDITION("Edition", Icons.AutoMirrored.Filled.List, { it.blue }),
     LATER("Later", Icons.Filled.Notifications, { it.amber }),
@@ -195,8 +195,11 @@ private fun MainScaffold(
     onRequestNotifications: () -> Unit,
 ) {
     val navigator = rememberListDetailPaneScaffoldNavigator<Long>()
-    var view by remember { mutableStateOf(View.TODAY) }
-    var showSettings by remember { mutableStateOf(false) }
+    // The section and the settings screen survive rotation and process
+    // death like the navigator's open article does; without them the reader
+    // would reopen into a list the user was not looking at.
+    var view by rememberSaveable(saver = ViewSaver) { mutableStateOf(View.TODAY) }
+    var showSettings by rememberSaveable { mutableStateOf(false) }
     val readerEntry = state.snapshot.entries.firstOrNull { it.id == navigator.currentDestination?.contentKey && !it.deleted }
     val reader = remember { ReaderLoadState() }
     var activityGroups by remember { mutableStateOf<List<ch.lkmc.earnest.core.ActivityGroup>>(emptyList()) }
@@ -1114,4 +1117,13 @@ private fun String.relativeTime(): String = runCatching {
 internal val AgentSelectedSaver: Saver<MutableState<Set<Long>>, LongArray> = Saver(
     save = { it.value.toLongArray() },
     restore = { mutableStateOf(it.toSet()) },
+)
+
+/**
+ * The selected section across the saved-state round trip, falling back to
+ * Today for a name a future build no longer knows.
+ */
+internal val ViewSaver: Saver<MutableState<View>, String> = Saver(
+    save = { it.value.name },
+    restore = { name -> mutableStateOf(View.entries.firstOrNull { it.name == name } ?: View.TODAY) },
 )
