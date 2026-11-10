@@ -1014,7 +1014,9 @@ class SearchModelTest {
 
     private suspend fun awaitState(
         model: SearchModel,
-        timeoutMs: Long = 5_000,
+        // The shared CI runner schedules sluggishly; a state that normally
+        // arrives in milliseconds has taken over five seconds under load.
+        timeoutMs: Long = 15_000,
         predicate: (SearchUiState) -> Boolean,
     ): SearchUiState = try {
         withTimeout(timeoutMs) { model.state.first(predicate) }
