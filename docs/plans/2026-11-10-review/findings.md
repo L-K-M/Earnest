@@ -68,7 +68,7 @@ credential scoping and SSRF checks are unchanged.
 
 ### S10-1: Lost LLM responses can refund billable requests
 
-**Open, verification in progress.** `internal/llm/client.go:billingUnknown`
+**Open, independently confirmed by code reading.** `internal/llm/client.go:billingUnknown`
 refunds every `outbound.Connect` failure. The outbound classification also
 covers read/write failures after a provider may have received the request.
 The push transport already distinguishes dial failures from uncertain
@@ -77,7 +77,7 @@ the estimate on connection resets, while proven pre-send failures refund it.
 
 ### S2-1: Concurrent password checks bypass the failure limit
 
-**Open, verification in progress.** `Auth.Authenticate` and `CompatLogin`
+**Open, independently confirmed by code reading.** `Auth.Authenticate` and `CompatLogin`
 check the throttle before password hashing, then record failures afterward.
 The two critical sections do not reserve in-flight attempts. A simultaneous
 burst can pass the check before any failure is recorded, multiplying both
@@ -112,15 +112,15 @@ Measure a large backlog before designing compact atomic range events.
 
 ### S8-1: Frame messages are not bound to a document load
 
-**Deferred to existing work:** another agent owns
-[#146](https://github.com/L-K-M/Earnest/pull/146), branch
-`fix/web-frame-channel`. The recovered report identified the missing
-per-load token and checked that branch's implementation. This review does
-not duplicate or claim that fix; its merge and validation remain separate.
+**Fixed by separate work:** another agent's
+[#146](https://github.com/L-K-M/Earnest/pull/146) merged as `962c6da`.
+The recovered report identified the missing per-load token and checked that
+branch's implementation. This review did not duplicate or author that fix;
+its validation and review belong to the linked PR.
 
 ### S10-2: Summary input is not bounded like other pipeline tasks
 
-**Deferred, independent verification in progress.** `generateClaims` sends
+**Deferred, independently confirmed by code reading.** `generateClaims` sends
 the full stored text, unlike tasks using `Bound`. Very large articles can
 exceed a provider context or budget estimate. Blindly truncating to the
 existing 2048-byte prefix would also degrade summaries and make them appear

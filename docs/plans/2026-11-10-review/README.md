@@ -110,7 +110,7 @@ Updated as work lands. PR numbers link the record.
 
 | Item | State | PR |
 | --- | --- | --- |
-| Plan committed | written before fixes, PR open | [#147](https://github.com/L-K-M/Earnest/pull/147) |
+| Plan committed | written before fixes, merged | [#147](https://github.com/L-K-M/Earnest/pull/147) |
 | Review fan-out | 8/19 reports recovered; gaps recorded | see findings.md |
 | Dependabot: merge green PRs #133 to #137 | merged | #133, #134, #135, #136, #137 |
 | Dependabot: rerun #138 | rerun passed, merged | [#138](https://github.com/L-K-M/Earnest/pull/138) |
@@ -118,4 +118,4 @@ Updated as work lands. PR numbers link the record.
 | Retention overflow | regression reproduced and fixed; PR open | [#155](https://github.com/L-K-M/Earnest/pull/155) |
 | Redirect-triggered shutdown | Postgres regressions reproduced and fixed; PR open | [#156](https://github.com/L-K-M/Earnest/pull/156) |
 | Further fixes | verification in progress | see findings.md |
-| Backlog reconciliation | all 134 headings assessed, original preserved; PR open | #147 |
+| Backlog reconciliation | all 134 headings assessed, original preserved; follow-up PR pending | see backlog.md |
