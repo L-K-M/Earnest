@@ -105,6 +105,17 @@ class ReaderTest {
         )
         assertEquals("the HTTP-error path must notify too", 1, httpNotified)
         httpView.destroy()
+
+        var subresourceNotified = 0
+        val subView = createReaderWebView(ApplicationProvider.getApplicationContext<Context>(), url, "<p>cached</p>") { subresourceNotified++ }
+        subView.loadUrl(url)
+        subView.webViewClient.onReceivedHttpError(
+            subView,
+            request(main = false),
+            WebResourceResponse("image/png", null, 404, "Not Found", emptyMap(), ByteArray(0).inputStream()),
+        )
+        assertEquals("a broken image must not announce the cached copy", 0, subresourceNotified)
+        subView.destroy()
     }
 
     @Test fun theFindLabelNamesTheMatchPosition() {
