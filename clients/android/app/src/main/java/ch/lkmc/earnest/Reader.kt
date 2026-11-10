@@ -312,6 +312,9 @@ internal fun createReaderWebView(context: Context, url: String?, cachedHtml: Str
                 return empty()
             }
         }
+        // A reader starting directly on the cached copy shows it from the
+        // first frame; the error paths above report the same moment later.
+        if (url == null && cachedHtml != null) onFallback()
     }
 }
 

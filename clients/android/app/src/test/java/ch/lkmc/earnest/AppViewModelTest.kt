@@ -339,6 +339,8 @@ class AppViewModelTest {
         // the shared error text, which a concurrent flush may replace.
         await("the failed save to release the guard") { model.markScrolledPast(2) }
         assertNull("a failed save must not report success", action.get())
+        // queue() publishes the error before its finally releases the guard.
+        assertNotNull("a failed save must surface an error", model.state.value.error)
     }
 
     @Test fun failedUndoKeepsTheMarkUnreadGuard() = runBlocking(Dispatchers.IO) {
@@ -357,6 +359,8 @@ class AppViewModelTest {
         // snapshot and replaces the text while this would wait for it.
         await("the failed undo to report") { failed.get() > 0 }
         assertEquals(0, undone.get())
+        // queue() publishes the error before its finally runs onNotSaved.
+        assertNotNull("a failed undo must surface an error", model.state.value.error)
         // The article is still unread: the guard stands.
         assertFalse(model.markScrolledPast(2))
     }

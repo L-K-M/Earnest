@@ -118,6 +118,16 @@ class ReaderTest {
         subView.destroy()
     }
 
+    @Test fun startingOnTheCachedCopyNotifiesOnce() {
+        var notified = 0
+        val view = createReaderWebView(ApplicationProvider.getApplicationContext<Context>(), null, "<p>cached</p>") { notified++ }
+        assertEquals(1, notified)
+        // Errors after that arrive on a reader already on the fallback.
+        view.webViewClient.onReceivedError(view, request(), error)
+        assertEquals(1, notified)
+        view.destroy()
+    }
+
     @Test fun theFindLabelNamesTheMatchPosition() {
         assertEquals("No matches", findCountLabel(0, 0))
         assertEquals("1/1", findCountLabel(0, 1))
