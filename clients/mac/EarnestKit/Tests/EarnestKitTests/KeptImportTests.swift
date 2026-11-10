@@ -12,7 +12,7 @@ private func describe(_ skipped: [(feedURL: String, count: Int)]) -> [String] {
 /// A minimal subscription object, for the report's `subscribed` list.
 private func makeSubscription(_ id: Int64) throws -> Components.Schemas.Subscription {
     let json = """
-    {"id":\(id),"feed_id":\(id),"title":"Feed","url":"https://example.test/feed","site_url":"https://example.test","folder_id":0,"cadence":"daily","extract":"default","rev":1,"deleted":false,"private":false,"initial_through_seq":0,"initial_fetch_pending":false,"health":{"next_fetch_at":"2099-01-01T00:00:00Z","consecutive_failures":0,"http_status":200,"posts_per_day":0.5,"firehose":false}}
+    {"id":\(id),"feed_id":\(id),"title":"Feed","url":"https://example.test/feed","site_url":"https://example.test","folder_id":0,"cadence":"daily","extract":"default","rev":1,"deleted":false,"private":false,"muted":false,"initial_through_seq":0,"initial_fetch_pending":false,"health":{"next_fetch_at":"2099-01-01T00:00:00Z","consecutive_failures":0,"http_status":200,"posts_per_day":0.5,"firehose":false}}
     """
     let value = try JSONDecoder().decode(APIValue.self, from: Data(json.utf8))
     return try adapt(value)

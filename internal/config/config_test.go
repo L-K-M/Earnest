@@ -244,6 +244,40 @@ func TestLoadInvalid(t *testing.T) {
 	}
 }
 
+func TestLoadRetentionBounds(t *testing.T) {
+	for _, tc := range []struct {
+		days  string
+		valid bool
+	}{
+		{"1", true},
+		{"106751", true},
+		{"106752", false},
+		// These overflow to positive durations, bypassing the service's
+		// negative-duration guard and expiring entries far too early.
+		{"213504", false},
+		{"213505", false},
+		{"9223372036854775807", false},
+	} {
+		t.Run(tc.days, func(t *testing.T) {
+			setEnv(t, map[string]string{"EARNEST_RETENTION_DAYS": tc.days})
+			got, err := config.Load()
+			if !tc.valid {
+				if err == nil || !strings.Contains(err.Error(), "EARNEST_RETENTION_DAYS") {
+					t.Fatalf("Load() = (%+v, %v), want retention validation error", got, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			duration := time.Duration(got.RetentionDays) * 24 * time.Hour
+			if duration/(24*time.Hour) != time.Duration(got.RetentionDays) {
+				t.Fatalf("retention duration overflowed: %d days became %s", got.RetentionDays, duration)
+			}
+		})
+	}
+}
+
 func TestLoadErrorDoesNotLeakSecrets(t *testing.T) {
 	tests := []struct {
 		name string

@@ -33,9 +33,11 @@ func (a *Auth) SetCompatPassword(ctx context.Context, actor Actor) (string, erro
 
 // CompatLogin exchanges the compatibility password for a bearer token.
 func (a *Auth) CompatLogin(ctx context.Context, username, password, clientKey string) (TokenSecret, error) {
-	if a.throttle(username, clientKey) {
+	if !a.startLogin(username, clientKey) {
 		return TokenSecret{}, ErrRateLimited
 	}
+	outcome := loginAborted
+	defer func() { a.finishLogin(username, clientKey, outcome) }()
 	var userID, principalID int64
 	var hash *string
 	err := a.db.Pool().QueryRow(ctx, "SELECT u.id,p.id,u.compat_password_hash FROM users u JOIN principals p ON p.user_id=u.id AND p.kind='human' WHERE u.username=$1", username).Scan(&userID, &principalID, &hash)
@@ -47,10 +49,10 @@ func (a *Auth) CompatLogin(ctx context.Context, username, password, clientKey st
 		candidate = *hash
 	}
 	if !checkPassword(candidate, password) || err != nil || hash == nil {
-		a.recordFailure(username, clientKey)
+		outcome = loginFailed
 		return TokenSecret{}, ErrUnauthorized
 	}
-	a.clearFailures(username)
+	outcome = loginSucceeded
 	secret, err := makeSecret("earnest_compat_token_")
 	if err != nil {
 		return TokenSecret{}, err

@@ -239,7 +239,11 @@ func (f *Fetcher) Fetch(ctx context.Context, item service.FeedToFetch) error {
 		defer resp.Body.Close()
 		out.HTTPStatus = resp.StatusCode
 		if result.PermanentRedirect {
-			out.PermanentRedirectURL = result.FinalURL.String()
+			// Fragments are not sent in HTTP requests and cannot be stored
+			// as feed URLs. Keep both normal and failure outcomes valid.
+			redirect := *result.FinalURL
+			redirect.Fragment, redirect.RawFragment = "", ""
+			out.PermanentRedirectURL = redirect.String()
 		}
 		out.ETag = resp.Header.Get("ETag")
 		out.LastModified = resp.Header.Get("Last-Modified")

@@ -35,6 +35,7 @@ class AppViewModelTest {
     private val app get() = ApplicationProvider.getApplicationContext<Application>()
     private val identity = AccountIdentity("https://nas.test", 1, 1)
     private val calls = CopyOnWriteArrayList<String>()
+    private val payloads = CopyOnWriteArrayList<String>()
     private val contentUrlQueries = CopyOnWriteArrayList<String?>()
     private class Sessions(initial: AuthenticatedSession?) : SessionStore {
         private val stored = java.util.concurrent.atomic.AtomicReference(initial)
@@ -69,6 +70,11 @@ class AppViewModelTest {
     private fun api(agentChangesStatus: Int = 200, unauthorizedPath: String? = null, cancelledPath: String? = null) = EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { chain ->
         val path = chain.request().url.encodedPath
         calls += path
+        chain.request().body?.takeIf { !it.isOneShot() }?.let { body ->
+            val buffer = okio.Buffer()
+            body.writeTo(buffer)
+            payloads += buffer.readUtf8()
+        }
         if (path.endsWith("/content-url")) contentUrlQueries += chain.request().url.query
         val body = when (path) {
             "/v1/entries/2/content-url" -> """{"url":"https://content.test/signed","expires_at":"2026-11-03T01:00:00Z"}"""
@@ -76,8 +82,8 @@ class AppViewModelTest {
             "/v1/changes" -> """{"changes":[],"next":{"generation":"g1","rev":0},"next_cursor":"g1:0"}"""
             "/v1/activity/agent-changes" -> """[{"id":7,"principal_id":9,"principal_name":"Morning Agent","action":"state.updated","target":{"entry_id":2,"register":"shelf"},"before":null,"after":{"shelf":{"value":"done"}},"generation":"g1","created_at":"${java.time.Instant.now()}","next_action":"revert"}]"""
             "/v1/entries/2" -> """{"id":2,"subscription_id":3,"feed_id":5,"seq":4,"first_seen_at":"2026-11-03T00:00:00Z","title":"Notification headline","url":"https://news.test/article","author":"Author","rev":2,"deleted":false}"""
-            "/v1/subscriptions/3" -> """{"id":3,"feed_id":5,"title":"Feed","url":"https://feed.test/rss","site_url":"https://feed.test","folder_id":0,"cadence":"today","extract":"none","rev":1,"deleted":false,"private":false,"initial_through_seq":0,"initial_fetch_pending":false,"health":{"next_fetch_at":"2026-11-10T00:00:00Z","consecutive_failures":0,"http_status":200,"posts_per_day":1.0,"firehose":false}}"""
-            "/v1/opml:import" -> """[{"path":[],"deferred":true,"subscription":{"id":3,"feed_id":5,"title":"Feed","url":"https://feed.test/rss","site_url":"https://feed.test","folder_id":0,"cadence":"today","extract":"none","rev":1,"deleted":false,"private":false,"initial_through_seq":0,"initial_fetch_pending":false,"health":{"next_fetch_at":"2026-11-10T00:00:00Z","consecutive_failures":0,"http_status":200,"posts_per_day":1.0,"firehose":false}}}]"""
+            "/v1/subscriptions/3" -> """{"id":3,"feed_id":5,"title":"Feed","url":"https://feed.test/rss","site_url":"https://feed.test","folder_id":0,"cadence":"today","extract":"none","rev":1,"deleted":false,"private":false,"muted":false,"initial_through_seq":0,"initial_fetch_pending":false,"health":{"next_fetch_at":"2026-11-10T00:00:00Z","consecutive_failures":0,"http_status":200,"posts_per_day":1.0,"firehose":false}}"""
+            "/v1/opml:import" -> """[{"path":[],"deferred":true,"subscription":{"id":3,"feed_id":5,"title":"Feed","url":"https://feed.test/rss","site_url":"https://feed.test","folder_id":0,"cadence":"today","extract":"none","rev":1,"deleted":false,"private":false,"muted":false,"initial_through_seq":0,"initial_fetch_pending":false,"health":{"next_fetch_at":"2026-11-10T00:00:00Z","consecutive_failures":0,"http_status":200,"posts_per_day":1.0,"firehose":false}}}]"""
             else -> "[]"
         }
         val status = when (path) {
@@ -390,9 +396,52 @@ class AppViewModelTest {
         delay(250)
         assertTrue("undo clobbered the later change", calls.none { it.startsWith("/v1/subscriptions/") })
 
-        // The second change's undo restores what it replaced.
+        // The second change's undo restores exactly what it replaced:
+        // "now" had replaced "week".
+        payloads.clear()
+        assertTrue(model.undoCadence(3, restore = "week", written = "now"))
+        withTimeout(15000) { while (payloads.none { it.contains("\"cadence\":\"week\"") }) delay(10) }
+    }
+
+    @Test fun cadenceUndoLeavesAForeignChangeAlone() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        val saved = java.util.concurrent.atomic.AtomicInteger()
+        model.setCadence(3, "now") { saved.incrementAndGet() }
+        withTimeout(15000) { while (saved.get() == 0) delay(10) }
+
+        // Someone else changed the feed after us; the refreshed snapshot
+        // carries a third value the guard must leave alone.
+        val cache = SessionCache(app, identity)
+        cache.withEngine {
+            it.mergeObject(ch.lkmc.earnest.core.SyncObject(
+                kind = SyncEngine.OBJECT_SUBSCRIPTION, id = 3, name = "Feed", rev = 2,
+                raw = """{"cadence":"week"}""",
+            ))
+        }
+        model.refresh()
+        withTimeout(15000) {
+            while (model.state.value.snapshot.objects.none { it.id == 3L && ch.lkmc.earnest.core.River.cadence(it) == "week" }) delay(10)
+        }
+        calls.clear()
+        assertFalse("undo clobbered a foreign change", model.undoCadence(3, restore = "today", written = "now"))
+        delay(250)
+        assertTrue(calls.none { it.startsWith("/v1/subscriptions/") })
+
+        // A snapshot still showing what the change replaced (a slow refresh)
+        // must not block the restore.
+        cache.withEngine {
+            it.mergeObject(ch.lkmc.earnest.core.SyncObject(
+                kind = SyncEngine.OBJECT_SUBSCRIPTION, id = 3, name = "Feed", rev = 3,
+                raw = """{"cadence":"today"}""",
+            ))
+        }
+        model.refresh()
+        withTimeout(15000) {
+            while (model.state.value.snapshot.objects.none { it.id == 3L && ch.lkmc.earnest.core.River.cadence(it) == "today" }) delay(10)
+        }
+        payloads.clear()
         assertTrue(model.undoCadence(3, restore = "today", written = "now"))
-        withTimeout(15000) { while (calls.none { it.startsWith("/v1/subscriptions/") }) delay(10) }
+        withTimeout(15000) { while (payloads.none { it.contains("\"cadence\":\"today\"") }) delay(10) }
     }
 
     @Test fun opmlImportPublishesASummaryAndRefreshes() = runBlocking(Dispatchers.IO) {

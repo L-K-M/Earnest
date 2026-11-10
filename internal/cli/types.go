@@ -216,6 +216,7 @@ type subscription struct {
 	Rev                 uint64     `json:"rev"`
 	Deleted             bool       `json:"deleted"`
 	Private             bool       `json:"private"`
+	Muted               bool       `json:"muted"`
 	Health              feedHealth `json:"health"`
 }
 

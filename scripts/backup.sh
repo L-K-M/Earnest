@@ -12,5 +12,5 @@ name="$BACKUP_DIR/earnest-$(date -u +%Y%m%dT%H%M%SZ)-$$.dump"
 mv "$tmp" "$name"
 trap - EXIT HUP INT TERM
 # Filenames begin with sortable UTC timestamps; never prune failed dumps.
-find "$BACKUP_DIR" -maxdepth 1 -type f -name 'earnest-*.dump' -printf '%f\n' | sort -r | tail -n "+$((BACKUP_KEEP + 1))" | while IFS= read -r old; do rm -f -- "$BACKUP_DIR/$old"; done
+find "$BACKUP_DIR" -maxdepth 1 -type f -name 'earnest-*.dump' -exec basename {} \; | sort -r | tail -n "+$((BACKUP_KEEP + 1))" | while IFS= read -r old; do rm -f -- "$BACKUP_DIR/$old"; done
 printf '%s\n' "$name"

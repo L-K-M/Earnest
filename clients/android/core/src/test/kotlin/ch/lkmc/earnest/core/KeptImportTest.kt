@@ -166,6 +166,7 @@ class KeptImportTest {
         rev = 1,
         deleted = false,
         private = false,
+        muted = false,
         health = FeedHealth(
             lastSuccessAt = null,
             lastAttemptAt = null,

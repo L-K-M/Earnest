@@ -121,13 +121,19 @@ geometry of the local embedding models it names (`nomic-embed-text`,
 `bge-m3`). A task whose model is not in the table is a startup error, so a
 typo cannot call an unpriced model. Add local models with a zero price.
 
-`Budget.Authorize` runs before every call. When the provider's recorded spend
-for the current month has reached its limit, the call returns a
-`*llm.BudgetError`, which matches `llm.ErrBudgetExhausted`. The pipeline
-pauses rather than failing the operation. `Budget.Record` adds the priced cost
-after each call. The check and the record are separate operations, so
-concurrent in-flight calls can overshoot a limit by their combined cost; the
-pipeline's own sequencing is what keeps spend near the cap.
+`Client.Complete` and `Client.Embed` atomically reserve a conservative cost
+estimate before calling a provider. The monthly check includes other in-flight
+reservations; a call that would exceed the configured limit returns a
+`*llm.BudgetError`, which matches `llm.ErrBudgetExhausted`. The pipeline pauses
+rather than failing the operation. Completion estimates include input bytes,
+message framing, the schema and the output maximum, using configured prices.
+
+After the call, the reservation is reconciled with reported billable usage.
+Missing usage or an uncertain outcome retains the estimate: a lost response,
+including a mid-request connection failure, may still have been billed. A
+DNS, TLS, policy or non-timeout dial failure refunds the reservation, as do
+explicit unbilled provider rejections. Concurrent calls do not bypass the cap
+through a separate check-and-record race.
 
 ## Cache
 

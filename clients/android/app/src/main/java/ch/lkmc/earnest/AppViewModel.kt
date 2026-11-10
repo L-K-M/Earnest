@@ -1115,12 +1115,18 @@ class AppViewModel internal constructor(
 
     /**
      * Restores the cadence [written] replaced, leaving one alone that a later
-     * change of this client's replaced it with. The snapshot cannot be the
-     * reference: it refreshes only after a change round-trips, so undoing on a
-     * slow link would skip the restore entirely. Returns whether it started.
+     * change of this client's replaced it with. The refreshed snapshot is a
+     * second signal: it lags the write, so showing what the change replaced
+     * must not block the restore, but a third value there means another
+     * writer changed the feed and undo leaves it alone. Returns whether the
+     * restore started.
      */
     fun undoCadence(subscriptionId: Long, restore: String, written: String): Boolean {
         if (savedCadence[subscriptionId] != written) return false
+        val shown = _state.value.snapshot.objects
+            .firstOrNull { it.kind == SyncEngine.OBJECT_SUBSCRIPTION && it.id == subscriptionId }
+            ?.let(ch.lkmc.earnest.core.River::cadence)
+        if (shown != null && shown != written && shown != restore) return false
         setCadence(subscriptionId, restore)
         return true
     }

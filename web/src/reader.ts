@@ -13,13 +13,14 @@ export function viewKey(view: View): string { return `${view.kind}${view.id === 
 export type RangeScope = {kind: 'subscriptions' | 'folder'; ids: number[]}
 
 // The sync range "Mark the rest read" covers for a view. Today covers the
-// subscriptions it shows (every cadence except This week, which belongs to the
-// Edition); a feed or folder covers itself. Other views offer no such command.
+// subscriptions it shows: every cadence except This week, which belongs to the
+// Edition, and no muted feed, since the river hides those. A feed or folder
+// covers itself, muted or not. Other views offer no such command.
 export function viewScope(view: View, subscriptions: Subscription[]): RangeScope | null {
   if (view.kind === 'feed' && view.id !== undefined) return {kind: 'subscriptions', ids: [view.id]}
   if (view.kind === 'folder' && view.id !== undefined) return {kind: 'folder', ids: [view.id]}
   if (view.kind !== 'today') return null
-  const ids = subscriptions.filter(sub => !sub.deleted && sub.cadence !== 'week').map(sub => sub.id)
+  const ids = subscriptions.filter(sub => !sub.deleted && !sub.muted && sub.cadence !== 'week').map(sub => sub.id)
   return ids.length ? {kind: 'subscriptions', ids} : null
 }
 export function entryQuery(view: View, group?: 'cluster'): URLSearchParams {

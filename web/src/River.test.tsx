@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import {afterEach, describe, expect, it, vi} from 'vitest'
-import {cleanup, fireEvent, render, screen, waitFor, within} from '@testing-library/react'
+import {act, cleanup, fireEvent, render, screen, waitFor, within} from '@testing-library/react'
 import {QueryClient, QueryClientProvider} from '@tanstack/react-query'
 import {River} from './River'
 import type {Entry, ReaderActions, Subscription} from './reader'
@@ -252,6 +252,27 @@ it('reports the newest loaded entry for the mark-rest command', async () => {
   const onNewestLoaded = vi.fn()
   render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'today',title:'Today'}} subscriptions={[]} actions={{act:vi.fn(),state:entry=>entry.state}} selected={null} onSelect={vi.fn()} onOpen={vi.fn()} shortcuts counts={false} summary={{seen:0,done:0,later:0,kept:0}} onNewestLoaded={onNewestLoaded} /></QueryClientProvider>)
   await waitFor(() => expect(onNewestLoaded).toHaveBeenLastCalledWith(Math.max(...entries.map(entry => entry.seq))))
+})
+
+it('keeps its place when the saved position is read again', async () => {
+  // The offline worker's first install and a tab refocus refetch every query.
+  // By then this list has usually moved the saved position on; restarting
+  // from there would blank the list and drop the open article out of it.
+  let seq = 1
+  vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {blurb:'disabled'} : path.startsWith('/v1/positions') ? {seq} : {entries})
+  const client = new QueryClient({defaultOptions:{queries:{retry:false}}})
+  render(<QueryClientProvider client={client}><River view={{kind:'today',title:'Today'}} subscriptions={[]} actions={{act:vi.fn(),state:entry=>entry.state}} selected={null} onSelect={vi.fn()} onOpen={vi.fn()} shortcuts counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>)
+  await screen.findByText('Article 1')
+  const listRequests = () => vi.mocked(request).mock.calls.map(([path]) => String(path)).filter(path => path.startsWith('/v1/entries?'))
+  expect(listRequests()).toEqual([expect.stringContaining('after_seq=1')])
+  seq = 2
+  await act(async () => { await client.invalidateQueries() })
+  // Query results reach components a tick later; give a restart its chance.
+  await act(() => new Promise(resolve => setTimeout(resolve, 50)))
+  expect(screen.getByText('Article 1')).toBeTruthy()
+  expect(screen.queryByText('Finding your place…')).toBeNull()
+  // The list refetched in place: no third request from the new position.
+  expect(listRequests()).toEqual([expect.stringContaining('after_seq=1'), expect.stringContaining('after_seq=1')])
 })
 
 describe('list navigation', () => {

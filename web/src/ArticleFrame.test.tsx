@@ -84,6 +84,32 @@ describe('ArticleFrame', () => {
     expect(frame.style.height).toBe('')
   })
 
+  it('starts every load unsized, even back to an article it sized before', () => {
+    const {view, frame, nonce} = mount()
+    post(frame.contentWindow, {nonce, earnest: 'height', height: 2400})
+    expect(frame.style.height).toBe('2400px')
+    view.rerender(<div className="reader-scroll"><ArticleFrame src="https://content.test/content/2" /></div>)
+    view.rerender(<div className="reader-scroll"><ArticleFrame src="https://content.test/content/1" /></div>)
+    const again = view.container.querySelector('iframe')!
+    expect(again.style.height).toBe('')
+    const fresh = new URL(again.src).searchParams.get('frame_nonce')!
+    post(again.contentWindow, {nonce: fresh, earnest: 'height', height: 900})
+    expect(again.style.height).toBe('900px')
+  })
+
+  it('renders without randomUUID, for browsers that lack it', () => {
+    const original = crypto.randomUUID
+    Object.defineProperty(crypto, 'randomUUID', {value: undefined, configurable: true})
+    try {
+      const {frame, nonce} = mount()
+      // 16 random bytes: the token is the message auth.
+      expect(nonce).toMatch(/^[0-9a-f]{32}$/)
+      expect(frame.src).toContain(`frame_nonce=${encodeURIComponent(nonce)}`)
+    } finally {
+      Object.defineProperty(crypto, 'randomUUID', {value: original, configurable: true})
+    }
+  })
+
   it('starts the next article unsized and drops the previous nonce', () => {
     const {view, frame, nonce} = mount()
     post(frame.contentWindow, {nonce, earnest: 'height', height: 2400})

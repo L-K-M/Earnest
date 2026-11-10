@@ -36,6 +36,7 @@ class OpmlImportTest {
             rev = 1,
             deleted = false,
             `private` = false,
+            muted = false,
             health = FeedHealth(
                 nextFetchAt = "2026-11-10T01:00:00Z",
                 consecutiveFailures = 0,

@@ -47,6 +47,9 @@ type FeedHealth struct {
 // Subscription projects user settings without revealing credentials.
 // IconURL is the API path of the feed's stored icon, or "" while none is
 // stored; storing a new icon raises the revision (see announceFeedIcon).
+// Muted is the river's per-feed filter, which the sync feed already carried;
+// clients leave muted feeds out of Today-wide range marks. Nothing sets it
+// through the API yet.
 type Subscription struct {
 	InitialSince        *time.Time  `json:"initial_since,omitempty"`
 	InitialThroughSeq   uint64      `json:"initial_through_seq"`
@@ -63,6 +66,7 @@ type Subscription struct {
 	Rev                 uint64      `json:"rev"`
 	Deleted             bool        `json:"deleted"`
 	Private             bool        `json:"private"`
+	Muted               bool        `json:"muted"`
 	Health              FeedHealth  `json:"health"`
 }
 
@@ -141,7 +145,7 @@ func readExtract(mode string) ExtractMode {
 	return ""
 }
 
-const subscriptionColumns = `s.id,s.feed_id,coalesce(s.title_override,f.title),f.url,coalesce(f.site_url,''),coalesce(s.folder_id,0),s.cadence,s.full_text_mode,s.rev,s.deleted_at IS NOT NULL,f.owner_user_id IS NOT NULL,
+const subscriptionColumns = `s.id,s.feed_id,coalesce(s.title_override,f.title),f.url,coalesce(f.site_url,''),coalesce(s.folder_id,0),s.cadence,s.full_text_mode,s.rev,s.deleted_at IS NOT NULL,f.owner_user_id IS NOT NULL,s.muted,
  f.last_success_at,f.last_attempt_at,f.next_fetch_at,coalesce(f.error_class,''),coalesce(f.error_message,''),f.consecutive_failures,coalesce(f.last_http_status,0),f.posts_per_day,CASE WHEN isfinite(s.initial_since) THEN s.initial_since ELSE NULL END,s.initial_through_seq,s.initial_fetch_pending,
  (SELECT i.etag FROM feed_icons i WHERE i.feed_id=s.feed_id AND i.body IS NOT NULL)`
 
@@ -149,7 +153,7 @@ func scanSubscription(row pgx.Row) (Subscription, error) {
 	var sub Subscription
 	var extract string
 	var iconETag *string
-	err := row.Scan(&sub.ID, &sub.FeedID, &sub.Title, &sub.URL, &sub.SiteURL, &sub.FolderID, &sub.Cadence, &extract, &sub.Rev, &sub.Deleted, &sub.Private,
+	err := row.Scan(&sub.ID, &sub.FeedID, &sub.Title, &sub.URL, &sub.SiteURL, &sub.FolderID, &sub.Cadence, &extract, &sub.Rev, &sub.Deleted, &sub.Private, &sub.Muted,
 		&sub.Health.LastSuccessAt, &sub.Health.LastAttemptAt, &sub.Health.NextFetchAt, &sub.Health.ErrorClass, &sub.Health.ErrorMessage, &sub.Health.ConsecutiveFailures, &sub.Health.HTTPStatus, &sub.Health.PostsPerDay, &sub.InitialSince, &sub.InitialThroughSeq, &sub.InitialFetchPending,
 		&iconETag)
 	sub.Extract = readExtract(extract)
@@ -326,11 +330,14 @@ func (s *Service) subscribeTx(ctx context.Context, tx pgx.Tx, a Actor, rawURL st
 	}
 	// One URL can back two feed rows: the shared public row and the user's
 	// own credential-bearing row. Deduplicate subscriptions by URL so a second
-	// subscribe cannot stack a parallel feed showing every item twice.
+	// subscribe cannot stack a parallel feed showing every item twice. A
+	// recorded permanent redirect is an alias of the canonical URL, so match
+	// it too; an exact canonical match outranks an alias.
 	var existing int64
 	err := tx.QueryRow(ctx, `SELECT s.id FROM subscriptions s JOIN feeds f ON f.id=s.feed_id
-  WHERE s.user_id=$1 AND s.deleted_at IS NULL AND f.url=$2
-  AND (f.owner_user_id IS NULL OR f.owner_user_id=$1) ORDER BY f.owner_user_id NULLS LAST,s.id`, a.UserID, rawURL).Scan(&existing)
+  WHERE s.user_id=$1 AND s.deleted_at IS NULL AND (f.url=$2 OR f.permanent_redirect_url=$2)
+  AND (f.owner_user_id IS NULL OR f.owner_user_id=$1)
+  ORDER BY f.url=$2 DESC,f.owner_user_id NULLS LAST,s.id`, a.UserID, rawURL).Scan(&existing)
 	if err == nil {
 		sub, err := s.resubscribeTx(ctx, tx, a, rawURL, meta, encrypted, existing)
 		return sub, false, err

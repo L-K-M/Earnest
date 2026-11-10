@@ -1972,6 +1972,7 @@ export interface components {
             initial_since?: string;
             /** Format: int64 */
             initial_through_seq: number;
+            muted: boolean;
             private: boolean;
             /** Format: int64 */
             rev: number;

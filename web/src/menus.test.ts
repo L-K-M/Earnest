@@ -93,10 +93,15 @@ describe('articleMenu', () => {
     expect(d.act.mock.calls).toEqual([['shelf', 'none'], ['kept', false], ['seen', 'unseen'], ['shelf', 'none']])
   })
 
-  it('treats a Done article as read, like the row does', () => {
-    // Marking it unread delegates to the shared model, which clears Done
-    // atomically with the unseen write; the item cannot get stuck.
-    expect(item(articleMenu(state('unseen', 'done', false), deps()), 'read').label).toBe('Mark unread')
+  it('treats a Done article as read, like the row does', async () => {
+    const d = deps()
+    const items = articleMenu(state('unseen', 'done', false), d)
+    expect(item(items, 'read').label).toBe('Mark unread')
+    // It emits the one write; the shared model's clear-done rule (the
+    // "native-unread-done" vector) makes the article genuinely unread, which
+    // is what keeps the item from sticking.
+    await item(items, 'read').run()
+    expect(d.act.mock.calls).toEqual([['seen', 'unseen']])
   })
 })
 

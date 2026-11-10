@@ -1,4 +1,4 @@
-import {useEffect, useMemo, useRef, useState} from 'react'
+import {useEffect, useRef, useState} from 'react'
 
 // The article page reports its height and forwards keys pressed while focus
 // is inside it (frameScript in internal/web/content.go). Sizing the frame to
@@ -37,6 +37,15 @@ function forwardedKey(key: string): boolean {
   return key.length === 1 || key === 'Escape' || SCROLL_KEYS.has(key)
 }
 
+function freshToken(): string {
+  // randomUUID needs a secure context and a current browser; the sync layer
+  // needs the same, but a fallback keeps the reader rendering where only
+  // this API is missing (Chrome before 92).
+  return typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('')
+}
+
 export type FrameMessage = {earnest: 'height'; height: number} | {earnest: 'key'; key: string; shift: boolean}
 
 // Validates a message from the article page. Anything unexpected is ignored.
@@ -59,15 +68,20 @@ export function frameMessage(data: unknown, nonce: string): FrameMessage | null 
 
 export function ArticleFrame({src}: {src: string}) {
   const frame = useRef<HTMLIFrameElement>(null)
-  const [sized, setSized] = useState<{src: string; height: number} | null>(null)
-  // A fresh token per article, echoed by the page it loads. The height is
-  // kept with the article it measured: a new article starts unsized until
-  // its own page reports.
-  const {nonce, framed} = useMemo(() => {
-    const token = crypto.randomUUID()
-    return {nonce: token, framed: `${src}${src.includes('?') ? '&' : '?'}frame_nonce=${encodeURIComponent(token)}`}
-  }, [src])
-  const height = sized && sized.src === src ? sized.height : null
+  const [sized, setSized] = useState<{nonce: string; height: number} | null>(null)
+  // A fresh token per article, echoed by the page it loads, held in state
+  // rather than a memo: the token is load-bearing and a memo cache may be
+  // discarded without a prop change. The height is kept with the load that
+  // measured it: a new article starts unsized until its own page reports.
+  const [load, setLoad] = useState(() => ({src, nonce: freshToken()}))
+  if (load.src !== src) setLoad({src, nonce: freshToken()})
+  const nonce = load.nonce
+  const url = new URL(src)
+  url.searchParams.set('frame_nonce', nonce)
+  const framed = url.href
+  // The height belongs to the load that measured it, not just the address:
+  // a later visit to the same article starts unsized like any other load.
+  const height = sized && sized.nonce === nonce ? sized.height : null
   useEffect(() => {
     function receive(event: MessageEvent) {
       const node = frame.current
@@ -77,7 +91,7 @@ export function ArticleFrame({src}: {src: string}) {
       const message = frameMessage(event.data, nonce)
       if (!message) return
       if (message.earnest === 'height') {
-        setSized({src, height: message.height})
+        setSized({nonce, height: message.height})
         return
       }
       const pane = node.closest<HTMLElement>('.reader-scroll')

@@ -7,11 +7,14 @@
 # reproducible-builds "unset".
 ARG VERSION=dev REVISION=unknown CREATED=1970-01-01T00:00:00Z
 
-FROM --platform=$BUILDPLATFORM node:24-alpine AS web
+FROM --platform=$BUILDPLATFORM node:26-alpine AS web
 WORKDIR /src
-RUN corepack enable
 COPY web/package.json web/pnpm-lock.yaml ./web/
 WORKDIR /src/web
+# Node images from 25 on ship without corepack, so install pnpm directly at
+# the version package.json pins; the packageManager field stays the one
+# place that version is declared.
+RUN npm install -g "pnpm@$(node -p "require('./package.json').packageManager.split('@')[1]")"
 RUN pnpm install --frozen-lockfile
 COPY web/ ./
 COPY api/openapi.json ../api/openapi.json

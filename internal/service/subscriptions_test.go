@@ -102,6 +102,177 @@ func TestSubscribeSameURLWithCredentials(t *testing.T) {
 	coreCheckGapless(t, f.db, f.a.UserID)
 }
 
+// A recorded permanent redirect is an alias of the feed's canonical URL.
+// Subscribing to the redirect target must return the original subscription
+// and feed instead of stacking a parallel feed that repeats every item.
+func TestSubscribeRedirectTargetReturnsOriginalSubscription(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	f.s.prober = &subscriptionsProber{}
+	ctx := context.Background()
+	first, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/original", SubscribeOptions{OpID: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.RecordFetch(ctx, FetchOutcome{FeedID: first.FeedID, Status: FetchOK, Items: []IngestItem{coreItem("moved")}, PermanentRedirectURL: "https://feeds.test/moved"}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/moved", SubscribeOptions{OpID: "second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID != first.ID || second.FeedID != first.FeedID {
+		t.Fatalf("redirect target created a parallel subscription: %+v -> %+v", first, second)
+	}
+	var subs, feeds int
+	if err := f.db.Pool().QueryRow(ctx, `SELECT count(*) FROM subscriptions s JOIN feeds f ON f.id=s.feed_id
+ WHERE s.user_id=$1 AND s.deleted_at IS NULL AND (f.url=$2 OR f.permanent_redirect_url=$2)`, f.a.UserID, "https://feeds.test/moved").Scan(&subs); err != nil || subs != 1 {
+		t.Fatalf("active subscriptions for redirect target: %d %v", subs, err)
+	}
+	if err := f.db.Pool().QueryRow(ctx, "SELECT count(*) FROM feeds WHERE url='https://feeds.test/moved'").Scan(&feeds); err != nil || feeds != 0 {
+		t.Fatalf("redirect target feed row: %d %v", feeds, err)
+	}
+	// The target serves the same item; it must not surface twice in the river.
+	if _, err := f.s.RecordFetch(ctx, FetchOutcome{FeedID: second.FeedID, Status: FetchOK, Items: []IngestItem{coreItem("moved")}}); err != nil {
+		t.Fatal(err)
+	}
+	river, err := f.s.Entries(ctx, f.a, EntryFilter{})
+	if err != nil || len(river) != 1 || river[0].Title != "moved" {
+		t.Fatalf("river after redirect resubscribe: %+v %v", river, err)
+	}
+	coreCheckGapless(t, f.db, f.a.UserID)
+}
+
+// An exact canonical URL match outranks a recorded redirect alias, so a
+// direct subscription to the target is returned rather than the older
+// subscription whose feed redirects there.
+func TestSubscribeRedirectExactMatchBeatsAlias(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	f.s.prober = &subscriptionsProber{}
+	ctx := context.Background()
+	canonical, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/canonical", SubscribeOptions{OpID: "canonical"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/alias", SubscribeOptions{OpID: "alias"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.RecordFetch(ctx, FetchOutcome{FeedID: canonical.FeedID, Status: FetchOK, PermanentRedirectURL: "https://feeds.test/alias"}); err != nil {
+		t.Fatal(err)
+	}
+	again, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/alias", SubscribeOptions{OpID: "again"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.ID != alias.ID || again.FeedID != alias.FeedID {
+		t.Fatalf("alias match won over exact feed match: %+v -> %+v", alias, again)
+	}
+}
+
+// A tombstoned subscription is not revived by subscribing to its feed's
+// recorded redirect target; the new subscribe creates a fresh subscription.
+func TestSubscribeRedirectDoesNotReviveDeletedSubscription(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	f.s.prober = &subscriptionsProber{}
+	ctx := context.Background()
+	first, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/original", SubscribeOptions{OpID: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.RecordFetch(ctx, FetchOutcome{FeedID: first.FeedID, Status: FetchOK, PermanentRedirectURL: "https://feeds.test/moved"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.Unsubscribe(ctx, f.a, first.ID, "unsubscribe"); err != nil {
+		t.Fatal(err)
+	}
+	second, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/moved", SubscribeOptions{OpID: "second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID == first.ID {
+		t.Fatalf("deleted subscription revived: %+v", second)
+	}
+	var deleted bool
+	if err := f.db.Pool().QueryRow(ctx, "SELECT deleted_at IS NOT NULL FROM subscriptions WHERE id=$1", first.ID).Scan(&deleted); err != nil || !deleted {
+		t.Fatalf("original subscription not tombstoned: %v %v", deleted, err)
+	}
+}
+
+// Another user's private feed at the redirect target is not reused: the
+// local user's own public subscription matched by the alias is returned.
+func TestSubscribeRedirectDoesNotAttachForeignPrivateFeed(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	f.s.prober = &subscriptionsProber{}
+	ctx := context.Background()
+	other := subscriptionsOther(t, f, "other")
+	foreign, err := f.s.Subscribe(ctx, other, "https://feeds.test/moved", SubscribeOptions{OpID: "foreign", Credentials: &FeedCredentials{Username: "reader", Password: "very-secret"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !foreign.Private {
+		t.Fatal("foreign feed is not private")
+	}
+	first, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/original", SubscribeOptions{OpID: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.RecordFetch(ctx, FetchOutcome{FeedID: first.FeedID, Status: FetchOK, PermanentRedirectURL: "https://feeds.test/moved"}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/moved", SubscribeOptions{OpID: "second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID != first.ID || second.FeedID != first.FeedID {
+		t.Fatalf("redirect target did not reuse the public subscription: %+v -> %+v", first, second)
+	}
+	var owner int64
+	if err := f.db.Pool().QueryRow(ctx, "SELECT owner_user_id FROM feeds WHERE id=$1", foreign.FeedID).Scan(&owner); err != nil || owner != other.UserID {
+		t.Fatalf("foreign feed ownership changed: %d %v", owner, err)
+	}
+}
+
+// Credentials supplied for the redirect target keep the existing rebinding
+// contract: the same subscription moves to the user's own feed, and the
+// shared feed is never given credentials.
+func TestSubscribeRedirectTargetWithCredentialsRebinds(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	f.s.prober = &subscriptionsProber{}
+	ctx := context.Background()
+	first, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/original", SubscribeOptions{OpID: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.RecordFetch(ctx, FetchOutcome{FeedID: first.FeedID, Status: FetchOK, PermanentRedirectURL: "https://feeds.test/moved"}); err != nil {
+		t.Fatal(err)
+	}
+	creds := &FeedCredentials{Username: "reader", Password: "very-secret"}
+	second, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/moved", SubscribeOptions{OpID: "second", Credentials: creds})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("credentials created a second subscription: %+v -> %+v", first, second)
+	}
+	if !second.Private || second.FeedID == first.FeedID {
+		t.Fatalf("credentials did not rebind to a private feed: %+v -> %+v", first, second)
+	}
+	var envelope []byte
+	if err := f.db.Pool().QueryRow(ctx, "SELECT credentials_encrypted FROM feeds WHERE id=$1", second.FeedID).Scan(&envelope); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := f.s.openCredentials(envelope)
+	if err != nil || decoded.Password != creds.Password {
+		t.Fatal("credentials not bound to private feed", err)
+	}
+	if err := f.db.Pool().QueryRow(ctx, "SELECT credentials_encrypted FROM feeds WHERE id=$1", first.FeedID).Scan(&envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope != nil {
+		t.Fatal("credentials copied to the shared feed")
+	}
+}
+
 func TestRebindPreservesCanonicalFeedMetadata(t *testing.T) {
 	template := storetest.NewTemplate(t)
 	for _, private := range []bool{false, true} {
@@ -578,5 +749,41 @@ func TestSubscriptionValidation(t *testing.T) {
 		if err := validateSubscribe(options); !errors.Is(err, ErrInvalid) {
 			t.Fatal("invalid options accepted", options, err)
 		}
+	}
+}
+
+// The REST projection reports a muted subscription so clients can leave it
+// out of Today-wide range marks, as the sync projection already lets the
+// native clients do.
+func TestSubscriptionsReportMuted(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	f.s.prober = &subscriptionsProber{}
+	ctx := t.Context()
+	sub, err := f.s.Subscribe(ctx, f.a, "https://feeds.test/muted", SubscribeOptions{OpID: "muted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sub.Muted {
+		t.Fatalf("new subscription reported muted: %+v", sub)
+	}
+	if _, err := f.db.Pool().Exec(ctx, `UPDATE subscriptions SET muted=true WHERE id=$1`, sub.ID); err != nil {
+		t.Fatal(err)
+	}
+	subs, err := f.s.Subscriptions(ctx, f.a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, got := range subs {
+		if got.ID != sub.ID {
+			continue
+		}
+		found = true
+		if !got.Muted {
+			t.Fatalf("muted subscription listed as unmuted: %+v", got)
+		}
+	}
+	if !found {
+		t.Fatalf("subscription %d missing from the list", sub.ID)
 	}
 }

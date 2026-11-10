@@ -98,6 +98,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   client across a list's image loads, refuses oversized bodies before
   caching them, and no longer recomposes every image on each state
   change.
+- "Mark all as read" and "Mark the rest read" on Today in the web client
+  leave muted feeds alone, as the Today list already does. Subscriptions
+  in the API now carry `muted`, which the sync feed already reported.
+- The web article list keeps its place while it is open. When the offline
+  worker first takes over the tab, or the tab regains focus, every query
+  is read again; the list no longer blanks and restarts from a saved
+  position it had itself just advanced past the open article.
 - The web article frame binds its page's messages to the load that
   asked for them with a per-load token, ignores keys typed into a form
   control inside an article, and starts every article unsized instead

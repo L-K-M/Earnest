@@ -81,6 +81,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.Saver
@@ -210,8 +211,8 @@ private fun MainScaffold(
     // The section and the settings screen survive rotation and process
     // death like the navigator's open article does; without them the reader
     // would reopen into a list the user was not looking at.
-    var view by rememberSaveable(saver = ViewSaver) { mutableStateOf(View.TODAY) }
-    var showSettings by rememberSaveable { mutableStateOf(false) }
+    var view by rememberSection()
+    var showSettings by rememberSettingsOpen()
     val readerEntry = state.snapshot.entries.firstOrNull { it.id == navigator.currentDestination?.contentKey && !it.deleted }
     val reader = remember { ReaderLoadState() }
     var activityGroups by remember { mutableStateOf<List<ch.lkmc.earnest.core.ActivityGroup>>(emptyList()) }
@@ -496,14 +497,7 @@ private fun MainScaffold(
                                         findLabel = ""
                                         readerWebView?.clearMatches()
                                     }
-                                    DisposableEffect(readerWebView) {
-                                        val view = readerWebView
-                                        val listener = WebView.FindListener { active, matches, done ->
-                                            if (done) findLabel = findCountLabel(active, matches)
-                                        }
-                                        view?.setFindListener(listener)
-                                        onDispose { view?.setFindListener(null) }
-                                    }
+                                    FindLabelBridge(readerWebView, entry.id) { findLabel = it }
                                     LaunchedEffect(findQuery, readerWebView) {
                                         val view = readerWebView ?: return@LaunchedEffect
                                         if (findQuery.isBlank()) {
@@ -1207,9 +1201,13 @@ private fun FeedRow(
     onCadence: (Long, String) -> Unit,
     onUnsubscribe: (Long) -> Unit,
 ) {
+    // The icon path and fetch health live in the subscription's raw JSON.
+    // Parse them once per revision, not on every redraw of the list.
+    val iconUrl = remember(subscription.raw) { subscription.iconUrl() }
+    val health = remember(subscription.raw) { subscription.health() }
     Column(Modifier.fillMaxWidth().padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            subscription.iconUrl()?.let {
+            iconUrl?.let {
                 MediaImage(it, Modifier.size(24.dp), RoundedCornerShape(4.dp))
                 Spacer(Modifier.width(8.dp))
             }
@@ -1220,7 +1218,7 @@ private fun FeedRow(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        feedProblem(subscription.health())?.let { problem ->
+        feedProblem(health)?.let { problem ->
             Text(
                 "Fetch failing: ${problem.detail}",
                 style = MaterialTheme.typography.bodySmall,
@@ -1390,3 +1388,37 @@ internal val ViewSaver: Saver<MutableState<View>, String> = Saver(
     save = { it.value.name },
     restore = { name -> mutableStateOf(View.entries.firstOrNull { it.name == name } ?: View.TODAY) },
 )
+
+/**
+ * The section the user is looking at, kept across recreation. The wiring is
+ * the seam a restoration test drives: reverting it to a plain remember fails
+ * there.
+ */
+@Composable
+internal fun rememberSection(): MutableState<View> =
+    rememberSaveable(saver = ViewSaver) { mutableStateOf(View.TODAY) }
+
+/** Whether Settings covers the sections; survives recreation like [rememberSection]. */
+@Composable
+internal fun rememberSettingsOpen(): MutableState<Boolean> =
+    rememberSaveable { mutableStateOf(false) }
+
+/**
+ * Bridges the reader WebView's find results into [onLabel] for the article
+ * [entryId]. It re-registers whenever either changes, so a result always
+ * names the current article's matches, even for a reader that reuses one
+ * WebView across articles.
+ */
+@Composable
+internal fun FindLabelBridge(webView: WebView?, entryId: Long, onLabel: (String) -> Unit) {
+    // The listener outlives recompositions; it must always call the newest
+    // sink even when the keys do not change.
+    val currentOnLabel by rememberUpdatedState(onLabel)
+    DisposableEffect(webView, entryId) {
+        val listener = WebView.FindListener { active, matches, done ->
+            if (done) currentOnLabel(findCountLabel(active, matches))
+        }
+        webView?.setFindListener(listener)
+        onDispose { webView?.setFindListener(null) }
+    }
+}
