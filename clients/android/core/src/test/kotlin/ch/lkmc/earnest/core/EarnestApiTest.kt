@@ -183,4 +183,35 @@ class EarnestApiTest {
             }
         }
     }
+
+    @Test
+    fun opmlImportAndExportUseTheOpmlShapes() = runBlocking {
+        val request = AtomicReference<okhttp3.Request>()
+        val api = EarnestApi("https://earnest.test", "secret", OkHttpClient.Builder().addInterceptor { chain ->
+            request.set(chain.request())
+            val body = if (chain.request().url.encodedPath == "/v1/opml") {
+                """<opml version="2.0"><body/></opml>"""
+            } else {
+                """[{"path":[],"deferred":true,"subscription":{"id":3,"feed_id":5,"title":"Feed","url":"https://feed.test/rss","site_url":"","folder_id":0,"cadence":"today","extract":"none","rev":1,"deleted":false,"private":false,"initial_through_seq":0,"initial_fetch_pending":false,"health":{"next_fetch_at":"2026-11-10T01:00:00Z","consecutive_failures":0,"http_status":200,"posts_per_day":1.0,"firehose":false}}}]"""
+            }
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                .code(200).message("test").body(body.toResponseBody()).build()
+        }.build())
+
+        assertEquals("""<opml version="2.0"><body/></opml>""", api.exportOpml())
+        assertEquals("text/x-opml", request.get().header("Accept"))
+
+        val results = api.importOpml("""<opml version="2.0"/>""".toByteArray())
+        assertEquals(1, results.size)
+        assertEquals(true, results[0].deferred)
+        assertEquals("Feed", results[0].subscription?.title)
+        assertEquals("text/x-opml", request.get().body?.contentType().toString())
+    }
+
+    @Test
+    fun opmlImportRefusesOversizedDocuments() = runBlocking {
+        val api = EarnestApi("https://earnest.test", client = OkHttpClient.Builder().build())
+        val error = runCatching { api.importOpml(ByteArray(MAX_OPML_IMPORT_BYTES + 1)) }.exceptionOrNull()
+        assertTrue(error is IllegalArgumentException)
+    }
 }

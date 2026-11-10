@@ -80,9 +80,15 @@ class EarnestApi(
      * exports reach tens of MiB, far more than a parsed tree would allow.
      */
     private suspend fun requestRaw(method: String, url: HttpUrl, body: RequestBody?): JsonElement {
+        val text = requestText(method, url, body)
+        return if (text.isBlank()) JsonNull else json.parseToJsonElement(text)
+    }
+
+    /** The response body as text, for the OPML export; errors surface as problems. */
+    private suspend fun requestText(method: String, url: HttpUrl, body: RequestBody?, accept: String = "application/json"): String {
         val builder = Request.Builder().url(url).method(method, body)
         token?.let { builder.header("Authorization", "Bearer $it") }
-        builder.header("Accept", "application/json")
+        builder.header("Accept", accept)
         val call = http.newCall(builder.build())
         return suspendCancellableCoroutine { continuation ->
             continuation.invokeOnCancellation { call.cancel() }
@@ -96,7 +102,7 @@ class EarnestApi(
                         response.use {
                             val text = it.body?.string().orEmpty()
                             if (!it.isSuccessful) throw problem(it.code, text)
-                            if (text.isBlank()) JsonNull else json.parseToJsonElement(text)
+                            text
                         }
                     }
                     continuation.resumeWith(result)
@@ -408,6 +414,18 @@ class EarnestApi(
         return requestRaw("POST", url, document.toRequestBody(JSON_MEDIA_TYPE)).decode()
     }
 
+    /**
+     * Imports an OPML subscription export. [document] is posted verbatim as
+     * `text/x-opml`; every outline reports its own outcome.
+     */
+    suspend fun importOpml(document: ByteArray): List<OpmlResult> {
+        require(document.size <= MAX_OPML_IMPORT_BYTES) { "The OPML file is larger than 8 MiB." }
+        return requestRaw("POST", url("/v1/opml:import"), document.toRequestBody(OPML_MEDIA_TYPE)).decode()
+    }
+
+    /** The account's subscriptions as OPML. */
+    suspend fun exportOpml(): String = requestText("GET", url("/v1/opml"), null, accept = OPML_MEDIA_TYPE.toString())
+
     suspend fun me(): MeResult = get(url("/v1/me")).decode()
 
     suspend fun tokens(): List<Token> = get(url("/v1/tokens")).decode()
@@ -442,6 +460,7 @@ class EarnestApi(
 
     companion object {
         private val JSON_MEDIA_TYPE = "application/json".toMediaType()
+        private val OPML_MEDIA_TYPE = "text/x-opml".toMediaType()
 
         /**
          * The only paths the media GET may target: an entry thumbnail or a
