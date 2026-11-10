@@ -103,11 +103,9 @@ class AppViewModelTest {
 
     /** Waits for [condition], naming [what] when time runs out. */
     private suspend fun await(what: String, condition: () -> Boolean) {
-        val deadline = System.currentTimeMillis() + 15_000
-        while (!condition()) {
-            if (System.currentTimeMillis() > deadline) throw AssertionError("timed out waiting for $what")
-            delay(10)
-        }
+        withTimeoutOrNull(15_000) {
+            while (!condition()) delay(10)
+        } ?: throw AssertionError("timed out waiting for $what")
     }
 
     @Test fun agentSelectedEntriesOpenWithClickToLoadImages() = runBlocking(Dispatchers.IO) {
