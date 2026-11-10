@@ -31,7 +31,9 @@ class FindLabelBridgeTest {
 
     private class SpyWebView(context: Context) : WebView(context) {
         var listener: WebView.FindListener? = null
+        var registrations = 0
         override fun setFindListener(listener: WebView.FindListener?) {
+            if (listener != null) registrations++
             this.listener = listener
         }
     }
@@ -76,6 +78,20 @@ class FindLabelBridgeTest {
             second.listener?.onFindResultReceived(1, 2, true)
         }
         compose.runOnIdle { assertEquals(listOf("2/2"), sinks[3]) }
+    }
+
+    @Test fun aNewLabelSinkIsUsedWithoutReRegistering() {
+        val app = ApplicationProvider.getApplicationContext<Context>()
+        val webView = SpyWebView(app)
+        val delivered = mutableListOf<String>()
+        val sink = mutableStateOf<(String) -> Unit>({ })
+        compose.setContent { FindLabelBridge(webView, 1, sink.value) }
+        compose.runOnIdle { sink.value = { delivered += it } }
+        compose.runOnIdle { webView.listener?.onFindResultReceived(0, 4, true) }
+        compose.runOnIdle {
+            assertEquals(listOf("1/4"), delivered)
+            assertEquals("the listener re-registered for a new sink", 1, webView.registrations)
+        }
     }
 
     @Test fun anAbsentWebViewIsANoOp() {

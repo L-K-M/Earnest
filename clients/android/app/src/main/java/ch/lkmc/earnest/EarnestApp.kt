@@ -81,6 +81,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.Saver
@@ -1410,9 +1411,12 @@ internal fun rememberSettingsOpen(): MutableState<Boolean> =
  */
 @Composable
 internal fun FindLabelBridge(webView: WebView?, entryId: Long, onLabel: (String) -> Unit) {
+    // The listener outlives recompositions; it must always call the newest
+    // sink even when the keys do not change.
+    val currentOnLabel by rememberUpdatedState(onLabel)
     DisposableEffect(webView, entryId) {
         val listener = WebView.FindListener { active, matches, done ->
-            if (done) onLabel(findCountLabel(active, matches))
+            if (done) currentOnLabel(findCountLabel(active, matches))
         }
         webView?.setFindListener(listener)
         onDispose { webView?.setFindListener(null) }
