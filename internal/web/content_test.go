@@ -292,3 +292,36 @@ func TestContentNoticesCarryTheFrameScript(t *testing.T) {
 		})
 	}
 }
+
+func TestFrameScriptBindsMessagesToTheHostNonce(t *testing.T) {
+	js := frameScript("https://app.example", "abc_123")
+	for _, want := range []string{
+		`const n="abc_123"`,
+		// Every message echoes it, and keys typed into the article's own
+		// form controls never leave the frame.
+		`input,textarea,select,[contenteditable]`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Fatalf("frameScript() = %q, want it to contain %q", js, want)
+		}
+	}
+	if got := strings.Count(js, "nonce:n"); got != 2 {
+		t.Fatalf("frameScript() echoes the nonce %d times, want 2: %q", got, js)
+	}
+}
+
+func TestFrameNonceAcceptsOnlyBoundedTokens(t *testing.T) {
+	for _, tc := range []struct{ query, want string }{
+		{"frame_nonce=abc_123-XYZ", "abc_123-XYZ"},
+		{"", ""},
+		{"frame_nonce=", ""},
+		{"frame_nonce=" + strings.Repeat("a", 65), ""},
+		{"frame_nonce=with%20space", ""},
+		{"frame_nonce=%3Cscript%3E", ""},
+	} {
+		r := httptest.NewRequest(http.MethodGet, "/content/1?"+tc.query, nil)
+		if got := frameNonce(r); got != tc.want {
+			t.Fatalf("frameNonce(%q) = %q, want %q", tc.query, got, tc.want)
+		}
+	}
+}
