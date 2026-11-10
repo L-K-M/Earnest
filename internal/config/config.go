@@ -10,6 +10,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/netip"
 	"net/url"
@@ -46,6 +47,10 @@ const (
 	defaultFetchMinInterval = 15 * time.Minute
 	defaultFetchMaxInterval = 24 * time.Hour
 	defaultRetentionDays    = 90
+
+	// Whole days must fit time.Duration before serve converts them. An
+	// overflow can wrap positive and expire entries much earlier than asked.
+	maxRetentionDays = int(math.MaxInt64 / (24 * time.Hour))
 
 	// minSecretKeyBytes is the smallest acceptable key length. The key signs
 	// user-facing URLs and tokens, so short keys are rejected outright.
@@ -401,8 +406,8 @@ func loadRetentionDays() (int, error) {
 		return defaultRetentionDays, nil
 	}
 	n, err := strconv.Atoi(s)
-	if err != nil || n <= 0 {
-		return 0, fmt.Errorf("%s must be a positive number of days, got %q", envRetentionDays, s)
+	if err != nil || n <= 0 || n > maxRetentionDays {
+		return 0, fmt.Errorf("%s must be between 1 and %d days, got %q", envRetentionDays, maxRetentionDays, s)
 	}
 	return n, nil
 }

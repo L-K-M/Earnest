@@ -39,7 +39,7 @@ Copy `.env.example` to `.env` for Compose. Compose reads it for interpolation an
 | --- | --- | --- | --- |
 | `EARNEST_FETCH_MIN_INTERVAL` | `15m` | Minimum feed fetch interval. | Tune scheduling; positive Go duration, no greater than maximum. |
 | `EARNEST_FETCH_MAX_INTERVAL` | `24h` | Maximum feed fetch interval. | Tune scheduling; positive Go duration. |
-| `EARNEST_RETENTION_DAYS` | `90` | Entry and change-log retention in days. | Change retention; positive integer. |
+| `EARNEST_RETENTION_DAYS` | `90` | Entry and change-log retention in days. | Integer from 1 to 106751, the maximum whole days representable by the retention duration. |
 
 ## Push
 
