@@ -25,6 +25,19 @@ class ThemeTest {
         assertEquals(ThemeSetting.SYSTEM, context.themeSetting())
     }
 
+    @Test fun readerZoomRoundTripsAndStaysClamped() {
+        assertEquals(100, context.readerZoom())
+        context.setReaderZoom(120)
+        assertEquals(120, context.readerZoom())
+        context.setReaderZoom(1000)
+        assertEquals(MAX_READER_ZOOM, context.readerZoom())
+        context.setReaderZoom(10)
+        assertEquals(MIN_READER_ZOOM, context.readerZoom())
+        // The stored value is clamped too, not only the read path.
+        val raw = context.getSharedPreferences("appearance", Context.MODE_PRIVATE).getInt("reader_zoom", -1)
+        assertEquals(MIN_READER_ZOOM, raw)
+    }
+
     @Test fun everySettingRoundTrips() {
         ThemeSetting.entries.forEach { setting ->
             context.setThemeSetting(setting)

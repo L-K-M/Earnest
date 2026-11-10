@@ -79,6 +79,68 @@ class ReaderTest {
         view.destroy()
     }
 
+    @Test fun theOfflineCopyNotifiesOnceAndOnlyWithCache() {
+        var notified = 0
+        val view = createReaderWebView(ApplicationProvider.getApplicationContext<Context>(), url, "<p>cached</p>") { notified++ }
+        view.loadUrl(url)
+        val client = view.webViewClient
+        client.onReceivedError(view, request(), error)
+        client.onReceivedError(view, request(), error)
+        assertEquals(1, notified)
+        view.destroy()
+
+        val uncached = createReaderWebView(ApplicationProvider.getApplicationContext<Context>(), url, null) { notified++ }
+        uncached.loadUrl(url)
+        uncached.webViewClient.onReceivedError(uncached, request(), error)
+        assertEquals("no offline copy exists to announce", 1, notified)
+        uncached.destroy()
+
+        var httpNotified = 0
+        val httpView = createReaderWebView(ApplicationProvider.getApplicationContext<Context>(), url, "<p>cached</p>") { httpNotified++ }
+        httpView.loadUrl(url)
+        httpView.webViewClient.onReceivedHttpError(
+            httpView,
+            request(),
+            WebResourceResponse("text/html", "UTF-8", 503, "Unavailable", emptyMap(), "error".byteInputStream()),
+        )
+        assertEquals("the HTTP-error path must notify too", 1, httpNotified)
+        httpView.destroy()
+
+        var subresourceNotified = 0
+        val subView = createReaderWebView(ApplicationProvider.getApplicationContext<Context>(), url, "<p>cached</p>") { subresourceNotified++ }
+        subView.loadUrl(url)
+        subView.webViewClient.onReceivedHttpError(
+            subView,
+            request(main = false),
+            WebResourceResponse("image/png", null, 404, "Not Found", emptyMap(), ByteArray(0).inputStream()),
+        )
+        assertEquals("a broken image must not announce the cached copy", 0, subresourceNotified)
+        subView.destroy()
+    }
+
+    @Test fun startingOnTheCachedCopyNotifiesOnce() {
+        var notified = 0
+        val view = createReaderWebView(ApplicationProvider.getApplicationContext<Context>(), null, "<p>cached</p>") { notified++ }
+        assertEquals(1, notified)
+        // Errors after that arrive on a reader already on the fallback.
+        view.webViewClient.onReceivedError(view, request(), error)
+        assertEquals(1, notified)
+        view.destroy()
+    }
+
+    @Test fun theFindLabelNamesTheMatchPosition() {
+        assertEquals("No matches", findCountLabel(0, 0))
+        assertEquals("1/1", findCountLabel(0, 1))
+        assertEquals("3/12", findCountLabel(2, 12))
+    }
+
+    @Test fun textZoomStepsStayWithinBounds() {
+        assertEquals(110, zoomStep(100, true))
+        assertEquals(90, zoomStep(100, false))
+        assertEquals(MAX_READER_ZOOM, zoomStep(MAX_READER_ZOOM, true))
+        assertEquals(MIN_READER_ZOOM, zoomStep(MIN_READER_ZOOM, false))
+    }
+
     @Test fun mainFrameHttpFailureLoadsCacheButSubresourcesDoNot() {
         val view = createReaderWebView(ApplicationProvider.getApplicationContext<Context>(), url, "cached")
         view.loadUrl(url)
@@ -183,6 +245,34 @@ class ReaderTest {
         } finally {
             controller.pause().stop().destroy()
         }
+    }
+
+    @Test fun copyLinkPutsTheUrlOnTheClipboard() {
+        val application = ApplicationProvider.getApplicationContext<Application>()
+        assertTrue(copyLink(application, "https://example.com/article"))
+        val clipboard = application.getSystemService(android.content.ClipboardManager::class.java)
+        assertEquals("https://example.com/article", clipboard.primaryClip?.getItemAt(0)?.text?.toString())
+    }
+
+    @Test fun shareLinkOpensTheSystemShareSheet() {
+        val application = ApplicationProvider.getApplicationContext<Application>()
+        assertTrue(shareLink(application, "An article", "https://example.com/article"))
+        val intent = shadowOf(application).nextStartedActivity
+        assertEquals(Intent.ACTION_CHOOSER, intent.action)
+        val send = intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
+        assertEquals(Intent.ACTION_SEND, send?.action)
+        assertEquals("text/plain", send?.type)
+        assertEquals("An article", send?.getStringExtra(Intent.EXTRA_SUBJECT))
+        assertEquals("https://example.com/article", send?.getStringExtra(Intent.EXTRA_TEXT))
+        assertTrue(intent.flags and Intent.FLAG_ACTIVITY_NEW_TASK != 0)
+    }
+
+    // The system chooser reports its own empty state when no app can share,
+    // so this covers only the share sheet failing to start.
+    @Test fun shareLinkReturnsFalseWhenTheShareSheetCannotBeStarted() {
+        val application = ApplicationProvider.getApplicationContext<Application>()
+        shadowOf(application).checkActivities(true)
+        assertFalse(shareLink(application, "An article", "https://example.com/article"))
     }
 
     @Test fun noCacheDoesNotLoadEmptyFallback() {

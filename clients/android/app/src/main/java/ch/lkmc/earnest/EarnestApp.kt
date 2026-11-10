@@ -1,12 +1,17 @@
 package ch.lkmc.earnest
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.webkit.WebView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,6 +21,8 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -95,15 +102,22 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import ch.lkmc.earnest.core.CachedEntry
+import ch.lkmc.earnest.core.MAX_OPML_IMPORT_BYTES
+import ch.lkmc.earnest.core.OpmlSummary
 import ch.lkmc.earnest.core.River
 import ch.lkmc.earnest.core.SyncEngine
+import ch.lkmc.earnest.core.SyncObject
 import ch.lkmc.earnest.core.SyncSnapshot
 import ch.lkmc.earnest.core.UnreadCounts
+import ch.lkmc.earnest.core.health
 import ch.lkmc.earnest.core.iconUrl
+import ch.lkmc.earnest.core.readAtMost
 import ch.lkmc.earnest.core.typographyFor
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -120,7 +134,7 @@ import kotlin.math.roundToInt
  */
 private const val FOREGROUND_REFRESH_MS = 3L * 60 * 1000
 
-private enum class View(val label: String, val icon: ImageVector, val tone: ((Tones) -> Color)?) {
+internal enum class View(val label: String, val icon: ImageVector, val tone: ((Tones) -> Color)?) {
     TODAY("Today", Icons.Filled.DateRange, { it.orange }),
     EDITION("Edition", Icons.AutoMirrored.Filled.List, { it.blue }),
     LATER("Later", Icons.Filled.Notifications, { it.amber }),
@@ -193,8 +207,11 @@ private fun MainScaffold(
     onRequestNotifications: () -> Unit,
 ) {
     val navigator = rememberListDetailPaneScaffoldNavigator<Long>()
-    var view by remember { mutableStateOf(View.TODAY) }
-    var showSettings by remember { mutableStateOf(false) }
+    // The section and the settings screen survive rotation and process
+    // death like the navigator's open article does; without them the reader
+    // would reopen into a list the user was not looking at.
+    var view by rememberSaveable(saver = ViewSaver) { mutableStateOf(View.TODAY) }
+    var showSettings by rememberSaveable { mutableStateOf(false) }
     val readerEntry = state.snapshot.entries.firstOrNull { it.id == navigator.currentDestination?.contentKey && !it.deleted }
     val reader = remember { ReaderLoadState() }
     var activityGroups by remember { mutableStateOf<List<ch.lkmc.earnest.core.ActivityGroup>>(emptyList()) }
@@ -278,15 +295,20 @@ private fun MainScaffold(
         )
     }
 
-    fun undo(entryId: Long, target: SwipeTarget) {
+    /** Offers one undo for a completed action; the snackbar names the action. */
+    fun offerUndo(message: String, onUndo: () -> Unit) {
         scope.launch {
             val result = snackbar.showSnackbar(
-                message = target.message,
+                message = message,
                 actionLabel = "Undo",
                 duration = SnackbarDuration.Short,
             )
-            if (result == SnackbarResult.ActionPerformed) model.undoShelf(entryId)
+            if (result == SnackbarResult.ActionPerformed) onUndo()
         }
+    }
+
+    val undoable = { action: ReversibleAction ->
+        offerUndo(action.message) { model.undo(action) }
     }
 
     // Every destination draws its icon in its own tone. Labels stay ink: the
@@ -383,13 +405,26 @@ private fun MainScaffold(
                                     },
                                 )
                                 View.FEEDS -> FeedsScreen(
+                                    model = model,
                                     state = state,
                                     unreadCounts = state.unreadCounts,
                                     unreadSyncedAt = state.unreadCountsSyncedAt,
                                     unreadMode = state.readerSettings.readingMode == ch.lkmc.earnest.core.ReadingMode.UNREAD_COUNTS,
                                     onSubscribe = { showSubscribe = true },
                                     onUnsubscribe = { model.unsubscribe(it) },
-                                    onCadence = { id, cadence -> model.setCadence(id, cadence) },
+                                    onCadence = { id, cadence ->
+                                        val prior = state.snapshot.objects
+                                            .firstOrNull { it.kind == SyncEngine.OBJECT_SUBSCRIPTION && it.id == id }
+                                            ?.let(River::cadence)
+                                        model.setCadence(id, cadence) {
+                                            // Undo only when the cadence this
+                                            // change replaced is actually
+                                            // known; never guess one.
+                                            if (prior != null) {
+                                                offerUndo("Cadence set to ${cadenceOf(cadence).label}") { model.undoCadence(id, prior, cadence) }
+                                            }
+                                        }
+                                    },
                                 )
                                 View.ACTIVITY -> ActivityScreen(
                                     groups = activityGroups,
@@ -420,11 +455,12 @@ private fun MainScaffold(
                                         agentSelected = agentSelected + entryId
                                         scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
                                     },
-                                    onLater = { id -> model.later(id) { undo(id, SwipeTarget.LATER) } },
-                                    onDone = { id -> model.done(id) { undo(id, SwipeTarget.DONE) } },
-                                    onSeen = model::markSeen,
-                                    onKeep = { model.keep(it) },
-                                    onUnkeep = { model.unkeep(it) },
+                                    onLater = { id -> model.later(id, undoable) },
+                                    onDone = { id -> model.done(id, undoable) },
+                                    onSeen = { id -> model.markScrolledPast(id) },
+                                    onKeep = { id -> model.keep(id, undoable) },
+                                    onUnkeep = { id -> model.unkeep(id, undoable) },
+                                    onMarkUnread = { id -> model.markUnread(id, undoable) },
                                 )
                             }
                         }
@@ -443,9 +479,46 @@ private fun MainScaffold(
                             } else {
                                 Column(Modifier.fillMaxSize()) {
                                     val original = originalUrl(entry)
+                                    val entryState = state.states[entry.id]
+                                        ?: SyncEngine.initialState(state.principalId, entry.id)
+                                    var readerWebView by remember { mutableStateOf<WebView?>(null) }
+                                    // Per-article state starts fresh with the
+                                    // article itself; the device-local zoom
+                                    // survives navigation.
+                                    var offlineCopy by remember(entry.id) { mutableStateOf(false) }
+                                    var findOpen by remember(entry.id) { mutableStateOf(false) }
+                                    var findQuery by remember(entry.id) { mutableStateOf("") }
+                                    var findLabel by remember(entry.id) { mutableStateOf("") }
+                                    var textZoom by remember { mutableStateOf(context.readerZoom()) }
+                                    val closeFind: () -> Unit = {
+                                        findOpen = false
+                                        findQuery = ""
+                                        findLabel = ""
+                                        readerWebView?.clearMatches()
+                                    }
+                                    DisposableEffect(readerWebView) {
+                                        val view = readerWebView
+                                        val listener = WebView.FindListener { active, matches, done ->
+                                            if (done) findLabel = findCountLabel(active, matches)
+                                        }
+                                        view?.setFindListener(listener)
+                                        onDispose { view?.setFindListener(null) }
+                                    }
+                                    LaunchedEffect(findQuery, readerWebView) {
+                                        val view = readerWebView ?: return@LaunchedEffect
+                                        if (findQuery.isBlank()) {
+                                            view.clearMatches()
+                                            findLabel = ""
+                                        } else {
+                                            view.findAllAsync(findQuery)
+                                        }
+                                    }
+                                    BackHandler(enabled = findOpen, onBack = closeFind)
                                     ReaderHeader(
                                         entry = entry,
                                         source = subscriptionTitles[entry.subscriptionId].orEmpty(),
+                                        isRead = canMarkUnread(entryState),
+                                        offlineCopy = offlineCopy,
                                         onOpenOriginal = {
                                             original?.let { url ->
                                                 if (!openOriginal(context, url)) {
@@ -453,7 +526,45 @@ private fun MainScaffold(
                                                 }
                                             }
                                         },
+                                        onCopyLink = {
+                                            original?.let { url ->
+                                                // One notice keeps feedback identical on every supported
+                                                // version; Android 13+ also shows its own clipboard toast.
+                                                val message = if (copyLink(context, url)) "Link copied." else "Could not copy the link."
+                                                scope.launch { snackbar.showSnackbar(message) }
+                                            }
+                                        },
+                                        onShare = {
+                                            original?.let { url ->
+                                                if (!shareLink(context, entry.title, url)) {
+                                                    scope.launch { snackbar.showSnackbar("Could not share this link.") }
+                                                }
+                                            }
+                                        },
+                                        onMarkUnread = { model.markUnread(entry.id, undoable) },
+                                        onFind = {
+                                            findOpen = !findOpen
+                                            if (!findOpen) closeFind()
+                                        },
+                                        onSmallerText = {
+                                            textZoom = zoomStep(textZoom, false)
+                                            context.setReaderZoom(textZoom)
+                                        },
+                                        onLargerText = {
+                                            textZoom = zoomStep(textZoom, true)
+                                            context.setReaderZoom(textZoom)
+                                        },
                                     )
+                                    if (findOpen) {
+                                        FindBar(
+                                            query = findQuery,
+                                            label = findLabel,
+                                            onQuery = { findQuery = it },
+                                            onPrevious = { readerWebView?.findNext(false) },
+                                            onNext = { readerWebView?.findNext(true) },
+                                            onClose = closeFind,
+                                        )
+                                    }
                                     val content = reader.content
                                     when {
                                         reader.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -466,7 +577,10 @@ private fun MainScaffold(
                                             url = content.url,
                                             cachedHtml = content.cachedHtml,
                                             typography = state.readerSettings.typographyFor(entry.feedId),
+                                            textZoom = textZoom,
                                             modifier = Modifier.fillMaxSize(),
+                                            onFallback = { offlineCopy = true },
+                                            onWebView = { readerWebView = it },
                                         )
                                     }
                                 }
@@ -587,31 +701,82 @@ private fun ThemeDialog(
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ReaderHeader(entry: CachedEntry, source: String, onOpenOriginal: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 16.dp),
-        verticalAlignment = Alignment.Top,
-    ) {
-        Column(Modifier.weight(1f)) {
+private fun ReaderHeader(
+    entry: CachedEntry,
+    source: String,
+    isRead: Boolean,
+    offlineCopy: Boolean,
+    onOpenOriginal: () -> Unit,
+    onCopyLink: () -> Unit,
+    onShare: () -> Unit,
+    onMarkUnread: () -> Unit,
+    onFind: () -> Unit,
+    onSmallerText: () -> Unit,
+    onLargerText: () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 16.dp)) {
+        Text(
+            entry.title,
+            style = MaterialTheme.typography.titleMedium,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+        )
+        val date = entryDateLabel(entry)
+        val meta = listOfNotNull(
+            source.takeIf { it.isNotBlank() },
+            date.takeIf { it.isNotBlank() },
+            "Cached copy".takeIf { offlineCopy },
+        )
+        if (meta.isNotEmpty()) {
             Text(
-                entry.title,
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
+                meta.joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            val date = entryDateLabel(entry)
-            val meta = listOfNotNull(source.takeIf { it.isNotBlank() }, date.takeIf { it.isNotBlank() })
-            if (meta.isNotEmpty()) {
-                Text(
-                    meta.joinToString(" · "),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+        }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (originalUrl(entry) != null) {
+                TextButton(onClick = onOpenOriginal) { Text("Open original") }
+                TextButton(onClick = onCopyLink) { Text("Copy link") }
+                TextButton(onClick = onShare) { Text("Share") }
+            }
+            TextButton(onClick = onFind) { Text("Find in article") }
+            TextButton(onClick = onSmallerText) { Text("Smaller text") }
+            TextButton(onClick = onLargerText) { Text("Larger text") }
+            if (isRead) {
+                TextButton(onClick = onMarkUnread) { Text("Mark unread") }
             }
         }
-        if (originalUrl(entry) != null) {
-            TextButton(onClick = onOpenOriginal) { Text("Open original") }
+    }
+}
+
+@Composable
+private fun FindBar(
+    query: String,
+    label: String,
+    onQuery: (String) -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onClose: () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+        OutlinedTextField(
+            value = query,
+            onValueChange = onQuery,
+            label = { Text("Find in article") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+            TextButton(onClick = onPrevious) { Text("Previous") }
+            TextButton(onClick = onNext) { Text("Next") }
+            TextButton(onClick = onClose) { Text("Close") }
         }
     }
 }
@@ -641,6 +806,7 @@ private fun EntryListScreen(
     onSeen: (Long) -> Unit,
     onKeep: (Long) -> Unit,
     onUnkeep: (Long) -> Unit,
+    onMarkUnread: (Long) -> Unit,
 ) {
     val listState = rememberLazyListState()
     MarkSeenOnScroll(entries, principalId, listState, onSeen)
@@ -690,19 +856,23 @@ private fun EntryListScreen(
                     onClick = { onOpen(entry.id) },
                 )
             }
-            if (effective.kept.value == kotlinx.serialization.json.JsonPrimitive(true)) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (effective.kept.value == kotlinx.serialization.json.JsonPrimitive(true)) {
                     TextButton(
                         onClick = { onUnkeep(entry.id) },
                         colors = ButtonDefaults.textButtonColors(contentColor = LocalTones.current.plum),
                     ) { Text("Unkeep") }
-                }
-            } else {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                } else {
                     TextButton(
                         onClick = { onKeep(entry.id) },
                         colors = ButtonDefaults.textButtonColors(contentColor = LocalTones.current.plum),
                     ) { Text("Keep") }
+                }
+                if (canMarkUnread(effective)) {
+                    TextButton(onClick = { onMarkUnread(entry.id) }) { Text("Mark unread") }
                 }
             }
         }
@@ -864,7 +1034,9 @@ private fun SwipeActionRow(
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun FeedsScreen(
+    model: AppViewModel,
     state: UiState,
     unreadCounts: UnreadCounts?,
     unreadSyncedAt: Long?,
@@ -873,6 +1045,54 @@ private fun FeedsScreen(
     onUnsubscribe: (Long) -> Unit,
     onCadence: (Long, String) -> Unit,
 ) {
+    val opml = state.opml
+    var readingOpml by remember(state.accountKey) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val accountAtPick = state.accountKey
+        readingOpml = true
+        scope.launch {
+            // Read at most one byte past the limit, so a huge file picked by
+            // mistake is refused without loading it all into memory.
+            val document = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { readAtMost(it, MAX_OPML_IMPORT_BYTES) }
+                }.getOrNull()
+            }
+            readingOpml = false
+            // The file was picked for one account; never import it into an
+            // account that signed in while it was being read.
+            if (model.state.value.accountKey != accountAtPick) return@launch
+            when {
+                document == null -> model.opmlFileFailed("Could not read that file.")
+                document.size > MAX_OPML_IMPORT_BYTES -> model.opmlFileFailed("The OPML file is larger than 8 MiB.")
+                else -> model.importOpml(document)
+            }
+        }
+    }
+    val exportPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/x-opml")) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val accountAtPick = state.accountKey
+        readingOpml = true
+        scope.launch {
+            try {
+                val xml = model.exportOpml() ?: return@launch
+                if (model.state.value.accountKey != accountAtPick) return@launch
+                val written = withContext(Dispatchers.IO) {
+                    runCatching {
+                        // "wt" truncates: a reused document must not keep the
+                        // tail of whatever it held before.
+                        context.contentResolver.openOutputStream(uri, "wt")?.use { it.write(xml.toByteArray()) } != null
+                    }.getOrDefault(false)
+                }
+                if (!written) model.opmlFileFailed("Could not write that file.")
+            } finally {
+                readingOpml = false
+            }
+        }
+    }
     val subscriptions = state.snapshot.objects.filter { it.kind == SyncEngine.OBJECT_SUBSCRIPTION && !it.deleted }
     LazyColumn(Modifier.fillMaxSize()) {
         if (unreadMode) {
@@ -891,48 +1111,149 @@ private fun FeedsScreen(
             }
         }
         item {
-            TextButton(onClick = onSubscribe) {
-                Icon(Icons.Filled.Add, contentDescription = null)
-                Text("Subscribe by URL")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onSubscribe) {
+                    Icon(Icons.Filled.Add, contentDescription = null)
+                    Text("Subscribe by URL")
+                }
+                TextButton(
+                    onClick = { importPicker.launch(arrayOf("text/x-opml", "application/xml", "text/xml", "*/*")) },
+                    enabled = !opml.busy && !readingOpml,
+                ) { Text("Import OPML") }
+                TextButton(
+                    onClick = { exportPicker.launch("earnest.opml") },
+                    enabled = !opml.busy && !readingOpml,
+                ) { Text("Export OPML") }
             }
         }
-        items(subscriptions, key = { it.id }) { subscription ->
-            Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    subscription.iconUrl()?.let {
-                        MediaImage(it, Modifier.size(24.dp), RoundedCornerShape(4.dp))
-                        Spacer(Modifier.width(8.dp))
-                    }
-                    Text(subscription.name, style = MaterialTheme.typography.bodyLarge)
-                }
+        if (opml.busy || readingOpml) {
+            item {
                 Text(
-                    subscription.raw.url(),
+                    "Working on OPML…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
+        }
+        opml.error?.let { message ->
+            item {
+                Text(
+                    message,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
+        }
+        val folders = state.snapshot.objects.filter { it.kind == SyncEngine.OBJECT_FOLDER && !it.deleted }
+        feedGroups(subscriptions, folders).forEach { group ->
+            group.title?.let { title ->
+                item(key = group.key) {
+                    Text(
+                        title,
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
+            }
+            items(group.subscriptions, key = { it.id }) { subscription ->
+                FeedRow(
+                    subscription = subscription,
+                    unreadMode = unreadMode,
+                    unreadCount = unreadCounts?.bySubscription?.get(subscription.id),
+                    onCadence = onCadence,
+                    onUnsubscribe = onUnsubscribe,
+                )
+            }
+        }
+    }
+
+    state.opml.summary?.let { summary ->
+        OpmlReportDialog(summary = summary, onDismiss = model::dismissOpmlReport)
+    }
+}
+
+@Composable
+private fun OpmlReportDialog(summary: OpmlSummary, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("OPML import") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(opmlSummaryLine(summary), style = MaterialTheme.typography.bodyMedium)
+                if (summary.deferred > 0) {
+                    Text(
+                        "${summary.deferred} ${if (summary.deferred == 1) "feed is" else "feeds are"} fetched in the background soon.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                summary.errors.forEach { error ->
+                    Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
+@Composable
+private fun FeedRow(
+    subscription: SyncObject,
+    unreadMode: Boolean,
+    unreadCount: Long?,
+    onCadence: (Long, String) -> Unit,
+    onUnsubscribe: (Long) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            subscription.iconUrl()?.let {
+                MediaImage(it, Modifier.size(24.dp), RoundedCornerShape(4.dp))
+                Spacer(Modifier.width(8.dp))
+            }
+            Text(subscription.name, style = MaterialTheme.typography.bodyLarge)
+        }
+        Text(
+            subscription.raw.url(),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        feedProblem(subscription.health())?.let { problem ->
+            Text(
+                "Fetch failing: ${problem.detail}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            problem.triedAt?.let {
+                Text(
+                    "Tried ${it.relativeTime()}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (unreadMode) {
-                    val count = unreadCounts?.bySubscription?.get(subscription.id)
-                    Text(
-                        count?.let { "Unread $it" } ?: "Unread unavailable",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    val selection = cadenceSelection(River.cadence(subscription))
-                    Cadence.entries.forEach { cadence ->
-                        CadenceChip(
-                            cadence = cadence,
-                            selected = selection[cadence] == true,
-                            onSelect = { onCadence(subscription.id, cadence.value) },
-                        )
-                    }
-                    TextButton(onClick = { onUnsubscribe(subscription.id) }) { Text("Unsubscribe") }
-                }
             }
+        }
+        if (unreadMode) {
+            Text(
+                unreadCount?.let { "Unread $it" } ?: "Unread unavailable",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val selection = cadenceSelection(River.cadence(subscription))
+            Cadence.entries.forEach { cadence ->
+                CadenceChip(
+                    cadence = cadence,
+                    selected = selection[cadence] == true,
+                    onSelect = { onCadence(subscription.id, cadence.value) },
+                )
+            }
+            TextButton(onClick = { onUnsubscribe(subscription.id) }) { Text("Unsubscribe") }
         }
     }
 }
@@ -1059,4 +1380,13 @@ private fun String.relativeTime(): String = runCatching {
 internal val AgentSelectedSaver: Saver<MutableState<Set<Long>>, LongArray> = Saver(
     save = { it.value.toLongArray() },
     restore = { mutableStateOf(it.toSet()) },
+)
+
+/**
+ * The selected section across the saved-state round trip, falling back to
+ * Today for a name a future build no longer knows.
+ */
+internal val ViewSaver: Saver<MutableState<View>, String> = Saver(
+    save = { it.value.name },
+    restore = { name -> mutableStateOf(View.entries.firstOrNull { it.name == name } ?: View.TODAY) },
 )

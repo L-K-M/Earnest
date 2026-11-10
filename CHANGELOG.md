@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The Android reader finds text in an article with match counts and
+  steps, zooms its text from 80% to 200% with a device-local setting,
+  and says so when it shows a cached copy of an article.
+- The Android Feeds screen imports and exports OPML subscriptions. The
+  import reports each outline's outcome and the export writes the
+  account's subscriptions to a picked file.
+- The Android Feeds screen groups subscriptions by folder and shows a
+  failing feed's fetch error with the time of its last attempt.
+- Android row and reader actions undo: Later, Done, Keep, Unkeep and Mark
+  unread name themselves in an undo snackbar that writes back the
+  registers they changed and leaves alone one changed since, and a
+  cadence change offers the same: its undo leaves alone one a later
+  change replaced. Mark unread returns a read article to unread
+  and clears Done with it; scrolling never reverses it, only opening the
+  article reads it again. The reader header gained Copy link and Share
+  for the entry URL.
 - Context menus in the web client. Right-click, long-press or press
   Shift+F10 on Today, a folder or a feed for "Mark all as read", a
   refresh and its settings, or on an article for its reading actions and
@@ -77,6 +93,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The web article frame binds its page's messages to the load that
+  asked for them with a per-load token, ignores keys typed into a form
+  control inside an article, and starts every article unsized instead
+  of keeping the previous one's height.
+- The Android app remembers its section and open Settings screen across
+  rotation and process death, like the open article already did, so the
+  reader no longer reopens on Today after a configuration change.
 - The web reader scrolls an article in one place. The article frame now
   takes the article's height instead of the pane's, so Space, Page Down
   and the arrow keys move through the whole article, also after a click

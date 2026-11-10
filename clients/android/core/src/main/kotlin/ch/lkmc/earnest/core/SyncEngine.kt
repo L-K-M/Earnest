@@ -51,6 +51,15 @@ fun SyncObject.iconUrl(): String? = runCatching {
     Json.parseToJsonElement(raw).jsonObject["icon_url"]?.jsonPrimitive?.contentOrNull
 }.getOrNull()
 
+/**
+ * The stored fetch health in a subscription's raw projection, or null when
+ * absent. Decode failures are not distinguishable from "absent" here; keep
+ * the raw payload shape in lockstep with FeedHealth through these fixtures.
+ */
+fun SyncObject.health(): FeedHealth? = runCatching {
+    Json.decodeFromJsonElement(FeedHealth.serializer(), Json.parseToJsonElement(raw).jsonObject.getValue("health"))
+}.getOrNull()
+
 @Serializable
 data class CachedPosition(
     val principal: Long,

@@ -2,6 +2,8 @@ package ch.lkmc.earnest
 
 import android.app.Activity
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.os.Build
@@ -16,7 +18,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.net.toUri
@@ -64,6 +68,35 @@ internal fun openOriginal(context: Context, url: String): Boolean = try {
     false
 }
 
+/** Copies the article link to the clipboard, reporting false without one. */
+internal fun copyLink(context: Context, url: String): Boolean {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return false
+    clipboard.setPrimaryClip(ClipData.newPlainText("Link", url))
+    return true
+}
+
+/**
+ * Shares the article link through the system share sheet, reporting false
+ * when the sheet cannot start. The chooser reports its own empty state when
+ * no app can share, so availability is not checked here: such a query would
+ * need a package-visibility declaration and can fail open on Android 11+.
+ */
+internal fun shareLink(context: Context, title: String, url: String): Boolean = try {
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, title)
+        putExtra(Intent.EXTRA_TEXT, url)
+    }
+    val chooser = Intent.createChooser(send, null)
+    if (context !is Activity) chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    context.startActivity(chooser)
+    true
+} catch (_: ActivityNotFoundException) {
+    false
+} catch (_: SecurityException) {
+    false
+}
+
 /**
  * The reading view. JavaScript, file access and content access are off. The
  * main frame may load only the signed article URL (or the local asset
@@ -71,25 +104,61 @@ internal fun openOriginal(context: Context, url: String): Boolean = try {
  * reaches the article page through the content URL and the offline fallback.
  */
 @Composable
-internal fun Reader(url: String?, cachedHtml: String?, typography: ReaderTypography, modifier: Modifier = Modifier) {
+internal fun Reader(
+    url: String?,
+    cachedHtml: String?,
+    typography: ReaderTypography,
+    textZoom: Int = 100,
+    modifier: Modifier = Modifier,
+    onFallback: () -> Unit = {},
+    onWebView: (WebView?) -> Unit = {},
+) {
     val systemDark = isSystemInDarkTheme()
     val displayUrl = url?.let { readerUrl(it, typography, systemDark) }
     val fallbackHtml = cachedHtml?.let { offlineReaderHtml(it, typography, systemDark) }
+    val fallbackCallback = rememberUpdatedState(onFallback)
+    val webViewCallback = rememberUpdatedState(onWebView)
+    // The last WebView handed out; a release may run after a replacement has
+    // published itself and must not null the newer instance.
+    val published = remember { arrayOfNulls<WebView>(1) }
     key(url, fallbackHtml) {
         AndroidView(
             modifier = modifier,
-            factory = { context -> createReaderWebView(context, displayUrl, fallbackHtml) },
+            factory = { context ->
+                createReaderWebView(context, displayUrl, fallbackHtml) { fallbackCallback.value() }
+            },
             update = { webView ->
+                published[0] = webView
+                webViewCallback.value(webView)
+                if (webView.settings.textZoom != textZoom) webView.settings.textZoom = textZoom
                 if (webView.tag != (displayUrl ?: fallbackHtml)) {
                     webView.tag = displayUrl ?: fallbackHtml
                     if (displayUrl != null) webView.loadUrl(displayUrl) else webView.loadUrl(ASSET_URL)
                 }
             },
             onReset = null,
-            onRelease = { it.destroy() },
+            onRelease = {
+                it.destroy()
+                if (published[0] === it) {
+                    published[0] = null
+                    webViewCallback.value(null)
+                }
+            },
         )
     }
 }
+
+/** The reader's text zoom bounds; [zoomStep] never leaves them. */
+internal const val MIN_READER_ZOOM = 80
+internal const val MAX_READER_ZOOM = 200
+
+/** The next text zoom step, clamped to the supported range. */
+internal fun zoomStep(current: Int, up: Boolean): Int =
+    (current + if (up) 10 else -10).coerceIn(MIN_READER_ZOOM, MAX_READER_ZOOM)
+
+/** The find bar's match label: "3/12", or "No matches" for an empty search. */
+internal fun findCountLabel(active: Int, total: Int): String =
+    if (total <= 0) "No matches" else "${active + 1}/$total"
 
 /** Maps the account's article theme to the content origin's `theme` value (internal/web/content.go). */
 internal fun ReaderTheme.contentTheme(systemDark: Boolean): String = when (this) {
@@ -173,7 +242,7 @@ internal class ReaderLoadState {
     }
 }
 
-internal fun createReaderWebView(context: Context, url: String?, cachedHtml: String?): WebView {
+internal fun createReaderWebView(context: Context, url: String?, cachedHtml: String?, onFallback: () -> Unit = {}): WebView {
     val allowedOrigin = url?.toUri()
     fun allowed(uri: android.net.Uri): Boolean = allowedOrigin != null &&
         uri.scheme == "https" && uri.host.equals(allowedOrigin.host, ignoreCase = true) &&
@@ -209,6 +278,7 @@ internal fun createReaderWebView(context: Context, url: String?, cachedHtml: Str
                 if (usingFallback || cachedHtml == null || !request.isForMainFrame || !allowed(request.url)) return
                 usingFallback = true
                 view.loadUrl(ASSET_URL)
+                onFallback()
             }
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
@@ -242,6 +312,9 @@ internal fun createReaderWebView(context: Context, url: String?, cachedHtml: Str
                 return empty()
             }
         }
+        // A reader starting directly on the cached copy shows it from the
+        // first frame; the error paths above report the same moment later.
+        if (url == null && cachedHtml != null) onFallback()
     }
 }
 
