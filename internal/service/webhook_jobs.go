@@ -244,7 +244,8 @@ func classifyWebhook(result *outbound.Result, err error) webhookResult {
 		if code >= 200 && code <= 299 {
 			return webhookResult{outcome: outcomeDelivered}
 		}
-		if code == http.StatusRequestTimeout {
+		// See Other can point to the result of an already processed POST.
+		if code == http.StatusRequestTimeout || code == http.StatusSeeOther {
 			return webhookResult{outcome: outcomeAmbiguous, class: fmt.Sprintf("http_%d", code)}
 		}
 		return webhookResult{outcome: outcomeDefinite, class: fmt.Sprintf("http_%d", code)}
