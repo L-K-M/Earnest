@@ -53,19 +53,20 @@ type Deps struct {
 
 // Service owns domain operations. Its dependencies must be safe for concurrent use.
 type Service struct {
-	store         *store.Store
-	now           func() time.Time
-	prober        FeedProber
-	credentials   cipher.AEAD
-	events        broker
-	pushRegistry  *push.Registry
-	outbound      *outbound.Client
-	probeTimeout  time.Duration
-	mediaPorts    []uint16
-	fetchPolicy   FetchPolicy
-	modelDefaults llm.Config
-	modelMu       sync.Mutex
-	modelRuntime  *modelRuntime
+	store            *store.Store
+	now              func() time.Time
+	prober           FeedProber
+	credentials      cipher.AEAD
+	events           broker
+	pushRegistry     *push.Registry
+	outbound         *outbound.Client
+	probeTimeout     time.Duration
+	mediaPorts       []uint16
+	fetchPolicy      FetchPolicy
+	modelDefaults    llm.Config
+	modelIdentityKey []byte
+	modelMu          sync.Mutex
+	modelRuntime     *modelRuntime
 	// mediaBackfilled records that no pre-thumbnail entries remain in the
 	// backfill window, so later media passes skip that scan.
 	mediaBackfilled atomic.Bool
@@ -89,6 +90,10 @@ func New(db *store.Store, deps Deps) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("derive credential key: %w", err)
 	}
+	identityKey, err := hkdf.Key(sha256.New, deps.SecretKey, nil, "earnest/llm-config-identity/v1", 32)
+	if err != nil {
+		return nil, fmt.Errorf("derive model identity key: %w", err)
+	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("credential cipher: %w", err)
@@ -105,7 +110,7 @@ func New(db *store.Store, deps Deps) (*Service, error) {
 	if deps.LLMConfig != nil {
 		models = *deps.LLMConfig
 	}
-	return &Service{store: db, now: now, prober: deps.FeedProber, credentials: aead, pushRegistry: deps.PushRegistry, outbound: deps.Outbound, probeTimeout: defaultProbeTimeout, mediaPorts: append([]uint16(nil), deps.MediaPorts...), mediaDecode: make(chan struct{}, 1), modelDefaults: models, fetchPolicy: fetchPolicy}, nil
+	return &Service{store: db, now: now, prober: deps.FeedProber, credentials: aead, pushRegistry: deps.PushRegistry, outbound: deps.Outbound, probeTimeout: defaultProbeTimeout, mediaPorts: append([]uint16(nil), deps.MediaPorts...), mediaDecode: make(chan struct{}, 1), modelDefaults: models, modelIdentityKey: identityKey, fetchPolicy: fetchPolicy}, nil
 }
 
 func (s *Service) checkActor(ctx context.Context, a Actor, scope Scope) error {

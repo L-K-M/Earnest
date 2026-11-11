@@ -128,6 +128,11 @@ func (s *Service) PutLLMSettings(ctx context.Context, a Actor, in LLMSettingsInp
 		if err != nil {
 			return err
 		}
+		if revision == 0 {
+			if err := s.retainLegacyEditionConfig(ctx, tx, previous); err != nil {
+				return err
+			}
+		}
 		// Build without contacting a provider. Reject incompatible routing before
 		// committing, so saving cannot install a runtime that fails to start.
 		if _, err := s.buildModelRuntime(cfg, revision+1); err != nil {
@@ -332,7 +337,7 @@ func llmSettingsMoney(text string) (llm.USD, error) {
 func llmBaseURL(raw string) (string, error) {
 	base := strings.TrimRight(strings.TrimSpace(raw), "/")
 	u, err := url.Parse(base)
-	if err != nil || len(base) > 2048 || u == nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" {
+	if err != nil || len(base) > 2048 || u == nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(base, "#") || u.Opaque != "" {
 		return "", fmt.Errorf("provider base URL must be HTTP(S) with a host and no credentials, query or fragment: %w", ErrInvalid)
 	}
 	if port := u.Port(); port != "" {

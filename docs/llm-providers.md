@@ -73,11 +73,14 @@ cannot bypass address checks. Prices and caps are exact decimal USD with up
 to six fractional digits; zero cap means unlimited. The editor supports up to
 32 providers and 128 models, and timeouts from 1 to 600 seconds.
 
-Edition batch handles are bound to the configuration that submitted them. If
-that configuration changes while a batch is pending, Earnest will not send
-the old handle to a different provider. The edition falls back to synchronous
-generation when due, with a cancellation warning; the old provider may still
-charge for its batch and its conservative reservation is retained.
+Edition batch handles retain an encrypted snapshot of the configuration that
+submitted them. Pending batches use their original provider, credentials,
+model and prices for collection and reconciliation, including after a server
+restart. Editing settings does not abandon or regenerate that paid work.
+Historical credentials are removed when their jobs finish. Clearing a key
+removes it from new routing, not from a batch already accepted by its provider.
+Disabling the edition task pauses collection until you re-enable it; it does
+not cancel work already running at the provider.
 
 ## Environment defaults
 

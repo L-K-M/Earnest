@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,8 +44,7 @@ func (s *Service) ModelContext(ctx context.Context) (context.Context, error) {
 		}
 		s.modelRuntime = runtime
 	}
-	ctx = WithPipeline(ctx, s.modelRuntime.engine)
-	return pipeline.WithEditionBatch(ctx, s.modelRuntime.batch), nil
+	return s.withModelRuntime(ctx, s.modelRuntime), nil
 }
 
 func (s *Service) buildModelRuntime(cfg llm.Config, revision int64) (*modelRuntime, error) {
@@ -73,15 +71,20 @@ func (s *Service) buildModelRuntime(cfg llm.Config, revision int64) (*modelRunti
 	}
 	batch := pipeline.NewEditionBatch(router, budget, cfg, client)
 	if batch != nil {
-		raw, err := json.Marshal(cfg)
+		raw, err := json.Marshal(editionBatchConfig(cfg))
 		if err != nil {
 			return nil, err
 		}
 		// Bind persisted batch handles to their original provider, credentials,
 		// model and prices. A later configuration must not poll or cancel that
 		// handle at a different destination or reconcile it using different prices.
-		identity := fmt.Sprintf("%x", sha256.Sum256(raw))
-		batch = &configuredEditionBatch{EditionBatch: batch, prefix: "llm-settings:" + identity + ":", allowLegacy: revision == 0}
+		identity := s.modelConfigIdentity(raw)
+		batch = &configuredEditionBatch{
+			EditionBatch: batch, prefix: editionConfigPrefix + identity + ":", allowLegacy: revision == 0,
+			retain: func(ctx context.Context) error {
+				return s.retainEditionConfig(ctx, s.store.Pool(), identity, raw, editionConfigBound)
+			},
+		}
 	}
 	return &modelRuntime{revision: revision, engine: engine, batch: batch}, nil
 }
@@ -90,9 +93,15 @@ type configuredEditionBatch struct {
 	pipeline.EditionBatch
 	prefix      string
 	allowLegacy bool
+	retain      func(context.Context) error
 }
 
 func (b *configuredEditionBatch) Submit(ctx context.Context, requests []llm.CompleteRequest) (string, error) {
+	if b.retain != nil {
+		if err := b.retain(ctx); err != nil {
+			return "", err
+		}
+	}
 	id, err := b.EditionBatch.Submit(ctx, requests)
 	if err != nil {
 		return "", err
@@ -104,7 +113,7 @@ func (b *configuredEditionBatch) originalHandle(id string) (string, error) {
 	if handle, ok := strings.CutPrefix(id, b.prefix); ok {
 		return handle, nil
 	}
-	if b.allowLegacy && !strings.HasPrefix(id, "llm-settings:") {
+	if b.allowLegacy && !strings.HasPrefix(id, editionConfigPrefix) {
 		return id, nil
 	}
 	return "", llm.ErrUnsupported

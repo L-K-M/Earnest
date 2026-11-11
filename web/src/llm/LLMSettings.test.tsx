@@ -316,6 +316,24 @@ it('rejects a key containing control characters', async () => {
   expect(putCalls()).toHaveLength(0)
 })
 
+it.each([2, 3])('keeps an open provider editor attached when there are %i providers', async count => {
+  const providers = [...fixture.providers!, {...fixture.providers![1], name: 'third', base_url: 'https://third.example/v1'}].slice(0, count)
+  mount({...fixture, providers, tasks: LLM_TASKS.map(task => ({task, provider: '', model: ''}))})
+  confirm()
+  await screen.findByText(/http:\/\/ollama:11434\/v1/)
+  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[1])
+  fireEvent.change(screen.getByLabelText('Name'), {target: {value: 'edited-local'}})
+  const remove = screen.getAllByRole('button', {name: 'Remove'})[0]
+  expect((remove as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.click(remove)
+  expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('edited-local')
+  fireEvent.click(screen.getByRole('button', {name: 'Apply provider'}))
+  fireEvent.click(screen.getAllByRole('button', {name: 'Remove'})[0])
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText(/LLM services saved/)
+  expect(lastPut().providers.map(provider => provider.name)).toEqual(count === 2 ? ['edited-local'] : ['edited-local', 'third'])
+})
+
 it('labels the server canonical zero cap as unlimited', async () => {
   mount({...fixture, providers: fixture.providers!.map(provider => ({...provider, monthly_limit_usd: '0.000000'}))})
   await screen.findByText(/http:\/\/ollama:11434\/v1/)

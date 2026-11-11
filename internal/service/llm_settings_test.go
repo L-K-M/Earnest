@@ -35,6 +35,7 @@ func TestLLMSettingsValidation(t *testing.T) {
 		{"credentials URL", func(in *LLMSettingsInput) { in.Providers[0].BaseURL = "https://secret:password@models.example/v1" }},
 		{"query URL", func(in *LLMSettingsInput) { in.Providers[0].BaseURL = "https://models.example/v1?key=secret" }},
 		{"empty query URL", func(in *LLMSettingsInput) { in.Providers[0].BaseURL = "https://models.example/v1?" }},
+		{"empty fragment URL", func(in *LLMSettingsInput) { in.Providers[0].BaseURL = "https://models.example/v1#" }},
 		{"file URL", func(in *LLMSettingsInput) { in.Providers[0].BaseURL = "file:///etc/passwd" }},
 		{"bad port", func(in *LLMSettingsInput) { in.Providers[0].BaseURL = "http://models.example:65536/v1" }},
 		{"timeout", func(in *LLMSettingsInput) { in.Providers[0].TimeoutSeconds = 0 }},

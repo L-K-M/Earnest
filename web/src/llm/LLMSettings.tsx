@@ -246,8 +246,8 @@ export function LLMSettings() {
               </div>
               <p className="settings-row-detail muted">{provider.base_url} · {/^0+(?:\.0+)?$/.test(provider.monthly_limit_usd) ? 'no monthly limit' : `$${provider.monthly_limit_usd} per month`} · {provider.timeout_seconds}s timeout · {provider.token_field}</p>
               <div className="button-row">
-                <button type="button" disabled={busy} onClick={() => setProviderForm({mode: 'edit', index})}>Edit</button>
-                <button type="button" disabled={busy} onClick={() => removeProvider(index)}>Remove</button>
+                <button type="button" disabled={busy || providerForm !== null} onClick={() => setProviderForm({mode: 'edit', index})}>Edit</button>
+                <button type="button" disabled={busy || providerForm !== null} onClick={() => removeProvider(index)}>Remove</button>
               </div>
             </>}
         </li>)}

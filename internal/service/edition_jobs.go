@@ -83,7 +83,12 @@ func (s *Service) RunEditionJobs(ctx context.Context, limit int) (int, error) {
 		processed++
 		out, err := s.editionByID(ctx, job.job.UserID, job.job.EditionID)
 		if err == nil {
-			err = s.generateEdition(ctx, job, &out)
+			original, contextErr := s.editionModelContext(ctx, job.job.BatchID)
+			if contextErr != nil {
+				err = contextErr
+			} else {
+				err = s.generateEdition(original, job, &out)
+			}
 		}
 		if err := s.finishEdition(ctx, job, &out, err); err != nil {
 			return processed, err
@@ -319,8 +324,10 @@ func (s *Service) finishEdition(ctx context.Context, job *claimedEdition, out *E
 			return nil
 		}
 		if errors.Is(cause, ErrNotFound) {
-			_, err := tx.Exec(ctx, `DELETE FROM jobs WHERE id=$1`, job.id)
-			return err
+			if _, err := tx.Exec(ctx, `DELETE FROM jobs WHERE id=$1`, job.id); err != nil {
+				return err
+			}
+			return s.pruneEditionConfigs(ctx, tx)
 		}
 		if cause != nil {
 			out.Status = "pending"
@@ -359,6 +366,9 @@ func (s *Service) finishEdition(ctx context.Context, job *claimedEdition, out *E
 			if _, err := tx.Exec(ctx, `DELETE FROM jobs WHERE id=$1`, job.id); err != nil {
 				return fmt.Errorf("finish edition job: %w", err)
 			}
+			if err := s.pruneEditionConfigs(ctx, tx); err != nil {
+				return err
+			}
 			if out.Status == "ready" {
 				return s.emitWebhooks(ctx, tx, job.job.UserID, WebhookEvent{Type: WebhookEditionReady, EditionID: out.ID})
 			}
@@ -379,6 +389,6 @@ func (s *Service) finishEdition(ctx context.Context, job *claimedEdition, out *E
 		if _, err := tx.Exec(ctx, `UPDATE jobs SET payload=$2,attempts=$3,locked_until=NULL,run_at=$4,last_error=$5 WHERE id=$1`, job.id, payload, attempts, next, out.Error); err != nil {
 			return fmt.Errorf("reschedule edition: %w", err)
 		}
-		return nil
+		return s.pruneEditionConfigs(ctx, tx)
 	})
 }
