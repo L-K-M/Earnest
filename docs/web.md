@@ -17,6 +17,20 @@ production bundle run `make web-build` before `make build`; the Docker build
 also builds and embeds the client. A plain Go build uses the checked-in
 placeholder until the web bundle has been copied into `internal/web/dist`.
 
+## Organize feeds
+
+Drag a feed onto a sidebar folder to move it there. Drag a folder onto another
+folder to nest it, keeping its feeds and subfolders together. Drop on the Feeds
+heading or the top-level drop area to move an item out of its folder. Collapsed
+folders accept drops and expand after a successful move. Invalid destinations,
+including a folder's own descendants, do not accept drops. Failed saves leave
+the original placement intact and show an error in the sidebar.
+
+Folder views, unread counts and folder actions continue to apply to the feeds
+directly in that folder. Nesting organizes the sidebar; it does not change feed
+membership. Deleting a folder keeps its subfolders at the top level and leaves
+its direct feeds unfiled. Folder nesting is preserved in sync and OPML exports.
+
 ## Reader workflow
 
 1. Sign in. The browser shares the session's CSRF token between tabs and restores

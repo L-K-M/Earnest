@@ -1123,6 +1123,10 @@
           "name": {
             "type": "string"
           },
+          "parent_id": {
+            "format": "int64",
+            "type": "integer"
+          },
           "rev": {
             "format": "int64",
             "minimum": 0,
@@ -1134,6 +1138,26 @@
           "name",
           "rev",
           "deleted"
+        ],
+        "type": "object"
+      },
+      "FolderPatchBody": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "op_id": {
+            "type": "string"
+          },
+          "parent_id": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "op_id"
         ],
         "type": "object"
       },
@@ -9101,7 +9125,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/NameBody"
+                "$ref": "#/components/schemas/FolderPatchBody"
               }
             }
           },

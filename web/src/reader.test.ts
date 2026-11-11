@@ -23,11 +23,20 @@ describe('reader rules', () => {
   it.each([['feed','subscription_id'], ['folder','folder_id'], ['label','label_id']] as const)('filters %s by ID', (kind, parameter) => {
     expect(entryQuery({kind, id: 12, title: 'A'}).get(parameter)).toBe('12')
   })
-  it('groups Edition by stable subscription and seq, not publisher time', () => {
+  it.each(['today', 'edition', 'feed', 'folder', 'label', 'later', 'kept', 'done'] as const)('requests the newest %s entries first', kind => {
+    const query = entryQuery({kind, id: 12, title: 'A'})
+    expect(query.get('direction')).toBe('backward')
+    expect(query.has('after_seq')).toBe(false)
+  })
+  it('orders articles newest first by ingest sequence, not publisher time', () => {
+    const entries = [{id: 1, seq: 1, published_at: '2030-01-01'}, {id: 3, seq: 3, published_at: '2020-01-01'}, {id: 2, seq: 2}] as Entry[]
+    expect(orderEntries(entries, {kind: 'folder', id: 1, title: 'Folder'}, []).map(entry => entry.id)).toEqual([3,2,1])
+  })
+  it('groups Edition by stable subscription with newest entries first', () => {
     const entries = [{id: 1, subscription_id: 2, seq: 1}, {id: 2, subscription_id: 1, seq: 3}, {id: 3, subscription_id: 1, seq: 2}] as Entry[]
-    expect(orderEntries(entries, {kind: 'edition', title: 'Edition'}, []).map(entry => entry.id)).toEqual([3,2,1])
+    expect(orderEntries(entries, {kind: 'edition', title: 'Edition'}, []).map(entry => entry.id)).toEqual([2,3,1])
     const today: View = {kind: 'today', title: 'Today'}
-    expect(orderEntries(entries, today, [{id: 2, cadence: 'week'} as Subscription]).map(entry => entry.id)).toEqual([3,2])
+    expect(orderEntries(entries, today, [{id: 2, cadence: 'week'} as Subscription]).map(entry => entry.id)).toEqual([2,3])
   })
   it('retains admitted rows but honors an explicit deletion without mutating earlier snapshots', () => {
     const entry = {id: 1, state: {seen: {value: 'unseen'}, shelf: {value: 'none'}}} as Entry

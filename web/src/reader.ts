@@ -25,7 +25,7 @@ export function viewScope(view: View, subscriptions: Subscription[]): RangeScope
   return ids.length ? {kind: 'subscriptions', ids} : null
 }
 export function entryQuery(view: View, group?: 'cluster'): URLSearchParams {
-  const query = new URLSearchParams({view: view.kind === 'today' ? 'river' : ['later', 'kept', 'done'].includes(view.kind) ? view.kind : 'all', limit: '100', direction: 'forward'})
+  const query = new URLSearchParams({view: view.kind === 'today' ? 'river' : ['later', 'kept', 'done'].includes(view.kind) ? view.kind : 'all', limit: '100', direction: 'backward'})
   if (view.kind === 'edition') {query.set('view', 'river');query.set('cadence', 'week')}
   if (view.kind === 'feed') query.set('subscription_id', String(view.id))
   if (view.kind === 'folder') query.set('folder_id', String(view.id))
@@ -37,7 +37,7 @@ export function orderEntries(entries: Entry[], view: View, subscriptions: Subscr
   const byID = new Map(subscriptions.map(sub => [sub.id, sub]))
   const unique = [...new Map(entries.map(entry => [entry.id, entry])).values()]
   return unique.filter(entry => !entry.deleted && (view.kind !== 'today' || byID.get(entry.subscription_id)?.cadence !== 'week'))
-    .sort((a, b) => view.kind === 'edition' ? a.subscription_id - b.subscription_id || a.seq - b.seq : a.seq - b.seq)
+    .sort((a, b) => view.kind === 'edition' ? a.subscription_id - b.subscription_id || b.seq - a.seq : b.seq - a.seq)
 }
 // A visit admits unread rows once. Keep their metadata even if a background
 // river response omits them after a read, so sync cannot move the list under

@@ -17,7 +17,7 @@ function mount(pipeline='enabled', watch=false, dryRun: {entries: Entry[]; total
     if (path === '/v1/rules:dry-run') return dryRun
     return {}
   })
-  render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><Rules feeds={[{id:8,feed_id:42,title:'Publisher'} as Subscription]} folders={[{id:7,name:'Work',rev:1,deleted:false}]} labels={[{id:3,name:'Reading',rev:1,deleted:false}]}/></QueryClientProvider>)
+  render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><Rules feeds={[{id:8,feed_id:42,title:'Publisher'} as Subscription]} folders={[{id:7,name:'Work',parent_id:0,rev:1,deleted:false}]} labels={[{id:3,name:'Reading',rev:1,deleted:false}]}/></QueryClientProvider>)
 }
 async function edit() {fireEvent.click(await screen.findByRole('button',{name:'Edit Noise'}));return screen.getByRole('region',{name:'Rule editor'})}
 it('lists statistics and disables and deletes through their API operations',async () => {

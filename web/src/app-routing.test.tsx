@@ -123,3 +123,39 @@ it('follows go-to shortcuts without letting the second key act on the list', asy
   await waitFor(() => expect(location.pathname).toBe('/edition'))
   expect(act).not.toHaveBeenCalled()
 })
+
+it('persists sidebar drops and refreshes folder and feed placement without navigating', async () => {
+  const fallback = vi.mocked(request).getMockImplementation()!
+  let folderID = 0
+  let parentID = 0
+  vi.mocked(request).mockImplementation(async (path, options) => {
+    if (path === '/v1/subscriptions/8' && options?.method === 'PATCH') {
+      const body = JSON.parse(String(options.body))
+      expect(body.op_id).toBeTruthy()
+      folderID = body.folder_id
+      return {}
+    }
+    if (path === '/v1/folders/2' && options?.method === 'PATCH') {
+      const body = JSON.parse(String(options.body))
+      expect(body.op_id).toBeTruthy()
+      parentID = body.parent_id
+      return {}
+    }
+    if (path === '/v1/folders') return [{id:1, name:'Parent', parent_id:0}, {id:2, name:'Child', parent_id:parentID}]
+    if (path === '/v1/subscriptions') return [{id:8, title:'Rust', url:'https://feed.test', deleted:false, folder_id:folderID}]
+    return fallback(path, options)
+  })
+  await start('/today')
+  const feed = await screen.findByRole('link', {name:'Rust'}, {timeout:5000})
+  const dataTransfer = {setData: vi.fn(), effectAllowed: '', dropEffect: ''}
+  fireEvent.dragStart(feed, {dataTransfer})
+  fireEvent.drop(screen.getByRole('link', {name:'Child'}).closest('.nav-folder-row')!, {dataTransfer})
+  await waitFor(() => expect(screen.getByText('Moved.')).toBeTruthy())
+  expect(screen.getByRole('link', {name:'Child'}).closest('li')!.contains(screen.getByRole('link', {name:'Rust'}))).toBe(true)
+  fireEvent.dragStart(screen.getByRole('link', {name:'Child'}), {dataTransfer})
+  fireEvent.drop(screen.getByRole('link', {name:'Parent'}).closest('.nav-folder-row')!, {dataTransfer})
+  await waitFor(() => expect(screen.getByRole('link', {name:'Parent'}).closest('li')!.contains(screen.getByRole('link', {name:'Child'}))).toBe(true))
+  expect(location.pathname).toBe('/today')
+  expect(folderID).toBe(2)
+  expect(parentID).toBe(1)
+})

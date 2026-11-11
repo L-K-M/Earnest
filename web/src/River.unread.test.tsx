@@ -111,7 +111,7 @@ describe('unread-only list visits', () => {
     states.set(2, article(2, 'seen').state)
     vi.mocked(request).mockImplementation(async path => {
       if (path.startsWith('/v1/positions')) return {seq: 0}
-      return path.includes('cursor=2') ? {entries: [article(4, 'seen'), article(5)]} : {entries: [article(2, 'seen')], next_cursor: 'next'}
+      return path.includes('cursor=next') ? {entries: [article(4, 'seen'), article(5)]} : {entries: [article(2, 'seen')], next_cursor: 'next'}
     })
     // A background refresh can reveal another page, without ending the visit.
     await act(async () => {await client.invalidateQueries({queryKey: ['river']})})

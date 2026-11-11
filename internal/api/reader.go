@@ -100,6 +100,12 @@ type clusterGroup struct {
 	AlsoIn    int   `json:"also_in"`
 }
 
+type folderPatchBody struct {
+	Name     *string `json:"name,omitempty"`
+	ParentID *int64  `json:"parent_id,omitempty" minimum:"0"`
+	OpID     string  `json:"op_id"`
+}
+
 func (s *server) readerRoutes() {
 	route(s, http.MethodGet, "/v1/subscriptions", "list-subscriptions", func(ctx context.Context, in *empty) ([]service.Subscription, error) {
 		return s.svc.Subscriptions(ctx, actor(ctx))
@@ -138,8 +144,8 @@ func (s *server) readerRoutes() {
 	route(s, http.MethodPost, "/v1/folders", "create-folder", func(ctx context.Context, in *bodyInput[nameBody]) (service.Folder, error) {
 		return s.svc.CreateFolder(ctx, actor(ctx), in.Body.Name, in.Body.OpID)
 	})
-	route(s, http.MethodPatch, "/v1/folders/{id}", "rename-folder", func(ctx context.Context, in *idBody[nameBody]) (service.Folder, error) {
-		return s.svc.RenameFolder(ctx, actor(ctx), in.ID, in.Body.Name, in.Body.OpID)
+	route(s, http.MethodPatch, "/v1/folders/{id}", "rename-folder", func(ctx context.Context, in *idBody[folderPatchBody]) (service.Folder, error) {
+		return s.svc.UpdateFolder(ctx, actor(ctx), in.ID, service.UpdateFolderOptions{Name: in.Body.Name, ParentID: in.Body.ParentID, OpID: in.Body.OpID})
 	})
 	route(s, http.MethodDelete, "/v1/folders/{id}", "delete-folder", func(ctx context.Context, in *deleteInput) (empty, error) {
 		return empty{}, s.svc.DeleteFolder(ctx, actor(ctx), in.ID, in.OpID)

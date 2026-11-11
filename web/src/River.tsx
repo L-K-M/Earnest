@@ -18,7 +18,7 @@ import {MENU_ATTRIBUTE, type MenuItem} from './ContextMenu'
 
 type ClusterGroup = {entry: Entry; cluster_id?: number; also_in: number}
 type Page = {entries: Entry[]; next_cursor?: string; groups?: ClusterGroup[]}
-type PageParam = {direction: 'forward' | 'backward'; cursor?: string; after?: number}
+type PageParam = string | undefined
 type OpenMode = 'push' | 'replace'
 export type SessionSummary = {done: number; later: number; kept: number; seen: number}
 const seenWriteInterval = 600
@@ -70,29 +70,20 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   const [error, setError] = useState('')
   const [cluster, setCluster] = useState(false)
   const position = useQuery({queryKey: ['position', key], queryFn: ({signal}) => request<{seq: number}>(`/v1/positions/${encodeURIComponent(key)}`, {signal})})
-  // The list starts from the position saved when it mounted and keeps that
-  // start while it is open. Later reads of the position (a tab refocus, the
-  // offline worker claiming the tab after its first install) usually find it
-  // advanced by this very list; restarting from there would blank the list
-  // and drop the article being read out of it. Set during render, as React
-  // allows for state derived from the previous render.
-  const [start, setStart] = useState<number | null>(null)
-  if (start === null && position.isSuccess) setStart(position.data.seq)
+  // Positions still sync reading progress, but never bound the article list.
+  // Each visit starts at the newest page and loads older pages below it.
   const filterUnread = unreadOnly && !['later', 'kept', 'done'].includes(view.kind)
   const list = useInfiniteQuery({
-    queryKey: ['river', key, start, cluster, filterUnread], enabled: start !== null,
-    initialPageParam: {direction: 'forward', after: start ?? 0} as PageParam,
+    queryKey: ['river', key, 'newest', cluster, filterUnread],
+    initialPageParam: undefined as PageParam,
     queryFn: ({pageParam, signal}) => {
       const query = entryQuery(view, cluster ? 'cluster' : undefined)
       if (filterUnread) query.set('unread_only', 'true')
-      query.set('direction', pageParam.direction)
-      if (pageParam.cursor) query.set('cursor', pageParam.cursor)
-      if (pageParam.after) query.set('after_seq', String(pageParam.after))
+      if (pageParam) query.set('cursor', pageParam)
       return request<Page>(`/v1/entries?${query}`, {signal})
     },
-    getNextPageParam: (last): PageParam | undefined => last.next_cursor ? {direction: 'forward', cursor: String(Math.max(...last.entries.map(e => e.seq)))} : undefined,
-    getPreviousPageParam: (first): PageParam | undefined => first.entries.length ? {direction: 'backward', cursor: String(Math.min(...first.entries.map(e => e.seq)))} : start ? {direction: 'backward', cursor: String(start + 1)} : undefined,
-    refetchOnWindowFocus: false, staleTime: Infinity,
+    getNextPageParam: (last): PageParam => last.next_cursor || undefined,
+    refetchOnMount: 'always', refetchOnWindowFocus: false, staleTime: Infinity,
   })
   const loaded = list.data?.pages.flatMap(page => page.entries) ?? []
   // Membership belongs to this mounted parent list, not to the open article,
@@ -170,6 +161,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   // resets when the view key changes, then the fetched position reseeds it.
   const targetSeq = useRef(0)
   const resumeSeq = useRef(0)
+  const positionReady = useRef(false)
   const pendingSeq = useRef<number | null>(null)
   const retryDelay = useRef(0)
   const retryAfter = useRef(0)
@@ -180,7 +172,12 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     retryDelay.current = 0
     retryAfter.current = 0
   }, [key])
-  useEffect(() => { if (position.data) resumeSeq.current = Math.max(resumeSeq.current, position.data.seq) }, [position.data])
+  useEffect(() => {
+    // Loading articles does not wait for this read. Position writes do, so
+    // reading an older row cannot overwrite a higher saved position.
+    positionReady.current = position.isSuccess
+    if (position.data) resumeSeq.current = Math.max(resumeSeq.current, position.data.seq)
+  }, [position.data, position.isSuccess])
   // A newly chosen list takes focus at its heading, unless an article is
   // opening alongside it (the reader takes focus then).
   const readingRef = useRef(reading)
@@ -248,7 +245,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
       }
       const reached = due.reduce((max, {entry}) => Math.max(max, entry.seq), targetSeq.current)
       targetSeq.current = reached
-      if (reached > resumeSeq.current && pendingSeq.current === null && Date.now() >= retryAfter.current) {
+      if (positionReady.current && reached > resumeSeq.current && pendingSeq.current === null && Date.now() >= retryAfter.current) {
         pendingSeq.current = reached
         void request(`/v1/positions/${encodeURIComponent(key)}`, {method: 'PUT', body: JSON.stringify({seq: reached, op_id: crypto.randomUUID()})})
           .then(() => { resumeSeq.current = Math.max(resumeSeq.current, reached); retryDelay.current = 0 })
@@ -351,7 +348,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   }
 
   const unread = entries.filter(entry => { const state = actions.state(entry); return state.seen.value === 'unseen' && state.shelf.value !== 'done' }).length
-  const loading = position.isPending || list.isPending
+  const loading = list.isPending
   const failure = error || position.error?.message || list.error?.message
   const feed = view.kind === 'feed' ? subscriptions.find(sub => sub.id === view.id) : undefined
   const feedProblem = feed ? explainHealth(feed.health) : null
@@ -364,7 +361,6 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
         <button type="button" className="icon-button" title="Refresh articles" disabled={!list.isSuccess || list.isRefetching} onClick={() => {void reload()}}><Icon name="refresh" /><span className="sr-only">Refresh articles</span></button>
       </div>
       <div className="pane-tools">
-        <button type="button" className="quiet small" disabled={!list.isSuccess || list.isFetchingPreviousPage} onClick={() => { void list.fetchPreviousPage() }}><Icon name="earlier" size={16} />Earlier articles</button>
         <button type="button" className="quiet small toggle" aria-pressed={cluster} disabled={!list.isSuccess || list.isFetching} onClick={() => setCluster(value => !value)}><Icon name="stack" size={16} />One per story</button>
         {view.kind === 'feed' && <Link className="pane-link" to={`/feeds#subscription-${view.id}`}>Feed settings</Link>}
         {counts && list.isSuccess && <p className="pane-count">{unread} unread in loaded {cluster ? 'stories' : 'articles'}</p>}
@@ -376,7 +372,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     <div className="river-scroll" ref={scroller} onScroll={markScrolledPast} onKeyDown={listKeys} tabIndex={-1} aria-label="Article list" aria-busy={loading || undefined}>
       {view.kind === 'today' && <TodayAgents since={since} onOpen={onOpen}/>}
       {loading && <div className="skeleton-rows" aria-hidden="true">{Array.from({length: SKELETON_ROWS}, (_, index) => <div key={index} className="skeleton-row"><div className="skeleton line" /><div className="skeleton line short" /></div>)}</div>}
-      {loading && <p role="status" className="sr-only">Finding your place…</p>}
+      {loading && <p role="status" className="sr-only">Loading articles…</p>}
       <div ref={listRef} className="virtual-list" style={{height: virtual.getTotalSize()}} role="list">
         {visible.map(row => {
           const entry = entries[row.index]
