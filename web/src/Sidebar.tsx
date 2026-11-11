@@ -1,5 +1,6 @@
-import {useState, type MouseEvent as ReactMouseEvent} from 'react'
+import {useRef, useState, type DragEvent, type ReactNode, type MouseEvent as ReactMouseEvent} from 'react'
 import type {components} from './api.generated'
+import {canMove, SIDEBAR_DRAG_TYPE, type SidebarItem} from './folderMoves'
 import {Brand} from './Brand'
 import {MENU_ATTRIBUTE} from './ContextMenu'
 import {FeedIcon} from './EntryMedia'
@@ -53,13 +54,72 @@ type Props = {
   onHelp: () => void
   onSignOut: () => void
   prefetch: (screen: 'feeds' | 'settings' | 'rules') => void
+  onMove?: (item: SidebarItem, parentID: number) => Promise<void>
   // Opens the actions for Today, a folder or a feed (a right click, a long
   // press, Shift+F10 or the Menu key).
   onMenu?: (event: ReactMouseEvent<HTMLElement>, view: View) => void
 }
 
-export function Sidebar({route, subscriptions, folders, labels, savedSearches, counts, askEnabled, sync, onNavigate, onPalette, onHelp, onSignOut, prefetch, onMenu}: Props) {
+export function Sidebar({route, subscriptions, folders, labels, savedSearches, counts, askEnabled, sync, onNavigate, onPalette, onHelp, onSignOut, prefetch, onMenu, onMove}: Props) {
   const [collapsed, setCollapsed] = useState(readCollapsed)
+  const dragging = useRef<SidebarItem | null>(null)
+  const moving = useRef(false)
+  const [isDragging, setIsDragging] = useState(false)
+  const [dropTarget, setDropTarget] = useState<number | null>(null)
+  const [moveMessage, setMoveMessage] = useState('')
+  const [pending, setPending] = useState(false)
+  function endDrag() {
+    dragging.current = null
+    setIsDragging(false)
+    setDropTarget(null)
+  }
+  function drag(item: SidebarItem) {
+    return {
+      draggable: !!onMove && !pending,
+      onDragStart: (event: DragEvent<HTMLElement>) => {
+        if (!onMove || moving.current) { event.preventDefault(); return }
+        dragging.current = item
+        setIsDragging(true)
+        event.dataTransfer.effectAllowed = 'move'
+        event.dataTransfer.setData(SIDEBAR_DRAG_TYPE, JSON.stringify(item))
+        event.stopPropagation()
+      },
+      onDragEnd: endDrag,
+    }
+  }
+  function target(parentID: number) {
+    const accepts = () => !!onMove && !moving.current && !!dragging.current && canMove(dragging.current, parentID, subscriptions, folders)
+    return {
+      'data-drop-target': dropTarget === parentID || undefined,
+      onDragOver: (event: DragEvent<HTMLElement>) => {
+        event.stopPropagation()
+        if (!accepts()) { event.dataTransfer.dropEffect = 'none'; setDropTarget(null); return }
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'move'
+        setDropTarget(parentID)
+      },
+      onDragLeave: (event: DragEvent<HTMLElement>) => {
+        if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDropTarget(null)
+      },
+      onDrop: (event: DragEvent<HTMLElement>) => {
+        event.preventDefault()
+        event.stopPropagation()
+        const item = dragging.current
+        const valid = accepts()
+        endDrag()
+        if (!valid || !item || !onMove) return
+        moving.current = true
+        setPending(true)
+        setMoveMessage('Moving…')
+        void onMove(item, parentID).then(() => {
+          setCollapsed(previous => { const next = new Set(previous); next.delete(parentID); return next })
+          setMoveMessage('Moved.')
+        }).catch((error: unknown) => {
+          setMoveMessage(`Could not move: ${error instanceof Error ? error.message : 'Please try again.'}`)
+        }).finally(() => { moving.current = false; setPending(false) })
+      },
+    }
+  }
   const section = routeSection(route)
   const current = (key: string) => section === key ? 'page' as const : undefined
   function toggle(id: number) {
@@ -73,16 +133,28 @@ export function Sidebar({route, subscriptions, folders, labels, savedSearches, c
   const groups = groupByFolder(subscriptions, folders)
   const filed = groups.filter(group => group.folder !== null)
   const unfiled = groups.find(group => group.folder === null)?.subscriptions ?? []
-  const nav = (props: {to: string; icon?: IconName; label: string; current?: 'page'; count?: number; intent?: () => void; feed?: Subscription; warning?: string | null; tone?: Tone; menu?: View}) => {
+  const nav = (props: {to: string; icon?: IconName; label: string; current?: 'page'; count?: number; intent?: () => void; feed?: Subscription; warning?: string | null; tone?: Tone; menu?: View; item?: SidebarItem}) => {
     const {menu} = props
-    return <Link to={props.to} className="nav-link" aria-current={props.current} data-tone={props.tone} onClick={onNavigate} onIntent={props.intent} onContextMenu={menu && onMenu ? event => onMenu(event, menu) : undefined} {...(menu && onMenu ? {[MENU_ATTRIBUTE]: ''} : {})}>
+    return <Link {...(props.item ? drag(props.item) : {})} to={props.to} className="nav-link" aria-current={props.current} data-tone={props.tone} onClick={onNavigate} onIntent={props.intent} onContextMenu={menu && onMenu ? event => onMenu(event, menu) : undefined} {...(menu && onMenu ? {[MENU_ATTRIBUTE]: ''} : {})}>
       {props.feed ? <FeedIcon subscription={props.feed} title={props.label} /> : props.icon && <Icon name={props.icon} />}
       <span className="nav-label">{props.label}</span>
       {props.warning && <span className="nav-warning" title={props.warning}><Icon name="warning" size={14} /><span className="sr-only">, failing: {props.warning}</span></span>}
       {props.count ? ' ' : null}<Count value={props.count} />
     </Link>
   }
-  const feedLink = (sub: Subscription) => <li key={sub.id}>{nav({to:viewHref({kind:'feed', id:sub.id}), label:sub.title || sub.url, feed:sub, current:current(`river:feed:${sub.id}`), count:feedCount(sub), warning:explainHealth(sub.health), menu:{kind:'feed', id:sub.id, title:sub.title || sub.url}})}</li>
+  const feedLink = (sub: Subscription) => <li key={sub.id}>{nav({to:viewHref({kind:'feed', id:sub.id}), label:sub.title || sub.url, item:{kind:'feed', id:sub.id}, feed:sub, current:current(`river:feed:${sub.id}`), count:feedCount(sub), warning:explainHealth(sub.health), menu:{kind:'feed', id:sub.id, title:sub.title || sub.url}})}</li>
+  const folderRows = (parentID: number): ReactNode => filed.filter(({folder}) => (folder?.parent_id || 0) === parentID).map(({folder, subscriptions: members}) => {
+    if (!folder) return null
+    const open = !collapsed.has(folder.id)
+    const total = counts ? members.reduce((sum, sub) => sum + (feedCount(sub) ?? 0), 0) : undefined
+    return <li key={`folder-${folder.id}`} className="nav-folder">
+      <div className="nav-folder-row" {...target(folder.id)}>
+        <button type="button" className="disclosure" aria-expanded={open} onClick={() => toggle(folder.id)}><Icon name="chevron" size={14} /><span className="sr-only">{open ? 'Collapse' : 'Expand'} {folder.name}</span></button>
+        {nav({to:viewHref({kind:'folder', id:folder.id}), icon:'folder', label:folder.name, item:{kind:'folder', id:folder.id}, current:current(`river:folder:${folder.id}`), count:total, tone:'blue', menu:{kind:'folder', id:folder.id, title:folder.name}})}
+      </div>
+      {open && <ul className="nav-list nested">{folderRows(folder.id)}{members.map(feedLink)}</ul>}
+    </li>
+  })
   const activeLabels = labels.filter(label => !label.deleted)
 
   return <nav className="sidebar" aria-label="Earnest">
@@ -98,23 +170,14 @@ export function Sidebar({route, subscriptions, folders, labels, savedSearches, c
         <h2 id="nav-reading" className="nav-heading sr-only">Reading</h2>
         <ul className="nav-list">{READING_VIEWS.map(item => <li key={item.kind}>{nav({to:viewHref({kind:item.kind}), icon:item.icon, label:item.title, current:current(`river:${item.kind}:`), count:item.kind === 'later' ? counts?.later : item.kind === 'kept' ? counts?.kept : undefined, tone:item.tone, menu:item.kind === 'today' ? {kind:'today', title:item.title} : undefined})}</li>)}</ul>
       </div>
-      {subscriptions.some(sub => !sub.deleted) && <div role="group" aria-labelledby="nav-feeds">
-        <h2 id="nav-feeds" className="nav-heading">Feeds</h2>
+      {(subscriptions.some(sub => !sub.deleted) || filed.length > 0) && <div role="group" aria-labelledby="nav-feeds">
+        <h2 id="nav-feeds" className="nav-heading" {...target(0)} title="Drop here to move to the top level">Feeds</h2>
+        {moveMessage && <p className={moveMessage === 'Moved.' ? 'sr-only' : 'nav-move-status'} role="status">{moveMessage}</p>}
         <ul className="nav-list">
-          {filed.map(({folder, subscriptions: members}) => {
-            if (!folder) return null
-            const open = !collapsed.has(folder.id)
-            const total = counts ? members.reduce((sum, sub) => sum + (feedCount(sub) ?? 0), 0) : undefined
-            return <li key={`folder-${folder.id}`} className="nav-folder">
-              <div className="nav-folder-row">
-                <button type="button" className="disclosure" aria-expanded={open} onClick={() => toggle(folder.id)}><Icon name="chevron" size={14} /><span className="sr-only">{open ? 'Collapse' : 'Expand'} {folder.name}</span></button>
-                {nav({to:viewHref({kind:'folder', id:folder.id}), icon:'folder', label:folder.name, current:current(`river:folder:${folder.id}`), count:total, tone:'blue', menu:{kind:'folder', id:folder.id, title:folder.name}})}
-              </div>
-              {open && members.length > 0 && <ul className="nav-list nested">{members.map(feedLink)}</ul>}
-            </li>
-          })}
+          {folderRows(0)}
           {unfiled.map(feedLink)}
         </ul>
+        {isDragging && <div className="nav-root-drop" {...target(0)}>Drop here to move to the top level</div>}
       </div>}
       {activeLabels.length > 0 && <div role="group" aria-labelledby="nav-labels">
         <h2 id="nav-labels" className="nav-heading">Labels</h2>

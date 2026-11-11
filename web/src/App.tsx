@@ -14,7 +14,8 @@ import {Search, useSavedSearches} from './search/Search'
 import {markRestCommand} from './markRest'
 import {ContextMenu, menuRequest, SEPARATOR, tidy, useContextMenuKey, type MenuItem, type MenuRequest} from './ContextMenu'
 import {listMenu, markUpToHere, newestListed} from './menus'
-import {refreshSubscription} from './feeds'
+import {moveFolder, newOp, patchSubscription, refreshSubscription} from './feeds'
+import type {SidebarItem} from './folderMoves'
 import {Palette, type Command, type PaletteHandle} from './palette/Palette'
 import {OfflineStatus, clearOffline, useOnline} from './offline/Offline'
 import {Ask} from './pipeline/Pipeline'
@@ -554,7 +555,12 @@ function Session({onLogout}: {onLogout: () => void}) {
   // instead of a banner per failed request.
   const syncTone = sync.error && online ? 'problem' as const : !online || /waiting|Restoring|Opening/.test(sync.status) ? 'waiting' as const : 'quiet' as const
   const syncText = !online ? `Offline. ${sync.status.replace(/\.$/, '')}` : sync.error ? 'Sync needs attention' : sync.status.replace(/\.$/, '')
-  const sidebar = <Sidebar route={route} subscriptions={subs} folders={folders.data ?? []} labels={labels.data ?? []} savedSearches={savedSearches.data ?? []} counts={settings.reading_mode === 'unread_counts' ? unreadCounts.data : undefined} askEnabled={pipeline.data?.ask === 'enabled'} sync={{text: syncText, tone: syncTone}} onNavigate={() => drawer.current?.close()} onPalette={() => {drawer.current?.close(); palette.current?.openPalette()}} onHelp={() => {drawer.current?.close(); palette.current?.openHelp()}} onSignOut={() => {void logout()}} prefetch={prefetch} onMenu={showListMenu} />
+  async function moveSidebarItem(item: SidebarItem, parentID: number) {
+    if (item.kind === 'feed') await patchSubscription(item.id, {folder_id: parentID, op_id: newOp()})
+    else await moveFolder(item.id, parentID)
+    await Promise.all(['subscriptions', 'folders', 'unread-counts', 'river'].map(resource => queryClient.invalidateQueries({queryKey: [resource]})))
+  }
+  const sidebar = <Sidebar route={route} subscriptions={subs} folders={folders.data ?? []} labels={labels.data ?? []} savedSearches={savedSearches.data ?? []} counts={settings.reading_mode === 'unread_counts' ? unreadCounts.data : undefined} askEnabled={pipeline.data?.ask === 'enabled'} sync={{text: syncText, tone: syncTone}} onNavigate={() => drawer.current?.close()} onPalette={() => {drawer.current?.close(); palette.current?.openPalette()}} onHelp={() => {drawer.current?.close(); palette.current?.openHelp()}} onSignOut={() => {void logout()}} prefetch={prefetch} onMenu={showListMenu} onMove={moveSidebarItem} />
 
   function screen(): ReactNode {
     if (firstRun) return <div className="page" ref={page}><div className="page-inner onboarding" onChangeCapture={() => setOnboardingStarted(true)} onClickCapture={() => setOnboardingStarted(true)}><Suspense fallback={<PageSkeleton />}><OnboardingScreen onComplete={() => {setOnboarded(true);refreshResources();void queryClient.invalidateQueries({queryKey:['position']});go('/today', {replace: true})}} /></Suspense></div></div>

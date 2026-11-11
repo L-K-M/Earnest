@@ -138,7 +138,7 @@ func PageSubscriptions(ctx context.Context, tx pgx.Tx, user, afterID int64, limi
 // PageFolders pages a user's folders including tombstones.
 func PageFolders(ctx context.Context, tx pgx.Tx, user, afterID int64, limit int) (Page, error) {
 	return collectPage(ctx, tx, `SELECT to_jsonb(f) FROM (
-  SELECT f.id, f.name, f.rev, (f.deleted_at IS NOT NULL) AS deleted
+  SELECT f.id, f.name, COALESCE(f.parent_id,0) AS parent_id, f.rev, (f.deleted_at IS NOT NULL) AS deleted
   FROM folders f WHERE f.user_id = $1 AND f.id > $2 ORDER BY f.id LIMIT $3) f`,
 		[]any{user, afterID, limit + 1}, limit,
 		func(body json.RawMessage) (int64, int64, string) { return jsonID(body, "id"), 0, "" })

@@ -31,7 +31,7 @@ function sub(overrides: Partial<Subscription> = {}): Subscription {
   return {id: 1, feed_id: 11, title: 'Feed One', url: 'https://a.example/feed', site_url: 'https://a.example/', folder_id: 0, cadence: 'today', extract: '', rev: 1, deleted: false, private: false, muted: false, initial_through_seq: 0, initial_fetch_pending: false, health: {...baseHealth}, ...overrides}
 }
 function folder(overrides: Partial<Folder> = {}): Folder {
-  return {id: 3, name: 'Tech', rev: 1, deleted: false, ...overrides}
+  return {id: 3, name: 'Tech', parent_id: 0, rev: 1, deleted: false, ...overrides}
 }
 
 beforeEach(() => {

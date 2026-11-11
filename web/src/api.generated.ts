@@ -1561,7 +1561,15 @@ export interface components {
             id: number;
             name: string;
             /** Format: int64 */
+            parent_id: number;
+            /** Format: int64 */
             rev: number;
+        };
+        FolderPatchBody: {
+            name?: string;
+            op_id: string;
+            /** Format: int64 */
+            parent_id?: number;
         };
         GroundedClaim: {
             citations: components["schemas"]["PassageCitation"][] | null;
@@ -6521,7 +6529,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["NameBody"];
+                "application/json": components["schemas"]["FolderPatchBody"];
             };
         };
         responses: {
