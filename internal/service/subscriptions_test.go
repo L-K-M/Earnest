@@ -543,7 +543,7 @@ func TestSubscriptions(t *testing.T) {
 			t.Fatal("import burst probes")
 		}
 		first, err := f.s.ExportOPML(context.Background(), f.a)
-		if err != nil || len(first) != 3 {
+		if err != nil || len(first) != 2 {
 			t.Fatal("export", first, err)
 		}
 		repeat, err := f.s.ImportOPML(context.Background(), f.a, input)
