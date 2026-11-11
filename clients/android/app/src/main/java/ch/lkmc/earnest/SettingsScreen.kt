@@ -175,6 +175,18 @@ internal fun SettingsScreen(
             }
         }
 
+        Section("Article visibility") {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(
+                    checked = settings.showOnlyUnread,
+                    onCheckedChange = { value -> model.updateReaderSettingsDraft { it.copy(showOnlyUnread = value) } },
+                    modifier = Modifier.semantics { contentDescription = "Show only unread" },
+                )
+                Text("Show only unread")
+            }
+            Text("Read articles stay until you reopen or refresh the list. Saved shelves and search are not filtered.")
+        }
+
         Section("Today decay") {
             Text("${settings.todayDecayDays} days")
             Slider(

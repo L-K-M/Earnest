@@ -6,6 +6,7 @@ export type Register = 'seen' | 'shelf' | 'kept'
 export type Value = 'seen' | 'unseen' | 'none' | 'later' | 'done' | boolean
 export type View = {kind: 'today' | 'edition' | 'later' | 'kept' | 'done' | 'feed' | 'folder' | 'label'; id?: number; title: string}
 export type ReaderActions = {
+  deleted?: (entry: Entry) => boolean
   state: (entry: Entry) => EntryState
   act: (entry: Entry, register: Register, value: Value, kind?: 'explicit' | 'passive') => Promise<void>
 }
@@ -37,6 +38,23 @@ export function orderEntries(entries: Entry[], view: View, subscriptions: Subscr
   const unique = [...new Map(entries.map(entry => [entry.id, entry])).values()]
   return unique.filter(entry => !entry.deleted && (view.kind !== 'today' || byID.get(entry.subscription_id)?.cadence !== 'week'))
     .sort((a, b) => view.kind === 'edition' ? a.subscription_id - b.subscription_id || b.seq - a.seq : b.seq - a.seq)
+}
+// A visit admits unread rows once. Keep their metadata even if a background
+// river response omits them after a read, so sync cannot move the list under
+// the reader. Deletions still remove rows immediately; only an intentional
+// parent-list reload clears the read-admission snapshot.
+export function retainUnreadEntries(previous: Entry[], fresh: Entry[], state: ReaderActions['state'], deleted: (entry: Entry) => boolean = entry => entry.deleted): Entry[] {
+  const admitted = new Map(previous.filter(entry => !deleted(entry)).map(entry => [entry.id, entry]))
+  for (const entry of fresh) {
+    if (deleted(entry)) {
+      admitted.delete(entry.id)
+      continue
+    }
+    const current = state(entry)
+    if (admitted.has(entry.id) || (current.seen.value === 'unseen' && current.shelf.value !== 'done')) admitted.set(entry.id, entry)
+  }
+  const next = [...admitted.values()]
+  return next.length === previous.length && next.every((entry, index) => entry === previous[index]) ? previous : next
 }
 export function shortcutsAllowed(target: EventTarget | null, enabled: boolean): boolean {
   if (!enabled || !(target instanceof Element)) return false

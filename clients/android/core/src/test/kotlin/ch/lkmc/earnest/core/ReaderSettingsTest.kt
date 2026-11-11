@@ -59,6 +59,7 @@ class ReaderSettingsTest {
     fun defaultsMatchServerDefaults() {
         val settings = ReaderSettings()
         assertEquals(ReadingMode.RIVER, settings.readingMode)
+        assertFalse(settings.showOnlyUnread)
         assertEquals(2L, settings.todayDecayDays)
         assertTrue(settings.singleKeyShortcuts)
         assertEquals(ReaderTheme.SYSTEM, settings.theme)
@@ -74,7 +75,7 @@ class ReaderSettingsTest {
     @Test
     fun readerSettingsDecodesLargeRevAndOverrides() = runBlocking {
         val (api, requests) = client { response(it, body = """
-            {"reading_mode":"unread_counts","today_decay_days":3,"single_key_shortcuts":false,
+            {"reading_mode":"unread_counts","show_only_unread":true,"today_decay_days":3,"single_key_shortcuts":false,
              "theme":"black","measure":72,"font":"dyslexic",
              "feed_overrides":{"42":{"theme":"eink","measure":64,"font":"sans"}},
              "rev":9223372036854775807}
@@ -84,6 +85,7 @@ class ReaderSettingsTest {
         assertEquals("/v1/settings", requests.single().url.encodedPath)
         assertEquals(ReadingMode.UNREAD_COUNTS, settings.readingMode)
         assertEquals(3L, settings.todayDecayDays)
+        assertTrue(settings.showOnlyUnread)
         assertFalse(settings.singleKeyShortcuts)
         assertEquals(ReaderTheme.BLACK, settings.theme)
         assertEquals(72L, settings.measure)
@@ -99,6 +101,7 @@ class ReaderSettingsTest {
         }
         val settings = ReaderSettings(
             readingMode = ReadingMode.UNREAD_COUNTS,
+            showOnlyUnread = true,
             todayDecayDays = 7,
             singleKeyShortcuts = false,
             theme = ReaderTheme.DARK,
@@ -116,11 +119,12 @@ class ReaderSettingsTest {
         assertEquals("Bearer secret", request.header("Authorization"))
         val body = request.bodyObject()
         assertEquals(
-            setOf("reading_mode", "today_decay_days", "single_key_shortcuts", "theme", "measure", "font", "feed_overrides", "op_id"),
+            setOf("reading_mode", "show_only_unread", "today_decay_days", "single_key_shortcuts", "theme", "measure", "font", "feed_overrides", "op_id"),
             body.keys,
         )
         assertFalse("PUT body must not carry rev", body.containsKey("rev"))
         assertEquals("unread_counts", body.getValue("reading_mode").jsonPrimitive.content)
+        assertEquals("true", body.getValue("show_only_unread").jsonPrimitive.content)
         assertEquals("7", body.getValue("today_decay_days").jsonPrimitive.content)
         assertEquals("false", body.getValue("single_key_shortcuts").jsonPrimitive.content)
         assertEquals("dark", body.getValue("theme").jsonPrimitive.content)
@@ -134,6 +138,13 @@ class ReaderSettingsTest {
                 body.getValue("feed_overrides").jsonObject.getValue("42").toString(),
             ),
         )
+    }
+
+    @Test
+    fun unreadPreferenceSurvivesSerializationAndDefaultsForLegacyDocuments() {
+        assertFalse(json.decodeFromString(ReaderSettings.serializer(), defaultsJSON).showOnlyUnread)
+        val settings = ReaderSettings(showOnlyUnread = true)
+        assertEquals(settings, json.decodeFromString(ReaderSettings.serializer(), json.encodeToString(settings)))
     }
 
     @Test

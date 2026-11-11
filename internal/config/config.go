@@ -23,18 +23,19 @@ import (
 )
 
 const (
-	envContentAddr          = "EARNEST_CONTENT_ADDR"
-	envHTTPAddr             = "EARNEST_HTTP_ADDR"
-	envDatabaseURL          = "EARNEST_DATABASE_URL"
-	envBaseURL              = "EARNEST_BASE_URL"
-	envContentOrigin        = "EARNEST_CONTENT_ORIGIN"
-	envSecretKey            = "EARNEST_SECRET_KEY"
-	envOutboundAllowPrivate = "EARNEST_OUTBOUND_ALLOW_PRIVATE"
-	envTrustedProxies       = "EARNEST_TRUSTED_PROXIES"
-	envLogLevel             = "EARNEST_LOG_LEVEL"
-	envFetchMinInterval     = "EARNEST_FETCH_MIN_INTERVAL"
-	envFetchMaxInterval     = "EARNEST_FETCH_MAX_INTERVAL"
-	envRetentionDays        = "EARNEST_RETENTION_DAYS"
+	envContentAddr           = "EARNEST_CONTENT_ADDR"
+	envHTTPAddr              = "EARNEST_HTTP_ADDR"
+	envDatabaseURL           = "EARNEST_DATABASE_URL"
+	envBaseURL               = "EARNEST_BASE_URL"
+	envContentOrigin         = "EARNEST_CONTENT_ORIGIN"
+	envSecretKey             = "EARNEST_SECRET_KEY"
+	envOutboundAllowPrivate  = "EARNEST_OUTBOUND_ALLOW_PRIVATE"
+	envTrustedProxies        = "EARNEST_TRUSTED_PROXIES"
+	envLogLevel              = "EARNEST_LOG_LEVEL"
+	envFetchMinInterval      = "EARNEST_FETCH_MIN_INTERVAL"
+	envFetchMaxInterval      = "EARNEST_FETCH_MAX_INTERVAL"
+	envFetchCacheMaxInterval = "EARNEST_FETCH_CACHE_MAX_INTERVAL"
+	envRetentionDays         = "EARNEST_RETENTION_DAYS"
 )
 
 const (
@@ -44,9 +45,10 @@ const (
 	defaultContentOrigin = "http://localhost:8081"
 	defaultLogLevel      = "info"
 
-	defaultFetchMinInterval = 15 * time.Minute
-	defaultFetchMaxInterval = 24 * time.Hour
-	defaultRetentionDays    = 90
+	defaultFetchMinInterval      = 15 * time.Minute
+	defaultFetchMaxInterval      = 24 * time.Hour
+	defaultFetchCacheMaxInterval = 48 * time.Hour
+	defaultRetentionDays         = 90
 
 	// Whole days must fit time.Duration before serve converts them. An
 	// overflow can wrap positive and expire entries much earlier than asked.
@@ -95,7 +97,10 @@ type Config struct {
 	LogLevel         slog.Level
 	FetchMinInterval time.Duration
 	FetchMaxInterval time.Duration
-	RetentionDays    int
+	// FetchCacheMaxInterval caps how far a healthy feed's Cache-Control
+	// max-age can extend its schedule beyond FetchMaxInterval.
+	FetchCacheMaxInterval time.Duration
+	RetentionDays         int
 
 	// PushVAPIDPrivateKey and PushVAPIDPublicKey override the persisted key pair.
 	PushVAPIDPrivateKey []byte
@@ -123,10 +128,10 @@ func (c Config) String() string {
 	return fmt.Sprintf(
 		"http_addr=%s content_addr=%s database_url=%s base_url=%s content_origin=%s secret_key=%s "+
 			"outbound_allow_private=%s trusted_proxies=%s log_level=%s fetch_min_interval=%s "+
-			"fetch_max_interval=%s retention_days=%d",
+			"fetch_max_interval=%s fetch_cache_max_interval=%s retention_days=%d",
 		c.HTTPAddr, c.ContentAddr, redactedValue, c.BaseURL, c.ContentOrigin, redactedValue,
 		strings.Join(c.OutboundAllowPrivate, ","), prefixList(c.TrustedProxies), c.LogLevel,
-		c.FetchMinInterval, c.FetchMaxInterval, c.RetentionDays)
+		c.FetchMinInterval, c.FetchMaxInterval, c.FetchCacheMaxInterval, c.RetentionDays)
 }
 
 // Load reads the environment into a validated Config. Errors name the
@@ -178,6 +183,14 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("%s (%s) must not exceed %s (%s)",
 			envFetchMinInterval, cfg.FetchMinInterval,
 			envFetchMaxInterval, cfg.FetchMaxInterval)
+	}
+	if cfg.FetchCacheMaxInterval, err = loadDuration(envFetchCacheMaxInterval, defaultFetchCacheMaxInterval); err != nil {
+		return Config{}, err
+	}
+	if cfg.FetchCacheMaxInterval < cfg.FetchMinInterval {
+		return Config{}, fmt.Errorf("%s (%s) must not be less than %s (%s)",
+			envFetchCacheMaxInterval, cfg.FetchCacheMaxInterval,
+			envFetchMinInterval, cfg.FetchMinInterval)
 	}
 	if cfg.RetentionDays, err = loadRetentionDays(); err != nil {
 		return Config{}, err

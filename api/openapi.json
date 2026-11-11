@@ -2198,6 +2198,9 @@
             "minimum": 0,
             "type": "integer"
           },
+          "show_only_unread": {
+            "type": "boolean"
+          },
           "single_key_shortcuts": {
             "type": "boolean"
           },
@@ -2728,6 +2731,10 @@
           },
           "reading_mode": {
             "type": "string"
+          },
+          "show_only_unread": {
+            "description": "Show only unread articles on intentional list loads; omission preserves the saved preference.",
+            "type": "boolean"
           },
           "single_key_shortcuts": {
             "type": "boolean"

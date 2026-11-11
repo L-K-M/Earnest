@@ -34,6 +34,7 @@ extension NetworkTests {
 
     @Test func readerDefaultsMatchServerDefaults() {
         let settings = APIReaderSettings()
+        #expect(!settings.showOnlyUnread)
         #expect(settings.readingMode == .river)
         #expect(settings.todayDecayDays == 2)
         #expect(settings.singleKeyShortcuts)
@@ -55,6 +56,7 @@ extension NetworkTests {
         #expect(settings.font == .serif)
         #expect(settings.feedOverrides.isEmpty)
         #expect(settings.rev == Int64.max)
+        #expect(!settings.showOnlyUnread)
         ScriptedHTTP.assertFinished()
     }
 
@@ -63,7 +65,8 @@ extension NetworkTests {
             .init(method: "PUT", path: "/v1/settings", body: #"{"reading_mode":"unread_counts","today_decay_days":3,"single_key_shortcuts":false,"theme":"dark","measure":68,"font":"sans","feed_overrides":{},"rev":7}"#, checkBody: { data in
                 let value = try JSONDecoder().decode(APIValue.self, from: #require(data))
                 guard case .object(let fields) = value else { Issue.record("body is not an object"); return }
-                #expect(fields.count == 8)
+                #expect(fields.count == 9)
+                #expect(fields["show_only_unread"] == .bool(true))
                 #expect(fields["rev"] == nil)
                 #expect(fields["op_id"] == .string("op-1"))
                 #expect(fields["reading_mode"] == .string("unread_counts"))
@@ -76,13 +79,19 @@ extension NetworkTests {
             }),
         ])
         let settings = APIReaderSettings(
-            readingMode: .unreadCounts, todayDecayDays: 3, singleKeyShortcuts: false,
+            readingMode: .unreadCounts, showOnlyUnread: true, todayDecayDays: 3, singleKeyShortcuts: false,
             theme: .dark, measure: 68, font: .sans, feedOverrides: [:], rev: 9223372036854775807
         )
         let updated = try await api.updateReaderSettings(settings, opID: "op-1")
         #expect(updated.rev == 7)
         #expect(updated.readingMode == .unreadCounts)
         ScriptedHTTP.assertFinished()
+    }
+
+    @Test func unreadPreferenceSurvivesTypedAndSyncSerialization() throws {
+        let settings = APIReaderSettings(showOnlyUnread: true, rev: 8)
+        #expect(try JSONDecoder().decode(APIReaderSettings.self, from: JSONEncoder().encode(settings)) == settings)
+        #expect(SyncObject(settings: settings).readerSettings == settings)
     }
 
     @Test func suppliedOpIDIsPreserved() async throws {
@@ -164,9 +173,10 @@ extension NetworkTests {
     }
 
     @Test func generatedModelsCoverEveryReaderField() throws {
-        let json = Data(#"{"reading_mode":"unread_counts","today_decay_days":3,"single_key_shortcuts":false,"theme":"black","measure":72,"font":"dyslexic","feed_overrides":{"42":{"theme":"eink","measure":64,"font":"sans"}},"rev":5}"#.utf8)
+        let json = Data(#"{"reading_mode":"unread_counts","show_only_unread":true,"today_decay_days":3,"single_key_shortcuts":false,"theme":"black","measure":72,"font":"dyslexic","feed_overrides":{"42":{"theme":"eink","measure":64,"font":"sans"}},"rev":5}"#.utf8)
         let generated = try JSONDecoder().decode(Components.Schemas.ReaderSettings.self, from: json)
         #expect(generated.readingMode == "unread_counts")
+        #expect(generated.showOnlyUnread == true)
         #expect(generated.todayDecayDays == 3)
         #expect(generated.singleKeyShortcuts == false)
         #expect(generated.theme == "black")
@@ -183,13 +193,14 @@ extension NetworkTests {
             measure: 72,
             opId: "op-1",
             readingMode: "unread_counts",
+            showOnlyUnread: true,
             singleKeyShortcuts: false,
             theme: "black",
             todayDecayDays: 3
         )
         let encoded = try JSONEncoder().encode(body)
         let fields = try JSONDecoder().decode([String: APIValue].self, from: encoded)
-        #expect(Set(fields.keys) == ["reading_mode", "today_decay_days", "single_key_shortcuts", "theme", "measure", "font", "feed_overrides", "op_id"])
+        #expect(Set(fields.keys) == ["reading_mode", "show_only_unread", "today_decay_days", "single_key_shortcuts", "theme", "measure", "font", "feed_overrides", "op_id"])
         #expect(fields["rev"] == nil)
     }
 
@@ -208,6 +219,7 @@ extension NetworkTests {
     @Test func settingsObjectCapturesEveryReaderField() throws {
         let raw: APIValue = .object([
             "reading_mode": .string("unread_counts"),
+            "show_only_unread": .bool(true),
             "today_decay_days": .integer(9),
             "single_key_shortcuts": .bool(false),
             "theme": .string("eink"),
@@ -221,6 +233,7 @@ extension NetworkTests {
         let settings = try #require(object.readerSettings)
         #expect(settings.readingMode == .unreadCounts)
         #expect(settings.todayDecayDays == 9)
+        #expect(settings.showOnlyUnread)
         #expect(!settings.singleKeyShortcuts)
         #expect(settings.theme == .eink)
         #expect(settings.measure == 70)

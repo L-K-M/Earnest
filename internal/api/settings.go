@@ -9,6 +9,7 @@ import (
 
 type settingsBody struct {
 	ReadingMode        service.ReadingMode               `json:"reading_mode"`
+	ShowOnlyUnread     *bool                             `json:"show_only_unread,omitempty" doc:"Show only unread articles on intentional list loads; omission preserves the saved preference."`
 	TodayDecayDays     int                               `json:"today_decay_days"`
 	SingleKeyShortcuts bool                              `json:"single_key_shortcuts"`
 	Theme              service.ReaderTheme               `json:"theme"`
@@ -26,6 +27,7 @@ func (s *server) settingsRoutes() {
 		b := in.Body
 		return s.svc.PutSettings(ctx, actor(ctx), service.ReaderSettingsInput{
 			ReadingMode:        b.ReadingMode,
+			ShowOnlyUnread:     b.ShowOnlyUnread,
 			TodayDecayDays:     b.TodayDecayDays,
 			SingleKeyShortcuts: b.SingleKeyShortcuts,
 			Theme:              b.Theme,

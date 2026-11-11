@@ -68,7 +68,7 @@ describe('Onboarding', () => {
     const settings = calls('/v1/settings')
     expect(settings).toHaveLength(1)
     expect(settings[0][1]?.method).toBe('PUT')
-    expect(bodyOf(settings[0])).toEqual({reading_mode: 'river', today_decay_days: 2, single_key_shortcuts: true, theme: 'system', measure: 66, font: 'serif', feed_overrides: {}, op_id: expect.any(String)})
+    expect(bodyOf(settings[0])).toEqual({reading_mode: 'river', show_only_unread: false, today_decay_days: 2, single_key_shortcuts: true, theme: 'system', measure: 66, font: 'serif', feed_overrides: {}, op_id: expect.any(String)})
   })
 
   it('skips import and saves unread-counts mode without touching positions', async () => {

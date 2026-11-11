@@ -316,6 +316,7 @@ class EarnestApi(
             readingMode = settings.readingMode,
             todayDecayDays = settings.todayDecayDays,
             singleKeyShortcuts = settings.singleKeyShortcuts,
+            showOnlyUnread = settings.showOnlyUnread,
             theme = settings.theme,
             measure = settings.measure,
             font = settings.font,

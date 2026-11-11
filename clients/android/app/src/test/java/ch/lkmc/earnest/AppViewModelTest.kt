@@ -9,6 +9,7 @@ import kotlinx.coroutines.*
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -114,6 +115,13 @@ class AppViewModelTest {
         } ?: throw AssertionError("timed out waiting for $what")
     }
 
+    private suspend fun corruptSnapshot() = SyncAccess.mutex.withLock {
+        // A save callback can run before withEngine records its final version.
+        // Serialize the fixture writer so it cannot make a healthy cached
+        // engine adopt the corrupted row's version and bypass the disk failure.
+        SessionCache(app, identity).db.snapshot().save(ch.lkmc.earnest.db.SyncSnapshotEntity(json = "invalid snapshot"))
+    }
+
     @Test fun agentSelectedEntriesOpenWithClickToLoadImages() = runBlocking(Dispatchers.IO) {
         val model = model()
         assertEquals("https://content.test/signed", model.openEntry(2)?.url)
@@ -153,7 +161,7 @@ class AppViewModelTest {
 
     @Test fun cacheFailureReportsAnErrorWithoutShelfSuccess() = runBlocking(Dispatchers.IO) {
         val model = model()
-        SessionCache(app, identity).db.snapshot().save(ch.lkmc.earnest.db.SyncSnapshotEntity(json = "invalid snapshot"))
+        corruptSnapshot()
         val saved = java.util.concurrent.atomic.AtomicInteger()
         model.later(2) { saved.incrementAndGet() }
         withTimeout(15000) { model.state.first { it.error?.startsWith("Could not save the action") == true } }
@@ -337,7 +345,7 @@ class AppViewModelTest {
     @Test fun failedMarkUnreadReleasesTheGuard() = runBlocking(Dispatchers.IO) {
         val model = model()
         model.loadEntry(2)
-        SessionCache(app, identity).db.snapshot().save(ch.lkmc.earnest.db.SyncSnapshotEntity(json = "invalid snapshot"))
+        corruptSnapshot()
         val action = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
         model.markUnread(2) { action.set(it) }
         // The guard is released in queue()'s finally once the failed write is
@@ -355,7 +363,7 @@ class AppViewModelTest {
         val action = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
         model.markUnread(2) { action.set(it) }
         await("the mark-unread save") { action.get() != null }
-        SessionCache(app, identity).db.snapshot().save(ch.lkmc.earnest.db.SyncSnapshotEntity(json = "invalid snapshot"))
+        corruptSnapshot()
 
         val undone = java.util.concurrent.atomic.AtomicInteger()
         val failed = java.util.concurrent.atomic.AtomicInteger()

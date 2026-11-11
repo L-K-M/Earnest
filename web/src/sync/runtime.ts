@@ -378,6 +378,10 @@ export class ReaderSync {
     return this.client.entry(entryId) !== undefined;
   }
 
+  isDeleted(entryId: bigint): boolean {
+    return this.client.entry(entryId)?.deleted === true;
+  }
+
   // History pages can extend beyond bootstrap's cached window. Adopt what
   // this device actually observed before deriving the register base.
   async observe(entry: Entry, state: State, generation?: string): Promise<void> {

@@ -7,7 +7,7 @@ import EarnestKit
 /// sharing the sync engine: a write in one window reaches the other only
 /// through the shared rebuild.
 @MainActor final class WindowModelTests: XCTestCase {
-    private func makeModel(api: EarnestAPI? = nil) throws -> AppModel {
+    private func makeModel(api: EarnestAPI? = nil, unreadOnly: Bool = false) throws -> AppModel {
         let engine = SyncEngine(store: MemorySyncStore())
         try engine.bootstrap(Cursor(generation: "g", rev: 1))
         try engine.mergeEntries([try entry(42), try entry(43)], generation: "g")
@@ -16,7 +16,13 @@ import EarnestKit
             "initial_since": .null, "initial_through_seq": .integer(0),
         ])])
         try engine.finishBootstrap()
+        if unreadOnly {
+            try engine.replaceRiverResources(mutes: [], settings: .object([
+                "today_decay_days": .integer(2), "show_only_unread": .bool(true),
+            ]))
+        }
         let model = AppModel(api: api, engine: engine, principalID: 7)
+        try model.restoreReaderPreferences()
         model.loggedIn = true
         return model
     }
@@ -174,6 +180,62 @@ import EarnestKit
 
         XCTAssertEqual(window.entries.filter { $0.id == 42 }.count, 1)
         ContentHTTP.assertFinished()
+    }
+
+    func testUnreadVisitKeepsReadRowsAfterSelectionAndBackgroundRefresh() async throws {
+        let session = ContentHTTP.install([
+            .init(path: "/v1/entries", body: #"{"entries":[]}"#),
+            .init(path: "/v1/entries", body: #"{"entries":[]}"#),
+        ])
+        let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: ContentTokens(), session: session)
+        let model = try makeModel(api: api, unreadOnly: true)
+        defer { model.signOut(); session.invalidateAndCancel() }
+        let window = WindowModel(app: model)
+        XCTAssertEqual(window.rows.map(\.id), [42, 43])
+        var seen = State(principal: 7, entryID: 42)
+        seen.seen = Stamp(value: .text("seen"), rev: 2)
+        try model.engine?.mergeBootstrap([seen])
+        model.rebuildPresentation()
+        XCTAssertEqual(window.rows.map(\.id), [42, 43])
+        XCTAssertFalse(try XCTUnwrap(window.rows.first).unread)
+        await window.refreshEntries()
+        model.rebuildPresentation()
+        XCTAssertEqual(window.rows.map(\.id), [42, 43])
+        window.requestListReload()
+        await window.refreshEntries()
+        model.rebuildPresentation()
+        XCTAssertTrue(window.rows.isEmpty)
+        ContentHTTP.assertFinished()
+    }
+
+    func testUnreadVisitIsReappliedWhenParentSectionIsReopened() throws {
+        let model = try makeModel(unreadOnly: true)
+        defer { model.signOut() }
+        let window = WindowModel(app: model)
+        window.selected = 42
+        var seen = State(principal: 7, entryID: 42)
+        seen.seen = Stamp(value: .text("seen"), rev: 2)
+        try model.engine?.mergeBootstrap([seen])
+        window.selected = 43
+        window.selected = nil
+        model.rebuildPresentation()
+        XCTAssertEqual(window.rows.map(\.id), [42, 43])
+        window.section = .edition
+        window.section = .today
+        model.rebuildPresentation()
+        XCTAssertEqual(window.rows.map(\.id), [43])
+    }
+
+    func testUnreadVisitCannotRetainMetadataAcrossRestore() throws {
+        let model = try makeModel(unreadOnly: true)
+        defer { model.signOut() }
+        let window = WindowModel(app: model)
+        XCTAssertEqual(window.rows.map(\.id), [42, 43])
+        try model.engine?.bootstrap(Cursor(generation: "restored", rev: 0))
+        window.resetListAfterRestore()
+        model.rebuildPresentation()
+        XCTAssertTrue(window.entries.isEmpty)
+        XCTAssertTrue(window.rows.isEmpty)
     }
 
     func testGoneEntryDisappearsFromBothWindows() throws {
