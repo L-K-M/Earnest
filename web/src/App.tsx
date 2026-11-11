@@ -1,4 +1,4 @@
-import {Component, lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ComponentType, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode} from 'react'
+import {Component, lazy, Suspense, useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type ComponentType, type CSSProperties, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode} from 'react'
 import {useQuery, useQueryClient} from '@tanstack/react-query'
 import type {components} from './api.generated'
 import {request, RequestError, setCSRF} from './request'
@@ -14,7 +14,8 @@ import {Search, useSavedSearches} from './search/Search'
 import {markRestCommand} from './markRest'
 import {ContextMenu, menuRequest, SEPARATOR, tidy, useContextMenuKey, type MenuItem, type MenuRequest} from './ContextMenu'
 import {listMenu, markUpToHere, newestListed} from './menus'
-import {moveFolder, newOp, patchSubscription, refreshSubscription} from './feeds'
+import type {FeedPrefill} from './FeedSettings'
+import {createSubfolder, moveFolder, newOp, patchSubscription, refreshSubscription, renameFolder} from './feeds'
 import type {SidebarItem} from './folderMoves'
 import {Palette, type Command, type PaletteHandle} from './palette/Palette'
 import {OfflineStatus, clearOffline, useOnline} from './offline/Offline'
@@ -31,6 +32,7 @@ import {activityHref, parseRoute, routeSection, searchHref, TODAY, viewHref, typ
 type Identity = {user_id: number; principal_id: number}
 type Toast = {id: number; message: string; undo?: () => Promise<void>}
 type OpenMode = 'push' | 'replace'
+type FolderDialogState = {kind: 'rename'; id: number; name: string} | {kind: 'subfolder'; id: number; parent: string}
 
 // Sync acknowledges reading actions continuously; coalesce the resource
 // refreshes they trigger so a burst of keystrokes costs one refetch burst.
@@ -449,6 +451,9 @@ function Session({onLogout}: {onLogout: () => void}) {
 
   const [newestLoaded, setNewestLoaded] = useState({key: '', seq: 0})
   const [menu, setMenu] = useState<MenuRequest | null>(null)
+  const [folderDialog, setFolderDialog] = useState<FolderDialogState | null>(null)
+  const [subscribePrefill, setSubscribePrefill] = useState<FeedPrefill | null>(null)
+  const consumeSubscribePrefill = useCallback(() => setSubscribePrefill(null), [])
   const closeMenu = useCallback(() => setMenu(null), [])
   useContextMenuKey()
   function showMenu(event: ReactMouseEvent<HTMLElement>, label: string, items: MenuItem[]) {
@@ -467,6 +472,16 @@ function Session({onLogout}: {onLogout: () => void}) {
       newest: newestKnown, markRange, confirm: confirmAction, notify,
       go: to => {go(to)}, openTab: href => {window.open(href, '_blank', 'noopener')},
       refreshFeed: async id => {await refreshSubscription(id)},
+      // The narrow layout's sidebar drawer is modal; close it so a dialog
+      // rendered at the app root is not inert, and so the Feeds screen a
+      // prefill navigates to is reachable.
+      renameFolder: folder => { drawer.current?.close(); setFolderDialog({kind: 'rename', id: folder.id, name: folder.title}) },
+      newSubfolder: parent => { drawer.current?.close(); setFolderDialog({kind: 'subfolder', id: parent.id, parent: parent.title}) },
+      addFeed: folder => {
+        drawer.current?.close()
+        setSubscribePrefill(previous => ({folderID: folder.id, token: (previous?.token ?? 0) + 1}))
+        go('/feeds#subscribe')
+      },
     }))
   }
   function showArticleMenu(event: ReactMouseEvent<HTMLElement>, entry: Entry, items: MenuItem[]) {
@@ -601,7 +616,7 @@ function Session({onLogout}: {onLogout: () => void}) {
     case 'rules': return <div className="page" ref={page}><div className="page-inner"><Suspense fallback={<PageSkeleton />}><RulesScreen feeds={subs} folders={folders.data ?? []} labels={labels.data ?? []} editing={route.rule} onEdit={id => {go(`/rules/${id}`)}} onClose={() => { if (openedFrom() === '/rules') history.back(); else go('/rules', {replace: true}) }} /></Suspense></div></div>
     case 'activity': return <div className="page" ref={page}><div className="page-inner"><ActivityScreen filters={route.filters} onFilters={filters => {go(activityHref(filters), {replace: true})}} /></div></div>
     case 'notifications': return <div className="page" ref={page}><div className="page-inner"><Notifications selectedID={route.id} onSelect={id => {go(`/notifications/${id}`, {replace: route.id !== undefined})}} onOpen={openElsewhere} onOpenSettings={() => {go('/settings#push')}} /></div></div>
-    case 'feeds': return <div className="page" ref={page}><div className="page-inner"><Suspense fallback={<PageSkeleton />}><div className="page-header"><h2>Manage feeds</h2></div><FeedsScreen onChanged={refreshResources} /></Suspense></div></div>
+    case 'feeds': return <div className="page" ref={page}><div className="page-inner"><Suspense fallback={<PageSkeleton />}><div className="page-header"><h2>Manage feeds</h2></div><FeedsScreen onChanged={refreshResources} prefill={subscribePrefill} onPrefillApplied={consumeSubscribePrefill} /></Suspense></div></div>
     case 'settings': return <div className="page" ref={page}><div className="page-inner wide"><Suspense fallback={<PageSkeleton />}><SettingsScreen device={route.device} settings={settings} onSaved={savedSettings} /></Suspense></div></div>
     case 'not-found': return <div className="page" ref={page}><div className="page-inner"><div className="empty-state"><h2 tabIndex={-1}>There is nothing at this address</h2><p>The link may be mistyped, or the page moved.</p><p><Link to="/today">Go to Today</Link></p></div></div></div>
     }
@@ -634,7 +649,77 @@ function Session({onLogout}: {onLogout: () => void}) {
     <Palette ref={palette} commands={commands} shortcuts={shortcuts} triggers={false} />
     <ToastRegion toast={toast} onDismiss={dismissToast} />
     <ContextMenu request={menu} onClose={closeMenu} onError={message => notify(message)} />
+    {folderDialog && <FolderDialog state={folderDialog} onClose={() => setFolderDialog(null)} onSaved={note => {refreshResources(); notify(note)}} />}
   </div>
+}
+
+// Rename and new-subfolder actions from a folder's context menu. The dialog
+// is modal, labelled and keeps its own error so a failed save leaves the
+// folder untouched and says why without dismissing the form.
+function FolderDialog({state, onClose, onSaved}: {state: FolderDialogState; onClose: () => void; onSaved: (note: string) => void}) {
+  const node = useRef<HTMLDialogElement>(null)
+  const input = useRef<HTMLInputElement>(null)
+  const opener = useRef<HTMLElement | null>(null)
+  const ids = useId()
+  const [name, setName] = useState(state.kind === 'rename' ? state.name : '')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const errorID = `${ids}-folder-error`
+
+  useEffect(() => {
+    const dialog = node.current
+    if (!dialog) return
+    opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    if (!dialog.open) dialog.showModal()
+    input.current?.focus()
+    input.current?.select()
+  }, [])
+
+  function closed() {
+    const target = opener.current
+    if (target?.isConnected) target.focus({preventScroll: true})
+    onClose()
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const next = name.trim()
+    if (!next) {
+      setError('Give the folder a name.')
+      input.current?.focus()
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      if (state.kind === 'rename') await renameFolder(state.id, next)
+      else await createSubfolder(next, state.id)
+      node.current?.close()
+      onSaved(state.kind === 'rename' ? 'Folder renamed.' : 'Subfolder created.')
+    } catch (cause) {
+      setError(cause instanceof Error && cause.message ? cause.message : 'The change did not go through.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const rename = state.kind === 'rename'
+  return <dialog ref={node} className="folder-dialog" aria-labelledby={`${ids}-folder-title`} onClose={closed} onClick={event => {if (event.target === node.current) node.current?.close()}}>
+    <form onSubmit={submit}>
+      <h3 id={`${ids}-folder-title`}>{rename ? 'Rename folder' : 'New subfolder'}</h3>
+      {!rename && <p className="muted">Inside {state.parent}.</p>}
+      <label htmlFor={`${ids}-folder-name`}>Folder name</label>
+      <input id={`${ids}-folder-name`} ref={input} value={name} autoComplete="off" required
+        onChange={event => { setName(event.target.value); if (error) setError('') }}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? errorID : undefined} />
+      {error && <p id={errorID} role="alert">{error}</p>}
+      <p className="button-row">
+        <button type="button" onClick={() => node.current?.close()}>Cancel</button>
+        <button type="submit" className="primary" disabled={busy}>{rename ? 'Save' : 'Create'}</button>
+      </p>
+    </form>
+  </dialog>
 }
 
 function ToastRegion({toast, onDismiss}: {toast: Toast | null; onDismiss: () => void}) {

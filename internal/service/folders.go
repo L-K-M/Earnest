@@ -46,6 +46,15 @@ func (s *Service) CreateFolder(ctx context.Context, a Actor, name, opID string) 
 	return s.writeFolder(ctx, a, 0, name, opID, folderCreate, nil)
 }
 
+// CreateSubfolder creates and parents a folder in one transaction. An invalid
+// or concurrently deleted parent cannot leave an unintended folder at root.
+func (s *Service) CreateSubfolder(ctx context.Context, a Actor, parentID int64, name, opID string) (Folder, error) {
+	if parentID <= 0 {
+		return Folder{}, ErrInvalid
+	}
+	return s.writeFolder(ctx, a, 0, name, opID, folderCreate, &parentID)
+}
+
 // RenameFolder changes one active folder's name.
 func (s *Service) RenameFolder(ctx context.Context, a Actor, id int64, name, opID string) (Folder, error) {
 	if id <= 0 {
@@ -134,7 +143,10 @@ func (s *Service) writeFolder(ctx context.Context, a Actor, id int64, name, opID
 		}
 		switch method {
 		case folderCreate:
-			if err := tx.QueryRow(ctx, "INSERT INTO folders(user_id,name,rev) VALUES($1,$2,$3) RETURNING id", a.UserID, name, rev).Scan(&out.ID); err != nil {
+			if parentID != nil {
+				out.ParentID = *parentID
+			}
+			if err := tx.QueryRow(ctx, "INSERT INTO folders(user_id,name,rev,parent_id) VALUES($1,$2,$3,NULLIF($4,0)) RETURNING id", a.UserID, name, rev, out.ParentID).Scan(&out.ID); err != nil {
 				return domainError(err)
 			}
 			out.Name = name

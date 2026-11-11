@@ -104,6 +104,27 @@ func TestContentStyleHashMatchesCSS(t *testing.T) {
 	}
 }
 
+func TestContentCanvasTheme(t *testing.T) {
+	for _, tc := range []struct{ theme, css string }{
+		{"light", "html{color-scheme:light;background:#fff;color:#202020}"},
+		{"dark", "html{color-scheme:dark;background:#242424;color:#eee}"},
+		{"black", "html{color-scheme:dark;background:#000;color:#fff}"},
+		{"eink", "html{color-scheme:light;background:#fff;color:#000}"},
+	} {
+		t.Run(tc.theme, func(t *testing.T) {
+			if body := newContentRecorder(t, "&theme="+tc.theme).Body.String(); !strings.Contains(body, tc.css) {
+				t.Fatalf("article canvas missing %q", tc.css)
+			}
+			w := httptest.NewRecorder()
+			c := &Content{}
+			c.notice(w, httptest.NewRequest(http.MethodGet, "/content/1?theme="+tc.theme, nil), http.StatusGone, "Expired", "Reopen the article.")
+			if !strings.Contains(w.Body.String(), tc.css) {
+				t.Fatalf("notice canvas missing %q", tc.css)
+			}
+		})
+	}
+}
+
 func TestContentDarkThemeStyles(t *testing.T) {
 	w := newContentRecorder(t, "&theme=dark")
 	body := w.Body.String()

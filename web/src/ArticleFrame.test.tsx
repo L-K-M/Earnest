@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import {afterEach, describe, expect, it, vi} from 'vitest'
-import {act, cleanup, render} from '@testing-library/react'
+import {act, cleanup, fireEvent, render} from '@testing-library/react'
 import {ArticleFrame, frameMessage, scrollMove} from './ArticleFrame'
 
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
@@ -55,6 +55,22 @@ function post(source: MessageEventSource | null, data: unknown) {
 }
 
 describe('ArticleFrame', () => {
+  it('hides the blank canvas until the requested article has rendered', () => {
+    const {view, frame, nonce} = mount()
+    expect(frame.style.visibility).toBe('hidden')
+    post(frame.contentWindow, {nonce: 'stale', earnest: 'height', height: 400})
+    expect(frame.style.visibility).toBe('hidden')
+    post(frame.contentWindow, {nonce, earnest: 'height', height: 400})
+    expect(frame.style.visibility).toBe('visible')
+    view.rerender(<div className="reader-scroll"><ArticleFrame src="https://content.test/content/2" /></div>)
+    const next = view.container.querySelector('iframe')!
+    expect(next.style.visibility).toBe('hidden')
+    fireEvent.load(frame)
+    expect(next.style.visibility).toBe('hidden')
+    fireEvent.load(next)
+    expect(next.style.visibility).toBe('visible')
+  })
+
   it('runs the article page script in an opaque-origin sandbox', () => {
     const {frame, nonce} = mount()
     expect(frame.getAttribute('sandbox')).toBe('allow-scripts allow-popups allow-popups-to-escape-sandbox')

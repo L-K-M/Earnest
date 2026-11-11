@@ -29,14 +29,15 @@ const defaultTimeout = 30 * time.Second
 type Purpose string
 
 const (
-	Feed      Purpose = "feed"
-	Discovery Purpose = "discovery"
-	Extract   Purpose = "extract"
-	Favicon   Purpose = "favicon"
-	Image     Purpose = "image"
-	Push      Purpose = "push"
-	Webhook   Purpose = "webhook"
-	LLM       Purpose = "llm"
+	Feed        Purpose = "feed"
+	Discovery   Purpose = "discovery"
+	Extract     Purpose = "extract"
+	Favicon     Purpose = "favicon"
+	Image       Purpose = "image"
+	Push        Purpose = "push"
+	Webhook     Purpose = "webhook"
+	LLM         Purpose = "llm"
+	Integration Purpose = "integration"
 )
 
 type RedirectPolicy uint8
@@ -165,7 +166,7 @@ func (c *Client) Do(request *http.Request, p Policy) (*Result, error) {
 		return nil, fmt.Errorf("missing request or URL")
 	}
 	switch p.Purpose {
-	case Feed, Discovery, Extract, Favicon, Image, Push, Webhook, LLM:
+	case Feed, Discovery, Extract, Favicon, Image, Push, Webhook, LLM, Integration:
 	default:
 		return nil, fmt.Errorf("invalid purpose")
 	}
@@ -175,8 +176,8 @@ func (c *Client) Do(request *http.Request, p Policy) (*Result, error) {
 	if p.Redirect != RedirectFollow && p.Redirect != RedirectNone {
 		return nil, fmt.Errorf("invalid redirect policy")
 	}
-	if (p.Purpose == Push || p.Purpose == Webhook) && p.Redirect != RedirectNone {
-		return nil, fmt.Errorf("push and webhook redirects must be disabled")
+	if (p.Purpose == Push || p.Purpose == Webhook || p.Purpose == Integration) && p.Redirect != RedirectNone {
+		return nil, fmt.Errorf("push, webhook and integration redirects must be disabled")
 	}
 	if p.MaxBodySize < 0 || p.MaxBodySize == 1<<63-1 || p.Timeout < 0 {
 		return nil, fmt.Errorf("negative limit")

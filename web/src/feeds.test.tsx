@@ -4,8 +4,8 @@ import {act, cleanup, fireEvent, render, screen, waitFor} from '@testing-library
 import {request} from './request'
 import {Feeds} from './FeedSettings'
 import {
-  defaultReadingSettings, explainHealth, groupByFolder, healthPending, isFirehose,
-  normalizeFeedURLInput, parseCredentialHeaders, settingsBody, summarizeImport, summarizeKeptImport,
+  createSubfolder, defaultReadingSettings, explainHealth, groupByFolder, healthPending, isFirehose,
+  normalizeFeedURLInput, parseCredentialHeaders, renameFolder, settingsBody, summarizeImport, summarizeKeptImport,
   type Folder, type KeptImportReport, type OPMLResult, type Subscription,
 } from './feeds'
 
@@ -126,6 +126,26 @@ describe('feed rules', () => {
   it('groups subscriptions by folder with unfiled last', () => {
     const groups = groupByFolder([sub({folder_id: 3}), sub({id: 2}), sub({id: 4, deleted: true})], [folder()])
     expect(groups.map(group => [group.folder?.name ?? 'none', group.subscriptions.map(s => s.id)])).toEqual([['Tech', [1]], ['none', [2]]])
+  })
+
+  it('renames a folder by name alone, preserving its parent', async () => {
+    api({'/v1/subscriptions': [], '/v1/folders': [folder({id: 3, parent_id: 9})], '/v1/mutes': []})
+    await renameFolder(3, 'Renamed')
+    expect(bodyOf(calls('/v1/folders/3', 'PATCH')[0])).toEqual({name: 'Renamed', op_id: expect.any(String)})
+  })
+
+  it('creates a subfolder under its parent', async () => {
+    api({
+      '/v1/folders': (options?: RequestInit) => {
+        if (options?.method === 'POST') return folder({id: 7, name: 'Child', parent_id: 3})
+        return [folder()]
+      },
+      '/v1/subscriptions': [],
+      '/v1/mutes': [],
+    })
+    await createSubfolder('Child', 3)
+    expect(bodyOf(calls('/v1/folders', 'POST')[0])).toEqual({name: 'Child', parent_id: 3, op_id: expect.any(String)})
+    expect(calls('/v1/folders/7', 'PATCH')).toHaveLength(0)
   })
 
   it('builds the documented settings body', () => {
@@ -406,6 +426,32 @@ describe('Feeds', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Refresh now'}))
     await waitFor(() => expect((screen.getByRole('button', {name: 'Refresh now'}) as HTMLButtonElement).disabled).toBe(false))
     expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('My draft')
+  })
+
+  it('applies a folder preselection that arrives after the form mounts', async () => {
+    api({'/v1/subscriptions': [], '/v1/folders': [folder()], '/v1/mutes': []})
+    const view = render(<Feeds onChanged={() => {}} />)
+    expect((await view.findByLabelText('Folder') as HTMLSelectElement).value).toBe('0')
+    view.rerender(<Feeds onChanged={() => {}} prefill={{folderID: 3, token: 1}} />)
+    await waitFor(() => expect((view.getByLabelText('Folder') as HTMLSelectElement).value).toBe('3'))
+  })
+
+  it('keeps a folder preselection through async folder discovery and submits it', async () => {
+    let finishFolders!: (folders: Folder[]) => void
+    api({
+      '/v1/subscriptions': (options?: RequestInit) => options?.method === 'POST' ? sub({id: 2, folder_id: 3}) : [],
+      '/v1/folders': () => new Promise<Folder[]>(resolve => { finishFolders = resolve }),
+      '/v1/mutes': [],
+    })
+    render(<Feeds onChanged={() => {}} prefill={{folderID: 3, token: 1}} />)
+    // The subscribe form waits for the discovered folder list before mounting.
+    expect(screen.queryByLabelText('Feed or site URL')).toBeNull()
+    await act(async () => { finishFolders([folder()]) })
+    expect((await screen.findByLabelText('Folder') as HTMLSelectElement).value).toBe('3')
+    fireEvent.change(screen.getByLabelText('Feed or site URL'), {target: {value: 'https://example.com/feed'}})
+    fireEvent.click(screen.getByRole('button', {name: 'Subscribe'}))
+    await waitFor(() => expect(calls('/v1/subscriptions', 'POST')).toHaveLength(1))
+    expect(bodyOf(calls('/v1/subscriptions', 'POST')[0])).toMatchObject({url: 'https://example.com/feed', folder_id: 3})
   })
 
   it('revokes the OPML download URL only after the download starts', async () => {

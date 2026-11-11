@@ -311,6 +311,7 @@ dd {margin: 0}
 .tool.back:hover {background: var(--hover)}
 .tool-divider {flex: none; width: 1px; height: 1.25rem; margin: 0 var(--s1); background: var(--line)}
 .tool-spacer {flex: 1}
+.integration-mark {display: inline-grid; place-items: center; width: 1.15rem; height: 1.15rem; border: 1px solid currentColor; border-radius: 3px; font: 700 .75rem/1 var(--font-ui)}
 @container reader (max-width: 62rem) {
   .tool.secondary .label {position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap}
   .tool.secondary {padding: 0; width: var(--control); justify-content: center}
@@ -329,6 +330,8 @@ dd {margin: 0}
 .reader[data-font=dyslexic] .article-header {font-family: Verdana, Arial, sans-serif}
 .article-header h2 {margin: 0 0 var(--s2); font-family: var(--font-read); font-weight: 600; font-size: clamp(1.45rem, 1.1rem + 1.6cqi, 2.1rem); line-height: 1.2; letter-spacing: -.01em; overflow-wrap: anywhere}
 .article-meta {margin: 0; font: var(--step--1)/1.5 var(--font-ui); color: var(--ink-muted)}
+.article-header h2 a {color: inherit; text-decoration: none}
+.article-header h2 a:hover {text-decoration: underline}
 .reader-scroll > section, .article-loading {max-width: calc(var(--measure, 66) * 1ch + 2rem); margin: var(--s3) auto 0; padding: 0 1rem; font-size: 1.1rem}
 .reader-scroll > section > *, .article-loading > * {font-size: var(--step-0)}
 .article-body iframe {display: block; width: 100%; height: 100cqb; border: 0; background: var(--surface)}
