@@ -150,6 +150,11 @@ type app struct {
 // prints failures itself so callers only decide the code.
 func Run(args []string, stdout, stderr io.Writer) int {
 	args, jsonOut := extractJSONFlag(args)
+	rawOPML := len(args) >= 2 && args[0] == "feeds" && args[1] == "export"
+	if !jsonOut && !rawOPML {
+		stdout = humanTextWriter{out: stdout}
+	}
+	stderr = humanTextWriter{out: stderr}
 	if len(args) == 0 {
 		printUsage(stderr)
 		return exitUsage
