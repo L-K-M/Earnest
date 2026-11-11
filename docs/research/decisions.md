@@ -44,6 +44,8 @@ Taken by you on 2026-11-07, while triaging the review PRs.
 - **Context menus also offer bulk mark-read** (2026-11-09, at your request). Today, a folder or a feed in the sidebar has "Mark all as read", and an article row has "Mark read up to here". A sidebar list may not be open, so "Mark all as read" marks through the newest article the browser knows of (synced, or loaded in any list) rather than the newest loaded one; the confirmation says so, and later arrivals stay unread. It is still not a toolbar button.
 - **The article frame runs one script of Earnest's own** (2026-11-09, at your request). A frame sized to the pane gave the reader two scrollbars, and Space could not scroll the article. The content page now carries a short script, admitted by its hash in the page's CSP, that reports the article's height and forwards scrolling keys and single-key shortcuts to the app origin only. The frame's sandbox adds `allow-scripts` but never `allow-same-origin`, so the page keeps an opaque origin, and the sanitiser and CSP still stop every script the article itself carries. This relaxes the [tech-stack](tech-stack.md) rule that the frame allows only popups.
 
+- **Web lists start with the newest articles** (2026-11-11, at your request). Opening a list loads the highest ingest sequences first, then pages toward older entries. Saved reading positions still sync but never filter or delay the list. Edition retains its feed grouping, with newest entries first within each feed. Read/unread state is unchanged by opening a list.
+
 ## Fetching
 
 Taken on 2026-11-09, at your request, while fixing a feed that stopped the server.
