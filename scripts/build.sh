@@ -114,6 +114,7 @@ record() { RESULTS+=("$1"); }   # "binary: built -> …" | "mac: skipped (…)" 
 # is what the summary points at — one folder with everything this run built.
 DIST="$ROOT/dist"
 STAGED=0
+STAGED_APP=0
 stage() {
   local src="$1" name="${2:-$(basename "$1")}"
   mkdir -p "$DIST"
@@ -144,6 +145,30 @@ skip_or_fail() {
   return 0
 }
 
+# Copy completely before replacing embedded assets. Keep the old directory
+# until publication succeeds so a copy or rename failure leaves it usable.
+stage_web() {
+  local tmp
+  tmp="$(mktemp -d internal/web/.dist-stage.XXXXXX)" || return 1
+  if ! mkdir "$tmp/next" || ! cp -R web/dist/. "$tmp/next/"; then
+    rm -rf "$tmp"
+    return 1
+  fi
+  if [[ -e internal/web/dist ]] && ! mv internal/web/dist "$tmp/previous"; then
+    rm -rf "$tmp"
+    return 1
+  fi
+  if ! mv "$tmp/next" internal/web/dist; then
+    if [[ -e "$tmp/previous" ]] && ! mv "$tmp/previous" internal/web/dist; then
+      echo "!! web: could not restore previous assets; recover them from $tmp/previous" >&2
+      return 1
+    fi
+    rm -rf "$tmp"
+    return 1
+  fi
+  rm -rf "$tmp"
+}
+
 # ---------------------------------------------------------------------------
 build_web() {
   echo "== web (web client, embedded by binary and docker) =="
@@ -154,7 +179,7 @@ build_web() {
       echo "!! web: pnpm build produced no web/dist" >&2
       record "web: FAILED (no dist output)"; return 1
     fi
-    if rm -rf internal/web/dist && mkdir -p internal/web/dist && cp -R web/dist/. internal/web/dist/; then
+    if stage_web; then
       record "web: built -> internal/web/dist"
     else
       echo "!! web: failed to stage client into internal/web/dist" >&2
@@ -231,6 +256,7 @@ build_mac() {
     app="$dd/Build/Products/$config/Earnest.app"
     if [[ -d "$app" ]] && stage "$app" "Earnest.app"; then
       record "mac: built ($config) -> dist/Earnest.app"
+      STAGED_APP=1
     else
       echo "!! mac: product not found to stage" >&2
       record "mac: FAILED ($config — product not found to stage)"; return 1
@@ -347,7 +373,7 @@ elif [[ "$STAGED" -gt 0 ]]; then
   if [[ "$(uname -s)" == "Darwin" ]]; then
     # Highlight the app when one was staged — dist/ also holds the macos/
     # DerivedData intermediates, which are not deliverables.
-    if [[ -d "$DIST/Earnest.app" ]]; then open -R "$DIST/Earnest.app"; else open "$DIST"; fi
+    if [[ "$STAGED_APP" -eq 1 ]]; then open -R "$DIST/Earnest.app"; else open "$DIST"; fi
   fi
 fi
 
