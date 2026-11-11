@@ -16,7 +16,7 @@ class Observer {
   observe(element: Element) { observed.push(element) }
   disconnect() {}
 }
-const entries = [1,2,3].map(id => ({id,seq:id,title:`Article ${id}`,blurb:'A cached line',subscription_id:1,deleted:false,state:{principal:1,entry_id:id,state_rev:0,seen:{value:'unseen',rev:0},shelf:{value:'none',rev:0},kept:{value:false,rev:0}}})) as Entry[]
+const entries = [1,2,3].map(id => ({id,seq:4-id,title:`Article ${id}`,blurb:'A cached line',subscription_id:1,deleted:false,state:{principal:1,entry_id:id,state_rev:0,seen:{value:'unseen',rev:0},shelf:{value:'none',rev:0},kept:{value:false,rev:0}}})) as Entry[]
 function withShelf(entry: Entry, value: 'none' | 'later' | 'done'): Entry {
   return {...entry, state: {...entry.state, shelf: {...entry.state.shelf, value}}}
 }
@@ -139,7 +139,7 @@ describe('river interactions', () => {
     actions.state = () => current
     await screen.findByText('Article 1')
     fireEvent.click(screen.getByText('Article 1'))
-    await waitFor(() => expect(positionWrites()).toEqual([1]), {timeout: 1500})
+    await waitFor(() => expect(positionWrites()).toEqual([3]), {timeout: 1500})
     expect(write).not.toHaveBeenCalled()
     current = {...current, seen: {...current.seen, value: 'unseen'}}
     fireEvent.click(screen.getByText('Article 1'))
@@ -191,14 +191,15 @@ describe('river interactions', () => {
     await waitFor(()=>expect(act).toHaveBeenCalledWith(entries[1],'seen','seen','passive'),{timeout:1500})
   })
   it('never regresses the resume position when an earlier row becomes due later', async () => {
-    const {act}=mount()
-    await screen.findByText('Article 2')
-    fireEvent.click(screen.getByText('Article 2'))
-    await waitFor(()=>expect(positionWrites()).toEqual([2]),{timeout:1500})
-    // The earlier row becomes due only now, after seq 2 was already saved.
+    const {act}=mount(true,'disabled',entries[1])
+    await screen.findByText('Article 1')
+    fireEvent.click(screen.getByText('Article 1'))
+    await waitFor(()=>expect(positionWrites()).toEqual([3]),{timeout:1500})
+    // Reading down the newest-first list must not move the shared high-water
+    // position backwards when the older row becomes due.
     fireEvent.keyDown(document.body,{key:'j'})
-    await waitFor(()=>expect(act).toHaveBeenCalledWith(entries[0],'seen','seen','passive'),{timeout:1500})
-    expect(positionWrites()).toEqual([2])
+    await waitFor(()=>expect(act).toHaveBeenCalledWith(entries[1],'seen','seen','passive'),{timeout:1500})
+    expect(positionWrites()).toEqual([3])
   })
   it('backs off before retrying a failed position write', async () => {
     mount()
@@ -212,10 +213,10 @@ describe('river interactions', () => {
       return path === '/v1/pipeline' ? {blurb:'disabled'} : path.startsWith('/v1/positions') ? {seq:0} : {entries}
     })
     scrollPast(2)
-    await waitFor(()=>expect(positionWrites()).toEqual([2]),{timeout:1500})
+    await waitFor(()=>expect(positionWrites()).toEqual([3]),{timeout:1500})
     await new Promise(resolve => window.setTimeout(resolve, 700))
-    expect(positionWrites()).toEqual([2])
-    await waitFor(()=>expect(positionWrites()).toEqual([2,2]),{timeout:3000})
+    expect(positionWrites()).toEqual([3])
+    await waitFor(()=>expect(positionWrites()).toEqual([3,3]),{timeout:3000})
   })
   it('keeps rows skipped by a jump unseen', async () => {
     virtualItems.items=[1,2]
@@ -230,7 +231,7 @@ describe('river interactions', () => {
     await screen.findByText('Article 1')
     const header=container.querySelector('.river header') as HTMLElement
     expect(within(header).getByText('Refresh articles')).toBeTruthy()
-    expect(within(header).getByText('Earlier articles')).toBeTruthy()
+    expect(within(header).getByText('One per story')).toBeTruthy()
   })
   it('labels shelf states in title case', async () => {
     const done=withShelf(entries[0],'done')
@@ -321,25 +322,58 @@ it('reports the newest loaded entry for the mark-rest command', async () => {
   await waitFor(() => expect(onNewestLoaded).toHaveBeenLastCalledWith(Math.max(...entries.map(entry => entry.seq))))
 })
 
-it('keeps its place when the saved position is read again', async () => {
-  // The offline worker's first install and a tab refocus refetch every query.
-  // By then this list has usually moved the saved position on; restarting
-  // from there would blank the list and drop the open article out of it.
+it('ignores saved positions when loading and refetching articles', async () => {
+  virtualItems.items = [0,1,2]
+  // Sync and a tab refocus may refetch positions. Neither the initial saved
+  // position nor a later one should bound the newest-first article query.
   let seq = 1
   vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {blurb:'disabled'} : path.startsWith('/v1/positions') ? {seq} : {entries})
   const client = new QueryClient({defaultOptions:{queries:{retry:false}}})
   render(<QueryClientProvider client={client}><River view={{kind:'today',title:'Today'}} subscriptions={[]} actions={{act:vi.fn(),state:entry=>entry.state}} selected={null} onSelect={vi.fn()} onOpen={vi.fn()} shortcuts counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>)
   await screen.findByText('Article 1')
   const listRequests = () => vi.mocked(request).mock.calls.map(([path]) => String(path)).filter(path => path.startsWith('/v1/entries?'))
-  expect(listRequests()).toEqual([expect.stringContaining('after_seq=1')])
+  expect(listRequests()).toEqual([expect.stringContaining('direction=backward')])
+  expect(listRequests()[0]).not.toContain('after_seq')
   seq = 2
   await act(async () => { await client.invalidateQueries() })
   // Query results reach components a tick later; give a restart its chance.
   await act(() => new Promise(resolve => setTimeout(resolve, 50)))
   expect(screen.getByText('Article 1')).toBeTruthy()
-  expect(screen.queryByText('Finding your place…')).toBeNull()
+  expect(screen.queryByText('Loading articles…')).toBeNull()
   // The list refetched in place: no third request from the new position.
-  expect(listRequests()).toEqual([expect.stringContaining('after_seq=1'), expect.stringContaining('after_seq=1')])
+  expect(listRequests()).toEqual([expect.stringContaining('direction=backward'), expect.stringContaining('direction=backward')])
+  expect(listRequests().every(path => !path.includes('after_seq'))).toBe(true)
+})
+
+it('loads and marks articles seen while waiting for the shared position', async () => {
+  let finishPosition: ((value: {seq: number}) => void) | undefined
+  const position = new Promise<{seq: number}>(resolve => { finishPosition = resolve })
+  vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {blurb:'disabled'} : path.startsWith('/v1/positions') ? position : {entries})
+  const write = vi.fn().mockResolvedValue(undefined)
+  render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'feed',id:9,title:'Rust'}} subscriptions={[]} actions={{act:write,state:entry=>entry.state}} selected={null} onSelect={vi.fn()} onOpen={vi.fn()} shortcuts counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>)
+  fireEvent.click(await screen.findByText('Article 1'))
+  await waitFor(() => expect(write).toHaveBeenCalledWith(entries[0], 'seen', 'seen', 'passive'), {timeout:1500})
+  expect(positionWrites()).toEqual([])
+  await act(async () => { finishPosition!({seq:10}) })
+  await new Promise(resolve => window.setTimeout(resolve, 700))
+  // The delayed position must not be overwritten with this older article.
+  expect(positionWrites()).toEqual([])
+})
+
+it('fetches newly arrived articles when returning to a cached list', async () => {
+  let rows = entries
+  vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {blurb:'disabled'} : path.startsWith('/v1/positions') ? {seq:99} : {entries:rows})
+  const client = new QueryClient({defaultOptions:{queries:{retry:false}}})
+  const tree = <QueryClientProvider client={client}><River view={{kind:'feed',id:9,title:'Rust'}} subscriptions={[]} actions={{act:vi.fn(),state:entry=>entry.state}} selected={null} onSelect={vi.fn()} onOpen={vi.fn()} shortcuts counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>
+  const first = render(tree)
+  await screen.findByText('Article 1')
+  first.unmount()
+  rows = [{...entries[0], id:4, seq:4, title:'Newest arrival'}, ...entries]
+  render(tree)
+  await screen.findByText('Newest arrival')
+  const queries = vi.mocked(request).mock.calls.map(([path]) => String(path)).filter(path => path.startsWith('/v1/entries?'))
+  expect(queries).toHaveLength(2)
+  expect(queries.every(path => path.includes('direction=backward') && !path.includes('after_seq') && !path.includes('cursor'))).toBe(true)
 })
 
 describe('list navigation', () => {

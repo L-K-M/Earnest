@@ -177,7 +177,7 @@ func (s *Service) importOPMLItem(ctx context.Context, tx pgx.Tx, a Actor, w opml
 		return result, nil
 	}
 	if w.folder {
-		folder, err := s.importFolderTx(ctx, tx, a, w.title)
+		folder, err := s.importFolderTx(ctx, tx, a, w.title, folderID)
 		if err != nil {
 			return result, err
 		}
@@ -186,26 +186,30 @@ func (s *Service) importOPMLItem(ctx context.Context, tx pgx.Tx, a Actor, w opml
 	return result, nil
 }
 
-func (s *Service) importFolderTx(ctx context.Context, tx pgx.Tx, a Actor, name string) (Folder, error) {
+func (s *Service) importFolderTx(ctx context.Context, tx pgx.Tx, a Actor, name string, parentID int64) (Folder, error) {
 	if !validName(name) {
 		return Folder{}, ErrInvalid
 	}
 	var folder Folder
-	err := tx.QueryRow(ctx, "SELECT id,name,rev FROM folders WHERE user_id=$1 AND name=$2 AND deleted_at IS NULL", a.UserID, name).Scan(&folder.ID, &folder.Name, &folder.Rev)
+	err := tx.QueryRow(ctx, "SELECT id,name,rev,COALESCE(parent_id,0) FROM folders WHERE user_id=$1 AND name=$2 AND deleted_at IS NULL", a.UserID, name).Scan(&folder.ID, &folder.Name, &folder.Rev, &folder.ParentID)
 	if err == nil {
 		return folder, nil
 	}
 	if err != pgx.ErrNoRows {
 		return Folder{}, err
 	}
+	if err := ensureFolder(ctx, tx, a.UserID, parentID); err != nil {
+		return Folder{}, err
+	}
 	rev, err := changeRev(ctx, tx, a.UserID)
 	if err != nil {
 		return Folder{}, err
 	}
-	if err := tx.QueryRow(ctx, "INSERT INTO folders(user_id,name,rev) VALUES($1,$2,$3) RETURNING id", a.UserID, name, rev).Scan(&folder.ID); err != nil {
+	if err := tx.QueryRow(ctx, "INSERT INTO folders(user_id,name,rev,parent_id) VALUES($1,$2,$3,NULLIF($4,0)) RETURNING id", a.UserID, name, rev, parentID).Scan(&folder.ID); err != nil {
 		return Folder{}, err
 	}
 	folder.Name = name
+	folder.ParentID = parentID
 	folder.Rev = uint64(rev)
 	return folder, s.emitChange(ctx, tx, a.UserID, rev, syncmodel.FolderUpdated, "folder", folder)
 }
@@ -223,19 +227,33 @@ func (s *Service) ExportOPML(ctx context.Context, a Actor) ([]OPMLOutline, error
 	if err != nil {
 		return nil, err
 	}
-	out := []OPMLOutline{}
-	byFolder := map[int64]int{}
+	children := map[int64][]Folder{}
+	known := map[int64]bool{0: true}
 	for _, folder := range folders {
-		byFolder[folder.ID] = len(out)
-		out = append(out, OPMLOutline{Title: folder.Name, Outlines: []OPMLOutline{}})
+		known[folder.ID] = true
 	}
-	for _, sub := range subscriptions {
-		outline := OPMLOutline{Title: sub.Title, XMLURL: sub.URL, HTMLURL: sub.SiteURL}
-		if i, ok := byFolder[sub.FolderID]; ok {
-			out[i].Outlines = append(out[i].Outlines, outline)
-		} else {
-			out = append(out, outline)
+	for _, folder := range folders {
+		parent := folder.ParentID
+		if !known[parent] {
+			parent = 0
 		}
+		children[parent] = append(children[parent], folder)
 	}
-	return out, nil
+	feeds := map[int64][]OPMLOutline{}
+	for _, sub := range subscriptions {
+		parent := sub.FolderID
+		if !known[parent] {
+			parent = 0
+		}
+		feeds[parent] = append(feeds[parent], OPMLOutline{Title: sub.Title, XMLURL: sub.URL, HTMLURL: sub.SiteURL})
+	}
+	var outlines func(int64) []OPMLOutline
+	outlines = func(parent int64) []OPMLOutline {
+		out := []OPMLOutline{}
+		for _, folder := range children[parent] {
+			out = append(out, OPMLOutline{Title: folder.Name, Outlines: outlines(folder.ID)})
+		}
+		return append(out, feeds[parent]...)
+	}
+	return outlines(0), nil
 }
