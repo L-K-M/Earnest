@@ -1,4 +1,4 @@
-import {Component, lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ComponentType, type MouseEvent as ReactMouseEvent, type ReactNode} from 'react'
+import {Component, lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ComponentType, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode} from 'react'
 import {useQuery, useQueryClient} from '@tanstack/react-query'
 import type {components} from './api.generated'
 import {request, RequestError, setCSRF} from './request'
@@ -23,6 +23,8 @@ import {Brand} from './Brand'
 import {Icon} from './Icon'
 import {Login} from './Login'
 import {READING_VIEWS, Sidebar} from './Sidebar'
+import {ResizeHandle} from './ResizeHandle'
+import {usePaneWidths} from './paneWidths'
 import {currentHref, initializeHistory, Link, navigate, openedFrom, resetLocation, returnTo, useLocation, useScrollRestoration, whenPresent} from './router'
 import {activityHref, parseRoute, routeSection, searchHref, TODAY, viewHref, type Route, type ViewRef} from './routes'
 
@@ -131,6 +133,7 @@ function Session({onLogout}: {onLogout: () => void}) {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const narrow = useMedia('(max-width: 1099px)')
   const compact = useMedia('(max-width: 759px)')
+  const paneWidths = usePaneWidths(narrow)
   const location = useLocation()
   const route = parseRoute(location.pathname, location.search)
   const routeRef = useRef(route)
@@ -573,11 +576,12 @@ function Session({onLogout}: {onLogout: () => void}) {
     if (firstRun) return <div className="page" ref={page}><div className="page-inner onboarding" onChangeCapture={() => setOnboardingStarted(true)} onClickCapture={() => setOnboardingStarted(true)}><Suspense fallback={<PageSkeleton />}><OnboardingScreen onComplete={() => {setOnboarded(true);refreshResources();void queryClient.invalidateQueries({queryKey:['position']});go('/today', {replace: true})}} /></Suspense></div></div>
     switch (route.name) {
     case 'river': return <div className={`panes${reading ? ' reading' : ''}`}>
-      <div className="list-pane" inert={compact && reading}>
+      <div id="article-list" className="list-pane" inert={compact && reading}>
         {resolved.missing
           ? <section className="river"><div className="empty-state"><h2 tabIndex={-1}>This {viewRef.kind} is gone</h2><p>It may have been deleted or unsubscribed on another device.</p><p><Link to="/today">Go to Today</Link></p></div></section>
           : <River since={since} sessionStart={sessionStart} key={`${viewKey(view)}:${listVisit.number}`} onNewestLoaded={seq => setNewestLoaded({key: viewKey(view), seq})} view={view} subscriptions={subs} actions={actions} selected={current} onSelect={setSelected} onOpen={openFromList} onMenu={showArticleMenu} reading={reading} shortcuts={shortcuts} counts={settings.reading_mode === 'unread_counts'} unreadOnly={settings.show_only_unread} summary={summary} />}
       </div>
+      {!compact && <ResizeHandle label="Article list width" controls="article-list" {...paneWidths.list} />}
       <div className="reader-pane">
         {!reading ? <ReaderPlaceholder shortcuts={shortcuts} />
           : openEntry ? <Reader key={openEntry.id} onOpen={entry => openArticle(entry, {mode: 'push'})} entry={openEntry} subscription={subs.find(sub => sub.id === openEntry.subscription_id)} settings={settings} actions={actions} onSettings={savedSettings} onNotify={notify} renderBody={url => <ArticleFrame src={url} />} onClose={closeReader} />
@@ -603,7 +607,7 @@ function Session({onLogout}: {onLogout: () => void}) {
     }
   }
 
-  return <div className={`app${reading ? ' is-reading' : ''}`}>
+  return <div className={`app${reading ? ' is-reading' : ''}`} style={{'--sidebar': `${paneWidths.navigation.value}px`, '--list-width': `${paneWidths.list.value}px`} as CSSProperties}>
     <a className="skip-link" href="#main" onClick={event => {event.preventDefault();document.getElementById('main')?.focus()}}>Skip to content</a>
     {narrow && <header className="topbar">
       <button type="button" className="icon-button" aria-haspopup="dialog" aria-expanded={drawerOpen} onClick={() => drawer.current?.showModal()}><Icon name="menu" /><span className="sr-only">Menu</span></button>
@@ -614,7 +618,7 @@ function Session({onLogout}: {onLogout: () => void}) {
     </header>}
     {narrow
       ? <dialog ref={drawer} className="drawer" aria-label="Navigation" onClose={() => setDrawerOpen(false)} onToggle={event => setDrawerOpen(event.currentTarget.open)} onClick={event => {if (event.target === drawer.current) drawer.current.close()}}>{sidebar}</dialog>
-      : sidebar}
+      : <div id="navigation-pane" className="navigation-pane">{sidebar}<ResizeHandle label="Navigation width" controls="navigation-pane" {...paneWidths.navigation} /></div>}
     <div className="workspace">
       <div className="banners">
         {error && <p role="alert" className="banner problem">{error} <button type="button" className="quiet" onClick={() => setError('')}>Dismiss</button></p>}
