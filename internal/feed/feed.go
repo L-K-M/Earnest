@@ -87,8 +87,8 @@ var DefaultLimits = Limits{
 type ParseOptions struct {
 	// Charset is the encoding label from the HTTP Content-Type header, either
 	// bare ("windows-1252") or the whole header value. It overrides the XML
-	// declaration. Empty auto-detects from the BOM, the declaration and
-	// content sniffing.
+	// declaration. Empty auto-detects from the BOM and XML declaration,
+	// preserves valid UTF-8, then falls back to content sniffing.
 	Charset string
 	// BaseURL is the URL the document was fetched from. Relative links
 	// resolve against xml:base first, then the feed link, then this.

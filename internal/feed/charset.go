@@ -6,15 +6,15 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/net/html/charset"
 )
 
 // decodeToUTF8 converts data to UTF-8. An explicit HTTP charset wins over the
-// XML declaration; without one the WHATWG sniffing rules in x/net/html/charset
-// inspect the BOM, the declaration and finally fall back to windows-1252,
-// which is what browsers do for mislabelled documents. The output is capped
-// because some legacy encodings expand up to four bytes per input byte.
+// BOM and XML declaration. Otherwise valid UTF-8 is preserved, with HTML
+// charset sniffing as a fallback for undeclared legacy encodings. The output
+// is capped because some encodings expand up to four bytes per input byte.
 func decodeToUTF8(data []byte, httpCharset string, maxDecoded int64) ([]byte, error) {
 	r, err := utf8Reader(data, httpCharset)
 	if err != nil {
@@ -31,18 +31,32 @@ func decodeToUTF8(data []byte, httpCharset string, maxDecoded int64) ([]byte, er
 	return neutraliseXMLDeclaration(out), nil
 }
 
-// utf8Reader picks the explicit charset first and falls back to sniffing when
-// the label is unknown, so a bogus header cannot make the parse fail.
+// utf8Reader prefers HTTP, BOM and XML encodings, in that order. Unknown
+// labels fall through so a bogus declaration cannot make the parse fail.
 func utf8Reader(data []byte, httpCharset string) (io.Reader, error) {
-	label := charsetLabel(httpCharset)
-	if label == "" {
-		return charset.NewReader(bytes.NewReader(data), "")
+	r := bytes.NewReader(data)
+	if label := charsetLabel(httpCharset); label != "" {
+		if decoded, err := charset.NewReaderLabel(label, r); err == nil {
+			return decoded, nil
+		}
 	}
-	r, err := charset.NewReaderLabel(label, bytes.NewReader(data))
-	if err == nil {
+	if enc, _, certain := charset.DetermineEncoding(data, ""); certain {
+		// Without an HTTP header, only a BOM makes this result certain.
+		return enc.NewDecoder().Reader(r), nil
+	}
+	if declaration := xmlEncodingAttr.FindSubmatch(data); declaration != nil {
+		quoted := declaration[2]
+		label := string(quoted[1 : len(quoted)-1])
+		if decoded, err := charset.NewReaderLabel(label, r); err == nil {
+			return decoded, nil
+		}
+	}
+	// HTML sniffing only checks 1024 bytes and defaults to windows-1252
+	// when they are all ASCII, corrupting any later Unicode feed text.
+	if utf8.Valid(data) {
 		return r, nil
 	}
-	return charset.NewReader(bytes.NewReader(data), "")
+	return charset.NewReader(r, "")
 }
 
 // charsetLabel extracts the encoding label from a Content-Type charset
@@ -69,7 +83,7 @@ func charsetLabel(contentType string) string {
 // so the already-converted bytes can be declared as UTF-8. Without this the
 // decoder would hand the declaration to CharsetReader and try to re-decode
 // UTF-8 bytes as windows-1252.
-var xmlEncodingAttr = regexp.MustCompile(`(?i)(<\?xml[^>]*?)\s+encoding\s*=\s*(?:"[^"]*"|'[^']*')`)
+var xmlEncodingAttr = regexp.MustCompile(`(?i)^(\s*<\?xml[^>]*?)\s+encoding\s*=\s*("[^"]*"|'[^']*')`)
 
 // neutraliseXMLDeclaration rewrites the declaration's encoding to UTF-8.
 func neutraliseXMLDeclaration(data []byte) []byte {
