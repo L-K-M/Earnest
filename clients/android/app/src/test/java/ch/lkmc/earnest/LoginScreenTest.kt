@@ -37,11 +37,13 @@ class LoginScreenTest {
     private class FakeApi {
         val starts = CopyOnWriteArrayList<String>()
         val polls = CopyOnWriteArrayList<String>()
+        val apiCalls = CopyOnWriteArrayList<Pair<String, String?>>()
         var startCount = 0
         var transportFailure: IOException? = null
         var poll: (Int) -> Pair<Int, String> = { 200 to """{"access_token":"tok","token_type":"Bearer"}""" }
 
         val factory: (String, String?) -> EarnestApi = { server, token ->
+            apiCalls += server to token
             val client = OkHttpClient.Builder().addInterceptor { chain ->
                 val path = chain.request().url.encodedPath
                 when (path) {
@@ -90,6 +92,7 @@ class LoginScreenTest {
         while (fake.polls.size < count && steps < maxSteps) {
             advance(1)
             compose.waitForIdle()
+            // OkHttp completion is not driven by the Compose clock.
             Thread.sleep(20)
             steps += 1
         }
@@ -139,6 +142,18 @@ class LoginScreenTest {
         compose.onNodeWithText("Start device sign in").assertIsEnabled()
     }
 
+    @Test fun messageLessTransportFailureStillExplainsTheReset() {
+        val fake = FakeApi()
+        fake.transportFailure = IOException()
+        compose.setContent { LoginScreen(onLoggedIn = {}, apiFactory = fake.factory) }
+        start(fake)
+
+        advance(1)
+        waitForText("Sign-in failed. Try again.")
+        compose.onNodeWithText(SERVER).assertIsEnabled()
+        compose.onNodeWithText("Start device sign in").assertIsEnabled()
+    }
+
     @Test fun pendingAndSlowDownKeepPollingUntilATerminalFailure() {
         val fake = FakeApi()
         fake.poll = { attempt ->
@@ -164,6 +179,9 @@ class LoginScreenTest {
 
         awaitPolls(fake, 3)
         waitForText("Earnest request failed (400): expired_token")
+        check(fake.apiCalls.count { it.second == null } == 2) {
+            "Start and all polls should use one anonymous client each: ${fake.apiCalls}"
+        }
         compose.onNodeWithText(SERVER).assertIsEnabled()
         compose.onNodeWithText("Start device sign in").assertIsEnabled()
     }

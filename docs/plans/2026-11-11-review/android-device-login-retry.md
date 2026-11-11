@@ -27,6 +27,11 @@ Do not automatically replay unknown token issuance or change auth policy.
 - Verify the failure returns to an enabled form and a second click starts a new
   code, while pending/slow-down stay active. Exercise cancellation where practical.
 - Capture requests using an OkHttp interceptor, not real network/auth accounts.
+- Review follow-ups: check that message-less transport errors still explain the
+  reset and that one authorization reuses its polling client across pending and
+  slow-down responses. Observe those checks fail before changing the paths.
+  Keep client construction inside handled error behavior; do not broaden this
+  into concurrent-start prevention, local expiry or automatic retry policy.
 - Run the focused regression, then core/app unit tests, debug assembly and lint
   with JDK 21 and the installed Android SDK. Do not run another native build
   simultaneously. Merge only after current-head CI and actual review.

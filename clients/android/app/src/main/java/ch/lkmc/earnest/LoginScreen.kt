@@ -65,10 +65,11 @@ internal fun LoginScreen(
     LaunchedEffect(authorization) {
         val current = authorization ?: return@LaunchedEffect
         intervalSeconds = current.interval
+        // Construct within the handled poll path, then reuse its connections.
+        val api by lazy { apiFactory(server, null) }
         while (true) {
             delay(intervalSeconds * 1000)
             try {
-                val api = apiFactory(server, null)
                 val token = api.devicePoll(current.deviceCode)
                 val me = apiFactory(server, token.accessToken).me()
                 SyncAccess.mutex.withLock { Secrets(context).saveSession(server, token.accessToken, me) }
@@ -96,7 +97,7 @@ internal fun LoginScreen(
                 // Composition or effect cancellation is not a login failure.
                 throw failure
             } catch (failure: Exception) {
-                error = failure.message
+                error = failure.message ?: SIGN_IN_FAILED_MESSAGE
                 authorization = null
                 return@LaunchedEffect
             }
@@ -167,7 +168,7 @@ internal fun LoginScreen(
                         } catch (failure: CancellationException) {
                             throw failure
                         } catch (failure: Exception) {
-                            error = failure.message
+                            error = failure.message ?: SIGN_IN_FAILED_MESSAGE
                         }
                     }
                 },
@@ -229,3 +230,4 @@ private fun BrandRibbon(modifier: Modifier = Modifier) {
 }
 
 private const val SLOW_DOWN_STEP_SECONDS = 5L
+private const val SIGN_IN_FAILED_MESSAGE = "Sign-in failed. Try again."
