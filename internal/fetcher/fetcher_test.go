@@ -94,6 +94,32 @@ func TestFetchConditionalAndChanges(t *testing.T) {
 		t.Fatal("identity or content hash wrong")
 	}
 }
+func TestFetchUTF8AfterASCIIPrefix(t *testing.T) {
+	const title = "Let’s Talk About Why all This OT Stuff is Connected"
+	const body = "It’s connected."
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Lobsters declares UTF-8 in XML, but not in its Content-Type.
+		w.Header().Set("Content-Type", "application/rss+xml")
+		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>Lobsters: Newest Comments</title>%s<item><guid>https://lobste.rs/c/example</guid><title>%s</title><description>%s</description></item></channel></rss>`, strings.Repeat(" ", 2048), title, body)
+	}))
+	defer server.Close()
+
+	f, s := testFetcher(t, server)
+	if err := f.Fetch(context.Background(), service.FeedToFetch{FeedID: 1, URL: server.URL}); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.outcomes) != 1 {
+		t.Fatalf("outcomes = %d, want 1", len(s.outcomes))
+	}
+	out := s.outcomes[0]
+	if out.Status != service.FetchOK || len(out.Items) != 1 {
+		t.Fatalf("outcome = %+v", out)
+	}
+	if item := out.Items[0]; item.Title != title || item.ContentText != body {
+		t.Fatalf("title = %q, body = %q; want %q, %q", item.Title, item.ContentText, title, body)
+	}
+}
+
 func TestFetchFailures(t *testing.T) {
 	tests := []struct {
 		name               string

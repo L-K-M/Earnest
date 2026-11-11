@@ -452,8 +452,23 @@ func TestParseEncodings(t *testing.T) {
 			want: "café",
 		},
 		{
+			name: "declared shift-jis",
+			data: []byte("<?xml version=\"1.0\" encoding=\"Shift_JIS\"?><rss version=\"2.0\"><channel><title>\x93\xfa\x96\x7b\x8c\xea</title></channel></rss>"),
+			want: "日本語",
+		},
+		{
+			name: "declared latin1 with utf-8 compatible bytes",
+			data: []byte("<?xml version=\"1.0\" encoding='iso-8859-1'?><rss version=\"2.0\"><channel><title>caf\xc3\xa9</title></channel></rss>"),
+			want: "cafÃ©",
+		},
+		{
 			name: "utf-8 bom",
 			data: append([]byte{0xEF, 0xBB, 0xBF}, []byte("<rss version=\"2.0\"><channel><title>café</title></channel></rss>")...),
+			want: "café",
+		},
+		{
+			name: "bom overrides declaration",
+			data: append([]byte{0xEF, 0xBB, 0xBF}, []byte("<?xml version=\"1.0\" encoding=\"windows-1252\"?><rss version=\"2.0\"><channel><title>café</title></channel></rss>")...),
 			want: "café",
 		},
 		{
@@ -472,6 +487,50 @@ func TestParseEncodings(t *testing.T) {
 			}
 			if feed.Title != tt.want {
 				t.Fatalf("title = %q, want %q", feed.Title, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseUTF8AfterASCIIPrefix(t *testing.T) {
+	t.Parallel()
+
+	// HTML charset sniffing only examines the first 1024 bytes. Real feeds
+	// can have ASCII metadata and entries before their first Unicode text.
+	padding := strings.Repeat(" ", 2048)
+	const title = "Let’s Talk About Why all This OT Stuff is Connected"
+	const author = "Renée"
+	const body = "“Unicode” stays intact 日本語 😀"
+	rss := `<rss version="2.0"><channel><title>Lobsters: Newest Comments</title>` + padding +
+		`<item><title>` + title + `</title><author>` + author + `</author><description>` + body + `</description></item></channel></rss>`
+	tests := []struct {
+		name, doc, charset string
+	}{
+		{"rss without declaration", rss, ""},
+		{"rss with declaration", `<?xml version="1.0" encoding="UTF-8"?>` + rss, "application/rss+xml"},
+		{"rss with unknown charset", rss, "bogus-charset"},
+		{"rss with unknown declaration", `<?xml version="1.0" encoding="unknown"?>` + rss, ""},
+		{"atom", `<feed xmlns="http://www.w3.org/2005/Atom"><title>Feed</title>` + padding +
+			`<entry><title>` + title + `</title><author><name>` + author + `</name></author><summary>` + body + `</summary></entry></feed>`, "application/atom+xml"},
+		{"json feed", `{"version":"https://jsonfeed.org/version/1.1","title":"Feed",` + padding +
+			`"items":[{"id":"1","title":"` + title + `","authors":[{"name":"` + author + `"}],"content_text":"` + body + `"}]}`, "application/feed+json"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			parsed, err := Parse([]byte(tt.doc), ParseOptions{Charset: tt.charset})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(parsed.Items) != 1 {
+				t.Fatalf("items = %d, want 1", len(parsed.Items))
+			}
+			item := parsed.Items[0]
+			if item.Title != title || item.Author != author {
+				t.Errorf("title = %q, author = %q; want %q, %q", item.Title, item.Author, title, author)
+			}
+			if got := htmlText(item.SummaryHTML + item.ContentHTML); got != body {
+				t.Errorf("body = %q, want %q", got, body)
 			}
 		})
 	}

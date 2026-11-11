@@ -221,6 +221,21 @@ func TestParseOPMLCharsetHandling(t *testing.T) {
 	}
 }
 
+func TestParseOPMLUTF8AfterASCIIPrefix(t *testing.T) {
+	t.Parallel()
+
+	const title = "Reader’s feeds 日本語"
+	data := []byte(`<?xml version="1.0" encoding="UTF-8"?><opml><head>` + strings.Repeat(" ", 2048) +
+		`<title>` + title + `</title></head><body><outline text="` + title + `" xmlUrl="https://example.com/rss"/></body></opml>`)
+	doc, err := ParseOPML(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.Title != title || len(doc.Outlines) != 1 || doc.Outlines[0].Title != title {
+		t.Fatalf("OPML text changed: %+v", doc)
+	}
+}
+
 func TestParseOPMLBOMAndUTF8(t *testing.T) {
 	t.Parallel()
 

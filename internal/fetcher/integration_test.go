@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/L-K-M/Earnest/internal/feed"
 	"github.com/L-K-M/Earnest/internal/outbound"
 	"github.com/L-K-M/Earnest/internal/service"
 	"github.com/L-K-M/Earnest/internal/store"
@@ -76,6 +77,69 @@ func persistedClass(t *testing.T, db *store.Store, feed int64) (string, time.Tim
 		t.Fatal(err)
 	}
 	return class, next
+}
+
+func TestFetchCorrectsStoredUTF8(t *testing.T) {
+	template := storetest.NewTemplate(t)
+	db := template.New(t)
+	ctx := context.Background()
+	const title = "Let’s Talk About Why all This OT Stuff is Connected"
+	const text = "It’s connected."
+	doc := `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>Lobsters: Newest Comments</title>` + strings.Repeat(" ", 2048) +
+		`<item><guid>https://lobste.rs/c/example</guid><title>` + title + `</title><description>` + text + `</description></item></channel></rss>`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/rss+xml")
+		fmt.Fprint(w, doc)
+	}))
+	defer server.Close()
+	host, port := serverHostPort(t, server)
+	f, svc := integrationFetcher(t, db, testClient(t, host), port)
+	feedID := insertFeed(t, db, server.URL)
+	claim := service.FeedToFetch{FeedID: feedID, URL: server.URL}
+
+	// Reproduce the old decoder's windows-1252 interpretation in storage.
+	corrupted, err := feed.Parse([]byte(doc), feed.ParseOptions{Charset: "windows-1252"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := f.items(ctx, claim, corrupted.Items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.RecordFetch(ctx, service.FetchOutcome{FeedID: feedID, Status: service.FetchOK, Items: items}); err != nil {
+		t.Fatal(err)
+	}
+	var beforeID, beforeSeq int64
+	var beforeTitle string
+	if err := db.Pool().QueryRow(ctx, "SELECT id,seq,title FROM entries WHERE feed_id=$1", feedID).Scan(&beforeID, &beforeSeq, &beforeTitle); err != nil {
+		t.Fatal(err)
+	}
+	if beforeTitle == title {
+		t.Fatal("seed did not reproduce the corrupted title")
+	}
+
+	if err := f.Fetch(ctx, claim); err != nil {
+		t.Fatal(err)
+	}
+	var afterID, afterSeq int64
+	var afterTitle string
+	var count int
+	if err := db.Pool().QueryRow(ctx, "SELECT count(*) FROM entries WHERE feed_id=$1", feedID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Pool().QueryRow(ctx, "SELECT id,seq,title FROM entries WHERE feed_id=$1", feedID).Scan(&afterID, &afterSeq, &afterTitle); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || afterID != beforeID || afterSeq != beforeSeq || afterTitle != title {
+		t.Fatalf("refresh changed entry identity or failed to correct title: count=%d id=%d seq=%d title=%q", count, afterID, afterSeq, afterTitle)
+	}
+	_, gotText, _, _, err := store.LoadContent(ctx, db.Pool(), afterID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotText != text {
+		t.Fatalf("stored body = %q, want %q", gotText, text)
+	}
 }
 
 func TestFetchOutcomePersisted(t *testing.T) {
