@@ -325,6 +325,7 @@ function Session({onLogout}: {onLogout: () => void}) {
     }
   }
   const actions: ReaderActions = {
+    deleted: sync.deleted,
     state: entry => sync.state(entry),
     act: async (entry, register, value, kind = 'explicit') => {
       const before = sync.state(entry)

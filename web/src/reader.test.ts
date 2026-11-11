@@ -38,6 +38,7 @@ describe('reader rules', () => {
     expect(updated).toEqual([read])
     expect(previous).toEqual([entry])
     expect(retainUnreadEntries(updated, [{...read, deleted: true}], value => value.state)).toEqual([])
+    expect(retainUnreadEntries(updated, [], value => value.state, () => true)).toEqual([])
   })
   it('keeps signed content capabilities while applying preferences', () => {
     const url = new URL(readerURL('https://content.example/content/1?sig=secret', {theme:'system',measure:64,font:'sans'}, true))

@@ -100,7 +100,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   // representatives so retaining rows cannot undo "One per story".
   const [admitted, setAdmitted] = useState<{flat: Entry[]; clustered: Entry[]; groups: ClusterGroup[]}>({flat: [], clustered: [], groups: []})
   const representation = cluster ? 'clustered' : 'flat'
-  const retained = filterUnread ? retainUnreadEntries(admitted[representation], loaded, actions.state) : admitted[representation]
+  const retained = filterUnread ? retainUnreadEntries(admitted[representation], loaded, actions.state, actions.deleted) : admitted[representation]
   const groups = new Map((filterUnread ? admitted.groups : []).map(group => [group.entry.id, group]))
   for (const page of list.data?.pages ?? []) {
     for (const group of page.groups ?? []) groups.set(group.entry.id, group)
@@ -122,7 +122,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   async function reload() {
     const result = await list.refetch()
     if (!result.isSuccess || !filterUnread) return
-    const fresh = retainUnreadEntries([], result.data.pages.flatMap(page => page.entries), actionsRef.current.state)
+    const fresh = retainUnreadEntries([], result.data.pages.flatMap(page => page.entries), actionsRef.current.state, actionsRef.current.deleted)
     setAdmitted({flat: [], clustered: [], groups: result.data.pages.flatMap(page => page.groups ?? []), [representation]: fresh})
   }
   const clusterInfo = new Map(rememberedGroups.map(group => [group.entry.id, group.also_in]))

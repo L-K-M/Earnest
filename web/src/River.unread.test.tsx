@@ -26,15 +26,16 @@ const feed: View = {kind: 'feed', id: 1, title: 'Example feed'}
 function mount(view: View = feed, unreadOnly = true) {
   let rows = [article(1, 'seen'), article(2), article(3, 'unseen', 'done')]
   const states = new Map<number, EntryState>()
+  const deleted = new Set<number>()
   const client = new QueryClient({defaultOptions: {queries: {retry: false}}})
   vi.mocked(request).mockImplementation(async path => path.startsWith('/v1/positions') ? {seq: 0} : {entries: rows})
-  const actions: ReaderActions = {act: vi.fn().mockResolvedValue(undefined), state: entry => states.get(entry.id) ?? entry.state}
+  const actions: ReaderActions = {act: vi.fn().mockResolvedValue(undefined), state: entry => states.get(entry.id) ?? entry.state, deleted: entry => entry.deleted || deleted.has(entry.id)}
   const onOpen = vi.fn()
   function tree(visit = 0, reading = false, selected: Entry | null = null) {
     return <QueryClientProvider client={client}><River key={visit} view={view} subscriptions={[]} actions={actions} selected={selected} onSelect={vi.fn()} onOpen={onOpen} reading={reading} shortcuts counts={false} unreadOnly={unreadOnly} summary={{seen: 0, done: 0, later: 0, kept: 0}} /></QueryClientProvider>
   }
   const rendered = render(tree())
-  return {client, states, actions, onOpen, tree, ...rendered, setRows: (next: Entry[]) => {rows = next}}
+  return {client, states, deleted, actions, onOpen, tree, ...rendered, setRows: (next: Entry[]) => {rows = next}}
 }
 
 describe('unread-only list visits', () => {
@@ -67,6 +68,14 @@ describe('unread-only list visits', () => {
     await act(async () => {await client.invalidateQueries()})
     expect(screen.getByText('Article 2')).toBeTruthy()
     await waitFor(() => expect(screen.getByText('Article 2').closest('a')?.hasAttribute('data-unread')).toBe(false))
+  })
+
+  it('honors sync tombstones without keeping deleted metadata for the visit', async () => {
+    const {deleted, rerender, tree} = mount()
+    await screen.findByText('Article 2')
+    deleted.add(2)
+    rerender(tree())
+    expect(screen.queryByText('Article 2')).toBeNull()
   })
 
   it('prunes newly read articles only after a successful explicit refresh', async () => {

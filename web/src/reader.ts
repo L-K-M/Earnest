@@ -6,6 +6,7 @@ export type Register = 'seen' | 'shelf' | 'kept'
 export type Value = 'seen' | 'unseen' | 'none' | 'later' | 'done' | boolean
 export type View = {kind: 'today' | 'edition' | 'later' | 'kept' | 'done' | 'feed' | 'folder' | 'label'; id?: number; title: string}
 export type ReaderActions = {
+  deleted?: (entry: Entry) => boolean
   state: (entry: Entry) => EntryState
   act: (entry: Entry, register: Register, value: Value, kind?: 'explicit' | 'passive') => Promise<void>
 }
@@ -40,11 +41,12 @@ export function orderEntries(entries: Entry[], view: View, subscriptions: Subscr
 }
 // A visit admits unread rows once. Keep their metadata even if a background
 // river response omits them after a read, so sync cannot move the list under
-// the reader. Only an intentional parent-list reload starts with an empty set.
-export function retainUnreadEntries(previous: Entry[], fresh: Entry[], state: ReaderActions['state']): Entry[] {
-  const admitted = new Map(previous.map(entry => [entry.id, entry]))
+// the reader. Deletions still remove rows immediately; only an intentional
+// parent-list reload clears the read-admission snapshot.
+export function retainUnreadEntries(previous: Entry[], fresh: Entry[], state: ReaderActions['state'], deleted: (entry: Entry) => boolean = entry => entry.deleted): Entry[] {
+  const admitted = new Map(previous.filter(entry => !deleted(entry)).map(entry => [entry.id, entry]))
   for (const entry of fresh) {
-    if (entry.deleted) {
+    if (deleted(entry)) {
       admitted.delete(entry.id)
       continue
     }
