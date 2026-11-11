@@ -1971,7 +1971,6 @@
         },
         "required": [
           "reading_mode",
-          "show_only_unread",
           "today_decay_days",
           "single_key_shortcuts",
           "theme",

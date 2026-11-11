@@ -62,6 +62,31 @@ class ReadingStateTest {
         assertFalse(todayEntries(refreshed).any { it.id == 1L })
     }
 
+    @Test fun unreadVisitRetainsReadRowsAcrossBackgroundReloads() {
+        val initial = state().copy(readerSettings = ReaderSettings(showOnlyUnread = true))
+        val seen = SyncEngine.initialState(1, 1).let { it.copy(seen = it.seen.copy(value = JsonPrimitive("seen"))) }
+        val fresh = initial.copy(states = mapOf(1L to seen), riverEntryIds = initial.riverEntryIds - 1L)
+        val background = fresh.copy(riverEntryIds = initial.riverMembersAfter(fresh))
+        assertTrue(todayEntries(background).any { it.id == 1L })
+        assertFalse(initial.riverMembersAfter(fresh, intentionalVisit = initial.listVisit).contains(1L))
+        // A refresh for an older list cannot prune the current visit.
+        assertTrue(initial.copy(listVisit = 1).riverMembersAfter(fresh, intentionalVisit = 0).contains(1L))
+        assertFalse(initial.riverMembersAfter(fresh.copy(snapshot = fresh.snapshot.copy(cursor = Revision("g2", 0)))).contains(1L))
+    }
+
+    @Test fun unreadVisitRetainsRowsMarkedDoneUntilTheNextVisit() {
+        val initial = state().copy(readerSettings = ReaderSettings(showOnlyUnread = true))
+        val done = SyncEngine.initialState(1, 1).let { it.copy(shelf = it.shelf.copy(value = JsonPrimitive("done"))) }
+        assertTrue(todayEntries(initial.copy(states = mapOf(1L to done))).any { it.id == 1L })
+    }
+
+    @Test fun restoredSettingsIncludeUnreadVisibility() {
+        val initial = state().snapshot
+        val settings = SyncObject("settings", 0, rev = 1, raw = """{"show_only_unread":true}""")
+        val restored = restoredState(SyncEngine(Store(initial.copy(objects = initial.objects + settings))), 1)
+        assertTrue(restored.readerSettings.showOnlyUnread)
+    }
+
     @Test fun editionKeepsPassiveSeenMembersAndDropsShelvedRows() {
         val snapshot = SyncSnapshot(Revision("g1", 0), entries = entries.map { it.copy(subscriptionId = 4) },
             objects = listOf(subscription(4, "week")))

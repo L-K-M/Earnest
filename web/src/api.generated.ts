@@ -1778,7 +1778,7 @@ export interface components {
             reading_mode: string;
             /** Format: int64 */
             rev: number;
-            show_only_unread: boolean;
+            show_only_unread?: boolean;
             single_key_shortcuts: boolean;
             theme: string;
             /** Format: int64 */

@@ -43,6 +43,7 @@ public struct APIReaderOverride: Codable, Sendable, Equatable {
 /// and is read-only for clients.
 public struct APIReaderSettings: Codable, Sendable, Equatable {
     public var readingMode: APIReadingMode
+    public var showOnlyUnread: Bool
     public var todayDecayDays: Int64
     public var singleKeyShortcuts: Bool
     public var theme: APIReaderTheme
@@ -53,6 +54,7 @@ public struct APIReaderSettings: Codable, Sendable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case readingMode = "reading_mode"
+        case showOnlyUnread = "show_only_unread"
         case todayDecayDays = "today_decay_days"
         case singleKeyShortcuts = "single_key_shortcuts"
         case theme, measure, font
@@ -64,6 +66,7 @@ public struct APIReaderSettings: Codable, Sendable, Equatable {
     /// until the first write.
     public init(
         readingMode: APIReadingMode = .river,
+        showOnlyUnread: Bool = false,
         todayDecayDays: Int64 = 2,
         singleKeyShortcuts: Bool = true,
         theme: APIReaderTheme = .system,
@@ -73,6 +76,7 @@ public struct APIReaderSettings: Codable, Sendable, Equatable {
         rev: Int64 = 0
     ) {
         self.readingMode = readingMode
+        self.showOnlyUnread = showOnlyUnread
         self.todayDecayDays = todayDecayDays
         self.singleKeyShortcuts = singleKeyShortcuts
         self.theme = theme
@@ -80,6 +84,21 @@ public struct APIReaderSettings: Codable, Sendable, Equatable {
         self.font = font
         self.feedOverrides = feedOverrides
         self.rev = rev
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            readingMode: try values.decode(APIReadingMode.self, forKey: .readingMode),
+            showOnlyUnread: try values.decodeIfPresent(Bool.self, forKey: .showOnlyUnread) ?? false,
+            todayDecayDays: try values.decode(Int64.self, forKey: .todayDecayDays),
+            singleKeyShortcuts: try values.decode(Bool.self, forKey: .singleKeyShortcuts),
+            theme: try values.decode(APIReaderTheme.self, forKey: .theme),
+            measure: try values.decode(Int64.self, forKey: .measure),
+            font: try values.decode(APIReaderFont.self, forKey: .font),
+            feedOverrides: try values.decode([String: APIReaderOverride].self, forKey: .feedOverrides),
+            rev: try values.decode(Int64.self, forKey: .rev)
+        )
     }
 }
 
@@ -116,6 +135,9 @@ extension APIReaderSettings {
         }
         if let value = object.fields["today_decay_days"]?.int64Value, (1...365).contains(value) {
             settings.todayDecayDays = value
+        }
+        if let value = object.fields["show_only_unread"]?.boolValue {
+            settings.showOnlyUnread = value
         }
         if let value = object.fields["single_key_shortcuts"]?.boolValue {
             settings.singleKeyShortcuts = value

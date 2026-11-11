@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.MapSerializer
@@ -52,6 +53,7 @@ data class UiState(
     val states: Map<Long, State> = emptyMap(),
     val cadences: Map<Long, String> = emptyMap(),
     val riverEntryIds: Set<Long> = initialRiverIds(snapshot, states),
+    val listVisit: Long = 0,
     val accountKey: String? = null,
     val cacheNotice: String? = null,
     val agentChanges: List<Activity> = emptyList(),
@@ -293,7 +295,7 @@ class AppViewModel internal constructor(
                     principalId = restored.principalId,
                     states = restored.states,
                     cadences = restored.cadences,
-                    riverEntryIds = restored.riverEntryIds,
+                    riverEntryIds = previous.riverMembersAfter(restored),
                     agentChanges = changes,
                     sessionAgentChanges = activitySince(changes, sessionStartedAt),
                     agentChangesError = if (cache.agentChangesStale) AGENT_CHANGES_STALE_MESSAGE else null,
@@ -319,8 +321,23 @@ class AppViewModel internal constructor(
         _loggedIn.value = false
     }
 
+    /** Choosing a parent list is deliberate; returning from its article is not. */
+    fun beginListVisit() {
+        _state.update { current -> current.copy(
+            listVisit = current.listVisit + 1,
+            riverEntryIds = if (current.readerSettings.showOnlyUnread) initialRiverIds(current.snapshot, current.states) else current.riverEntryIds,
+        ) }
+    }
+
+    fun reloadList() {
+        val visit = _state.updateAndGet { it.copy(listVisit = it.listVisit + 1) }.listVisit
+        refresh(visit)
+    }
+
     /** Pulls change pages, flushes the outbox and refreshes the cached briefs. */
-    fun refresh() {
+    fun refresh() = refresh(null)
+
+    private fun refresh(intentionalVisit: Long?) {
         viewModelScope.launch(Dispatchers.IO) {
             val (cache, session) = activeAccount("Still signing in; the refresh did not run.") ?: return@launch
             _state.update { current -> current.copy(loading = true, error = null) }
@@ -359,7 +376,7 @@ class AppViewModel internal constructor(
                         principalId = restored.principalId,
                         states = restored.states,
                         cadences = restored.cadences,
-                        riverEntryIds = restored.riverEntryIds,
+                        riverEntryIds = current.riverMembersAfter(restored, intentionalVisit),
                         agentChanges = changes,
                         sessionAgentChanges = activitySince(changes, sessionStartedAt),
                         agentChangesError = changesResult.exceptionOrNull()?.let { failureText("Could not refresh agent changes", it) },

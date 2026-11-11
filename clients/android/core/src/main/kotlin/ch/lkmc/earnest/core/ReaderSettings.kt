@@ -59,6 +59,7 @@ data class ReaderSettings(
     val font: ReaderFont = ReaderFont.SERIF,
     @SerialName("feed_overrides") val feedOverrides: Map<String, ReaderOverride> = emptyMap(),
     val rev: Long = 0,
+    @SerialName("show_only_unread") val showOnlyUnread: Boolean = false,
 )
 
 /** The effective reading view after per-feed inheritance. */
@@ -109,6 +110,7 @@ data class ReaderSettingsBody(
     val font: ReaderFont,
     @SerialName("feed_overrides") val feedOverrides: Map<String, ReaderOverride> = emptyMap(),
     @SerialName("op_id") val opId: String,
+    @SerialName("show_only_unread") val showOnlyUnread: Boolean = false,
 )
 
 /** Server-side ranges from internal/service/settings.go. */

@@ -10,15 +10,25 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import java.time.Instant
 
-/** Session members survive passive seen writes, while explicit shelf actions remove rows. */
+/** Unread-only visits retain admitted rows until intentional parent-list loading. */
 internal fun todayEntries(state: UiState): List<CachedEntry> = sessionEntries(state).filter { state.cadences[it.subscriptionId] != "week" }
 
 internal fun editionEntries(state: UiState): List<CachedEntry> = sessionEntries(state).filter { state.cadences[it.subscriptionId] == "week" }
 
 private fun sessionEntries(state: UiState): List<CachedEntry> = state.snapshot.entries.filter {
     !it.deleted && it.id in state.riverEntryIds &&
-        (state.states[it.id] ?: SyncEngine.initialState(state.principalId, it.id)).shelf.value == JsonPrimitive(SyncEngine.VALUE_NONE)
+        (state.readerSettings.showOnlyUnread ||
+            (state.states[it.id] ?: SyncEngine.initialState(state.principalId, it.id)).shelf.value == JsonPrimitive(SyncEngine.VALUE_NONE))
 }.sortedBy { it.seq }
+
+// A background cache/sync reload must not turn a seen change into removal.
+// An intentional reload is fenced to the visit that requested it; a late
+// response must not prune articles read in a subsequently chosen list.
+internal fun UiState.riverMembersAfter(fresh: UiState, intentionalVisit: Long? = null): Set<Long> {
+    if (!fresh.readerSettings.showOnlyUnread || fresh.snapshot.cursor.generation != snapshot.cursor.generation ||
+        fresh.principalId != principalId || intentionalVisit == listVisit) return fresh.riverEntryIds
+    return riverEntryIds + fresh.riverEntryIds
+}
 
 internal fun restoredState(engine: SyncEngine, principal: Long, now: Instant = Instant.now()): UiState {
     val snapshot = engine.snapshot()

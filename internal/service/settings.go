@@ -74,7 +74,7 @@ type ReaderOverride struct {
 // last write, so a client can order it against settings.updated events.
 type ReaderSettings struct {
 	ReadingMode        ReadingMode               `json:"reading_mode"`
-	ShowOnlyUnread     bool                      `json:"show_only_unread"`
+	ShowOnlyUnread     bool                      `json:"show_only_unread" required:"false"`
 	TodayDecayDays     int                       `json:"today_decay_days"`
 	SingleKeyShortcuts bool                      `json:"single_key_shortcuts"`
 	Theme              ReaderTheme               `json:"theme"`

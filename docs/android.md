@@ -89,6 +89,13 @@ immediately; refresh starts a new membership from the current effective
 state. Cached subscription cadences are restored before a network request,
 so Today and Edition also work on an offline cold launch.
 
+With **Show only unread** enabled in Settings, admitted articles also stay
+through background refreshes and sync, including articles you mark Done or
+Later. Choosing a parent list or successfully pressing Refresh reapplies
+eligibility. Opening and closing an article, rotating the device and foreground
+polling do not start another visit. Saved shelves and search remain unfiltered.
+The preference defaults to off and syncs with your account.
+
 List rows show the feed's icon next to the source line and the article's
 thumbnail at the end of the row, and Feeds rows show the icon before the
 feed name. Earnest stored those copies when the feed and the article
