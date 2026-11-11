@@ -63,8 +63,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   const listRef = useRef<HTMLDivElement>(null)
   const [scrollMargin, setScrollMargin] = useState(0)
   const heading = useRef<HTMLHeadingElement>(null)
-  const seen = useRef(new Set<number>())
-  const pending = useRef(new Set<number>())
+  const pending = useRef(new Map<number, {seenRev: number}>())
   const rendered = useRef(new Map<number, {start: number; size: number}>())
   const passed = useRef(new Set<number>())
   const focusNext = useRef<number | null>(null)
@@ -193,24 +192,32 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     }, 10)
   })
 
-  // The interval drains the queue so passive writes are batched and a failed
-  // write is retried without blocking scrolling.
+  // Deduplicate only outstanding writes. A later open or viewport crossing
+  // must still mark a row seen after an explicit unread, even from another client.
   useEffect(() => {
+    const inFlight = new Set<number>()
     const timer = window.setInterval(() => {
-      const due = [...pending.current].map(id => entriesRef.current.find(entry => entry.id === id)).filter((entry): entry is Entry => entry !== undefined)
-      for (const entry of due) {
-        pending.current.delete(entry.id)
-        if (seen.current.has(entry.id)) continue
-        seen.current.add(entry.id)
-        if (actionsRef.current.state(entry).seen.value !== 'seen') {
-          void actionsRef.current.act(entry, 'seen', 'seen', 'passive').then(() => setError('')).catch(error => {
-            seen.current.delete(entry.id)
-            pending.current.add(entry.id)
-            setError(error instanceof Error ? error.message : 'Could not save reading progress.')
-          })
+      const due = [...pending.current].flatMap(([id, intent]) => {
+        const entry = entriesRef.current.find(entry => entry.id === id)
+        return entry ? [{entry, intent}] : []
+      })
+      for (const {entry, intent} of due) {
+        if (inFlight.has(entry.id)) continue
+        const state = actionsRef.current.state(entry).seen
+        if (state.rev !== intent.seenRev || state.value === 'seen') {
+          pending.current.delete(entry.id)
+          continue
         }
+        inFlight.add(entry.id)
+        void actionsRef.current.act(entry, 'seen', 'seen', 'passive').then(() => {
+          if (pending.current.get(entry.id) === intent) pending.current.delete(entry.id)
+          setError('')
+        }).catch(error => {
+          if (pending.current.get(entry.id) === intent && actionsRef.current.state(entry).seen.rev !== intent.seenRev) pending.current.delete(entry.id)
+          setError(error instanceof Error ? error.message : 'Could not save reading progress.')
+        }).finally(() => inFlight.delete(entry.id))
       }
-      const reached = due.reduce((max, entry) => Math.max(max, entry.seq), targetSeq.current)
+      const reached = due.reduce((max, {entry}) => Math.max(max, entry.seq), targetSeq.current)
       targetSeq.current = reached
       if (reached > resumeSeq.current && pendingSeq.current === null && Date.now() >= retryAfter.current) {
         pendingSeq.current = reached
@@ -228,6 +235,10 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     return () => window.clearInterval(timer)
   }, [key])
 
+  const queueSeen = useCallback((entry: Entry) => {
+    pending.current.set(entry.id, {seenRev: actionsRef.current.state(entry).seen.rev})
+  }, [])
+
   function markScrolledPast() {
     const root = scroller.current
     if (!root) return
@@ -235,14 +246,15 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     for (const [id, row] of rendered.current) {
       if (row.start + row.size > top) continue
       if (!passed.current.delete(id)) continue
-      pending.current.add(id)
+      const entry = entriesRef.current.find(entry => entry.id === id)
+      if (entry) queueSeen(entry)
     }
   }
 
   const open = useCallback((entry: Entry, mode?: OpenMode) => {
-    pending.current.add(entry.id)
+    queueSeen(entry)
     onOpen(entry, mode)
-  }, [onOpen])
+  }, [onOpen, queueSeen])
 
   // A row's menu offers what its shortcuts do. As with "m", a deliberate read
   // or unread replaces the row's queued passive seen.
@@ -263,12 +275,12 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     const target = entries[index]
     if (!target) return
     // Moving the selection past a row is the keyboard form of scrolling past it.
-    if (from >= 0) pending.current.add(entries[from].id)
+    if (from >= 0) queueSeen(entries[from])
     onSelect(target)
     virtual.scrollToIndex(index, {align: 'auto'})
     if (focus) focusNext.current = target.id
     if (reading && from !== index) open(target, 'replace')
-  }, [entries, onSelect, virtual, reading, open])
+  }, [entries, onSelect, virtual, reading, open, queueSeen])
 
   useEffect(() => {
     function keyboard(event: KeyboardEvent) {
