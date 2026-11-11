@@ -27,7 +27,7 @@ function mount(shortcuts=true, blurbStatus="disabled", selected=entries[0], rows
   const actions: ReaderActions = {act,state:entry=>entry.state}
   const onSelect=vi.fn()
   const view=render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'today',title:'Today'}} subscriptions={subscriptions} actions={actions} selected={selected} onSelect={onSelect} onOpen={vi.fn()} shortcuts={shortcuts} counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>)
-  return {act,onSelect,container:view.container}
+  return {act,actions,onSelect,container:view.container}
 }
 function scroller() { return screen.getByLabelText('Article list') }
 function scrollPast(id: number) {
@@ -108,6 +108,55 @@ describe('river interactions', () => {
     await screen.findByText('Article 1')
     fireEvent.click(screen.getByText('Article 1'))
     await waitFor(()=>expect(act).toHaveBeenCalledWith(entries[0],'seen','seen','passive'),{timeout:1500})
+  })
+  it.each(['keyboard', 'reader action', 'remote'])('allows a later open after a settled passive read and %s unread', async source => {
+    const {act: write, actions} = mount()
+    let current = entries[0].state
+    const setSeen = (value: 'seen' | 'unseen') => {
+      current = {...current, state_rev: current.state_rev + 1, seen: {...current.seen, value, rev: current.seen.rev + 1}}
+    }
+    actions.state = () => current
+    write.mockImplementation(async (_entry, register, value) => {
+      if (register === 'seen' && (value === 'seen' || value === 'unseen')) setSeen(value)
+    })
+    const passive = () => write.mock.calls.filter(call => call[3] === 'passive')
+    await screen.findByText('Article 1')
+    fireEvent.click(screen.getByText('Article 1'))
+    await waitFor(() => expect(passive()).toHaveLength(1), {timeout: 1500})
+    if (source === 'keyboard') fireEvent.keyDown(document.body, {key: 'm'})
+    else if (source === 'reader action') await actions.act(entries[0], 'seen', 'unseen')
+    else setSeen('unseen')
+    expect(current.seen.value).toBe('unseen')
+    await new Promise(resolve => window.setTimeout(resolve, 700))
+    expect(passive()).toHaveLength(1)
+    fireEvent.click(screen.getByText('Article 1'))
+    await waitFor(() => expect(passive()).toHaveLength(2), {timeout: 1500})
+    expect(current.seen.value).toBe('seen')
+  })
+  it('does not retain an already-seen row against a later unread and open', async () => {
+    const {act: write, actions} = mount()
+    let current: Entry['state'] = {...entries[0].state, seen: {...entries[0].state.seen, value: 'seen'}}
+    actions.state = () => current
+    await screen.findByText('Article 1')
+    fireEvent.click(screen.getByText('Article 1'))
+    await waitFor(() => expect(positionWrites()).toEqual([1]), {timeout: 1500})
+    expect(write).not.toHaveBeenCalled()
+    current = {...current, seen: {...current.seen, value: 'unseen'}}
+    fireEvent.click(screen.getByText('Article 1'))
+    await waitFor(() => expect(write).toHaveBeenCalledWith(entries[0], 'seen', 'seen', 'passive'), {timeout: 1500})
+  })
+  it('keeps a later open queued while its earlier passive write is outstanding', async () => {
+    const {act: write} = mount()
+    let finish: (() => void) | undefined
+    write.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve }))
+    await screen.findByText('Article 1')
+    fireEvent.click(screen.getByText('Article 1'))
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(1), {timeout: 1500})
+    fireEvent.click(screen.getByText('Article 1'))
+    await new Promise(resolve => window.setTimeout(resolve, 700))
+    expect(write).toHaveBeenCalledTimes(1)
+    await act(async () => { finish!() })
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(2), {timeout: 1500})
   })
   it('marks the row the selection leaves when j moves down', async () => {
     const {act,onSelect}=mount()

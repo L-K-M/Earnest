@@ -63,7 +63,6 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   const listRef = useRef<HTMLDivElement>(null)
   const [scrollMargin, setScrollMargin] = useState(0)
   const heading = useRef<HTMLHeadingElement>(null)
-  const seen = useRef(new Set<number>())
   const pending = useRef(new Set<number>())
   const rendered = useRef(new Map<number, {start: number; size: number}>())
   const passed = useRef(new Set<number>())
@@ -193,21 +192,21 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     }, 10)
   })
 
-  // The interval drains the queue so passive writes are batched and a failed
-  // write is retried without blocking scrolling.
+  // Deduplicate only outstanding writes. A later open or viewport crossing
+  // must still mark a row seen after an explicit unread, even from another client.
   useEffect(() => {
+    const inFlight = new Set<number>()
     const timer = window.setInterval(() => {
       const due = [...pending.current].map(id => entriesRef.current.find(entry => entry.id === id)).filter((entry): entry is Entry => entry !== undefined)
       for (const entry of due) {
+        if (inFlight.has(entry.id)) continue
         pending.current.delete(entry.id)
-        if (seen.current.has(entry.id)) continue
-        seen.current.add(entry.id)
         if (actionsRef.current.state(entry).seen.value !== 'seen') {
+          inFlight.add(entry.id)
           void actionsRef.current.act(entry, 'seen', 'seen', 'passive').then(() => setError('')).catch(error => {
-            seen.current.delete(entry.id)
             pending.current.add(entry.id)
             setError(error instanceof Error ? error.message : 'Could not save reading progress.')
-          })
+          }).finally(() => inFlight.delete(entry.id))
         }
       }
       const reached = due.reduce((max, entry) => Math.max(max, entry.seq), targetSeq.current)
