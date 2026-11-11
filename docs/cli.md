@@ -39,6 +39,11 @@ table; `--json` echoes the server response (or a small composed object for
 `whoami`, `briefing`, a multi-entry `annotate` and `saved-searches show`) with
 no extra text on stdout.
 
+Human-readable output removes terminal control characters while preserving
+newlines, tabs and Unicode text. A feed cannot issue terminal commands through
+its title or stored text. JSON and raw OPML exports keep their original data;
+render them with a suitable viewer rather than treating them as safe terminal text.
+
 Mutations print their result; state batches list every `op_id`. Every mutation
 generates a UUIDv7 `op_id` client-side and retries are safe: the
 server deduplicates per principal, so a repeated command after a lost response

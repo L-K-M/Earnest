@@ -8,12 +8,39 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
 )
 
 const (
 	tableCellLimit = 60
 	compactLimit   = 80
 )
+
+// humanText preserves text layout without letting untrusted text issue
+// terminal commands. Machine formats bypass this rendering boundary.
+func humanText(value string) string {
+	return strings.Map(func(r rune) rune {
+		if r != '\n' && r != '\t' && unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, value)
+}
+
+type humanTextWriter struct{ out io.Writer }
+
+func (w humanTextWriter) Write(p []byte) (int, error) {
+	text := humanText(string(p))
+	n, err := io.WriteString(w.out, text)
+	if err != nil {
+		return 0, err
+	}
+	if n != len(text) {
+		return 0, io.ErrShortWrite
+	}
+	// The whole input was consumed, including controls omitted from its rendering.
+	return len(p), nil
+}
 
 // writeTable renders rows as an aligned plain-text table.
 func writeTable(w io.Writer, header []string, rows [][]string) {
@@ -29,6 +56,7 @@ func tableRows(count int) [][]string { return make([][]string, 0, count) }
 
 // cell sanitises one value for the fixed-width table.
 func cell(value string) string {
+	value = humanText(value)
 	value = strings.ReplaceAll(value, "\t", " ")
 	value = strings.ReplaceAll(value, "\n", " ")
 	return truncate(value, tableCellLimit)

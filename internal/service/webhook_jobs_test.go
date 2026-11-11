@@ -233,8 +233,11 @@ func TestWebhookClassification(t *testing.T) {
 	if r := classifyWebhook(&outbound.Result{Response: &http.Response{StatusCode: 200}}, nil); r.outcome != outcomeDelivered {
 		t.Fatal("2xx")
 	}
-	if r := classifyWebhook(&outbound.Result{Response: &http.Response{StatusCode: 302}}, nil); r.outcome != outcomeDefinite {
-		t.Fatal("3xx must be a definite refusal when redirects are disabled")
+	for code := http.StatusMultipleChoices; code < http.StatusBadRequest; code++ {
+		r := classifyWebhook(&outbound.Result{Response: &http.Response{StatusCode: code}}, nil)
+		if r.outcome != outcomeAmbiguous || r.class != "http_"+strconv.Itoa(code) {
+			t.Fatalf("HTTP %d does not prove the POST was refused: %+v", code, r)
+		}
 	}
 	if r := classifyWebhook(nil, &outbound.Error{Class: outbound.HTTP5xx}); r.outcome != outcomeAmbiguous {
 		t.Fatal("5xx is ambiguous")
