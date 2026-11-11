@@ -62,6 +62,7 @@ export function useReaderSync(identity: {user_id: number; principal_id: number} 
   },[principal,userID,attempt])
   return {
     status,error,
+    deleted:(entry:Entry):boolean => entry.deleted || runtime.current?.isDeleted(BigInt(entry.id)) === true,
     state:(entry:Entry):EntryState => {
       const sync=runtime.current
       if (!sync || !sync.hasEntry(BigInt(entry.id))) return entry.state

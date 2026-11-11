@@ -361,6 +361,7 @@ public final class EarnestAPI: Sendable {
             measure: settings.measure,
             opId: opID,
             readingMode: settings.readingMode.rawValue,
+            showOnlyUnread: settings.showOnlyUnread,
             singleKeyShortcuts: settings.singleKeyShortcuts,
             theme: settings.theme.rawValue,
             todayDecayDays: settings.todayDecayDays

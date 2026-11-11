@@ -90,6 +90,12 @@ decay after the configured number of days (two by default), and Edition entries
 decay after seven days, all measured from first-seen time with inclusive cutoffs.
 Today excludes week-cadence feeds, which appear in Edition.
 
+Enable **Show only unread** in Settings to keep an unread-only list visit
+stable. Articles admitted to Today or Edition stay visible after reading,
+selection changes and background sync. Choosing the parent list again or
+successfully using Refresh reapplies eligibility; opening or closing an
+article does not. Saved shelves and search remain unfiltered.
+
 Bootstrap omits mutes and reader settings. Each online synchronization fetches
 `/v1/mutes` and `/v1/settings` before replaying changes. The identity's sync
 snapshot retains those resources and applies `mute.updated`, `mute.deleted` and
@@ -330,7 +336,8 @@ survives sync updates and is flagged as a conflict rather than replaced. Saving
 needs your verified account and an available server; failures are reported.
 
 Settings cover the reading mode (river or unread counts), Today decay days
-(1-365), single-key shortcuts, and article theme, font and line length
+(1-365), Show only unread (off by default), single-key shortcuts, and article
+theme, font and line length
 (62-72). Numeric fields keep partial input while you type and commit, clamped
 to their range, when you press Return or Tab or leave the field; Escape puts
 the current value back. Their steppers apply at once. Per-feed typography overrides,

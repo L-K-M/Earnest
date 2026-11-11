@@ -127,7 +127,7 @@ private struct ViewCommands: Commands {
         ToolbarCommands()
         CommandGroup(after: .toolbar) {
             Divider()
-            Button("Refresh") { model.scheduleSync() }
+            Button("Refresh") { model.reloadLists() }
                 .keyboardShortcut("r", modifiers: .command)
                 .disabled(!model.loggedIn || model.syncing)
             Divider()

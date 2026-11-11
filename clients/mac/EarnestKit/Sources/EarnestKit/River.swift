@@ -61,6 +61,7 @@ extension SyncObject {
         self.init(kind: .settings, id: 1, rev: value["rev"]?.int64Value ?? 0)
         fields = ["today_decay_days": .integer(days)]
         if let mode = value["reading_mode"]?.stringValue { fields["reading_mode"] = .string(mode) }
+        if let on = value["show_only_unread"]?.boolValue { fields["show_only_unread"] = .bool(on) }
         if let on = value["single_key_shortcuts"]?.boolValue { fields["single_key_shortcuts"] = .bool(on) }
         if let theme = value["theme"]?.stringValue { fields["theme"] = .string(theme) }
         if let measure = value["measure"]?.int64Value { fields["measure"] = .integer(measure) }
@@ -77,6 +78,7 @@ extension SyncObject {
         self.init(kind: .settings, id: 1, rev: value.rev)
         fields = [
             "reading_mode": .string(value.readingMode.rawValue),
+            "show_only_unread": .bool(value.showOnlyUnread),
             "today_decay_days": .integer(value.todayDecayDays),
             "single_key_shortcuts": .bool(value.singleKeyShortcuts),
             "theme": .string(value.theme.rawValue),

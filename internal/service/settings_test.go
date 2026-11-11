@@ -16,6 +16,7 @@ import (
 func readerSettingsInput(op string) ReaderSettingsInput {
 	return ReaderSettingsInput{
 		ReadingMode:        ReadingModeUnreadCounts,
+		ShowOnlyUnread:     new(true),
 		TodayDecayDays:     14,
 		SingleKeyShortcuts: false,
 		Theme:              ReaderThemeEink,
@@ -145,7 +146,7 @@ func TestReaderSettings(t *testing.T) {
 			t.Fatal(err)
 		}
 		if put.ReadingMode != want.ReadingMode || put.TodayDecayDays != 14 || put.Theme != ReaderThemeEink ||
-			put.Measure != 70 || put.Font != ReaderFontDyslexic || put.SingleKeyShortcuts || put.Rev == 0 {
+			put.Measure != 70 || put.Font != ReaderFontDyslexic || put.SingleKeyShortcuts || !put.ShowOnlyUnread || put.Rev == 0 {
 			t.Fatalf("put: %+v", put)
 		}
 		if got := put.FeedOverrides["12"]; got.Theme == nil || *got.Theme != ReaderThemeBlack {
@@ -185,6 +186,26 @@ func TestReaderSettings(t *testing.T) {
 			t.Fatal("no change notification")
 		}
 		coreCheckGapless(t, f.db, f.a.UserID)
+	})
+
+	t.Run("legacy_saves_preserve_unread_preference", func(t *testing.T) {
+		f := newCoreFixture(t, template)
+		ctx := context.Background()
+		if _, err := f.s.PutSettings(ctx, f.a, readerSettingsInput("unread-on")); err != nil {
+			t.Fatal(err)
+		}
+		legacy := readerSettingsInput("legacy-save")
+		legacy.ShowOnlyUnread = nil
+		got, err := f.s.PutSettings(ctx, f.a, legacy)
+		if err != nil || !got.ShowOnlyUnread {
+			t.Fatalf("legacy save cleared unread preference: %+v %v", got, err)
+		}
+		legacy.OpID = "unread-off"
+		legacy.ShowOnlyUnread = new(false)
+		got, err = f.s.PutSettings(ctx, f.a, legacy)
+		if err != nil || got.ShowOnlyUnread {
+			t.Fatalf("explicit false did not clear unread preference: %+v %v", got, err)
+		}
 	})
 
 	t.Run("unrelated_keys_preserved", func(t *testing.T) {

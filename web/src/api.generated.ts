@@ -1786,6 +1786,7 @@ export interface components {
             reading_mode: string;
             /** Format: int64 */
             rev: number;
+            show_only_unread?: boolean;
             single_key_shortcuts: boolean;
             theme: string;
             /** Format: int64 */
@@ -1926,6 +1927,8 @@ export interface components {
             measure: number;
             op_id: string;
             reading_mode: string;
+            /** @description Show only unread articles on intentional list loads; omission preserves the saved preference. */
+            show_only_unread?: boolean;
             single_key_shortcuts: boolean;
             theme: string;
             /** Format: int64 */

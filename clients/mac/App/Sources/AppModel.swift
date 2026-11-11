@@ -391,6 +391,11 @@ struct ReaderPreferencesScope: Equatable {
         }
     }
 
+    func reloadLists() {
+        for window in windows { window.requestListReload() }
+        scheduleSync()
+    }
+
     func scheduleSync() { scheduleSync(delay: 0) }
 
     /// Passive marks coalesce for `delay` so rapid j/k browsing costs one
@@ -412,7 +417,7 @@ struct ReaderPreferencesScope: Equatable {
                 let report = try await coordinator.synchronize()
                 guard !Task.isCancelled, self.session == s, self.loggedIn else { return }
                 if (try self.engine?.snapshot().cursor?.generation) != generation {
-                    for window in self.windows { window.selected = nil }
+                    for window in self.windows { window.resetListAfterRestore() }
                     try self.restoreCachedPresentation()
                 }
                 try self.restoreReaderPreferences()

@@ -511,7 +511,7 @@ struct WindowAccessor: NSViewRepresentable {
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .navigation) {
             Button {
-                model.scheduleSync()
+                model.reloadLists()
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }

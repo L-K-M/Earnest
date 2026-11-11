@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type {ReactNode} from 'react'
+import {useState, type ReactNode} from 'react'
 import {afterEach, beforeEach, expect, it, vi} from 'vitest'
 import {act as reactAct, cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {createRoot} from 'react-dom/client'
@@ -7,15 +7,18 @@ import {request, RequestError} from './request'
 import {defaultSettings} from './Settings'
 import type {Entry, View} from './reader'
 
-const {act, entries} = vi.hoisted(() => {
+const {act, entries, listMounted} = vi.hoisted(() => {
   const state = (shelf = 'none') => ({shelf:{value:shelf}, kept:{value:false}, seen:{value:'unseen'}})
-  return {act:vi.fn().mockResolvedValue(undefined), entries:[4,5].map(id => ({id, title:`Article ${id}`, subscription_id:8, feed_id:42, url:`https://example.test/${id}`, state:state()}))}
+  return {listMounted: vi.fn(), act:vi.fn().mockResolvedValue(undefined), entries:[4,5].map(id => ({id, title:`Article ${id}`, subscription_id:8, feed_id:42, url:`https://example.test/${id}`, state:state()}))}
 })
 vi.mock('react-dom/client',() => ({createRoot:vi.fn()}))
 vi.mock('./request',async original => ({...await original<typeof import('./request')>(), request:vi.fn(), setCSRF:vi.fn()}))
 vi.mock('./syncBridge',() => ({useReaderSync:() => ({state:(value: Entry) => value.state,act,actRange:vi.fn(),retry:vi.fn(),status:'Reading actions synced.',error:''})}))
 vi.mock('./offline/Offline',() => ({OfflineStatus:() => null,useOnline:() => true,registerOffline:vi.fn().mockResolvedValue(undefined),clearOffline:vi.fn().mockResolvedValue(undefined)}))
-vi.mock('./River',() => ({River:({view,onOpen}: {view: View; onOpen: (entry: Entry) => void}) => <section><h2>{view.title} list</h2>{entries.map(entry => <button key={entry.id} onClick={() => onOpen(entry as Entry)}>Open {entry.title}</button>)}</section>}))
+vi.mock('./River',() => ({River: function River({view,onOpen,unreadOnly}: {view: View; onOpen: (entry: Entry) => void; unreadOnly?: boolean}) {
+  useState(() => {listMounted(view); return null})
+  return <section data-unread-only={unreadOnly}><h2>{view.title} list</h2>{entries.map(entry => <button key={entry.id} onClick={() => onOpen(entry as Entry)}>Open {entry.title}</button>)}</section>
+}}))
 vi.mock('./ArticleReader',() => ({Reader:({entry,onClose}: {entry: Entry; onClose: () => void}) => <article><h2>{entry.title}</h2><button onClick={onClose}>Back</button></article>}))
 
 beforeEach(async () => {
@@ -62,6 +65,22 @@ it('opens from the list with a new history entry and goes back to it', async () 
   await waitFor(() => expect(vi.mocked(request).mock.calls.some(([path]) => path === '/v1/entries/5')).toBe(true))
   fireEvent.click(screen.getByRole('button',{name:'Back'}))
   await waitFor(() => expect(location.pathname).toBe('/today'))
+})
+
+it('keeps a list visit while opening and closing articles, but renews it on intentional parent navigation', async () => {
+  const original = vi.mocked(request).getMockImplementation()!
+  vi.mocked(request).mockImplementation(async (path, options) => path === '/v1/settings' ? {...defaultSettings, show_only_unread: true, rev: 1} : original(path, options))
+  await start('/feeds/8')
+  fireEvent.click(await screen.findByRole('button', {name: 'Open Article 4'}, {timeout: 5000}))
+  await screen.findByRole('heading', {name: 'Article 4'})
+  expect(listMounted).toHaveBeenCalledTimes(1)
+  fireEvent.click(screen.getByRole('button', {name: 'Back'}))
+  await waitFor(() => expect(location.pathname).toBe('/feeds/8'))
+  expect(listMounted).toHaveBeenCalledTimes(1)
+  fireEvent.click(screen.getByRole('button', {name: 'Open Article 4'}))
+  await screen.findByRole('heading', {name: 'Article 4'})
+  fireEvent.click(screen.getByRole('link', {name: 'Rust'}))
+  await waitFor(() => expect(listMounted).toHaveBeenCalledTimes(2))
 })
 
 it('explains an article that no longer exists instead of showing a blank pane', async () => {

@@ -13,15 +13,17 @@ import AppKit
 /// which calls rebuildPresentation() on every window when they change, so
 /// a write issued in one window appears in the others after the rebuild.
 @MainActor final class WindowModel: ObservableObject {
-    @Published var section: Section = .today
+    @Published var section: Section = .today {
+        didSet { if oldValue != section { beginListVisit() } }
+    }
     @Published var entries: [APIEntry] = []
     @Published var rows: [EntryRow] = []
     @Published var editionGroups: [EditionGroup] = []
     @Published var selected: Int64? {
         didSet {
             guard oldValue != selected else { return }
-            // The article read before stays in the river only while it is
-            // open; drop it from the list as soon as the selection moves.
+            // Reevaluate the default river's open-article exception. An
+            // unread-only visit instead retains every admitted article.
             if oldValue != nil, (section == .today || section == .edition) { rebuildPresentation() }
             open(selected)
         }
@@ -100,6 +102,9 @@ import AppKit
     // Whether this window's candidates came from the cache or the server's
     // filtered river. Another window's successful fetch must not change it.
     private var cachedPresentation = false
+    private var admittedUnread = Set<Int64>()
+    private var listVisit: UInt64 = 0
+    private var pendingListReload: UInt64?
 
     init(app: AppModel) {
         self.app = app
@@ -122,7 +127,7 @@ import AppKit
     }
 
     func restoreCachedEntries(_ entries: [APIEntry]) {
-        self.entries = keepingOpenArticle(entries)
+        self.entries = keepingVisitedArticles(entries)
         cachedPresentation = true
     }
 
@@ -155,6 +160,15 @@ import AppKit
         return kept
     }
 
+    private func keepingVisitedArticles(_ fresh: [APIEntry]) -> [APIEntry] {
+        guard app.readerSettings.showOnlyUnread, section == .today || section == .edition else {
+            return keepingOpenArticle(fresh)
+        }
+        let freshIDs = Set(fresh.map(\.id))
+        let retained = entries.filter { admittedUnread.contains($0.id) && !freshIDs.contains($0.id) }
+        return keepingOpenArticle((fresh + retained).sorted { $0.seq < $1.seq })
+    }
+
     /// Every chunk of async work is a named task so selection changes cancel
     /// superseded loads; the app session counter guards writes that resume
     /// after the shared session ended.
@@ -185,6 +199,7 @@ import AppKit
         pendingRestoredSelection = nil
         pendingDeepLink = nil
         undoManager?.removeAllActions(withTarget: self)
+        beginListVisit()
         entries = []
         cachedPresentation = false
         rows = []
@@ -201,6 +216,26 @@ import AppKit
     }
 
     // MARK: - Refresh
+
+    func beginListVisit() {
+        listVisit += 1
+        pendingListReload = nil
+        admittedUnread.removeAll()
+    }
+
+    func resetListAfterRestore() {
+        beginListVisit()
+        entries = []
+        selected = nil
+    }
+
+    /// Keep the current visit until its requested load succeeds. A load that
+    /// was already in flight cannot consume a newer refresh request.
+    func requestListReload() {
+        guard app.readerSettings.showOnlyUnread else { return }
+        listVisit += 1
+        pendingListReload = listVisit
+    }
 
     /// Named-task wrapper so section changes cancel the previous fetch.
     func refreshSection() {
@@ -242,6 +277,8 @@ import AppKit
               let generation = try? engine.snapshot().cursor?.generation else { return }
         let expected = section
         let expectedSession = app.session
+        let expectedVisit = listVisit
+        let reload = pendingListReload
         do {
             var all: [APIEntry] = []
             var cursor: String?
@@ -254,10 +291,14 @@ import AppKit
                 cursor = page.nextCursor
                 if let cursor, !seenCursors.insert(cursor).inserted { throw APIError.invalidResponse }
             } while cursor != nil && !Task.isCancelled
-            guard self.section == expected, app.loggedIn, app.session == expectedSession, !Task.isCancelled else { return }
+            guard self.section == expected, listVisit == expectedVisit, app.loggedIn, app.session == expectedSession, !Task.isCancelled else { return }
             try engine.mergeEntries(all, generation: generation)
+            if let reload, pendingListReload == reload {
+                admittedUnread.removeAll()
+                pendingListReload = nil
+            }
             cachedPresentation = false
-            entries = keepingOpenArticle(all)
+            entries = keepingVisitedArticles(all)
         } catch is CancellationError {
         } catch {
             guard app.session == expectedSession, (try? engine.snapshot().cursor?.generation) == generation else { return }
@@ -353,14 +394,16 @@ import AppKit
         } else {
             riverIDs = Set(presented.filter { $0.1.seen.value == .text("unseen") && $0.1.shelf.value == .text("none") }.map { $0.0.id })
         }
-        // Opening an article marks it seen, which takes it out of the river.
-        // Keep the open article in place until the selection moves on, as Mail
-        // does in an unread view, so the list never shifts under the reader.
-        // Explicit Done and Later still remove it at once.
+        let unreadOnly = app.readerSettings.showOnlyUnread
+        if unreadOnly && isRiver { admittedUnread.formUnion(riverIDs) }
+        let visitIDs = unreadOnly && isRiver ? admittedUnread : riverIDs
+        // Outside unread-only mode, keep only the selected read article.
+        // In unread-only mode, every admitted row survives reading, selection
+        // changes and background refresh until its parent list is reloaded.
         let sticky: Int64? = presented.first {
             $0.0.id == selected && $0.1.shelf.value == .text("none") && !riverIDs.contains($0.0.id)
         }?.0.id
-        let inRiver = { (id: Int64) in riverIDs.contains(id) || id == sticky }
+        let inRiver = { (id: Int64) in visitIDs.contains(id) || (!unreadOnly && id == sticky) }
         switch section {
         case .today:
             rows = presented.filter { inRiver($0.0.id) && cadence(of: $0.0) != "week" }.map { row($0.0, $0.1) }
@@ -394,7 +437,7 @@ import AppKit
             rows = []
             editionGroups = []
         }
-        updateEndStatement(presented, riverIDs: riverIDs)
+        updateEndStatement(presented, riverIDs: visitIDs)
         if let link = pendingDeepLink, app.engine != nil, app.loggedIn {
             pendingDeepLink = nil
             pendingRestoredSelection = nil
@@ -675,7 +718,14 @@ import AppKit
     /// the section changes, as switching mailboxes does in Mail, so a command
     /// never acts on an article the list no longer shows.
     func go(to target: Section) {
-        guard target != section else { return }
+        guard target != section else {
+            if app.readerSettings.showOnlyUnread {
+                requestListReload()
+                selectFromList(nil)
+                app.scheduleSync()
+            }
+            return
+        }
         if target != .search { search.clearQuery() }
         selectFromList(nil)
         section = target
@@ -932,7 +982,7 @@ import AppKit
             PaletteCommand(title: "Mark as Unread", key: "M", enabled: canAct) { self.command(.unread) },
             PaletteCommand(title: "Open in Browser", key: "O", enabled: hasURL) { self.openOriginal() },
             PaletteCommand(title: "Load Images", key: "", enabled: selected != nil && imageMode == .click) { self.loadImages() },
-            PaletteCommand(title: "Refresh", key: "⌘R", enabled: app.loggedIn) { self.app.scheduleSync() },
+            PaletteCommand(title: "Refresh", key: "⌘R", enabled: app.loggedIn) { self.app.reloadLists() },
             PaletteCommand(title: "New Subscription…", key: "⌘N", enabled: app.loggedIn) { self.subscribing = true },
         ]
         commands.append(contentsOf: Section.places.map { target in

@@ -279,7 +279,7 @@ private fun MainScaffold(
             .mapNotNull { subscription -> subscription.iconUrl()?.let { subscription.id to it } }
             .toMap()
     }
-    val lists = remember(state.snapshot, state.states, state.cadences, state.riverEntryIds) {
+    val lists = remember(state.snapshot, state.states, state.cadences, state.riverEntryIds, state.readerSettings.showOnlyUnread) {
         val visible = entries.filterNot { it.deleted }
         fun stateOf(id: Long) = state.states[id] ?: SyncEngine.initialState(state.principalId, id)
         val today = todayEntries(state)
@@ -348,6 +348,7 @@ private fun MainScaffold(
                 item(
                     selected = view == destination,
                     onClick = {
+                        model.beginListVisit()
                         view = destination
                         scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.List) }
                     },
@@ -627,7 +628,7 @@ private fun EarnestTopBar(
                     color = MaterialTheme.colorScheme.onSurface,
                 )
             } else {
-                IconButton(onClick = { model.refresh() }) {
+                IconButton(onClick = { model.reloadList() }) {
                     Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
                 }
             }

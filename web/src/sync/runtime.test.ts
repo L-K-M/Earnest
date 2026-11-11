@@ -163,6 +163,21 @@ describe("ReaderSync", () => {
     await rs.stop();
   });
 
+  it("distinguishes synced tombstones from entries outside the cache", async () => {
+    const e = env();
+    e.model.ingest(entry(1n), T);
+    const rs = sync(e);
+    await rs.start();
+    await drive(rs);
+    expect(rs.isDeleted(1n)).toBe(false);
+    expect(rs.isDeleted(99n)).toBe(false);
+    e.model.deleteEntry(1n);
+    await drive(rs);
+    expect(rs.hasEntry(1n)).toBe(true);
+    expect(rs.isDeleted(1n)).toBe(true);
+    await rs.stop();
+  });
+
   it("re-bootstraps on 410 and replays the outbox", async () => {
     const e = env();
     e.model.ingest(entry(1n), T);

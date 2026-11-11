@@ -57,6 +57,10 @@ import EarnestKit
                     Text("Unread counts").tag(APIReadingMode.unreadCounts)
                 }
                 .pickerStyle(.radioGroup)
+                Toggle(isOn: $settings.draft.showOnlyUnread) {
+                    Text("Show only unread")
+                    Text("Read articles stay until you reopen or refresh the list. Saved shelves and search are not filtered.")
+                }
                 IntegerField("Keep Today articles for", value: $settings.draft.todayDecayDays, in: 1...365,
                              unit: settings.draft.todayDecayDays == 1 ? "day" : "days")
                 Toggle(isOn: $settings.draft.singleKeyShortcuts) {
