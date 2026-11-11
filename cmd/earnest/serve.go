@@ -26,7 +26,6 @@ import (
 	"github.com/L-K-M/Earnest/internal/mcp"
 	"github.com/L-K-M/Earnest/internal/metrics"
 	"github.com/L-K-M/Earnest/internal/outbound"
-	"github.com/L-K-M/Earnest/internal/pipeline"
 	"github.com/L-K-M/Earnest/internal/push"
 	"github.com/L-K-M/Earnest/internal/service"
 	"github.com/L-K-M/Earnest/internal/web"
@@ -90,32 +89,18 @@ func serve() error {
 	if err != nil {
 		return fmt.Errorf("model configuration: %w", err)
 	}
-	router, err := llm.NewRouter(llmConfig, egress)
-	if err != nil {
-		return fmt.Errorf("model router: %w", err)
-	}
-	modelBudget := llm.NewBudget(db, llmConfig.Limits())
-	modelClient, err := llm.NewClient(router, modelBudget, llmConfig.Models)
-	if err != nil {
-		return fmt.Errorf("model client: %w", err)
-	}
-	engine, err := pipeline.New(router, modelClient, llm.NewCache(db), llmConfig.Models)
-	if err != nil {
-		return fmt.Errorf("pipeline: %w", err)
-	}
-	ctx = service.WithPipeline(ctx, engine)
-	if batch := pipeline.NewEditionBatch(router, modelBudget, llmConfig, egress); batch != nil {
-		ctx = pipeline.WithEditionBatch(ctx, batch)
-	}
 	pushRegistry, publicKey, err := buildPushRegistry(cfg, egress)
 	if err != nil {
 		return fmt.Errorf("push transports: %w", err)
 	}
 
 	prober := &feedProber{}
-	svc, err := service.New(db, service.Deps{FeedProber: prober, SecretKey: cfg.SecretKey, PushRegistry: pushRegistry, Outbound: egress, MediaPorts: privatePorts(cfg.OutboundAllowPrivate)})
+	svc, err := service.New(db, service.Deps{FeedProber: prober, SecretKey: cfg.SecretKey, PushRegistry: pushRegistry, Outbound: egress, LLMConfig: &llmConfig, MediaPorts: privatePorts(cfg.OutboundAllowPrivate)})
 	if err != nil {
 		return fmt.Errorf("service: %w", err)
+	}
+	if _, err := svc.ModelContext(ctx); err != nil {
+		return fmt.Errorf("model runtime: %w", err)
 	}
 	auth := service.NewAuth(db, time.Now, cfg.SecretKey)
 	// Interrupted sends have an unknown outcome and must never be retried.
@@ -176,14 +161,12 @@ func serve() error {
 	}{
 		{"notification delivery", deliveryInterval, svc.DeliverNotifications},
 		{"webhook delivery", deliveryInterval, svc.RunWebhookJobs},
-		{"rule jobs", deliveryInterval, svc.RunRuleJobs},
-		{"edition jobs", deliveryInterval, svc.RunEditionJobs},
+		{"rule jobs", deliveryInterval, modelJob(svc, svc.RunRuleJobs)},
+		{"edition jobs", deliveryInterval, modelJob(svc, svc.RunEditionJobs)},
 		{"media", mediaIdleMax, svc.RunMedia},
+		{"internal pipeline", pipelineIdleMax, modelJob(svc, svc.RunPipeline)},
 	} {
 		workers.Go(func() { runDelivery(ctx, logger, job.name, job.run, job.idleMax) })
-	}
-	if router.Enabled(llm.TaskEmbed) || router.Enabled(llm.TaskClassify) {
-		workers.Go(func() { runDelivery(ctx, logger, "internal pipeline", svc.RunPipeline, pipelineIdleMax) })
 	}
 	// Stop and join delivery before the deferred database close.
 	defer workers.Wait()
@@ -249,10 +232,10 @@ func buildMux(baseURL string, svc *service.Service, auth *service.Auth, logger *
 func buildMuxWithWeb(baseURL, contentOrigin string, svc *service.Service, auth *service.Auth, logger *slog.Logger, registry *metrics.Registry, content *web.Content, vapidPublicKey ...string) *http.ServeMux {
 	apiHandler := api.New(svc, auth, logger, baseURL, content, vapidPublicKey...)
 	mux := http.NewServeMux()
-	mux.Handle("/v1/", apiHandler)
+	mux.Handle("/v1/", modelHandler(svc, apiHandler))
 	mux.Handle("/openapi.json", apiHandler)
 	mux.Handle("/api/greader/", greader.New(svc, auth, logger))
-	mux.Handle("/mcp", mcp.New(svc, auth, baseURL, logger))
+	mux.Handle("/mcp", modelHandler(svc, mcp.New(svc, auth, baseURL, logger)))
 	mux.HandleFunc("/llms.txt", mcp.LLMS)
 	mux.Handle("/metrics", registry)
 	mux.HandleFunc("/healthz", healthzHandler)

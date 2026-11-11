@@ -11,9 +11,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/L-K-M/Earnest/internal/llm"
 	"github.com/L-K-M/Earnest/internal/outbound"
 	"github.com/L-K-M/Earnest/internal/push"
 	"github.com/L-K-M/Earnest/internal/store"
@@ -41,6 +43,8 @@ type Deps struct {
 	SecretKey    []byte
 	PushRegistry *push.Registry
 	Outbound     *outbound.Client
+	// LLMConfig supplies immutable environment defaults. Saved settings take precedence.
+	LLMConfig *llm.Config
 	// MediaPorts are the non-default ports of explicitly allowed private
 	// destinations; media fetches may use them, as feed fetches do.
 	MediaPorts []uint16
@@ -48,15 +52,18 @@ type Deps struct {
 
 // Service owns domain operations. Its dependencies must be safe for concurrent use.
 type Service struct {
-	store        *store.Store
-	now          func() time.Time
-	prober       FeedProber
-	credentials  cipher.AEAD
-	events       broker
-	pushRegistry *push.Registry
-	outbound     *outbound.Client
-	probeTimeout time.Duration
-	mediaPorts   []uint16
+	store         *store.Store
+	now           func() time.Time
+	prober        FeedProber
+	credentials   cipher.AEAD
+	events        broker
+	pushRegistry  *push.Registry
+	outbound      *outbound.Client
+	probeTimeout  time.Duration
+	mediaPorts    []uint16
+	modelDefaults llm.Config
+	modelMu       sync.Mutex
+	modelRuntime  *modelRuntime
 	// mediaBackfilled records that no pre-thumbnail entries remain in the
 	// backfill window, so later media passes skip that scan.
 	mediaBackfilled atomic.Bool
@@ -88,7 +95,11 @@ func New(db *store.Store, deps Deps) (*Service, error) {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{store: db, now: now, prober: deps.FeedProber, credentials: aead, pushRegistry: deps.PushRegistry, outbound: deps.Outbound, probeTimeout: defaultProbeTimeout, mediaPorts: append([]uint16(nil), deps.MediaPorts...), mediaDecode: make(chan struct{}, 1)}, nil
+	models := llm.DefaultConfig()
+	if deps.LLMConfig != nil {
+		models = *deps.LLMConfig
+	}
+	return &Service{store: db, now: now, prober: deps.FeedProber, credentials: aead, pushRegistry: deps.PushRegistry, outbound: deps.Outbound, probeTimeout: defaultProbeTimeout, mediaPorts: append([]uint16(nil), deps.MediaPorts...), mediaDecode: make(chan struct{}, 1), modelDefaults: models}, nil
 }
 
 func (s *Service) checkActor(ctx context.Context, a Actor, scope Scope) error {

@@ -29,18 +29,20 @@ type EditionBatch interface {
 }
 
 type batchKey struct{}
+type batchContext struct{ batch EditionBatch }
 
 const openAIBatchFinishStop = "stop"
 
-// WithEditionBatch installs an optional governed batch transport on a worker context.
+// WithEditionBatch installs an optional governed batch transport on a worker
+// context. A nil batch clears any inherited transport.
 func WithEditionBatch(ctx context.Context, batch EditionBatch) context.Context {
-	return context.WithValue(ctx, batchKey{}, batch)
+	return context.WithValue(ctx, batchKey{}, batchContext{batch: batch})
 }
 
 // EditionBatchFrom returns the configured transport; nil means synchronous fallback.
 func EditionBatchFrom(ctx context.Context) EditionBatch {
-	batch, _ := ctx.Value(batchKey{}).(EditionBatch)
-	return batch
+	value, _ := ctx.Value(batchKey{}).(batchContext)
+	return value.batch
 }
 
 type openAIEditionBatch struct {
