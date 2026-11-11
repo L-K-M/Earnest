@@ -88,7 +88,7 @@ it('renames the saved search explicitly and invalidates the sidebar cache',async
     if (path === '/v1/saved-searches') return []
     return {}
   })
-  render(<QueryClientProvider client={client}><Search saved={{id:3,name:'Funding view',query:'funding',filters:{folder_id:7,mode:'hybrid',limit:10}}} onOpen={vi.fn()} folders={[{id:7,name:'Work',rev:1,deleted:false}]}/></QueryClientProvider>)
+  render(<QueryClientProvider client={client}><Search saved={{id:3,name:'Funding view',query:'funding',filters:{folder_id:7,mode:'hybrid',limit:10}}} onOpen={vi.fn()} folders={[{id:7,name:'Work',parent_id:0,rev:1,deleted:false}]}/></QueryClientProvider>)
   const field = await screen.findByLabelText('Rename saved search') as HTMLInputElement
   expect(field.value).toBe('Funding view')
   fireEvent.change(field,{target:{value:'  Renamed view  '}})
@@ -144,7 +144,7 @@ it('shows saved subscription, folder and limit filters as selectable controls',a
     return {matches:[]}
   })
   render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}>
-    <Search saved={{id:3,name:'Funding view',query:'funding',filters:{folder_id:7,subscription_id:5,limit:10,mode:'fulltext'}}} onOpen={vi.fn()} subscriptions={[{id:5,feed_id:1,title:'Publisher',url:'https://a.example',deleted:false} as never]} folders={[{id:7,name:'Work',rev:1,deleted:false}]}/>
+    <Search saved={{id:3,name:'Funding view',query:'funding',filters:{folder_id:7,subscription_id:5,limit:10,mode:'fulltext'}}} onOpen={vi.fn()} subscriptions={[{id:5,feed_id:1,title:'Publisher',url:'https://a.example',deleted:false} as never]} folders={[{id:7,name:'Work',parent_id:0,rev:1,deleted:false}]}/>
   </QueryClientProvider>)
   expect((screen.getByLabelText('Feed') as HTMLSelectElement).value).toBe('5')
   expect((screen.getByLabelText('Folder') as HTMLSelectElement).value).toBe('7')
@@ -157,7 +157,7 @@ it('clears a saved filter when its control is reset to all',async () => {
     return {}
   })
   render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}>
-    <Search saved={{id:3,name:'Funding view',query:'funding',filters:{folder_id:7,subscription_id:5,limit:10,mode:'fulltext'}}} onOpen={vi.fn()} subscriptions={[{id:5,feed_id:1,title:'Publisher',url:'https://a.example',deleted:false} as never]} folders={[{id:7,name:'Work',rev:1,deleted:false}]}/>
+    <Search saved={{id:3,name:'Funding view',query:'funding',filters:{folder_id:7,subscription_id:5,limit:10,mode:'fulltext'}}} onOpen={vi.fn()} subscriptions={[{id:5,feed_id:1,title:'Publisher',url:'https://a.example',deleted:false} as never]} folders={[{id:7,name:'Work',parent_id:0,rev:1,deleted:false}]}/>
   </QueryClientProvider>)
   await waitFor(() => expect(request).toHaveBeenCalledWith('/v1/search?q=funding&mode=fulltext&subscription_id=5&folder_id=7&limit=10',expect.anything()))
   fireEvent.change(screen.getByLabelText('Feed'),{target:{value:'0'}})

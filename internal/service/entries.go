@@ -681,7 +681,7 @@ func (s *Service) emitChange(ctx context.Context, tx pgx.Tx, user, rev int64, ki
 	case Subscription:
 		payload["object"] = syncmodel.Object{Kind: syncmodel.SubscriptionObject, ID: syncmodel.ID(object.ID), FolderID: syncmodel.ID(object.FolderID), Name: object.Title, Rev: object.Rev, Deleted: object.Deleted}
 	case Folder:
-		payload["object"] = syncmodel.Object{Kind: syncmodel.FolderObject, ID: syncmodel.ID(object.ID), Name: object.Name, Rev: object.Rev, Deleted: object.Deleted}
+		payload["object"] = syncmodel.Object{Kind: syncmodel.FolderObject, ID: syncmodel.ID(object.ID), ParentID: syncmodel.ID(object.ParentID), Name: object.Name, Rev: object.Rev, Deleted: object.Deleted}
 	}
 	return insertEvent(ctx, tx, user, rev, string(kind), payload, s.now().UTC())
 }

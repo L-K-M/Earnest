@@ -18,6 +18,7 @@ type Object struct {
 	Principal ID         `json:"principal"`
 	EntryID   ID         `json:"entry_id,omitempty"`
 	FolderID  ID         `json:"folder_id,omitempty"`
+	ParentID  ID         `json:"parent_id,omitempty"`
 	Name      string     `json:"name,omitempty"`
 	Rev       uint64     `json:"rev"`
 	Deleted   bool       `json:"deleted"`
