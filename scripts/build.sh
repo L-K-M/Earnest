@@ -63,7 +63,7 @@ while [[ $# -gt 0 ]]; do
     --clean) rm -rf dist; echo "==> removed dist/"; exit 0 ;;
     --debug) PROFILE="debug"; shift ;;
     --install) INSTALL=true; shift ;;
-    --docker) REQUESTED+=("docker"); EXPLICIT=1; shift ;;  # legacy flag spelling
+    --docker) REQUESTED+=(binary docker); EXPLICIT=1; shift ;;  # legacy flag: binary + image
     web|binary|docker|mac|android) REQUESTED+=("$1"); EXPLICIT=1; shift ;;
     all) REQUESTED=(web binary docker mac android); EXPLICIT=1; shift ;;
     *) echo "unknown argument: $1" >&2; usage 1 ;;
@@ -150,10 +150,16 @@ build_web() {
   if ! have pnpm; then skip_or_fail web "pnpm not found"; return; fi
   echo "-- pnpm install + build"
   if ( cd web && pnpm install --frozen-lockfile && pnpm build ); then
-    rm -rf internal/web/dist
-    mkdir -p internal/web/dist
-    cp -R web/dist/. internal/web/dist/
-    record "web: built -> internal/web/dist"
+    if [[ ! -d web/dist ]]; then
+      echo "!! web: pnpm build produced no web/dist" >&2
+      record "web: FAILED (no dist output)"; return 1
+    fi
+    if rm -rf internal/web/dist && mkdir -p internal/web/dist && cp -R web/dist/. internal/web/dist/; then
+      record "web: built -> internal/web/dist"
+    else
+      echo "!! web: failed to stage client into internal/web/dist" >&2
+      record "web: FAILED (stage copy)"; return 1
+    fi
   else
     echo "!! web: pnpm build failed" >&2
     record "web: FAILED (pnpm build)"; return 1
@@ -164,7 +170,7 @@ build_web() {
 build_binary() {
   echo "== binary (Go server) =="
   if ! have "$GO"; then skip_or_fail binary "Go toolchain ($GO) not found"; return; fi
-  mkdir -p "$DIST"
+  mkdir -p "$DIST" || { echo "!! binary: cannot create dist/" >&2; record "binary: FAILED (mkdir dist)"; return 1; }
   echo "-- go build → dist/earnest (version=$VERSION revision=$REVISION)"
   if "$GO" build -trimpath \
        -ldflags "-s -w -X main.version=$VERSION -X main.revision=$REVISION" \
@@ -226,8 +232,8 @@ build_mac() {
     if [[ -d "$app" ]] && stage "$app" "Earnest.app"; then
       record "mac: built ($config) -> dist/Earnest.app"
     else
-      record "mac: built ($config) — product not found to stage"
-      app=""
+      echo "!! mac: product not found to stage" >&2
+      record "mac: FAILED ($config — product not found to stage)"; return 1
     fi
   else
     echo "!! mac: xcodebuild failed" >&2
@@ -240,10 +246,13 @@ build_mac() {
       record "mac: install FAILED (product not found)"; return 1
     fi
     echo "-- installing /Applications/Earnest.app"
-    rm -rf "/Applications/Earnest.app"
+    # Copy to a sibling path first so a failed ditto can't destroy the
+    # previous install; the final rename is atomic on the same volume.
+    local dst="/Applications/Earnest.app" tmp="/Applications/.Earnest.app.new.$$"
+    rm -rf "$tmp"
     # ditto preserves the signature, resource forks, and permissions.
-    if ditto "$app" "/Applications/Earnest.app"; then
-      INSTALLED="/Applications/Earnest.app"
+    if ditto "$app" "$tmp" && rm -rf "$dst" && mv "$tmp" "$dst"; then
+      INSTALLED="$dst"
       record "mac: installed -> /Applications/Earnest.app"
       # Replacing a bundle in place leaves LaunchServices with the OLD
       # registration for the path; it then refuses to open the app with error
@@ -257,6 +266,7 @@ build_mac() {
         record "mac: WARNING — installed app fails codesign verify"
       fi
     else
+      rm -rf "$tmp"
       record "mac: install FAILED (ditto)"; return 1
     fi
   fi
@@ -298,7 +308,8 @@ build_android() {
     if [[ -f "$apk" ]] && stage "$apk" "earnest-debug.apk"; then
       record "android: built -> dist/earnest-debug.apk"
     else
-      record "android: built — APK not found to stage"
+      echo "!! android: APK not found to stage" >&2
+      record "android: FAILED (APK not found to stage)"; return 1
     fi
   else
     echo "!! android: gradle build failed" >&2
@@ -333,7 +344,11 @@ if [[ -n "$INSTALLED" ]]; then
   fi
 elif [[ "$STAGED" -gt 0 ]]; then
   echo "  artifacts: $DIST"
-  if [[ "$(uname -s)" == "Darwin" ]]; then open "$DIST"; fi
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    # Highlight the app when one was staged — dist/ also holds the macos/
+    # DerivedData intermediates, which are not deliverables.
+    if [[ -d "$DIST/Earnest.app" ]]; then open -R "$DIST/Earnest.app"; else open "$DIST"; fi
+  fi
 fi
 
 exit "$FAILED"
