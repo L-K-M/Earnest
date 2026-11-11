@@ -31,6 +31,8 @@ filter:
     - list-mutes
     - get-settings
     - put-settings
+    - get-llm-settings
+    - put-llm-settings
     - entry-counts
     - search
     - list-saved-searches

@@ -141,6 +141,37 @@ are system/light/dark/black/eink; fonts are serif/sans/dyslexic. Today decay acc
 1–365 days. `feed_overrides` maps feed IDs to optional theme, measure and font.
 An empty map clears the overrides. The settings service requires no migration.
 
+## LLM service settings
+
+Settings has a server-wide LLM services section at `/settings#llm`. It edits one
+draft of the provider, task and model configuration; Save replaces the whole
+document with `PUT /v1/settings/llm`, and Reload discards the draft and fetches
+the current one. The section states that the configuration is shared by every
+account and that keys stay on the server, and it asks before leaving with
+unsaved changes.
+
+Providers add, edit and remove with a kind, base URL, monthly limit, timeout and
+token field. The API key field is write-only and masked: it starts blank, a
+blank value keeps the saved key, a typed value replaces it, and a separate clear
+control removes it. Changing the base URL or kind of a keyed provider needs a
+replacement key or an explicit clear, so a saved secret is never forwarded to a
+different destination. Local servers note that private addresses need
+`EARNEST_OUTBOUND_ALLOW_PRIVATE` allowlisting.
+
+All seven tasks (embed, classify, blurb, summary, edition, compile_rule, ask)
+are always listed. A task is off until it has both a provider and a model;
+clearing the provider clears the model. Anthropic has no embeddings API, so the
+embed task rejects it. The advanced model pricing editor adds and removes named
+models with their input, output and embedding rates per million tokens, plus
+embedding dimensions and the truncatable flag. Prices are decimal strings, never
+floats, and existing entries survive edits.
+
+The revision comes from the GET and goes back on every save with a fresh
+`op_id`; a retry of an identical failed request reuses the `op_id`. A 409 keeps
+the draft, says a reload is required and never overwrites what changed. Typed
+keys live in component state only and are cleared after a save, a reload, or a
+sign out (which remounts the session).
+
 ## Sync and browser storage
 
 `src/sync/client.ts` is the pure protocol client; `runtime.ts` drives bootstrap,

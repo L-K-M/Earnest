@@ -8,13 +8,18 @@ import EarnestKit
     /// The account's reading preferences, edited by Settings and the feed
     /// detail; changes apply as they are made.
     @StateObject private var preferences: ReaderSettingsModel
+    /// The server-wide LLM services configuration, edited by Settings > LLM
+    /// Services; loading and saving are explicit.
+    @StateObject private var llmSettings: LLMSettingsModel
 
     init() {
         let model = AppModel()
         let preferences = ReaderSettingsModel(app: model)
         preferences.autosaves = true
+        let llmSettings = LLMSettingsModel(app: model)
         _model = StateObject(wrappedValue: model)
         _preferences = StateObject(wrappedValue: preferences)
+        _llmSettings = StateObject(wrappedValue: llmSettings)
     }
 
     var body: some Scene {
@@ -38,7 +43,7 @@ import EarnestKit
         }
 
         Settings {
-            SettingsWindow(settings: preferences)
+            SettingsWindow(settings: preferences, llmSettings: llmSettings)
                 .environmentObject(model)
         }
 

@@ -16,6 +16,9 @@ func TestHTTPLLMSettings(t *testing.T) {
 	requireStatus(t, f.do(t, http.MethodGet, "/v1/settings/llm", nil, agent), http.StatusForbidden)
 	rec := f.do(t, http.MethodGet, "/v1/settings/llm", nil, f.session())
 	requireStatus(t, rec, http.StatusOK)
+	if rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatal("configuration reads must not be cached")
+	}
 	defaults := decodeBody[map[string]any](t, rec)
 	if defaults["revision"] != float64(0) || len(defaults["providers"].([]any)) != 0 || len(defaults["tasks"].([]any)) != 7 {
 		t.Fatalf("unexpected defaults: %s", rec.Body.String())
@@ -45,6 +48,25 @@ func TestHTTPLLMSettings(t *testing.T) {
 	requireStatus(t, rec, http.StatusOK)
 	if strings.Contains(rec.Body.String(), "sk-private-key") {
 		t.Fatal("GET disclosed a provider key")
+	}
+	// Clients may omit both optional key controls to preserve the stored key.
+	provider := body["providers"].([]any)[0].(map[string]any)
+	delete(provider, "api_key")
+	delete(provider, "clear_api_key")
+	body["revision"], body["op_id"] = 1, "keep-key"
+	rec = f.do(t, http.MethodPut, "/v1/settings/llm", body, f.session())
+	requireStatus(t, rec, http.StatusOK)
+	saved = decodeBody[map[string]any](t, rec)
+	if saved["providers"].([]any)[0].(map[string]any)["has_api_key"] != true {
+		t.Fatal("omitting key controls removed the saved key")
+	}
+	provider["clear_api_key"] = true
+	body["revision"], body["op_id"] = 2, "clear-key"
+	rec = f.do(t, http.MethodPut, "/v1/settings/llm", body, f.session())
+	requireStatus(t, rec, http.StatusOK)
+	saved = decodeBody[map[string]any](t, rec)
+	if saved["providers"].([]any)[0].(map[string]any)["has_api_key"] != false {
+		t.Fatal("explicit clear did not remove the key")
 	}
 }
 

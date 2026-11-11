@@ -7,9 +7,10 @@ import EarnestKit
 /// truth, and a change made elsewhere is flagged instead of overwritten.
 @MainActor struct SettingsWindow: View {
     @ObservedObject var settings: ReaderSettingsModel
+    @ObservedObject var llmSettings: LLMSettingsModel
     @EnvironmentObject private var model: AppModel
 
-    private enum Pane: String { case general, reading }
+    private enum Pane: String { case general, reading, llm }
     @AppStorage("settingsTab") private var tab = Pane.general
 
     var body: some View {
@@ -19,6 +20,9 @@ import EarnestKit
             }
             Tab("Reading", systemImage: "textformat.size", value: Pane.reading) {
                 ReadingSettings(settings: settings)
+            }
+            Tab("LLM Services", systemImage: "sparkles", value: Pane.llm) {
+                LLMSettingsView(settings: llmSettings)
             }
         }
         .scenePadding()

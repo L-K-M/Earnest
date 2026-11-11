@@ -156,6 +156,8 @@ internal fun SettingsScreen(
             }
         }
 
+        LlmServicesSection(model = model, state = state, modifier = Modifier.padding(vertical = 8.dp))
+
         if (ui.loaded == null || state.snapshot.cursor.generation.isEmpty()) {
             Text("Sync or load your account settings before editing.")
             return@Column

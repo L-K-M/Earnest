@@ -367,6 +367,26 @@ public final class EarnestAPI: Sendable {
         )
         return try await generated { try adapt(try await client.putSettings(.init(body: .json(body))).ok.body.json) }
     }
+    /// The server-wide, redacted LLM configuration. Keys are never returned;
+    /// there is no sync or cache for this resource, so callers load it
+    /// explicitly.
+    public func llmSettings() async throws -> APILLMSettings {
+        try await generated { try adapt(try await client.getLlmSettings(.init()).ok.body.json) }
+    }
+    /// Replaces the whole server-wide LLM configuration, deduplicated by
+    /// `opID`. `previous` is the configuration the revision was loaded from,
+    /// so a stored key cannot be silently kept for a changed destination.
+    public func updateLLMSettings(_ input: APILLMSettingsInput, previous: APILLMSettings? = nil) async throws -> APILLMSettings {
+        try validateLLMSettings(input, previous: previous)
+        let body = Components.Schemas.LLMSettingsInput(
+            models: try input.models.map { try adapt($0) },
+            opId: input.opID,
+            providers: try input.providers.map { try adapt($0) },
+            revision: input.revision,
+            tasks: try input.tasks.map { try adapt($0) }
+        )
+        return try await generated { try adapt(try await client.putLlmSettings(.init(body: .json(body))).ok.body.json) }
+    }
     /// Exact unread totals. Callers gate this on the unread-count reading
     /// mode; river mode must never request it.
     public func unreadCounts() async throws -> APIUnreadCounts {

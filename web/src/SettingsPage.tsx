@@ -2,6 +2,7 @@ import {useEffect} from 'react'
 import {Settings, type ReadingSettings} from './Settings'
 import {LabelSettings} from './labels/LabelSettings'
 import {Push, Tokens, Webhooks} from './account/Account'
+import {LLMSettings} from './llm/LLMSettings'
 import {Link, whenPresent} from './router'
 
 const SECTIONS = [
@@ -10,6 +11,7 @@ const SECTIONS = [
   {id:'tokens', title:'Tokens and devices'},
   {id:'push', title:'Push'},
   {id:'webhooks', title:'Webhooks'},
+  {id:'llm', title:'LLM services'},
 ] as const
 
 // Settings is one page with a section index, so every part has its own
@@ -32,6 +34,7 @@ export function SettingsPage({device, settings, onSaved}: {device: boolean; sett
       <div id="tokens" className="card"><Tokens /></div>
       <div id="push" className="card"><Push /></div>
       <div id="webhooks" className="card"><Webhooks /></div>
+      <div id="llm" className="card"><LLMSettings /></div>
     </div>
   </div>
 }

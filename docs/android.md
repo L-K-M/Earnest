@@ -206,7 +206,10 @@ guard, mark unread clearing Done and surviving passive marking, share
 and clipboard intents, activity descriptions, reader date and original
 URL, outbox flush debounce, state restoration of the section and settings,
 and the find listener's per-article re-registration. The last two run as
-Compose UI tests on Robolectric.
+Compose UI tests on Robolectric. The LLM services tests cover the load/save
+lifecycle, 409 conflict preservation, frozen retry bodies, typed-key draft
+clearing on success, reload, sign-out and identity change, the key-move
+safeguard and the ban on persisting keys in the snapshot or preferences.
 Core repository tests exercise real wire payloads, batch boundaries, in-flight
 retries, entry hydration and sibling subscription projections. Room regressions
 use Robolectric's native SQLite mode on Apple silicon because legacy SQLite
@@ -247,3 +250,42 @@ you removed from Kept, are left alone. Articles whose feed you do not follow
 are skipped unless you ask Earnest to subscribe to those feeds first, and the
 report names what was added, what was already there, what was left out and
 what could not be imported.
+
+## LLM services
+
+Settings carries the server-managed LLM services configuration in its own
+section. These settings are shared for the whole server: changing them affects
+all accounts. API keys are stored encrypted on the server and are never
+returned to the app; the section shows only whether a provider has a saved key.
+The app never caches, syncs or persists this configuration. Choose Load to
+fetch it with GET; Save replaces the whole provider, task and model
+configuration with PUT. Typed keys exist only in the in-memory draft, are
+masked, and are dropped on a successful save, on Reload, on sign-out and on
+identity change. They are never written to preferences, Room, saved instance
+state or logs, and no screen uses `rememberSaveable` for them.
+
+Providers can be added, edited and removed. A typed key replaces the saved
+one, a blank field keeps it, and an explicit control removes it. Changing the
+URL or kind of a provider that has a saved key requires a replacement key or
+an explicit clear, so a stored secret cannot silently move to a different
+destination. Task routing covers all seven tasks (embed, classify, blurb,
+summary, edition, compile_rule, ask); a task is enabled only when both
+provider and model are set, and Anthropic cannot embed. The advanced model
+editor lists named models with their three per-1M prices, embedding dimensions
+and the truncatable toggle. Prices are decimal strings, never floating point,
+and local models need explicit zero prices.
+
+Load preserves an edited draft; Reload discards it and loads the newest
+settings. Saving sends the loaded revision and a fresh operation ID. An
+ambiguous failure freezes the exact body so Retry resends it unchanged, while
+a 409 keeps the draft and requires an explicit Reload before saving again;
+the screen never claims a save that did not happen. Saving is refused without
+a loaded baseline, and a stale request cannot publish under a different
+account. Local model servers need `EARNEST_OUTBOUND_ALLOW_PRIVATE`
+allowlisting on the server. Load, Reload and Retry are disabled while a save
+is in progress, so a reload cannot discard an in-flight request.
+
+For a layout check on a narrow phone, add several named providers and open
+Route. Confirm that the provider choices wrap and remain reachable. Open a
+model's price editor, show the keyboard and scroll to its dimensions and
+truncation controls before applying the edit.

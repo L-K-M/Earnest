@@ -30,6 +30,7 @@ class ApiException(
 ) : IOException(message) {
     val isGone: Boolean get() = status == 410
     val isUnauthorized: Boolean get() = status == 401
+    val isConflict: Boolean get() = status == 409
 }
 
 /**
@@ -285,6 +286,24 @@ class EarnestApi(
 
     /** The typed reader slice of `/v1/settings`; [settings] stays raw for sync. */
     suspend fun readerSettings(): ReaderSettings = get(url("/v1/settings")).decode()
+
+    /**
+     * The server-managed LLM services settings. Never cached or synced: the
+     * caller loads them explicitly and saves the whole configuration.
+     */
+    suspend fun llmSettings(): LlmSettings = get(url("/v1/settings/llm")).decode()
+
+    /**
+     * Replaces the whole LLM services configuration. [input] carries the GET
+     * revision and a fresh op ID (reuse only when retrying an identical
+     * uncertain request); [baseline] is the loaded redacted settings, used
+     * only to refuse forwarding a stored key to a changed URL or kind. The
+     * response is the redacted settings; a 409 means a reload is required.
+     */
+    suspend fun updateLlmSettings(input: LlmSettingsInput, baseline: LlmSettings?): LlmSettings {
+        validateLlmSettingsInput(input, baseline)
+        return put(url("/v1/settings/llm"), encoder.encodeToJsonElement(LlmSettingsInput.serializer(), input)).decode()
+    }
 
     /**
      * Replaces the reader slice. The supplied [opId] is sent verbatim (no

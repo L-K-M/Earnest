@@ -45,6 +45,34 @@ private func applyOverride(_ input: inout Any?, path: [String], value: Any) thro
     }
 }
 
+/// The LLM schemas leave `kind`, `token_field` and `task` as free strings
+/// because the server restricts them; the client enums use the wire values,
+/// so the generated example is patched before the round trip.
+private func withLLMEnums(_ value: Any) -> Any {
+    if var object = value as? [String: Any] {
+        for (key, child) in object {
+            switch key {
+            case "kind": object[key] = "openai"
+            case "token_field": object[key] = "max_completion_tokens"
+            case "task": object[key] = "embed"
+            default: object[key] = withLLMEnums(child)
+            }
+        }
+        return object
+    }
+    if let array = value as? [Any] { return array.map(withLLMEnums) }
+    return value
+}
+
+private func checkLLM<T: Codable>(_ type: T.Type, name: String, schemas: [String: Any]) throws {
+    let schema = try #require(schemas[name] as? [String: Any])
+    let input = withLLMEnums(try example(schema, schemas: schemas, alternative: 0))
+    let data = try JSONSerialization.data(withJSONObject: input, options: [.sortedKeys, .fragmentsAllowed])
+    let model = try JSONDecoder().decode(type, from: data)
+    let output = try JSONSerialization.jsonObject(with: JSONEncoder().encode(model), options: [.fragmentsAllowed])
+    #expect((input as? NSDictionary) == (output as? NSDictionary), "\(name) does not preserve schema fields or values")
+}
+
 private func check<T: Codable>(_ type: T.Type, name: String, schemas: [String: Any], overrides: [String: Any] = [:]) throws {
     let schema = try #require(schemas[name] as? [String: Any])
     for alternative in 0...1 {
@@ -81,6 +109,12 @@ private func check<T: Codable>(_ type: T.Type, name: String, schemas: [String: A
     try check(APISearchMatch.self, name: "SearchMatch", schemas: schemas)
     try check(APISearchPage.self, name: "SearchPage", schemas: schemas)
     try check(APISavedSearch.self, name: "SavedSearch", schemas: schemas, overrides: ["filters.mode": "fulltext"])
+    try checkLLM(APILLMSettings.self, name: "LLMSettings", schemas: schemas)
+    try checkLLM(APILLMSettingsInput.self, name: "LLMSettingsInput", schemas: schemas)
+    try checkLLM(APILLMProviderSettings.self, name: "LLMProviderSettings", schemas: schemas)
+    try checkLLM(APILLMProviderInput.self, name: "LLMProviderInput", schemas: schemas)
+    try checkLLM(APILLMTaskSettings.self, name: "LLMTaskSettings", schemas: schemas)
+    try checkLLM(APILLMModelSettings.self, name: "LLMModelSettings", schemas: schemas)
 }
 
 @Test func searchModeEncodesRawValuesAndAllCases() throws {

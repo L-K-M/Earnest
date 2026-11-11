@@ -49,6 +49,7 @@ must encrypt before writing them and never log secrets.
 | `clusters` | Per-user story grouping, revision and tombstone. |
 | `entry_clusters` | Per-user cluster membership, revision and tombstone; cluster-scoped state writes resolve current entries in the service. |
 | `embeddings` | Entry/model key, original dimensions and fixed `halfvec(1024)`; shorter vectors are zero-padded. HNSW uses cosine distance. Retrieval must filter model and subscription/privacy scope. |
+| `llm_settings` | Singleton server-wide provider, task and price configuration, encrypted as one authenticated envelope with its own revision. API keys are write-only. An absent row selects environment defaults; saved settings do not enter user sync. |
 | `llm_cache` | Content hash/kind/prompt version/model cache, output and citations. Optional owner partitions private content; NULL denotes public content. Agent text never populates this cache or embeddings. |
 | `llm_spend` | Exact decimal USD spent/limit per provider and calendar month; no floating-point budgets. |
 | `jobs` | Durable kind/payload, schedule, attempts, last error, lease and optional unique enqueue key. Workers claim with `FOR UPDATE SKIP LOCKED`, update the lease and commit before working. |
@@ -90,6 +91,9 @@ Feed credential envelopes use AES-256-GCM with a random nonce prefixed to the
 ciphertext and tag. HKDF-SHA-256 derives the key from the deployment secret
 with purpose `earnest/feed-credentials/v1`; the same purpose is authenticated
 as additional data. Credentials are never included in resource or sync payloads.
+LLM settings envelopes use the same encryption machinery with distinct
+additional data `earnest/llm-settings/v1`, preventing reuse as feed or push
+credentials. Only redacted LLM settings responses enter `op_ids`.
 State provenance stores the model's `rule_or_agent` value. Reads normalize the
 foundation's legacy `rule` and `agent` values to that combined class.
 
