@@ -158,6 +158,24 @@ describe('river interactions', () => {
     await act(async () => { finish!() })
     await waitFor(() => expect(write).toHaveBeenCalledTimes(2), {timeout: 1500})
   })
+  it.each(['remote', 'keyboard'])('does not retry older failed reading after a newer %s unread', async source => {
+    const {act: write, actions} = mount()
+    let current = entries[0].state
+    actions.state = () => current
+    let reject: ((error: Error) => void) | undefined
+    write.mockImplementationOnce(() => new Promise<void>((_resolve, fail) => { reject = fail }))
+    const passive = () => write.mock.calls.filter(call => call[3] === 'passive')
+    await screen.findByText('Article 1')
+    fireEvent.click(screen.getByText('Article 1'))
+    await waitFor(() => expect(passive()).toHaveLength(1), {timeout: 1500})
+    if (source === 'keyboard') fireEvent.keyDown(document.body, {key: 'm'})
+    else current = {...current, seen: {...current.seen, value: 'unseen', rev: current.seen.rev + 1}}
+    await act(async () => { reject!(new Error('Could not persist reading progress.')) })
+    await new Promise(resolve => window.setTimeout(resolve, 700))
+    expect(passive()).toHaveLength(1)
+    fireEvent.click(screen.getByText('Article 1'))
+    await waitFor(() => expect(passive()).toHaveLength(2), {timeout: 1500})
+  })
   it('marks the row the selection leaves when j moves down', async () => {
     const {act,onSelect}=mount()
     await screen.findByText('Article 1')
