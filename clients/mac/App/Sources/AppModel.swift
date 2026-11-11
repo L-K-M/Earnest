@@ -364,7 +364,6 @@ struct ReaderPreferencesScope: Equatable {
                         guard self.session == s, !Task.isCancelled else { return }
                         self.scheduleSync()
                     }
-                    return
                 } catch is CancellationError {
                     return
                 } catch {
@@ -373,9 +372,12 @@ struct ReaderPreferencesScope: Equatable {
                         self.report(error)
                         return
                     }
-                    self.connectionNote = "Live updates interrupted; retrying."
-                    try? await Task.sleep(for: .seconds(10))
                 }
+                guard !Task.isCancelled, self.session == s else { return }
+                // A graceful server close also interrupts live hints; reconnect
+                // with the same backoff as a transient transport failure.
+                self.connectionNote = "Live updates interrupted; retrying."
+                try? await Task.sleep(for: .seconds(10))
             }
         }
         // Poll as well as following hints so a quiet or interrupted stream

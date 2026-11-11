@@ -149,6 +149,57 @@ import Network
         }
     }
 
+    func testCleanEventStreamEndReconnectsAfterBackoff() async throws {
+        let requested = expectation(description: "Event stream reconnected")
+        requested.expectedFulfillmentCount = 2
+        let server = try EventFailureServer { requested.fulfill() }
+        try await server.start()
+        defer { server.stop() }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        addTeardownBlock { try FileManager.default.removeItem(at: directory) }
+        let defaults = UserDefaults(suiteName: defaultsSuite)!
+        defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+        let store = IdentityStore(defaults: defaults)
+        let identity = try AccountIdentity(server: server.origin, userID: 1, principalID: 7)
+        let cache = try Cache(identity: identity, directory: directory)
+        let engine = SyncEngine(store: cache)
+        try engine.bootstrap(Cursor(generation: "g", rev: 1))
+        try engine.finishBootstrap()
+        let session = ContentHTTP.install([
+            .init(path: "/v1/devices/start", body: #"{"device_code":"device","user_code":"user","verification_uri":"urn:earnest:test","interval":1,"expires_in":30}"#, method: "POST"),
+            .init(path: "/v1/devices/poll", body: #"{"access_token":"test-token","token_type":"Bearer"}"#, method: "POST"),
+            .init(path: "/v1/me", body: #"{"user_id":1,"principal_id":7,"kind":"human","scopes":[]}"#),
+            .init(path: "/v1/me", body: #"{"user_id":1,"principal_id":7,"kind":"human","scopes":[]}"#),
+            .init(path: "/v1/mutes", body: "[]"),
+            .init(path: "/v1/settings", body: #"{"reading_mode":"river","today_decay_days":2,"single_key_shortcuts":true,"theme":"system","measure":68,"font":"serif","feed_overrides":{},"rev":0}"#),
+            .init(path: "/v1/changes", body: #"{"changes":[],"next":{"generation":"g","rev":1},"next_cursor":"g:1"}"#),
+            .init(path: "/v1/changes", body: #"{"changes":[],"next":{"generation":"g","rev":1},"next_cursor":"g:1"}"#),
+            .init(path: "/v1/entries", body: #"{"entries":[]}"#),
+            .init(path: "/v1/tokens", body: "[]"),
+        ])
+        let api = try EarnestAPI(baseURL: server.origin, tokenStore: ContentTokens(), session: session)
+        let model = AppModel(api: api, serverURL: server.origin, tokens: ContentTokens(), identities: store, cacheDirectory: directory)
+        let window = WindowModel(app: model)
+        defer { model.signOut(); session.invalidateAndCancel() }
+        window.section = .later
+        model.login()
+        let firstDeadline = Date().addingTimeInterval(5)
+        while server.requestCount == 0 && Date() < firstDeadline { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(server.requestCount, 1)
+        let syncDeadline = Date().addingTimeInterval(5)
+        while (!ContentHTTP.finished || model.syncing) && Date() < syncDeadline { try await Task.sleep(for: .milliseconds(10)) }
+        ContentHTTP.assertFinished()
+        XCTAssertFalse(model.syncing)
+        server.respond(status: 200)
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(server.requestCount, 1, "A clean EOF must not start a busy reconnect loop")
+        await fulfillment(of: [requested], timeout: 15)
+        XCTAssertEqual(server.requestCount, 2)
+        XCTAssertTrue(model.loggedIn)
+        XCTAssertNil(model.error)
+        XCTAssertEqual(model.connectionNote, "Live updates interrupted; retrying.")
+    }
+
     /// A transient /v1/me failure attaches the remembered account's cache and
     /// the next attempt recovers, instead of killing the session.
     func testTransientMeFailureShowsCacheAndRecovers() async throws {
@@ -907,6 +958,9 @@ private final class EventFailureServer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "EarnestEventFailureTest")
     private let lock = NSLock()
     private var connection: NWConnection?
+    private var receivedRequests = 0
+
+    var requestCount: Int { lock.withLock { receivedRequests } }
 
     init(onRequest: @escaping @Sendable () -> Void) throws {
         listener = try NWListener(using: .tcp, on: .any)
@@ -917,6 +971,7 @@ private final class EventFailureServer: @unchecked Sendable {
             connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, _, _ in
                 guard let data else { connection.cancel(); return }
                 XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("/v1/events"), String(decoding: data, as: UTF8.self))
+                self.lock.withLock { self.receivedRequests += 1 }
                 onRequest()
             }
         }
@@ -939,7 +994,8 @@ private final class EventFailureServer: @unchecked Sendable {
 
     func respond(status: Int) {
         guard let connection = lock.withLock({ connection }) else { XCTFail("No event request"); return }
-        let response = "HTTP/1.1 \(status) Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        let contentType = status == 200 ? "Content-Type: text/event-stream\r\n" : ""
+        let response = "HTTP/1.1 \(status) Test\r\n\(contentType)Content-Length: 0\r\nConnection: close\r\n\r\n"
         connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in connection.cancel() })
     }
 

@@ -43,13 +43,18 @@ import androidx.core.net.toUri
 import ch.lkmc.earnest.core.ApiException
 import ch.lkmc.earnest.core.DeviceResult
 import ch.lkmc.earnest.core.EarnestApi
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
 
 /** Device authorization: start, show the code, then poll automatically. */
 @Composable
-internal fun LoginScreen(onLoggedIn: () -> Unit, notice: String? = null) {
+internal fun LoginScreen(
+    onLoggedIn: () -> Unit,
+    notice: String? = null,
+    apiFactory: (server: String, token: String?) -> EarnestApi = { server, token -> EarnestApi(server, token) },
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var server by remember { mutableStateOf("") }
@@ -60,12 +65,13 @@ internal fun LoginScreen(onLoggedIn: () -> Unit, notice: String? = null) {
     LaunchedEffect(authorization) {
         val current = authorization ?: return@LaunchedEffect
         intervalSeconds = current.interval
+        // Construct within the handled poll path, then reuse its connections.
+        val api by lazy { apiFactory(server, null) }
         while (true) {
             delay(intervalSeconds * 1000)
             try {
-                val api = EarnestApi(server)
                 val token = api.devicePoll(current.deviceCode)
-                val me = EarnestApi(server, token.accessToken).me()
+                val me = apiFactory(server, token.accessToken).me()
                 SyncAccess.mutex.withLock { Secrets(context).saveSession(server, token.accessToken, me) }
                 onLoggedIn()
                 // Permission and push registration start only now that sign-in succeeded.
@@ -79,12 +85,20 @@ internal fun LoginScreen(onLoggedIn: () -> Unit, notice: String? = null) {
                     "slow_down" -> intervalSeconds += SLOW_DOWN_STEP_SECONDS
                     "authorization_pending" -> Unit
                     else -> {
+                        // A terminal code ends this authorization: keep the
+                        // failure and the entered server, but let Start run
+                        // again with a fresh code.
                         error = failure.message
+                        authorization = null
                         return@LaunchedEffect
                     }
                 }
+            } catch (failure: CancellationException) {
+                // Composition or effect cancellation is not a login failure.
+                throw failure
             } catch (failure: Exception) {
-                error = failure.message
+                error = failure.message ?: SIGN_IN_FAILED_MESSAGE
+                authorization = null
                 return@LaunchedEffect
             }
         }
@@ -149,10 +163,12 @@ internal fun LoginScreen(onLoggedIn: () -> Unit, notice: String? = null) {
                     scope.launch {
                         error = null
                         try {
-                            val api = EarnestApi(server)
+                            val api = apiFactory(server, null)
                             authorization = api.deviceStart("Earnest Android")
+                        } catch (failure: CancellationException) {
+                            throw failure
                         } catch (failure: Exception) {
-                            error = failure.message
+                            error = failure.message ?: SIGN_IN_FAILED_MESSAGE
                         }
                     }
                 },
@@ -214,3 +230,4 @@ private fun BrandRibbon(modifier: Modifier = Modifier) {
 }
 
 private const val SLOW_DOWN_STEP_SECONDS = 5L
+private const val SIGN_IN_FAILED_MESSAGE = "Sign-in failed. Try again."
