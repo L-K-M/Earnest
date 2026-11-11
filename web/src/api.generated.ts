@@ -1561,7 +1561,7 @@ export interface components {
             id: number;
             name: string;
             /** Format: int64 */
-            parent_id: number;
+            parent_id?: number;
             /** Format: int64 */
             rev: number;
         };

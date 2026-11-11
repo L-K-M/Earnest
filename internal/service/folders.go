@@ -11,9 +11,10 @@ import (
 )
 
 // Folder groups subscriptions. Deleted folders survive as revisioned tombstones.
+// ParentID is optional in the schema so generated clients can read older servers.
 type Folder struct {
 	ID       int64  `json:"id"`
-	ParentID int64  `json:"parent_id"`
+	ParentID int64  `json:"parent_id" required:"false"`
 	Name     string `json:"name"`
 	Rev      uint64 `json:"rev"`
 	Deleted  bool   `json:"deleted"`
