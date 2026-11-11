@@ -19,9 +19,12 @@ clients live in `clients/mac` and `clients/android`.
 
 | What | Command |
 |---|---|
-| Build the binary | `make build` or `scripts/build.sh` → `dist/earnest` |
+| Build every target this host can | `scripts/build.sh` → `dist/` (targets: `web`, `binary`, `docker`, `mac`, `android`) |
+| Build the binary | `make build` or `scripts/build.sh binary` → `dist/earnest` |
+| Build + install the Mac app | `scripts/build.sh --install` → `/Applications/Earnest.app` (macOS only) |
+| Build the Android APK | `scripts/build.sh android` → `dist/earnest-debug.apk` |
 | Tests + vet + gofmt | `make test`, `make lint` |
-| Build the image | `make docker-build` or `scripts/build.sh --docker` → `earnest:local` |
+| Build the image | `make docker-build` or `scripts/build.sh docker` → `earnest:local` |
 | Validate the stack | `make compose-check` |
 | Everything CI runs | `make check` |
 | Run the stack | `docker compose up -d --build` → `localhost:8080/healthz` |

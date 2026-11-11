@@ -1,42 +1,339 @@
 #!/usr/bin/env bash
-# Build the Earnest binary into dist/ — and, with --docker, the deploy image.
 #
-#   scripts/build.sh            # go build → dist/earnest (host arch)
-#   scripts/build.sh --docker   # also docker build → earnest:local
-#   scripts/build.sh --clean    # remove dist/
+# Build every Earnest target this host can build, and print one clear summary.
+# The single local entry point; CI builds the same pieces in .github/workflows/.
 #
-# The image is what compose.yaml and update.sh consume; the plain binary is
-# for running outside Docker. No lkm-build kind covers a Go service, so this
-# is a bespoke script in the same contract: one artifact staged into dist/.
-set -euo pipefail
+#   web     — web client (pnpm) → web/dist, copied into internal/web/dist so
+#             the binary and the image embed it (the committed copy there is a
+#             placeholder). Builds before `binary` on a default run.
+#   binary  — Go server binary → dist/earnest (host arch, version-stamped).
+#             It embeds whatever internal/web/dist already holds — list `web`
+#             first, or rely on the default target order, for a fresh client.
+#   docker  — deployment image → earnest:local, what compose.yaml and
+#             update.sh consume. The Dockerfile builds the web client itself.
+#   mac     — native macOS app (XcodeGen + xcodebuild) → dist/Earnest.app.
+#             macOS hosts only.
+#   android — Android debug APK (gradlew :app:assembleDebug)
+#             → dist/earnest-debug.apk. The only signed variant — no release
+#             signing is configured. Install with `adb install -r`.
+#
+# Usage:
+#   scripts/build.sh                 # every target this host can build
+#   scripts/build.sh mac binary      # just these (naming a target turns an
+#                                    # infeasible target into an error, not a skip)
+#   scripts/build.sh --debug mac     # Debug Xcode configuration (the other
+#                                    # targets have no debug/release split)
+#   scripts/build.sh --install       # build the mac app and install it to
+#                                    # /Applications/Earnest.app (macOS only),
+#                                    # then reveal the installed copy
+#   scripts/build.sh --clean         # remove dist/
+#
+# VERSION and REVISION stamp the binary and the image; they default to
+# `git describe` / the short HEAD.
+#
+# Exit status is non-zero if any requested target fails to build. Targets that
+# simply can't build on this host (missing toolchain, wrong OS) are reported
+# as skipped, and only fail the run when you named them explicitly.
+set -uo pipefail
 
-cd "$(dirname "$0")/.."
+# Absolute path to this script — usage() must find it after the cd below.
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT" || exit 1
 
 GO="${GO:-go}"
 VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
 REVISION="${REVISION:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}"
-DOCKER=0
+IMAGE=earnest:local
 
-for arg in "$@"; do
-  case "$arg" in
-    --docker) DOCKER=1 ;;
-    --clean)  rm -rf dist; echo "==> removed dist/"; exit 0 ;;
-    -h|--help)
-      awk 'NR==1 && /^#!/ {next} /^#/ {sub(/^# ?/,""); print; next} {exit}' "$0"
-      exit 0 ;;
-    *) echo "unknown argument: $arg (try --help)" >&2; exit 2 ;;
+PROFILE="release"
+INSTALL=false
+declare -a REQUESTED=()
+EXPLICIT=0
+
+usage() {
+  # Print the leading comment block (the file header), minus the shebang.
+  awk 'NR==1 && /^#!/ {next} /^#/ {sub(/^# ?/,""); print; next} {exit}' "$SELF"
+  exit "${1:-0}"
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage 0 ;;
+    --clean) rm -rf dist; echo "==> removed dist/"; exit 0 ;;
+    --debug) PROFILE="debug"; shift ;;
+    --install) INSTALL=true; shift ;;
+    --docker) REQUESTED+=("docker"); EXPLICIT=1; shift ;;  # legacy flag spelling
+    web|binary|docker|mac|android) REQUESTED+=("$1"); EXPLICIT=1; shift ;;
+    all) REQUESTED=(web binary docker mac android); EXPLICIT=1; shift ;;
+    *) echo "unknown argument: $1" >&2; usage 1 ;;
   esac
 done
 
-echo "==> go build → dist/earnest (version=$VERSION revision=$REVISION)"
-"$GO" build -trimpath \
-  -ldflags "-s -w -X main.version=$VERSION -X main.revision=$REVISION" \
-  -o dist/earnest ./cmd/earnest
+case "$(uname -s)" in
+  Darwin) HOST="macos" ;;
+  Linux) HOST="linux" ;;
+  MINGW*|MSYS*|CYGWIN*) HOST="windows" ;;
+  *) HOST="unknown" ;;
+esac
 
-if [[ "$DOCKER" -eq 1 ]]; then
-  echo "==> docker build → earnest:local"
-  docker build --build-arg VERSION="$VERSION" --build-arg REVISION="$REVISION" \
-    -t earnest:local .
+# --install installs the mac app: with no explicit targets it builds just that
+# (not the whole matrix), and with explicit targets it makes sure `mac` is in.
+if $INSTALL; then
+  if [[ "$HOST" != "macos" ]]; then
+    echo "!! --install installs the macOS app; it is only supported on a macOS host" >&2
+    exit 2
+  fi
+  if [[ ${#REQUESTED[@]} -eq 0 ]]; then
+    REQUESTED=(mac); EXPLICIT=1
+  else
+    found=0
+    for t in "${REQUESTED[@]}"; do [[ "$t" == "mac" ]] && found=1; done
+    [[ $found -eq 0 ]] && REQUESTED+=(mac)
+  fi
 fi
 
-echo "==> done: dist/earnest"
+# Default to all targets; feasibility is decided per-target below.
+if [[ ${#REQUESTED[@]} -eq 0 ]]; then
+  REQUESTED=(web binary docker mac android)
+fi
+
+echo "Earnest build"
+echo "  host:    $HOST ($(uname -s))"
+echo "  profile: $PROFILE"
+echo "  targets: ${REQUESTED[*]}"
+echo "  version: $VERSION ($REVISION)"
+echo
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+declare -a RESULTS=()
+record() { RESULTS+=("$1"); }   # "binary: built -> …" | "mac: skipped (…)" | "android: FAILED"
+
+# Collect a finished artifact into dist/ (file or directory). The staged copy
+# is what the summary points at — one folder with everything this run built.
+DIST="$ROOT/dist"
+STAGED=0
+stage() {
+  local src="$1" name="${2:-$(basename "$1")}"
+  mkdir -p "$DIST"
+  rm -rf "${DIST:?}/$name"
+  cp -R "$src" "$DIST/$name" || return 1
+  STAGED=$((STAGED + 1))
+  echo "-- staged dist/$name"
+}
+
+# Was a given target explicitly named on the command line?
+was_named() {
+  [[ $EXPLICIT -eq 1 ]] || return 1
+  local t
+  for t in "${REQUESTED[@]}"; do [[ "$t" == "$1" ]] && return 0; done
+  return 1
+}
+
+# Skip a target: a soft skip on a default run, a hard error when named.
+skip_or_fail() {
+  local target="$1" reason="$2"
+  if was_named "$target"; then
+    echo "!! $target: cannot build on this host — $reason" >&2
+    record "$target: FAILED ($reason)"
+    return 1
+  fi
+  echo ".. $target: skipped — $reason"
+  record "$target: skipped ($reason)"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+build_web() {
+  echo "== web (web client, embedded by binary and docker) =="
+  if ! have pnpm; then skip_or_fail web "pnpm not found"; return; fi
+  echo "-- pnpm install + build"
+  if ( cd web && pnpm install --frozen-lockfile && pnpm build ); then
+    rm -rf internal/web/dist
+    mkdir -p internal/web/dist
+    cp -R web/dist/. internal/web/dist/
+    record "web: built -> internal/web/dist"
+  else
+    echo "!! web: pnpm build failed" >&2
+    record "web: FAILED (pnpm build)"; return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+build_binary() {
+  echo "== binary (Go server) =="
+  if ! have "$GO"; then skip_or_fail binary "Go toolchain ($GO) not found"; return; fi
+  mkdir -p "$DIST"
+  echo "-- go build → dist/earnest (version=$VERSION revision=$REVISION)"
+  if "$GO" build -trimpath \
+       -ldflags "-s -w -X main.version=$VERSION -X main.revision=$REVISION" \
+       -o "$DIST/earnest" ./cmd/earnest; then
+    STAGED=$((STAGED + 1))
+    record "binary: built -> dist/earnest"
+  else
+    echo "!! binary: go build failed" >&2
+    record "binary: FAILED (go build)"; return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+build_docker() {
+  echo "== docker (deployment image) =="
+  if ! have docker; then skip_or_fail docker "docker not found"; return; fi
+  if ! docker info >/dev/null 2>&1; then
+    skip_or_fail docker "docker daemon not reachable"; return
+  fi
+  echo "-- docker build → $IMAGE"
+  if docker build --build-arg VERSION="$VERSION" --build-arg REVISION="$REVISION" \
+       -t "$IMAGE" .; then
+    record "docker: built -> $IMAGE"
+  else
+    echo "!! docker: image build failed" >&2
+    record "docker: FAILED (docker build)"; return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+build_mac() {
+  echo "== mac (native macOS app) =="
+  if [[ "$HOST" != "macos" ]]; then
+    skip_or_fail mac "requires an Xcode/macOS host"; return
+  fi
+  if ! have xcodegen; then
+    skip_or_fail mac "xcodegen not found (install: brew install xcodegen)"; return
+  fi
+  if ! have xcodebuild; then
+    skip_or_fail mac "xcodebuild not found (install Xcode)"; return
+  fi
+
+  echo "-- xcodegen generate"
+  if ! ( cd clients/mac/App && xcodegen generate ); then
+    record "mac: FAILED (xcodegen)"; return 1
+  fi
+
+  local config="Release"
+  [[ "$PROFILE" == "debug" ]] && config="Debug"
+  # Pin DerivedData under dist/ (gitignored) so the product path is deterministic
+  # instead of a hashed ~/Library/Developer/Xcode/DerivedData/... path.
+  local dd="$DIST/macos/DerivedData" app=""
+  echo "-- xcodebuild ($config)"
+  if ( cd clients/mac/App && xcodebuild build \
+         -project Earnest.xcodeproj -scheme Earnest -configuration "$config" \
+         -destination 'platform=macOS' -derivedDataPath "$dd" \
+         -skipPackagePluginValidation ); then
+    app="$dd/Build/Products/$config/Earnest.app"
+    if [[ -d "$app" ]] && stage "$app" "Earnest.app"; then
+      record "mac: built ($config) -> dist/Earnest.app"
+    else
+      record "mac: built ($config) — product not found to stage"
+      app=""
+    fi
+  else
+    echo "!! mac: xcodebuild failed" >&2
+    record "mac: FAILED (xcodebuild)"; return 1
+  fi
+
+  if $INSTALL; then
+    if [[ -z "$app" ]]; then
+      echo "!! mac: nothing to install (product not found)" >&2
+      record "mac: install FAILED (product not found)"; return 1
+    fi
+    echo "-- installing /Applications/Earnest.app"
+    rm -rf "/Applications/Earnest.app"
+    # ditto preserves the signature, resource forks, and permissions.
+    if ditto "$app" "/Applications/Earnest.app"; then
+      INSTALLED="/Applications/Earnest.app"
+      record "mac: installed -> /Applications/Earnest.app"
+      # Replacing a bundle in place leaves LaunchServices with the OLD
+      # registration for the path; it then refuses to open the app with error
+      # -10810 even though the bundle runs fine. Force a re-registration.
+      LSREG="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+      if [[ -x "$LSREG" ]]; then
+        "$LSREG" -f "$INSTALLED" >/dev/null 2>&1 || true
+      fi
+      if ! codesign --verify --deep --strict "$INSTALLED" 2>/dev/null; then
+        echo "!! mac: $INSTALLED fails codesign verification — it may not launch." >&2
+        record "mac: WARNING — installed app fails codesign verify"
+      fi
+    else
+      record "mac: install FAILED (ditto)"; return 1
+    fi
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# An installed Android SDK is what separates "can build the APK" from a long
+# doomed Gradle run; probe the usual locations.
+detect_android_sdk() {
+  local c
+  for c in "${ANDROID_SDK_ROOT:-}" "${ANDROID_HOME:-}" \
+           "$HOME/Library/Android/sdk" "$HOME/Android/Sdk"; do
+    [[ -n "$c" && -d "$c/platforms" ]] && { echo "$c"; return 0; }
+  done
+  return 1
+}
+
+build_android() {
+  echo "== android (debug APK) =="
+  if [[ "$HOST" != "linux" && "$HOST" != "macos" ]]; then
+    skip_or_fail android "needs a Linux or macOS host"; return
+  fi
+  if [[ ! -x clients/android/gradlew ]]; then
+    skip_or_fail android "clients/android/gradlew missing or not executable"; return
+  fi
+  if ! have java && [[ -z "${JAVA_HOME:-}" ]]; then
+    skip_or_fail android "JDK not found (install JDK 21, or set JAVA_HOME)"; return
+  fi
+  local sdk
+  if ! sdk="$(detect_android_sdk)"; then
+    skip_or_fail android "no Android SDK found (set ANDROID_SDK_ROOT, or install one via Android Studio)"; return
+  fi
+  # Gradle locates the SDK via local.properties or ANDROID_HOME; supply the env.
+  export ANDROID_HOME="$sdk"
+  echo "-- Android SDK: $sdk"
+  echo "-- gradlew :app:assembleDebug"
+  if ( cd clients/android && ./gradlew :app:assembleDebug ); then
+    local apk="clients/android/app/build/outputs/apk/debug/app-debug.apk"
+    if [[ -f "$apk" ]] && stage "$apk" "earnest-debug.apk"; then
+      record "android: built -> dist/earnest-debug.apk"
+    else
+      record "android: built — APK not found to stage"
+    fi
+  else
+    echo "!! android: gradle build failed" >&2
+    record "android: FAILED (gradle)"; return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+FAILED=0
+INSTALLED=""
+for target in "${REQUESTED[@]}"; do
+  case "$target" in
+    web)     build_web     || FAILED=1 ;;
+    binary)  build_binary  || FAILED=1 ;;
+    docker)  build_docker  || FAILED=1 ;;
+    mac)     build_mac     || FAILED=1 ;;
+    android) build_android || FAILED=1 ;;
+  esac
+  echo
+done
+
+echo "Summary"
+for line in "${RESULTS[@]}"; do echo "  $line"; done
+
+# Reveal the result: the installed copy when --install ran, else the dist/
+# folder with everything this run produced (macOS only — elsewhere the paths
+# in the summary are the deliverable).
+if [[ -n "$INSTALLED" ]]; then
+  echo "  installed: $INSTALLED"
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    open -R "$INSTALLED"          # Finder, with the app selected
+  fi
+elif [[ "$STAGED" -gt 0 ]]; then
+  echo "  artifacts: $DIST"
+  if [[ "$(uname -s)" == "Darwin" ]]; then open "$DIST"; fi
+fi
+
+exit "$FAILED"
