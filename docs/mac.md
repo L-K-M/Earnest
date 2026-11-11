@@ -291,7 +291,10 @@ The API key control is a write-only replacement: the pane shows only whether a
 key is stored, and a typed replacement or an explicit remove is sent on the next
 save. An absent key keeps the stored one; changing a keyed provider's URL or kind
 requires a replacement key or an explicit remove, so a stored secret is never
-forwarded to a different destination. Typed keys are cleared after a successful
+forwarded to a different destination. Renaming a keyed provider also requires
+replacement or removal, since names identify stored keys. A failed Reload
+keeps a revision conflict active until a newer configuration is loaded.
+Typed keys are cleared after a successful
 save, a reload, and on sign-out or an account change, and are never written to
 preferences, caches or logs.
 

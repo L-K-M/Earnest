@@ -251,6 +251,13 @@ class LlmSettingsAppTest {
         assertEquals("sk-typed", model.state.value.llmSettingsUi.draft?.providers?.single()?.apiKeyInput)
         assertNull(model.state.value.llmSettingsUi.frozen)
 
+        getBody = llmJson(revision = 9)
+        model.loadLlmSettings()
+        withTimeout(15_000) { model.state.first { !it.llmSettingsUi.loading } }
+        assertTrue("Load must not dismiss a conflict while preserving the stale draft", model.state.value.llmSettingsUi.conflict)
+        assertEquals(3L, model.state.value.llmSettingsUi.loadedRevision)
+        assertEquals("sk-typed", model.state.value.llmSettingsUi.draft?.providers?.single()?.apiKeyInput)
+
         val attempts = llmPuts().size
         model.saveLlmSettings()
         delay(300)
@@ -263,6 +270,28 @@ class LlmSettingsAppTest {
         assertFalse(model.state.value.llmSettingsUi.conflict)
         assertNull("reload discards the draft and its typed key", model.state.value.llmSettingsUi.draft)
         assertNull(model.state.value.llmSettingsUi.frozen)
+    }
+
+    @Test fun failedReloadCannotResolveARevisionConflict() = runBlocking(Dispatchers.IO) {
+        putStatus = 409
+        val model = model()
+        model.loadedLlm()
+        model.updateLlmSettingsDraft { it.copy(providers = it.providers.map { p -> p.copy(timeoutSeconds = "90") }) }
+        model.saveLlmSettings()
+        withTimeout(15_000) { model.state.first { it.llmSettingsUi.conflict } }
+        respond = { request ->
+            if (request.method == "GET" && request.url.encodedPath == "/v1/settings/llm") {
+                503 to """{"title":"Unavailable","status":503}"""
+            } else defaultRespond(request)
+        }
+        model.reloadLlmSettings()
+        withTimeout(15_000) { model.state.first { !it.llmSettingsUi.loading && it.llmSettingsUi.error != null } }
+        assertTrue("a failed Reload must keep the stale-baseline conflict", model.state.value.llmSettingsUi.conflict)
+        assertEquals(3L, model.state.value.llmSettingsUi.loadedRevision)
+        val attempts = llmPuts().size
+        model.saveLlmSettings()
+        delay(300)
+        assertEquals(attempts, llmPuts().size)
     }
 
     @Test fun reloadClearsTypedKeyMaterial() = runBlocking(Dispatchers.IO) {

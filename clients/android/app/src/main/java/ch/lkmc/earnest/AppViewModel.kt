@@ -788,7 +788,6 @@ class AppViewModel internal constructor(
                 success = if (reset) false else it.llmSettingsUi.success,
                 loadRequest = request,
                 draft = if (reset) null else it.llmSettingsUi.draft,
-                conflict = if (reset) false else it.llmSettingsUi.conflict,
                 frozen = if (reset) null else it.llmSettingsUi.frozen,
             ))
         }
@@ -807,7 +806,7 @@ class AppViewModel internal constructor(
                             // A dirty draft keeps the baseline it was edited on.
                             loaded = if (ui.draft == null) canonical else ui.loaded,
                             loadedRevision = if (ui.draft == null) canonicalRevision else ui.loadedRevision,
-                            conflict = false,
+                            conflict = if (ui.draft == null) false else ui.conflict,
                             success = false,
                         ),
                     )

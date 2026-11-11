@@ -135,6 +135,12 @@ extension APILLMTask {
                 LabeledContent("Name") {
                     TextField("openai", text: $provider.name)
                         .frame(width: 160)
+                        .disabled(provider.hasAPIKey && provider.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !provider.clearAPIKey)
+                }
+                if provider.hasAPIKey {
+                    Text("To rename this provider, enter a replacement API key or remove the saved key.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 LabeledContent("Kind") {
                     Picker("Kind", selection: Binding(get: { provider.kind }, set: onKindChange)) {

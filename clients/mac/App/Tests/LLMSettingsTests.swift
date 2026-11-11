@@ -248,7 +248,60 @@ import EarnestKit
         settings.save()
         try await waitUntil { settings.error != nil }
         XCTAssertFalse(settings.saved)
+        XCTAssertFalse(settings.canRetry, "a validation failure must not freeze a retry")
         XCTAssertEqual(LLMHTTP.pending, 0, "client validation must keep a bad edit off the wire")
+    }
+
+    func testRenamingAKeyedProviderRequiresExplicitKeyIntent() async throws {
+        let (api, session) = try makeAPI([
+            .init(path: "/v1/settings/llm", body: settingsJSON(revision: 2)),
+            .init(method: "PUT", path: "/v1/settings/llm", body: settingsJSON(revision: 3, hasKey: false)),
+        ])
+        defer { session.invalidateAndCancel() }
+        let model = makeModel(api: api)
+        model.loggedIn = true
+        let settings = LLMSettingsModel(app: model)
+        settings.load()
+        try await waitUntil { settings.loaded && !settings.busy }
+        settings.draft.providers[0].name = "renamed"
+        for index in settings.draft.tasks.indices {
+            settings.draft.tasks[index].provider = ""
+            settings.draft.tasks[index].model = ""
+        }
+        settings.save()
+        try await waitUntil { !settings.busy }
+        XCTAssertNotNil(settings.error)
+        XCTAssertFalse(settings.saved)
+        XCTAssertFalse(settings.canRetry)
+        XCTAssertEqual(LLMHTTP.pending, 1, "renaming must not silently discard a saved key")
+
+        settings.draft.providers[0].clearAPIKey = true
+        settings.save()
+        try await waitUntil { settings.saved && !settings.busy }
+        let sent = try fields(of: XCTUnwrap(LLMHTTP.body(at: 0)))
+        XCTAssertEqual(sent["providers"]?.arrayValue?.first?["name"]?.stringValue, "renamed")
+        XCTAssertEqual(sent["providers"]?.arrayValue?.first?["clear_api_key"]?.boolValue, true)
+        LLMHTTP.assertFinished()
+    }
+
+    func testRejectedSaveDoesNotOfferAnIdenticalRetry() async throws {
+        let (api, session) = try makeAPI([
+            .init(path: "/v1/settings/llm", body: settingsJSON(revision: 2)),
+            .init(method: "PUT", path: "/v1/settings/llm", status: 400,
+                  body: #"{"type":"about:blank","title":"Invalid","status":400,"detail":"Invalid model configuration"}"#),
+        ])
+        defer { session.invalidateAndCancel() }
+        let model = makeModel(api: api)
+        model.loggedIn = true
+        let settings = LLMSettingsModel(app: model)
+        settings.load()
+        try await waitUntil { settings.loaded && !settings.busy }
+        settings.draft.providers[0].timeoutSeconds = 90
+        settings.save()
+        try await waitUntil { !settings.busy }
+        XCTAssertNotNil(settings.error)
+        XCTAssertFalse(settings.canRetry, "a rejected request needs an edit, not an identical retry")
+        LLMHTTP.assertFinished()
     }
 
     func testChangingAKeyedProviderDestinationWithoutAKeyFailsLocally() async throws {
@@ -299,6 +352,7 @@ import EarnestKit
             .init(path: "/v1/settings/llm", body: settingsJSON(revision: 2)),
             .init(method: "PUT", path: "/v1/settings/llm", status: 409,
                   body: #"{"type":"about:blank","title":"Conflict","status":409,"detail":"LLM settings changed; reload before saving"}"#),
+            .init(path: "/v1/settings/llm", body: "", failure: .notConnectedToInternet),
             .init(path: "/v1/settings/llm", body: settingsJSON(revision: 4)),
         ])
         defer { session.invalidateAndCancel() }
@@ -320,7 +374,13 @@ import EarnestKit
 
         settings.save()
         try await Task.sleep(for: .milliseconds(50))
-        XCTAssertEqual(LLMHTTP.pending, 1, "saving must wait for Reload")
+        XCTAssertEqual(LLMHTTP.pending, 2, "saving must wait for Reload")
+
+        settings.load()
+        try await waitUntil { !settings.busy }
+        XCTAssertTrue(settings.conflict, "a failed Reload cannot resolve a revision conflict")
+        XCTAssertEqual(settings.revision, 2)
+        XCTAssertEqual(settings.draft.providers[0].apiKey, "sk-new")
 
         settings.load()
         try await waitUntil { settings.loaded && !settings.busy }

@@ -223,7 +223,6 @@ struct LLMSettingsDraft: Equatable {
         busy = true
         error = nil
         saved = false
-        conflict = false
         task = Task { [weak self] in
             guard let self else { return }
             defer {
@@ -270,6 +269,15 @@ struct LLMSettingsDraft: Equatable {
         }
         guard let revision else {
             error = "Load the LLM settings before saving."
+            return
+        }
+        for provider in draft.providers {
+            guard let original = baseline?.providers.first(where: { $0.id == provider.id }),
+                  original.hasAPIKey, original.name != provider.name,
+                  provider.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !provider.clearAPIKey else { continue }
+            pending = nil
+            error = "Renaming a provider with a saved API key requires a replacement key or explicit removal."
             return
         }
         var candidate = draft.input(revision: revision, opID: pending?.opID ?? "")
@@ -325,6 +333,12 @@ struct LLMSettingsDraft: Equatable {
                     self.pending = nil
                     self.error = "These settings changed elsewhere. Reload to see the current configuration before saving."
                     return
+                }
+                // Definite rejection needs an edit, not an identical retry.
+                // Preserve the frozen body when the write's outcome is uncertain.
+                if error is APILLMSettingsError ||
+                    ((error is APIProblem || error is APIError) && !ErrorPresentation.isTransient(error)) {
+                    self.pending = nil
                 }
                 self.error = ErrorPresentation.message(error)
             }
@@ -426,7 +440,7 @@ struct LLMSettingsDraft: Equatable {
     private func adopt(_ settings: APILLMSettings) {
         // Rebuilding from the response discards every key draft.
         draft = LLMSettingsDraft(settings: settings)
-        baseline = LLMSettingsDraft(settings: settings)
+        baseline = draft
         revision = settings.revision
         loaded = true
         pending = nil
