@@ -16,7 +16,7 @@ func TestFeedCadenceUpgradeReconsidersOnlyHealthyWaits(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range names {
-		if name >= "migrations/0012_" {
+		if name >= "migrations/0013_" {
 			continue
 		}
 		body, err := migrations.ReadFile(name)
