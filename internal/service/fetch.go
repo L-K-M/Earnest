@@ -72,11 +72,10 @@ func (s *Service) ClaimDueFeeds(ctx context.Context, now time.Time, limit int, l
 			if extract {
 				f.Extract = ExtractAlways
 			}
-			f.Interval = time.Duration(seconds * float64(time.Second))
 			f.Credentials, err = s.openCredentials(encrypted)
 			if err != nil {
 				slog.Error("skip feed with unreadable credentials", "feed_id", f.FeedID)
-				skipped = append(skipped, undecryptable{f.FeedID, f.Interval, failures, private})
+				skipped = append(skipped, undecryptable{f.FeedID, time.Duration(seconds * float64(time.Second)), failures, private})
 				continue
 			}
 			feeds = append(feeds, f)
@@ -172,7 +171,7 @@ type ingestChange struct {
 // RecordFetch commits identity/content versions, user events and health together.
 // Seq is reserved only inside the locked commit, never while a fetch is in flight.
 func (s *Service) RecordFetch(ctx context.Context, outcome FetchOutcome) (IngestSummary, error) {
-	if outcome.FeedID <= 0 || len(outcome.Items) > maxFetchItems || outcome.RetryAfter < 0 {
+	if outcome.FeedID <= 0 || len(outcome.Items) > maxFetchItems || outcome.RetryAfter < 0 || outcome.CacheMaxAge < 0 {
 		return IngestSummary{}, ErrInvalid
 	}
 	if outcome.Status != FetchOK && outcome.Status != FetchNotModified && outcome.Status != FetchFailed {
@@ -597,7 +596,8 @@ func (s *Service) fetchHealth(ctx context.Context, tx pgx.Tx, o FetchOutcome, re
 	}
 	var errorClass, errorMessage any
 	backoff := time.Duration(0)
-	nextInterval := min(max(interval, minimumFetchInterval), maximumFetchInterval)
+	var nextInterval, delay time.Duration
+	var cadence feedCadence
 	if o.Status == FetchFailed {
 		errorClass = o.ErrorClass
 		message := o.ErrorMessage
@@ -609,26 +609,32 @@ func (s *Service) fetchHealth(ctx context.Context, tx pgx.Tx, o FetchOutcome, re
 		}
 		errorMessage = message
 		backoff = fetchBackoff(o.ErrorClass, failures, o.RetryAfter)
+		nextInterval, delay = s.fetchPolicy.failureSchedule(o, interval, failures)
 		failures++
 	} else {
-		failures = 0
-		if summary.Created == 0 {
-			nextInterval = min(nextInterval*2, maximumFetchInterval)
-		} else {
-			nextInterval = max(nextInterval/2, minimumFetchInterval)
+		var seconds float64
+		if err := tx.QueryRow(ctx, `SELECT coalesce(extract(epoch FROM posting_interval),0)::double precision,posting_sample_at FROM feeds WHERE id=$1`, o.FeedID).Scan(&seconds, &cadence.latest); err != nil {
+			return fmt.Errorf("load feed cadence: %w", err)
 		}
+		cadence.interval = time.Duration(seconds * float64(time.Second))
+		if o.Status == FetchOK {
+			cadence = cadence.observe(o.Items, receipt)
+		}
+		failures = 0
+		nextInterval, delay = s.fetchPolicy.healthySchedule(cadence, o.CacheMaxAge)
 	}
-	next := receipt.Add(max(nextInterval, backoff))
-	if !o.NextFetchAt.IsZero() && o.NextFetchAt.After(next) {
-		next = o.NextFetchAt.UTC()
-	}
+	// This is the only scheduling deadline calculation. A fetcher must not
+	// supply a later deadline that can bypass the healthy-feed policy.
+	next := receipt.Add(delay)
 	if _, err := tx.Exec(ctx, `UPDATE feeds SET last_attempt_at=$2,last_http_status=$3,error_class=$4,error_message=$5,consecutive_failures=$6,
  backoff=$7*interval '1 second',fetch_interval=$8*interval '1 second',next_fetch_at=$9,lease_until=NULL,
  last_success_at=CASE WHEN $10 THEN last_success_at ELSE $11 END,
  etag=CASE WHEN $10 OR ($12='' AND $13) THEN etag ELSE nullif($12,'') END,
  last_modified=CASE WHEN $10 OR ($14='' AND $13) THEN last_modified ELSE nullif($14,'') END,
- permanent_redirect_url=coalesce(nullif($15,''),permanent_redirect_url),item_count=item_count+$16,last_item_count=$17
- WHERE id=$1`, o.FeedID, o.AttemptedAt.UTC(), status, errorClass, errorMessage, failures, backoff.Seconds(), nextInterval.Seconds(), next, o.Status == FetchFailed, receipt, o.ETag, o.Status == FetchNotModified, o.LastModified, o.PermanentRedirectURL, summary.Created, len(o.Items)); err != nil {
+ permanent_redirect_url=coalesce(nullif($15,''),permanent_redirect_url),item_count=item_count+$16,last_item_count=$17,
+ posting_interval=CASE WHEN $10 THEN posting_interval ELSE nullif($18::double precision,0)*interval '1 second' END,
+ posting_sample_at=CASE WHEN $10 THEN posting_sample_at ELSE $19 END
+ WHERE id=$1`, o.FeedID, o.AttemptedAt.UTC(), status, errorClass, errorMessage, failures, backoff.Seconds(), nextInterval.Seconds(), next, o.Status == FetchFailed, receipt, o.ETag, o.Status == FetchNotModified, o.LastModified, o.PermanentRedirectURL, summary.Created, len(o.Items), cadence.interval.Seconds(), cadence.latest); err != nil {
 		return fmt.Errorf("record feed health: %w", err)
 	}
 	if o.Status != FetchFailed && o.Feed != nil {

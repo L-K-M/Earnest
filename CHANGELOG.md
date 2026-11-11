@@ -93,6 +93,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Feed cache lifetimes now follow observed posting cadence instead of allowing
+  a publisher's long `max-age` to stall busy feeds for days. Cadence survives
+  unchanged responses and restarts; cache hints are capped at twice the
+  posting interval, with a configurable 48-hour ceiling and a one-hour
+  fallback. Error backoff and explicit retry delays remain separate.
+
 - A feed's malformed icon or thumbnail metadata no longer drops the
   entries it arrives with. The Android media loader shares one HTTP
   client across a list's image loads, refuses oversized bodies before

@@ -37,9 +37,12 @@ Copy `.env.example` to `.env` for Compose. Compose reads it for interpolation an
 
 | Name | Default | What it does | When you need it |
 | --- | --- | --- | --- |
-| `EARNEST_FETCH_MIN_INTERVAL` | `15m` | Minimum feed fetch interval. | Tune scheduling; positive Go duration, no greater than maximum. |
-| `EARNEST_FETCH_MAX_INTERVAL` | `24h` | Maximum feed fetch interval. | Tune scheduling; positive Go duration. |
+| `EARNEST_FETCH_MIN_INTERVAL` | `15m` | Minimum feed fetch interval. | Tune scheduling; positive Go duration, no greater than maximum or the cache ceiling. |
+| `EARNEST_FETCH_MAX_INTERVAL` | `24h` | Maximum interval for normal polling. | Tune scheduling; positive Go duration. |
+| `EARNEST_FETCH_CACHE_MAX_INTERVAL` | `48h` | Ceiling for cache hints extending a healthy feed's schedule. | Tune scheduling; positive Go duration, no less than the minimum interval. |
 | `EARNEST_RETENTION_DAYS` | `90` | Entry and change-log retention in days. | Integer from 1 to 106751, the maximum whole days representable by the retention duration. |
+
+`EARNEST_FETCH_MAX_INTERVAL` caps normal polling. A healthy feed's `Cache-Control` max-age hint may extend its schedule beyond that maximum, but only within `EARNEST_FETCH_CACHE_MAX_INTERVAL` and a stricter, feed-dependent ceiling.
 
 ## Push
 

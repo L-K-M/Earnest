@@ -59,7 +59,7 @@ func TestFetchRecordsRejectedItemsAsThatFeedsFailure(t *testing.T) {
 		t.Fatalf("outcomes = %+v", s.outcomes)
 	}
 	failed := s.outcomes[1]
-	if failed.Status != service.FetchFailed || failed.ErrorClass != "parse" || len(failed.Items) != 0 || failed.ETag != "" || failed.NextFetchAt.IsZero() {
+	if failed.Status != service.FetchFailed || failed.ErrorClass != "parse" || len(failed.Items) != 0 || failed.ETag != "" {
 		t.Fatalf("failure record = %+v", failed)
 	}
 }

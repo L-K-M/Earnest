@@ -7,10 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math/rand/v2"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -30,13 +28,13 @@ type Service interface {
 	RecordFetch(context.Context, service.FetchOutcome) (service.IngestSummary, error)
 }
 
-// Config controls scheduling and outbound limits.
+// Config controls claim polling, concurrency and outbound limits.
+// The service owns per-feed scheduling after each fetch.
 type Config struct {
-	MinInterval, MaxInterval time.Duration
-	PollInterval, Lease      time.Duration
-	Workers, BatchSize       int
-	ExtraPorts               []uint16
-	Metrics                  *metrics.Registry
+	PollInterval, Lease time.Duration
+	Workers, BatchSize  int
+	ExtraPorts          []uint16
+	Metrics             *metrics.Registry
 }
 
 const (
@@ -63,12 +61,6 @@ func New(s Service, c *outbound.Client, cfg Config) (*Fetcher, error) {
 	if s == nil || c == nil {
 		return nil, errors.New("fetcher: service and client are required")
 	}
-	if cfg.MinInterval == 0 {
-		cfg.MinInterval = 15 * time.Minute
-	}
-	if cfg.MaxInterval == 0 {
-		cfg.MaxInterval = 24 * time.Hour
-	}
 	if cfg.PollInterval == 0 {
 		cfg.PollInterval = time.Minute
 	}
@@ -81,7 +73,7 @@ func New(s Service, c *outbound.Client, cfg Config) (*Fetcher, error) {
 	if cfg.BatchSize == 0 {
 		cfg.BatchSize = cfg.Workers
 	}
-	if cfg.MinInterval < 0 || cfg.MaxInterval < cfg.MinInterval || cfg.PollInterval < 0 || cfg.Lease < 0 || cfg.Workers < 1 || cfg.BatchSize < 1 {
+	if cfg.PollInterval < 0 || cfg.Lease < 0 || cfg.Workers < 1 || cfg.BatchSize < 1 {
 		return nil, errors.New("fetcher: invalid config")
 	}
 	cfg.ExtraPorts = append([]uint16(nil), cfg.ExtraPorts...)
@@ -295,16 +287,9 @@ func (f *Fetcher) Fetch(ctx context.Context, item service.FeedToFetch) error {
 			out.RetryAfter = oe.RetryAfter
 		}
 	}
-	interval := f.interval(item, parsed, out.Status, class)
 	if result != nil {
-		if age, ok := outbound.ParseMaxAge(result.Response.Header.Get("Cache-Control")); ok && age > interval {
-			interval = age
-		}
+		out.CacheMaxAge, _ = outbound.ParseMaxAge(result.Response.Header.Get("Cache-Control"))
 	}
-	if out.RetryAfter > interval {
-		interval = out.RetryAfter
-	}
-	out.NextFetchAt = now.Add(interval)
 	summary, recordErr := f.service.RecordFetch(ctx, out)
 	if recordErr != nil && out.Status != service.FetchFailed && errors.Is(recordErr, service.ErrInvalid) {
 		// The service refused what this feed served. That is one feed's
@@ -316,7 +301,7 @@ func (f *Fetcher) Fetch(ctx context.Context, item service.FeedToFetch) error {
 		failed := service.FetchOutcome{
 			FeedID: out.FeedID, AttemptedAt: out.AttemptedAt, Status: service.FetchFailed, HTTPStatus: out.HTTPStatus,
 			ErrorClass: persistedErrorClass(classParse), ErrorMessage: "the feed's items were rejected: " + recordErr.Error(),
-			PermanentRedirectURL: out.PermanentRedirectURL, NextFetchAt: out.NextFetchAt,
+			PermanentRedirectURL: out.PermanentRedirectURL,
 		}
 		out = failed
 		summary, recordErr = f.service.RecordFetch(ctx, failed)
@@ -337,42 +322,6 @@ func (f *Fetcher) Fetch(ctx context.Context, item service.FeedToFetch) error {
 	return nil
 }
 
-func (f *Fetcher) interval(item service.FeedToFetch, parsed *feed.Feed, status service.FetchStatus, class outbound.Class) time.Duration {
-	d := time.Hour
-	if status == service.FetchFailed {
-		switch class {
-		case outbound.HTTPGone, outbound.HTTP403, outbound.DeniedAddress, outbound.RedirectLoop, classHTTP4xx:
-			return f.config.MaxInterval
-		}
-		d = item.Interval * 2
-		if d <= 0 {
-			d = time.Hour
-		}
-	} else if parsed != nil {
-		dates := make([]time.Time, 0, len(parsed.Items))
-		for _, it := range parsed.Items {
-			if it.Published != nil && !it.Published.After(time.Now()) {
-				dates = append(dates, *it.Published)
-			}
-		}
-		sort.Slice(dates, func(i, j int) bool { return dates[i].Before(dates[j]) })
-		if len(dates) > 1 {
-			d = dates[len(dates)-1].Sub(dates[0]) / time.Duration(len(dates)-1)
-		}
-	}
-	if status != service.FetchFailed && d >= time.Hour {
-		d = time.Duration(float64(d) * (1 + rand.Float64()*0.1))
-	} else {
-		d = time.Duration(float64(d) * (0.9 + rand.Float64()*0.2))
-	}
-	if d < f.config.MinInterval {
-		d = f.config.MinInterval
-	}
-	if d > f.config.MaxInterval {
-		d = f.config.MaxInterval
-	}
-	return d
-}
 func metadata(p *feed.Feed) *service.FeedMeta {
 	return &service.FeedMeta{Title: p.Title, SiteURL: p.SiteURL, IconURL: p.IconURL, Language: p.Language}
 }

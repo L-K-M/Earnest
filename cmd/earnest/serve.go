@@ -113,7 +113,14 @@ func serve() error {
 	}
 
 	prober := &feedProber{}
-	svc, err := service.New(db, service.Deps{FeedProber: prober, SecretKey: cfg.SecretKey, PushRegistry: pushRegistry, Outbound: egress, MediaPorts: privatePorts(cfg.OutboundAllowPrivate)})
+	svc, err := service.New(db, service.Deps{
+		FeedProber: prober, SecretKey: cfg.SecretKey, PushRegistry: pushRegistry,
+		Outbound: egress, MediaPorts: privatePorts(cfg.OutboundAllowPrivate),
+		FetchPolicy: service.FetchPolicy{
+			MinInterval: cfg.FetchMinInterval, MaxInterval: cfg.FetchMaxInterval,
+			CacheMaxInterval: cfg.FetchCacheMaxInterval,
+		},
+	})
 	if err != nil {
 		return fmt.Errorf("service: %w", err)
 	}
@@ -139,10 +146,8 @@ func serve() error {
 
 	registry := metrics.New()
 	f, err := fetcher.New(svc, egress, fetcher.Config{
-		MinInterval: cfg.FetchMinInterval,
-		MaxInterval: cfg.FetchMaxInterval,
-		ExtraPorts:  privatePorts(cfg.OutboundAllowPrivate),
-		Metrics:     registry,
+		ExtraPorts: privatePorts(cfg.OutboundAllowPrivate),
+		Metrics:    registry,
 	})
 	if err != nil {
 		return fmt.Errorf("fetcher: %w", err)
