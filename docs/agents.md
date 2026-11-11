@@ -300,3 +300,10 @@ Requests use the shared outbound client and never follow redirects.
 Only definite failures are retried, with exponential backoff. Unknown
 outcomes are not retried. Five consecutive definite failures disable the
 destination. Re-enable it after fixing the receiver.
+
+A redirect response is an unknown outcome: the receiver may have processed
+the POST before returning a Location. Earnest discards the attempt rather
+than risking a duplicate. This can lose an event that was not processed,
+just like a lost response or a crash. The destination stays enabled; its
+active flag and refusal counter are not delivery acknowledgements. Return
+a 2xx response from your receiver when you accept an event.
