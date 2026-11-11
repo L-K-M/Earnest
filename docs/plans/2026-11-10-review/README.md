@@ -4,6 +4,11 @@ Status: first improvement batch implemented and submitted for merge.
 Baseline commit `f8adbdb` (merge of PR #143). The linked PRs track CI,
 review and merge gates; local implementation alone does not complete a task.
 
+The first batch's linked PRs have merged. The
+[2026-11-11 continuation](../2026-11-11-review/README.md) plans the eleven
+missing review reports against a newer baseline. The checkpoint below is
+preserved as the first batch's execution record, not a live status table.
+
 This plan covers one pass over the whole app: the Go server, the web
 client, the Android and Mac clients, deployment, CI and the docs. It
 reviews what is there, verifies what it finds, fixes the confirmed
