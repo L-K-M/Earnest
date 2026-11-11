@@ -221,6 +221,12 @@ function Session({onLogout}: {onLogout: () => void}) {
   })()
   const view = resolved.view
   const openID = riverRoute?.entry
+  // Choosing a parent list from the sidebar/palette is a new visit even when
+  // it is already behind the reader. Opening articles and Back/close are not.
+  const [listVisit, setListVisit] = useState({locationKey: location.key, number: 0})
+  if (listVisit.locationKey !== location.key) {
+    setListVisit({locationKey: location.key, number: listVisit.number + Number(settings.show_only_unread === true && riverRoute !== null && openID === undefined && location.action === 'push')})
+  }
   // An article link opened offline cannot fetch the article, but the list it
   // belongs to usually comes from the offline cache a moment later; the retry
   // finds it there.
@@ -563,7 +569,7 @@ function Session({onLogout}: {onLogout: () => void}) {
       <div className="list-pane" inert={compact && reading}>
         {resolved.missing
           ? <section className="river"><div className="empty-state"><h2 tabIndex={-1}>This {viewRef.kind} is gone</h2><p>It may have been deleted or unsubscribed on another device.</p><p><Link to="/today">Go to Today</Link></p></div></section>
-          : <River since={since} sessionStart={sessionStart} key={viewKey(view)} onNewestLoaded={seq => setNewestLoaded({key: viewKey(view), seq})} view={view} subscriptions={subs} actions={actions} selected={current} onSelect={setSelected} onOpen={openFromList} onMenu={showArticleMenu} reading={reading} shortcuts={shortcuts} counts={settings.reading_mode === 'unread_counts'} summary={summary} />}
+          : <River since={since} sessionStart={sessionStart} key={`${viewKey(view)}:${listVisit.number}`} onNewestLoaded={seq => setNewestLoaded({key: viewKey(view), seq})} view={view} subscriptions={subs} actions={actions} selected={current} onSelect={setSelected} onOpen={openFromList} onMenu={showArticleMenu} reading={reading} shortcuts={shortcuts} counts={settings.reading_mode === 'unread_counts'} unreadOnly={settings.show_only_unread} summary={summary} />}
       </div>
       <div className="reader-pane">
         {!reading ? <ReaderPlaceholder shortcuts={shortcuts} />

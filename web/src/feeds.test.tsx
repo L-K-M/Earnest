@@ -131,7 +131,7 @@ describe('feed rules', () => {
   it('builds the documented settings body', () => {
     const settings = defaultReadingSettings()
     const body = settingsBody(settings, 'op-1')
-    expect(body).toEqual({op_id: 'op-1', reading_mode: 'river', today_decay_days: 2, single_key_shortcuts: true, theme: 'system', measure: 66, font: 'serif', feed_overrides: {}})
+    expect(body).toEqual({op_id: 'op-1', reading_mode: 'river', show_only_unread: false, today_decay_days: 2, single_key_shortcuts: true, theme: 'system', measure: 66, font: 'serif', feed_overrides: {}})
   })
 })
 

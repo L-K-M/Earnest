@@ -74,6 +74,7 @@ type ReaderOverride struct {
 // last write, so a client can order it against settings.updated events.
 type ReaderSettings struct {
 	ReadingMode        ReadingMode               `json:"reading_mode"`
+	ShowOnlyUnread     bool                      `json:"show_only_unread"`
 	TodayDecayDays     int                       `json:"today_decay_days"`
 	SingleKeyShortcuts bool                      `json:"single_key_shortcuts"`
 	Theme              ReaderTheme               `json:"theme"`
@@ -83,9 +84,11 @@ type ReaderSettings struct {
 	Rev                uint64                    `json:"rev"`
 }
 
-// ReaderSettingsInput replaces every reader setting on PUT.
+// ReaderSettingsInput replaces reader settings on PUT. A nil ShowOnlyUnread
+// preserves the saved choice for clients predating that preference.
 type ReaderSettingsInput struct {
 	ReadingMode        ReadingMode
+	ShowOnlyUnread     *bool
 	TodayDecayDays     int
 	SingleKeyShortcuts bool
 	Theme              ReaderTheme
@@ -158,6 +161,19 @@ func (s *Service) PutSettings(ctx context.Context, a Actor, in ReaderSettingsInp
 		if replay != nil {
 			return json.Unmarshal(replay, &out)
 		}
+		if in.ShowOnlyUnread != nil {
+			out.ShowOnlyUnread = *in.ShowOnlyUnread
+		} else {
+			var raw []byte
+			if err := tx.QueryRow(ctx, "SELECT settings FROM users WHERE id=$1", a.UserID).Scan(&raw); err != nil {
+				return domainError(err)
+			}
+			stored, err := decodeReaderSettings(raw)
+			if err != nil {
+				return err
+			}
+			out.ShowOnlyUnread = stored.ShowOnlyUnread
+		}
 		rev, err := changeRev(ctx, tx, a.UserID)
 		if err != nil {
 			return err
@@ -167,6 +183,7 @@ func (s *Service) PutSettings(ctx context.Context, a Actor, in ReaderSettingsInp
 		// as retention_days survive the merge.
 		fragment, err := json.Marshal(map[string]any{
 			"reading_mode":         out.ReadingMode,
+			"show_only_unread":     out.ShowOnlyUnread,
 			"today_decay_days":     out.TodayDecayDays,
 			"single_key_shortcuts": out.SingleKeyShortcuts,
 			"theme":                out.Theme,
@@ -277,6 +294,10 @@ func decodeReaderSettings(raw []byte) (ReaderSettings, error) {
 	}
 	if n, ok := settingsNumber(doc, "today_decay_days"); ok && n >= 1 && n <= maxTodayDecayDays {
 		out.TodayDecayDays = n
+	}
+	var unreadOnly bool
+	if raw, ok := doc["show_only_unread"]; ok && json.Unmarshal(raw, &unreadOnly) == nil {
+		out.ShowOnlyUnread = unreadOnly
 	}
 	var on bool
 	if raw, ok := doc["single_key_shortcuts"]; ok && json.Unmarshal(raw, &on) == nil {

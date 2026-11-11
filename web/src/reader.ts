@@ -38,6 +38,22 @@ export function orderEntries(entries: Entry[], view: View, subscriptions: Subscr
   return unique.filter(entry => !entry.deleted && (view.kind !== 'today' || byID.get(entry.subscription_id)?.cadence !== 'week'))
     .sort((a, b) => view.kind === 'edition' ? a.subscription_id - b.subscription_id || a.seq - b.seq : a.seq - b.seq)
 }
+// A visit admits unread rows once. Keep their metadata even if a background
+// river response omits them after a read, so sync cannot move the list under
+// the reader. Only an intentional parent-list reload starts with an empty set.
+export function retainUnreadEntries(previous: Entry[], fresh: Entry[], state: ReaderActions['state']): Entry[] {
+  const admitted = new Map(previous.map(entry => [entry.id, entry]))
+  for (const entry of fresh) {
+    if (entry.deleted) {
+      admitted.delete(entry.id)
+      continue
+    }
+    const current = state(entry)
+    if (admitted.has(entry.id) || (current.seen.value === 'unseen' && current.shelf.value !== 'done')) admitted.set(entry.id, entry)
+  }
+  const next = [...admitted.values()]
+  return next.length === previous.length && next.every((entry, index) => entry === previous[index]) ? previous : next
+}
 export function shortcutsAllowed(target: EventTarget | null, enabled: boolean): boolean {
   if (!enabled || !(target instanceof Element)) return false
   // Keys pressed in an open menu belong to the menu.

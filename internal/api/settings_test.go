@@ -33,6 +33,7 @@ func settingsHandler(f *apiFixture) http.Handler {
 func settingsBodyFor(op string) settingsBody {
 	return settingsBody{
 		ReadingMode:        service.ReadingModeUnreadCounts,
+		ShowOnlyUnread:     new(true),
 		TodayDecayDays:     14,
 		SingleKeyShortcuts: false,
 		Theme:              service.ReaderThemeEink,
@@ -53,13 +54,13 @@ func TestHTTPSettings(t *testing.T) {
 		requireStatus(t, rec, http.StatusOK)
 		got := decodeBody[service.ReaderSettings](t, rec)
 		if got.ReadingMode != service.ReadingModeRiver || got.TodayDecayDays != 2 || !got.SingleKeyShortcuts ||
-			got.Theme != service.ReaderThemeSystem || got.Measure != 66 || got.Font != service.ReaderFontSerif || got.Rev != 0 {
+			got.Theme != service.ReaderThemeSystem || got.Measure != 66 || got.Font != service.ReaderFontSerif || got.Rev != 0 || got.ShowOnlyUnread {
 			t.Fatalf("defaults: %+v", got)
 		}
 		rec = f.do(t, http.MethodPut, "/v1/settings", settingsBodyFor("s1"), f.session())
 		requireStatus(t, rec, http.StatusOK)
 		put := decodeBody[service.ReaderSettings](t, rec)
-		if put.Theme != service.ReaderThemeEink || put.Rev == 0 {
+		if put.Theme != service.ReaderThemeEink || put.Rev == 0 || !put.ShowOnlyUnread {
 			t.Fatalf("put: %+v", put)
 		}
 		rec = f.do(t, http.MethodPut, "/v1/settings", settingsBodyFor("s1"), f.session())
@@ -72,6 +73,19 @@ func TestHTTPSettings(t *testing.T) {
 		requireStatus(t, rec, http.StatusOK)
 		if got = decodeBody[service.ReaderSettings](t, rec); got.Rev != put.Rev || got.Theme != service.ReaderThemeEink || got.FeedOverrides["12"].Measure == nil {
 			t.Fatalf("get: %+v", got)
+		}
+	})
+
+	t.Run("legacy saves preserve unread preference", func(t *testing.T) {
+		f := newAPIFixture(t, template)
+		rec := f.do(t, http.MethodPut, "/v1/settings", settingsBodyFor("enable-unread"), f.session())
+		requireStatus(t, rec, http.StatusOK)
+		body := settingsBodyFor("legacy-save")
+		body.ShowOnlyUnread = nil
+		rec = f.do(t, http.MethodPut, "/v1/settings", body, f.session())
+		requireStatus(t, rec, http.StatusOK)
+		if got := decodeBody[service.ReaderSettings](t, rec); !got.ShowOnlyUnread {
+			t.Fatalf("legacy save cleared unread preference: %+v", got)
 		}
 	})
 

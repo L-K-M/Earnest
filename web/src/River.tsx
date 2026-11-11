@@ -2,7 +2,7 @@ import {useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKey
 import {useInfiniteQuery, useQuery} from '@tanstack/react-query'
 import {useVirtualizer} from '@tanstack/react-virtual'
 import {emptyCopy} from './copy'
-import {entryQuery, orderEntries, shortcutsAllowed, viewKey, type Entry, type EntryState, type ReaderActions, type Subscription, type View} from './reader'
+import {entryQuery, orderEntries, retainUnreadEntries, shortcutsAllowed, viewKey, type Entry, type EntryState, type ReaderActions, type Subscription, type View} from './reader'
 import {request} from './request'
 import {TodayAgents, SessionChanges} from './agents/Surfaces'
 import {Edition} from './pipeline/Pipeline'
@@ -16,7 +16,7 @@ import {explainHealth} from './feeds'
 import {articleMenu} from './menus'
 import {MENU_ATTRIBUTE, type MenuItem} from './ContextMenu'
 
-type ClusterGroup = {entry: Entry; also_in: number}
+type ClusterGroup = {entry: Entry; cluster_id?: number; also_in: number}
 type Page = {entries: Entry[]; next_cursor?: string; groups?: ClusterGroup[]}
 type PageParam = {direction: 'forward' | 'backward'; cursor?: string; after?: number}
 type OpenMode = 'push' | 'replace'
@@ -56,7 +56,7 @@ function newTabClick(event: ReactMouseEvent): boolean {
   return event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey
 }
 
-export function River({view, subscriptions, actions, selected, onSelect, onOpen, onMenu, shortcuts, counts, summary, onNewestLoaded, reading = false, since = '1970-01-01T00:00:00Z', sessionStart = '1970-01-01T00:00:00Z'}: {since?:string; sessionStart?:string; onNewestLoaded?: (seq: number) => void; view: View; subscriptions: Subscription[]; actions: ReaderActions; selected: Entry | null; onSelect: (entry: Entry) => void; onOpen: (entry: Entry, mode?: OpenMode) => void; onMenu?: (event: ReactMouseEvent<HTMLElement>, entry: Entry, items: MenuItem[]) => void; shortcuts: boolean; counts: boolean; summary: SessionSummary; reading?: boolean}) {
+export function River({view, subscriptions, actions, selected, onSelect, onOpen, onMenu, shortcuts, counts, summary, onNewestLoaded, unreadOnly = false, reading = false, since = '1970-01-01T00:00:00Z', sessionStart = '1970-01-01T00:00:00Z'}: {since?:string; sessionStart?:string; onNewestLoaded?: (seq: number) => void; view: View; subscriptions: Subscription[]; actions: ReaderActions; selected: Entry | null; onSelect: (entry: Entry) => void; onOpen: (entry: Entry, mode?: OpenMode) => void; onMenu?: (event: ReactMouseEvent<HTMLElement>, entry: Entry, items: MenuItem[]) => void; shortcuts: boolean; counts: boolean; summary: SessionSummary; unreadOnly?: boolean; reading?: boolean}) {
   const pipeline = usePipeline()
   const key = viewKey(view)
   const scroller = useRef<HTMLDivElement>(null)
@@ -78,11 +78,13 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   // allows for state derived from the previous render.
   const [start, setStart] = useState<number | null>(null)
   if (start === null && position.isSuccess) setStart(position.data.seq)
+  const filterUnread = unreadOnly && !['later', 'kept', 'done'].includes(view.kind)
   const list = useInfiniteQuery({
-    queryKey: ['river', key, start, cluster], enabled: start !== null,
+    queryKey: ['river', key, start, cluster, filterUnread], enabled: start !== null,
     initialPageParam: {direction: 'forward', after: start ?? 0} as PageParam,
     queryFn: ({pageParam, signal}) => {
       const query = entryQuery(view, cluster ? 'cluster' : undefined)
+      if (filterUnread) query.set('unread_only', 'true')
       query.set('direction', pageParam.direction)
       if (pageParam.cursor) query.set('cursor', pageParam.cursor)
       if (pageParam.after) query.set('after_seq', String(pageParam.after))
@@ -92,11 +94,38 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     getPreviousPageParam: (first): PageParam | undefined => first.entries.length ? {direction: 'backward', cursor: String(Math.min(...first.entries.map(e => e.seq)))} : start ? {direction: 'backward', cursor: String(start + 1)} : undefined,
     refetchOnWindowFocus: false, staleTime: Infinity,
   })
-  const entries = orderEntries(list.data?.pages.flatMap(page => page.entries) ?? [], view, subscriptions)
-  const clusterInfo = new Map<number, number>()
+  const loaded = list.data?.pages.flatMap(page => page.entries) ?? []
+  // Membership belongs to this mounted parent list, not to the open article,
+  // a sync revision, or a fetched page. Grouped and flat lists keep their own
+  // representatives so retaining rows cannot undo "One per story".
+  const [admitted, setAdmitted] = useState<{flat: Entry[]; clustered: Entry[]; groups: ClusterGroup[]}>({flat: [], clustered: [], groups: []})
+  const representation = cluster ? 'clustered' : 'flat'
+  const retained = filterUnread ? retainUnreadEntries(admitted[representation], loaded, actions.state) : admitted[representation]
+  const groups = new Map((filterUnread ? admitted.groups : []).map(group => [group.entry.id, group]))
   for (const page of list.data?.pages ?? []) {
-    for (const group of page.groups ?? []) clusterInfo.set(group.entry.id, group.also_in)
+    for (const group of page.groups ?? []) groups.set(group.entry.id, group)
   }
+  const rememberedGroups = [...groups.values()]
+  const groupsChanged = filterUnread && (rememberedGroups.length !== admitted.groups.length || rememberedGroups.some((group, index) => group !== admitted.groups[index]))
+  if (retained !== admitted[representation] || groupsChanged) setAdmitted({...admitted, [representation]: retained, groups: rememberedGroups})
+  const represented = new Set<number>()
+  const candidates = filterUnread ? retained : loaded
+  const entries = orderEntries(cluster && filterUnread ? candidates.filter(entry => {
+    const id = groups.get(entry.id)?.cluster_id
+    if (!id) return true
+    // A read representative stays the representative for this visit, even if
+    // a later server response chooses another unread member of the same story.
+    if (represented.has(id)) return false
+    represented.add(id)
+    return true
+  }) : candidates, view, subscriptions)
+  async function reload() {
+    const result = await list.refetch()
+    if (!result.isSuccess || !filterUnread) return
+    const fresh = retainUnreadEntries([], result.data.pages.flatMap(page => page.entries), actionsRef.current.state)
+    setAdmitted({flat: [], clustered: [], groups: result.data.pages.flatMap(page => page.groups ?? []), [representation]: fresh})
+  }
+  const clusterInfo = new Map(rememberedGroups.map(group => [group.entry.id, group.also_in]))
   // Rows are measured (measureElement on each row) so long titles, blurbs and
   // zoomed text are never clipped; estimateSize is only the pre-measure guess.
   // eslint-disable-next-line react-hooks/incompatible-library -- Virtual owns mutable scroll measurements; this app does not use React Compiler.
@@ -332,7 +361,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     <header className="pane-header">
       <div className="pane-heading">
         <h2 ref={heading} tabIndex={-1}>{view.title}</h2>
-        <button type="button" className="icon-button" title="Refresh articles" disabled={!list.isSuccess || list.isRefetching} onClick={() => {void list.refetch()}}><Icon name="refresh" /><span className="sr-only">Refresh articles</span></button>
+        <button type="button" className="icon-button" title="Refresh articles" disabled={!list.isSuccess || list.isRefetching} onClick={() => {void reload()}}><Icon name="refresh" /><span className="sr-only">Refresh articles</span></button>
       </div>
       <div className="pane-tools">
         <button type="button" className="quiet small" disabled={!list.isSuccess || list.isFetchingPreviousPage} onClick={() => { void list.fetchPreviousPage() }}><Icon name="earlier" size={16} />Earlier articles</button>
@@ -342,7 +371,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
       </div>
     </header>
     {feedProblem && <p className="banner inline" role="status"><strong>Failing:</strong> {feedProblem} <Link to={`/feeds#subscription-${view.id}`}>Fix it in feed settings</Link></p>}
-    {failure && <p role="alert" className="banner problem inline">{failure} <button type="button" onClick={() => { setError(''); void (position.isError ? position.refetch() : list.refetch()) }}>Try again</button></p>}
+    {failure && <p role="alert" className="banner problem inline">{failure} <button type="button" onClick={() => { setError(''); void (position.isError ? position.refetch() : reload()) }}>Try again</button></p>}
     {view.kind === 'edition' && <Edition onOpen={onOpen}/>}
     <div className="river-scroll" ref={scroller} onScroll={markScrolledPast} onKeyDown={listKeys} tabIndex={-1} aria-label="Article list" aria-busy={loading || undefined}>
       {view.kind === 'today' && <TodayAgents since={since} onOpen={onOpen}/>}

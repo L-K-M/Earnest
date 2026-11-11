@@ -10,9 +10,9 @@ export type ReadingSettings = Omit<components['schemas']['ReaderSettings'], 'rea
   feed_overrides: Record<string, {theme?: ReadingSettings['theme']; measure?: number; font?: ReadingSettings['font']}>
   rev?: number
 }
-export const defaultSettings: ReadingSettings = {reading_mode: 'river', today_decay_days: 2, single_key_shortcuts: true, theme: 'system', measure: 66, font: 'serif', feed_overrides: {}}
+export const defaultSettings: ReadingSettings = {reading_mode: 'river', show_only_unread: false, today_decay_days: 2, single_key_shortcuts: true, theme: 'system', measure: 66, font: 'serif', feed_overrides: {}}
 export function settingsInput(settings: ReadingSettings, opID: string = crypto.randomUUID()) {
-  return {reading_mode:settings.reading_mode,today_decay_days:settings.today_decay_days,single_key_shortcuts:settings.single_key_shortcuts,theme:settings.theme,measure:settings.measure,font:settings.font,feed_overrides:settings.feed_overrides,op_id:opID}
+  return {reading_mode:settings.reading_mode,show_only_unread:settings.show_only_unread,today_decay_days:settings.today_decay_days,single_key_shortcuts:settings.single_key_shortcuts,theme:settings.theme,measure:settings.measure,font:settings.font,feed_overrides:settings.feed_overrides,op_id:opID}
 }
 
 // withoutFeedOverride returns settings with one feed's typography override
@@ -49,6 +49,8 @@ export function Settings({settings, onSaved}: {settings: ReadingSettings; onSave
   }
   return <form onSubmit={save} onChange={() => setSaved(false)}><h2>Reading settings</h2>
     <label>Reading mode<select value={draft.reading_mode} onChange={e => setDraft({...draft, reading_mode: e.target.value as ReadingSettings['reading_mode']})}><option value="river">A river that ends</option><option value="unread_counts">Unread counts</option></select></label>
+    <label><input type="checkbox" checked={draft.show_only_unread ?? false} onChange={e => setDraft({...draft, show_only_unread: e.target.checked})} aria-describedby="unread-mode-help" /> Show only unread</label>
+    <p id="unread-mode-help" className="muted">Read articles stay in the current list until you reopen or refresh it. Later, Kept, Done and search always show all matching articles.</p>
     <label>Today items stay for this many days<input type="number" min="1" max="365" value={draft.today_decay_days} onChange={e => setDraft({...draft, today_decay_days: e.target.valueAsNumber})} required /></label>
     <label><input type="checkbox" checked={draft.single_key_shortcuts} onChange={e => setDraft({...draft, single_key_shortcuts: e.target.checked})} /> Single-key shortcuts</label>
     <Typography value={draft} onChange={value => setDraft({...draft, ...value})} />

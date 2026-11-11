@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import {describe, expect, it} from 'vitest'
-import {entryQuery, orderEntries, readerURL, shortcutsAllowed, viewScope, type Entry, type Subscription, type View} from './reader'
+import {entryQuery, orderEntries, readerURL, retainUnreadEntries, shortcutsAllowed, viewScope, type Entry, type Subscription, type View} from './reader'
 describe('reader rules', () => {
   it.each(['input', 'textarea', 'select', 'div[contenteditable]', 'div[role=textbox]'])('protects typing in %s', selector => {
     const element = document.createElement(selector.split('[')[0])
@@ -28,6 +28,16 @@ describe('reader rules', () => {
     expect(orderEntries(entries, {kind: 'edition', title: 'Edition'}, []).map(entry => entry.id)).toEqual([3,2,1])
     const today: View = {kind: 'today', title: 'Today'}
     expect(orderEntries(entries, today, [{id: 2, cadence: 'week'} as Subscription]).map(entry => entry.id)).toEqual([3,2])
+  })
+  it('retains admitted rows but honors an explicit deletion without mutating earlier snapshots', () => {
+    const entry = {id: 1, state: {seen: {value: 'unseen'}, shelf: {value: 'none'}}} as Entry
+    const previous = retainUnreadEntries([], [entry], value => value.state)
+    const read = {...entry, state: {...entry.state, seen: {...entry.state.seen, value: 'seen'}}} as Entry
+    expect(retainUnreadEntries(previous, [], () => read.state)).toBe(previous)
+    const updated = retainUnreadEntries(previous, [read], value => value.state)
+    expect(updated).toEqual([read])
+    expect(previous).toEqual([entry])
+    expect(retainUnreadEntries(updated, [{...read, deleted: true}], value => value.state)).toEqual([])
   })
   it('keeps signed content capabilities while applying preferences', () => {
     const url = new URL(readerURL('https://content.example/content/1?sig=secret', {theme:'system',measure:64,font:'sans'}, true))
