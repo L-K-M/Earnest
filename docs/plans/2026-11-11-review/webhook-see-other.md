@@ -1,4 +1,4 @@
-# Webhook See Other outcome
+# Webhook redirect outcomes
 
 Written before implementation, following the continuation plan in PR #166.
 Baseline: `aaf7719cfa3ce932d6ed9e289e431cc44ed2d0e4`.
@@ -27,8 +27,29 @@ contract retries only definite failures, never unknown outcomes.
 
 ## Intended minimal change, if confirmed
 
-Treat HTTP 303 as ambiguous, like a 408 or a lost response. Preserve success,
-proven pre-send failures, existing other status behavior, signatures,
-redirect prohibition, destination authorization and failure backoff. Do not
-claim 303 proves successful delivery. Run webhook regressions, surrounding
-service tests, vet and the full Postgres-backed Go race suite before merge.
+Treat redirect responses as ambiguous, like a 408 or a lost response.
+Preserve success, proven pre-send failures, non-redirect status behavior,
+signatures, redirect prohibition, destination authorization and failure
+backoff. Do not claim a redirect proves successful delivery. Run webhook
+regressions, surrounding service tests, vet and the full Postgres-backed
+Go race suite before merge.
+
+## Review round 1: extend the reproduced case before further code changes
+
+The initial 303 fix passed its regressions. Review identified that 302 can
+use the same POST-result pattern (RFC 9110 section 15.4.3). The existing
+302 test asserted refusal but supplied no evidence that processing could
+not have happened. It must not preserve the same duplicate-effect bug.
+
+Extend the receiver regression to 301, 302, 303, 307 and 308, and classify
+the entire 3xx response class as unknown: refusing to follow a Location
+never proves rejection of the original POST. This is conservative even
+when a particular receiver redirected before processing. Observe the
+additional failures before extending production handling.
+
+Unknown outcomes deliberately discard the job after one attempt. This can
+lose an event that was not processed, just like a lost response or a crash;
+retrying could instead repeat an effect. Document that trade-off publicly,
+including that active destinations and refusal counters do not acknowledge
+delivery. New delivery history, logging and metrics are useful follow-ups,
+not a prerequisite for preserving this existing at-most-once contract.
