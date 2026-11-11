@@ -77,6 +77,7 @@
   --r1: 4px; --r2: 6px; --r3: 10px;
   --control: 2.25rem;
   --sidebar: 15.5rem;
+  --list-width: 27rem;
   --ribbon: linear-gradient(90deg, #ffa01c 0 14.2857%, #ea5f12 14.2857% 28.5714%, #c9481e 28.5714% 42.8571%, #8e3b68 42.8571% 57.1429%, #916e9d 57.1429% 71.4286%, #408cad 71.4286% 85.7143%, #5da8a1 85.7143% 100%);
 }
 [data-theme=light] {color-scheme: light}
@@ -186,6 +187,14 @@ dd {margin: 0}
 
 .topbar {display: none}
 
+/* Resize targets overlap the divider without taking space from either pane. */
+.navigation-pane {position: relative; min-width: 0; min-height: 0}
+.resize-handle {position: absolute; inset: 0 -4px 0 auto; width: 8px; z-index: 10; cursor: col-resize; touch-action: none; user-select: none}
+.resize-handle::after {content: ''; position: absolute; inset: 0 3px; background: transparent}
+.resize-handle:hover::after, .resize-handle:focus-visible::after, .resize-handle.is-resizing::after {background: var(--brand)}
+.resize-handle:focus-visible {outline-offset: -2px}
+.resize-shield {position: fixed; inset: 0; z-index: 100; cursor: col-resize; user-select: none; touch-action: none}
+
 /* Sidebar */
 .sidebar {position: relative; display: flex; flex-direction: column; min-height: 0; height: 100%; border-right: 1px solid var(--line); background: var(--paper)}
 .sidebar::before {content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--ribbon)}
@@ -234,7 +243,8 @@ dd {margin: 0}
 .sync-indicator.quiet > .icon {color: var(--green)}
 
 /* The river and reader share the workspace as two panes. */
-.panes {flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(19rem, 27rem) minmax(0, 1fr)}
+.panes {position: relative; flex: 1; min-height: 0; display: grid; grid-template-columns: var(--list-width) minmax(0, 1fr)}
+.panes > .resize-handle {left: calc(var(--list-width) - 4px); right: auto}
 .list-pane {display: flex; flex-direction: column; min-height: 0; min-width: 0; border-right: 1px solid var(--line); background: var(--paper); container: list / inline-size}
 .reader-pane {display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--surface); container: reader / inline-size}
 
@@ -415,6 +425,7 @@ dialog::backdrop {background: rgb(10 10 8 / .42)}
 /* Narrow screens: the sidebar becomes a drawer behind a top bar. */
 @media (max-width: 1099px) {
   .app {grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr)}
+  .navigation-pane {display: none}
   .topbar {display: flex; align-items: center; gap: var(--s1); min-height: 3rem; padding: max(var(--s1), env(safe-area-inset-top)) max(var(--s2), env(safe-area-inset-right)) var(--s1) max(var(--s2), env(safe-area-inset-left)); border-bottom: 1px solid var(--line); background: var(--paper)}
   .topbar-title {flex: 1; min-width: 0; margin: 0 var(--s1); overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap}
   .sync-dot {display: inline-flex; color: var(--ink-muted)}
@@ -426,6 +437,7 @@ dialog::backdrop {background: rgb(10 10 8 / .42)}
 }
 @media (max-width: 759px) {
   .panes {grid-template-columns: minmax(0, 1fr)}
+  .panes > .resize-handle {display: none}
   .list-pane, .reader-pane {grid-area: 1 / 1}
   .list-pane {border-right: 0}
   .panes:not(.reading) .reader-pane {display: none}
@@ -474,7 +486,7 @@ dialog::backdrop {background: rgb(10 10 8 / .42)}
   .sidebar::before, .login form::before, .login::before {display: none}
 }
 @media print {
-  .sidebar, .topbar, .reader-toolbar, .toast-region, .list-pane, .banners {display: none}
+  .navigation-pane, .resize-handle, .resize-shield, .sidebar, .topbar, .reader-toolbar, .toast-region, .list-pane, .banners {display: none}
   .app, .panes {display: block; height: auto; overflow: visible}
   .reader-pane, .reader, .reader-scroll, .page {display: block; height: auto; overflow: visible; container-type: normal}
   .article-body iframe {height: 100vh}
