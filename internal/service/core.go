@@ -43,7 +43,8 @@ type Deps struct {
 	Outbound     *outbound.Client
 	// MediaPorts are the non-default ports of explicitly allowed private
 	// destinations; media fetches may use them, as feed fetches do.
-	MediaPorts []uint16
+	MediaPorts  []uint16
+	FetchPolicy FetchPolicy
 }
 
 // Service owns domain operations. Its dependencies must be safe for concurrent use.
@@ -57,6 +58,7 @@ type Service struct {
 	outbound     *outbound.Client
 	probeTimeout time.Duration
 	mediaPorts   []uint16
+	fetchPolicy  FetchPolicy
 	// mediaBackfilled records that no pre-thumbnail entries remain in the
 	// backfill window, so later media passes skip that scan.
 	mediaBackfilled atomic.Bool
@@ -71,6 +73,10 @@ type Service struct {
 func New(db *store.Store, deps Deps) (*Service, error) {
 	if db == nil || len(deps.SecretKey) < 32 {
 		return nil, fmt.Errorf("store and 32-byte secret required: %w", ErrInvalid)
+	}
+	fetchPolicy, err := deps.FetchPolicy.normalized()
+	if err != nil {
+		return nil, err
 	}
 	key, err := hkdf.Key(sha256.New, deps.SecretKey, nil, "earnest/feed-credentials/v1", 32)
 	if err != nil {
@@ -88,7 +94,7 @@ func New(db *store.Store, deps Deps) (*Service, error) {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{store: db, now: now, prober: deps.FeedProber, credentials: aead, pushRegistry: deps.PushRegistry, outbound: deps.Outbound, probeTimeout: defaultProbeTimeout, mediaPorts: append([]uint16(nil), deps.MediaPorts...), mediaDecode: make(chan struct{}, 1)}, nil
+	return &Service{store: db, now: now, prober: deps.FeedProber, credentials: aead, pushRegistry: deps.PushRegistry, outbound: deps.Outbound, probeTimeout: defaultProbeTimeout, mediaPorts: append([]uint16(nil), deps.MediaPorts...), mediaDecode: make(chan struct{}, 1), fetchPolicy: fetchPolicy}, nil
 }
 
 func (s *Service) checkActor(ctx context.Context, a Actor, scope Scope) error {

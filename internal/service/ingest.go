@@ -50,7 +50,6 @@ type FeedToFetch struct {
 	LastModified string
 	Credentials  *FeedCredentials // nil for public feeds
 	Extract      ExtractMode
-	Interval     time.Duration // current adaptive interval
 	LeaseUntil   time.Time
 }
 
@@ -109,7 +108,9 @@ type FetchOutcome struct {
 	PermanentRedirectURL string
 	Feed                 *FeedMeta
 	Items                []IngestItem
-	NextFetchAt          time.Time
+	// CacheMaxAge is the publisher's freshness hint, not a scheduling deadline.
+	// The service bounds it using durable posting cadence before scheduling.
+	CacheMaxAge time.Duration
 }
 
 // IngestSummary says what RecordFetch changed.

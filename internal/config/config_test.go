@@ -27,6 +27,7 @@ var allEnvVars = []string{
 	"EARNEST_LOG_LEVEL",
 	"EARNEST_FETCH_MIN_INTERVAL",
 	"EARNEST_FETCH_MAX_INTERVAL",
+	"EARNEST_FETCH_CACHE_MAX_INTERVAL",
 	"EARNEST_RETENTION_DAYS",
 	"EARNEST_PUSH_VAPID_PRIVATE_KEY", "EARNEST_PUSH_VAPID_PUBLIC_KEY",
 	"EARNEST_PUSH_VAPID_SUBJECT", "EARNEST_PUSH_VAPID_KEY_FILE",
@@ -60,17 +61,18 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	want := config.Config{
-		HTTPAddr:             ":8080",
-		ContentAddr:          ":8081",
-		DatabaseURL:          "postgres://earnest:pw@db.internal:5432/earnest",
-		BaseURL:              "http://localhost:8080",
-		ContentOrigin:        "http://localhost:8081",
-		SecretKey:            []byte("test-key-material-of-32-bytes-padded"),
-		OutboundAllowPrivate: nil,
-		LogLevel:             slog.LevelInfo,
-		FetchMinInterval:     15 * time.Minute,
-		FetchMaxInterval:     24 * time.Hour,
-		RetentionDays:        90,
+		HTTPAddr:              ":8080",
+		ContentAddr:           ":8081",
+		DatabaseURL:           "postgres://earnest:pw@db.internal:5432/earnest",
+		BaseURL:               "http://localhost:8080",
+		ContentOrigin:         "http://localhost:8081",
+		SecretKey:             []byte("test-key-material-of-32-bytes-padded"),
+		OutboundAllowPrivate:  nil,
+		LogLevel:              slog.LevelInfo,
+		FetchMinInterval:      15 * time.Minute,
+		FetchMaxInterval:      24 * time.Hour,
+		FetchCacheMaxInterval: 48 * time.Hour,
+		RetentionDays:         90,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Load()\n got: %+v\nwant: %+v", got, want)
@@ -86,35 +88,51 @@ func TestLoadValid(t *testing.T) {
 		{
 			name: "all fields set",
 			env: map[string]string{
-				"EARNEST_HTTP_ADDR":              "127.0.0.1:9090",
-				"EARNEST_DATABASE_URL":           "host=db user=earnest dbname=earnest sslmode=disable",
-				"EARNEST_BASE_URL":               "https://feeds.example.com",
-				"EARNEST_CONTENT_ORIGIN":         "https://content.example.com",
-				"EARNEST_SECRET_KEY":             "another-secret-key-material-32bytes!",
-				"EARNEST_OUTBOUND_ALLOW_PRIVATE": " ollama.lan:11434 , 10.0.0.2:443 ",
-				"EARNEST_TRUSTED_PROXIES":        " 172.18.0.1 , 10.0.0.0/8 ,::ffff:192.0.2.1",
-				"EARNEST_LOG_LEVEL":              "debug",
-				"EARNEST_FETCH_MIN_INTERVAL":     "5m",
-				"EARNEST_FETCH_MAX_INTERVAL":     "12h",
-				"EARNEST_RETENTION_DAYS":         "365",
+				"EARNEST_HTTP_ADDR":                "127.0.0.1:9090",
+				"EARNEST_DATABASE_URL":             "host=db user=earnest dbname=earnest sslmode=disable",
+				"EARNEST_BASE_URL":                 "https://feeds.example.com",
+				"EARNEST_CONTENT_ORIGIN":           "https://content.example.com",
+				"EARNEST_SECRET_KEY":               "another-secret-key-material-32bytes!",
+				"EARNEST_OUTBOUND_ALLOW_PRIVATE":   " ollama.lan:11434 , 10.0.0.2:443 ",
+				"EARNEST_TRUSTED_PROXIES":          " 172.18.0.1 , 10.0.0.0/8 ,::ffff:192.0.2.1",
+				"EARNEST_LOG_LEVEL":                "debug",
+				"EARNEST_FETCH_MIN_INTERVAL":       "5m",
+				"EARNEST_FETCH_MAX_INTERVAL":       "12h",
+				"EARNEST_FETCH_CACHE_MAX_INTERVAL": "36h",
+				"EARNEST_RETENTION_DAYS":           "365",
 			},
 			check: func(t *testing.T, got config.Config) {
 				want := config.Config{
-					HTTPAddr:             "127.0.0.1:9090",
-					ContentAddr:          ":8081",
-					DatabaseURL:          "host=db user=earnest dbname=earnest sslmode=disable",
-					BaseURL:              "https://feeds.example.com",
-					ContentOrigin:        "https://content.example.com",
-					SecretKey:            []byte("another-secret-key-material-32bytes!"),
-					OutboundAllowPrivate: []string{"ollama.lan:11434", "10.0.0.2:443"},
-					TrustedProxies:       []netip.Prefix{netip.MustParsePrefix("172.18.0.1/32"), netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("192.0.2.1/32")},
-					LogLevel:             slog.LevelDebug,
-					FetchMinInterval:     5 * time.Minute,
-					FetchMaxInterval:     12 * time.Hour,
-					RetentionDays:        365,
+					HTTPAddr:              "127.0.0.1:9090",
+					ContentAddr:           ":8081",
+					DatabaseURL:           "host=db user=earnest dbname=earnest sslmode=disable",
+					BaseURL:               "https://feeds.example.com",
+					ContentOrigin:         "https://content.example.com",
+					SecretKey:             []byte("another-secret-key-material-32bytes!"),
+					OutboundAllowPrivate:  []string{"ollama.lan:11434", "10.0.0.2:443"},
+					TrustedProxies:        []netip.Prefix{netip.MustParsePrefix("172.18.0.1/32"), netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("192.0.2.1/32")},
+					LogLevel:              slog.LevelDebug,
+					FetchMinInterval:      5 * time.Minute,
+					FetchMaxInterval:      12 * time.Hour,
+					FetchCacheMaxInterval: 36 * time.Hour,
+					RetentionDays:         365,
 				}
 				if !reflect.DeepEqual(got, want) {
 					t.Fatalf("Load()\n got: %+v\nwant: %+v", got, want)
+				}
+			},
+		},
+		{
+			name: "empty interval values select defaults",
+			env: map[string]string{
+				"EARNEST_FETCH_MIN_INTERVAL":       "",
+				"EARNEST_FETCH_MAX_INTERVAL":       "",
+				"EARNEST_FETCH_CACHE_MAX_INTERVAL": "",
+			},
+			check: func(t *testing.T, got config.Config) {
+				if got.FetchMinInterval != 15*time.Minute || got.FetchMaxInterval != 24*time.Hour || got.FetchCacheMaxInterval != 48*time.Hour {
+					t.Fatalf("empty durations = %v, %v, %v; want 15m0s, 24h0m0s, 48h0m0s",
+						got.FetchMinInterval, got.FetchMaxInterval, got.FetchCacheMaxInterval)
 				}
 			},
 		},
@@ -221,6 +239,13 @@ func TestLoadInvalid(t *testing.T) {
 		{"fetch min not a duration", map[string]string{"EARNEST_FETCH_MIN_INTERVAL": "soon"}, "EARNEST_FETCH_MIN_INTERVAL"},
 		{"fetch min negative", map[string]string{"EARNEST_FETCH_MIN_INTERVAL": "-5m"}, "EARNEST_FETCH_MIN_INTERVAL"},
 		{"fetch max zero", map[string]string{"EARNEST_FETCH_MAX_INTERVAL": "0"}, "EARNEST_FETCH_MAX_INTERVAL"},
+		{"fetch cache max not a duration", map[string]string{"EARNEST_FETCH_CACHE_MAX_INTERVAL": "soon"}, "EARNEST_FETCH_CACHE_MAX_INTERVAL"},
+		{"fetch cache max zero", map[string]string{"EARNEST_FETCH_CACHE_MAX_INTERVAL": "0"}, "EARNEST_FETCH_CACHE_MAX_INTERVAL"},
+		{"fetch cache max negative", map[string]string{"EARNEST_FETCH_CACHE_MAX_INTERVAL": "-5m"}, "EARNEST_FETCH_CACHE_MAX_INTERVAL"},
+		{"fetch cache max below min", map[string]string{
+			"EARNEST_FETCH_MIN_INTERVAL":       "2h",
+			"EARNEST_FETCH_CACHE_MAX_INTERVAL": "1h",
+		}, "EARNEST_FETCH_CACHE_MAX_INTERVAL"},
 		{"fetch min exceeds max", map[string]string{
 			"EARNEST_FETCH_MIN_INTERVAL": "2h",
 			"EARNEST_FETCH_MAX_INTERVAL": "1h",
@@ -305,17 +330,18 @@ func TestLoadErrorDoesNotLeakSecrets(t *testing.T) {
 
 func TestConfigStringRedacts(t *testing.T) {
 	cfg := config.Config{
-		HTTPAddr:             ":8080",
-		ContentAddr:          ":8081",
-		DatabaseURL:          "postgres://u:hunter2@db:5432/d",
-		BaseURL:              "http://app.internal",
-		ContentOrigin:        "http://content.internal",
-		SecretKey:            []byte("hunter2-key-material-padded-32b"),
-		OutboundAllowPrivate: []string{"ollama.lan:11434"},
-		LogLevel:             slog.LevelWarn,
-		FetchMinInterval:     15 * time.Minute,
-		FetchMaxInterval:     24 * time.Hour,
-		RetentionDays:        90,
+		HTTPAddr:              ":8080",
+		ContentAddr:           ":8081",
+		DatabaseURL:           "postgres://u:hunter2@db:5432/d",
+		BaseURL:               "http://app.internal",
+		ContentOrigin:         "http://content.internal",
+		SecretKey:             []byte("hunter2-key-material-padded-32b"),
+		OutboundAllowPrivate:  []string{"ollama.lan:11434"},
+		LogLevel:              slog.LevelWarn,
+		FetchMinInterval:      15 * time.Minute,
+		FetchMaxInterval:      24 * time.Hour,
+		FetchCacheMaxInterval: 48 * time.Hour,
+		RetentionDays:         90,
 	}
 
 	s := cfg.String()
@@ -332,6 +358,7 @@ func TestConfigStringRedacts(t *testing.T) {
 		"log_level=WARN",
 		"fetch_min_interval=15m0s",
 		"fetch_max_interval=24h0m0s",
+		"fetch_cache_max_interval=48h0m0s",
 		"retention_days=90",
 	} {
 		if !strings.Contains(s, want) {

@@ -202,7 +202,7 @@ func TestRedirectAndRetryDate(t *testing.T) {
 	if s.outcomes[1].ErrorClass != "policy" {
 		t.Fatalf("private %+v", s.outcomes[1])
 	}
-	if s.outcomes[2].RetryAfter < 119*time.Minute || s.outcomes[2].NextFetchAt.Sub(s.outcomes[2].AttemptedAt) < s.outcomes[2].RetryAfter {
+	if s.outcomes[2].RetryAfter < 119*time.Minute {
 		t.Fatalf("retry %+v", s.outcomes[2])
 	}
 }
@@ -478,21 +478,6 @@ func TestFetchDropsActiveSchemeLinks(t *testing.T) {
 	}
 }
 
-func TestIntervalLetsSlowFeedsBackOffToMaxInterval(t *testing.T) {
-	f, _ := testFetcher(t, httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
-	now := time.Now()
-	day := 24 * time.Hour
-	parsed := &feed.Feed{Items: []feed.Item{
-		{Published: func() *time.Time { v := now.Add(-14 * day); return &v }()},
-		{Published: func() *time.Time { v := now.Add(-7 * day); return &v }()},
-		{Published: func() *time.Time { v := now; return &v }()},
-	}}
-	got := f.interval(service.FeedToFetch{}, parsed, service.FetchOK, "")
-	if got != f.config.MaxInterval {
-		t.Fatalf("a weekly feed must poll at MaxInterval (%v), got %v", f.config.MaxInterval, got)
-	}
-}
-
 func TestFetchBoundsExtractionWork(t *testing.T) {
 	var pageHits atomic.Int32
 	var server *httptest.Server
@@ -543,20 +528,6 @@ func TestFetchStopsExtractingNearTheLeaseDeadline(t *testing.T) {
 	}
 	if got := pageHits.Load(); got != 0 {
 		t.Fatalf("a lease about to expire must defer extraction, got %d page fetches", got)
-	}
-}
-
-func TestIntervalFailureRetriesAtTwiceTheInterval(t *testing.T) {
-	f, _ := testFetcher(t, httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
-	// The cadence-derived cap applies to successful parses only; failures
-	// retry at twice the feed's interval, bounded by MaxInterval. Pinned
-	// intentionally: dropping the old 1h success-path cap changed the
-	// interval a slow feed carries into this branch.
-	if got := f.interval(service.FeedToFetch{Interval: 48 * time.Hour}, nil, service.FetchFailed, ""); got != f.config.MaxInterval {
-		t.Fatalf("a failed slow feed must retry at MaxInterval (%v), got %v", f.config.MaxInterval, got)
-	}
-	if got := f.interval(service.FeedToFetch{Interval: time.Hour}, nil, service.FetchFailed, ""); got < 108*time.Minute || got > 132*time.Minute {
-		t.Fatalf("a failed fast feed must retry near twice its interval, got %v", got)
 	}
 }
 

@@ -82,6 +82,35 @@ The model pipeline is disabled by default. To enable it:
 
 Full-text search works without models. See [pipeline](pipeline.md) and [LLM providers](llm-providers.md) for routes, prices, task names and privacy controls.
 
+## Feed refresh scheduling
+
+Earnest estimates posting cadence from the latest 20 distinct, nonfuture
+publication dates. It uses their median gap and weights a new sample at 25%
+when a newer publication arrives. Gaps are bounded to one second through one
+year. This estimate is stored separately from polling and error backoff, so
+restarts, unchanged documents and `304 Not Modified` responses preserve it.
+Feeds that expose only one entry can learn from successive publication dates.
+
+Normal polling uses that estimate, with jitter, within
+`EARNEST_FETCH_MIN_INTERVAL` and `EARNEST_FETCH_MAX_INTERVAL` (15 minutes and
+24 hours by default). A healthy response's `Cache-Control: max-age` can extend
+the wait, but only up to twice the posting interval, bounded by the minimum
+and `EARNEST_FETCH_CACHE_MAX_INTERVAL` (48 hours). With no usable estimate,
+the cache ceiling is one hour, subject to those configured bounds. An hourly
+feed therefore allows at most a two-hour cache delay; a monthly feed allows
+two days. A missing or shorter cache hint does not impose that ceiling as a
+minimum polling interval.
+
+Error backoff and explicit `Retry-After` remain separate. Cache hints on error
+responses do not postpone recovery, and the healthy cache ceiling never
+shortens a requested retry delay. A successful fetch clears error backoff
+without discarding the posting estimate.
+
+The cadence migration brings existing healthy waits within one hour for
+reconsideration under this policy. It leaves failed feeds' schedules and
+active leases unchanged. It does not invent cadence from the old retry
+interval; new estimates are learned from feed entries.
+
 ## Feed health
 
 Use the web feed list or `GET /v1/feeds/{id}/health` to inspect health and the last error. The stored classes guide the next check:
