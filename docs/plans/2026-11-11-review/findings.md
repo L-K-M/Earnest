@@ -14,13 +14,13 @@ record the latest CI, review and merge state.
 | S6 | LongCat reviewed counters, core queries, locks, all eleven migrations and sync model. Primary review read the omitted generated/pipeline, cache, spend, embedding, clustering and entry-query files. Full database-backed Go tests ran. No query-plan benchmark was run. |
 | S9 | Free DeepSeek reviewed adapters, CLI, MCP and boundary callers. Its session compacted before a final report; recovered static notes and actual package-test results remain usable partial evidence. Its database tests skipped; the primary full Go gate separately ran them with Postgres. |
 | W2 | Free DeepSeek supplied a reader/routing report after the first LongCat timeout. A second LongCat review confirmed the selected passive-reading failure and rejected a local-handler-only fix as incomplete. No browser GUI test was run. |
-| W3 | Tool-based and one-response LongCat attempts timed out. A bounded fallback report is pending; no clean result is inferred. |
+| W3 | LongCat attempts and a bounded GLM fallback timed out. Primary review read all listed production entrypoints, feed helpers, selected boundary callers, Settings.test.tsx and Onboarding.test.tsx. Other adjacent tests and CSS were not read in full. No independent full-slice approval, browser GUI, accessibility or performance audit is claimed. |
 | A1 | LongCat reviewed core sync, API, persistence and relevant app callers. No runtime suite was run by the reviewer; omissions include several import/search/settings tests. No consequential defect was established. |
 | A2 | LongCat supplied a partial app review; independent verification confirmed the sign-in failure. Reader-load cancellation ordering and several larger test files remain unverified. |
 | M1 | LongCat reviewed kit sync/network paths and selected app callers. Independent verification confirmed the clean-EOF hint failure. No Swift suite was run by the reviewers; vector-runner and several UI areas were not read in full. |
 | M2 | LongCat supplied a partial window/reader/app report. Settings/Login internals and several tests were omitted. Its navigation/optimistic-cadence candidates are not runtime-confirmed. |
 | O1 | LongCat checked deployment contracts and ran backup plus shell syntax probes. No local Compose/image gate was run by the reviewer because its Docker CLI lacked the Compose plugin. Context-isolation and restore/update candidates remain unverified. |
-| O2 | Tool-based and one-response LongCat attempts timed out. A bounded fallback report is pending. |
+| O2 | After LongCat timeouts, GLM returned a static snapshot report comparing current product docs with CLI, config, MCP, compatibility and selected service/pipeline code. Most service code, HTTP handlers, deployment files and native/web implementation were absent from that snapshot. Primary inspection adjudicated the token-key claim. |
 
 All new review material is tied to the stated application baseline. The eight
 older recovered reports and 134 historical assessments remain in the
@@ -76,8 +76,8 @@ policy are deferred; no current streamed human-output path was found.
 
 ### R3: A row's passive-reading cache survives a later unread
 
-**Reproduced; submitted:** [#169](https://github.com/L-K-M/Earnest/pull/169).
-[Fix plan](river-passive-reread.md). Review round 1 completed; round 2 pending.
+**Fixed:** [#169](https://github.com/L-K-M/Earnest/pull/169), two completed
+review rounds. [Fix plan](river-passive-reread.md).
 
 River kept successful and already-seen IDs for an entire view mount. A later
 keyboard, reader-toolbar or remote unread could not be followed by another
@@ -89,28 +89,56 @@ newer unread. Two more regressions failed before extending the queue: pending
 intent records its observed register revision and object identity, so unread
 cancels stale intent and old callbacks cannot discard a newer event. This does
 not change the sync conflict policy or invent optimistic register revisions.
-All River tests, typecheck and lint pass; the complete final web gate passed.
+All 37 River tests and the complete final web gate passed on `27dca93`;
+all CI gates passed. Minor follow-ups about timer coupling, a superseded-intent
+error banner and a transient absent-row lookup were deferred, not turned into
+another push.
 
 ### R4: Android device sign-in cannot restart after polling fails
 
-**Candidate with independent confirmation; implementation in progress.**
-[Fix plan](android-device-login-retry.md).
+**Fixed:** [#170](https://github.com/L-K-M/Earnest/pull/170), two completed
+review rounds. [Fix plan](android-device-login-retry.md). All current-head CI
+gates passed; minor assertion-message wording was deferred.
 
-Expiry, denial and transport/API failures stop the polling effect while keeping
-its authorization. That permanently disables the server field and Start button.
-The planned fix releases the failed flow while keeping its error and server,
-preserves pending/slow-down behavior, and propagates cancellation. Focused
-Compose/Robolectric regressions and the native gate are not yet claimed complete.
+Expiry, denial and transport/API failures stopped polling while keeping the
+authorization, permanently disabling the server field and Start button. Four
+Compose/Robolectric regressions failed on the actual disabled form before the
+fix. Terminal failures now release the flow while preserving its error and
+server; pending/slow-down responses continue and cancellation is rethrown.
+
+Review follow-ups added message-less transport errors and per-authorization
+client reuse. Both additional checks failed before those changes. All five
+focused tests and the full core/app unit tests, debug assembly and lint passed
+on `50daa27`. No new dependency or automatic auth retry was added. Dedicated
+cancellation-disposal coverage, concurrent Start prevention and local expiry
+remain explicit gaps or separate work, not claimed implemented.
 
 ### R5: A clean EOF permanently stops Mac live hints
 
-**Candidate with independent confirmation; regression preparation in progress.**
-[Fix plan](mac-event-reconnect.md).
+**Fixed:** [#171](https://github.com/L-K-M/Earnest/pull/171), one completed
+review round. [Fix plan](mac-event-reconnect.md). All current-head CI gates,
+including universal archive validation, passed.
 
-The transport can finish a valid event stream without error. AppModel returns
-instead of reconnecting; the two-minute poll converges data but never restarts
-live hints. The intended fix uses the existing backoff and preserves session,
-cancellation and 401 exits. Runtime verification is not yet claimed complete.
+The transport can finish a valid event stream without error. AppModel returned
+instead of reconnecting; the two-minute poll converged data but never restarted
+live hints. A real local SSE receiver and the public sign-in path reproduced
+this: the second connection timed out before the fix. It now reconnects after
+the existing ten-second backoff without an immediate retry loop, preserving
+session, cancellation and 401 exits.
+
+The focused regression, all 139 App tests and all 113 EarnestKit Swift Testing
+tests passed on `1122258`. Local Debug tests used Apple Development signing
+and `GENERATE_INFOPLIST_FILE=YES` for the test bundle. An initial signed-harness
+plist failure and a later removable-volume permission interruption were not
+counted as regression evidence. After allowing the prompt, a clean red run
+preceded the production change.
+
+Review's post-sleep cancellation guard is redundant with the loop condition
+and session guard before the next stream. Exponential clean-close backoff and
+persistent-proxy diagnostics would introduce a new retry/reporting policy,
+contrary to this fix's bounded plan. They remain separate work, along with
+optional timeout slack and test-seam naming. No immediately-closing proxy or
+battery benchmark was run.
 
 ## Refutations and deferrals
 
@@ -120,8 +148,18 @@ cancellation and 401 exits. Runtime verification is not yet claimed complete.
 - **Google Reader repeated include filters:** recovered S9 notes identify the
   older B6-3 conjunction/union candidate. No new protocol regression was
   established here; it remains deferred for compatibility-contract verification.
-- **MCP guide search text:** the old unavailable-search sentence in `llms.go`
-  is a minor current-guide discrepancy, deferred rather than bundled into fixes.
+- **Current-guide discrepancies:** the stale unavailable-search sentence in
+  `internal/mcp/llms.go`, the agent notify example missing required `--entry`
+  (`docs/cli.md:203`), the priced/capped Gemini embedding refusal not stated
+  explicitly in the enable checklist, the idle worker's up-to-30-second polling
+  backoff and the overbroad OPML-only idempotency exception remain documentation
+  follow-ups. No unlimited-spend workaround or runtime policy change is proposed.
+- **CLI token key claim:** no empty-key credential-minting defect was established.
+  `Auth.CreateToken` uses a random opaque secret and its hash; the copied Auth
+  secret-key field is not used by that path. The CLI documentation overstates
+  the environment requirement, but the snapshot's suggested cryptographic
+  impact does not follow from the implementation. Validation-policy changes
+  and wording correction are deferred, not labeled a vulnerability.
 - **Triage broker hints:** primary inspection found no immediate publication on
   Triage/RevertTriage, but periodic browser pulls still converge. A required
   latency failure was not established; no data-loss claim is made.
@@ -146,7 +184,11 @@ cancellation and 401 exits. Runtime verification is not yet claimed complete.
   integrated gate includes R1. Local checks are distinct from each PR's CI.
 - Web verification uses isolated pnpm 10.15.1. The machine-wide corepack shim
   points to a missing cache entry; it was not altered or presented as working.
-- No combined local `make check`, native full gate, real-provider call, production
-  webhook delivery, restore, deployment or release is claimed by this checkpoint.
-- Owned worktrees/test services remain while this execution is active; they must
-  be saved and removed before the final task report.
+- Native builds were serialized. Android's full local gate used JDK 21 and the
+  installed SDK. Mac's signed Debug App tests and full Swift Testing suite passed;
+  neither suite's empty/filtered wrapper is counted as substantive test coverage.
+- No combined local `make check`, real-provider call, production webhook delivery,
+  restore, deployment or release is claimed by this checkpoint. Native/Go/web
+  checks are separate, commit-specific evidence, not a comprehensive app audit.
+- Task-local worktrees and test services are removed after saving wanted work;
+  the final task report records cleanup. Logs remain outside the checkouts.

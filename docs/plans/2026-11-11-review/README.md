@@ -1,14 +1,15 @@
 # Review continuation, 2026-11-11
 
-Status: planned before implementation. Findings and execution state are in
-[findings.md](findings.md).
+The plan was merged before implementation. Bounded coverage, findings and
+execution state are in [findings.md](findings.md).
 
 Baseline: `aaf7719cfa3ce932d6ed9e289e431cc44ed2d0e4`, current `origin/main`
 at the start of this continuation. The [first batch](../2026-11-10-review/README.md)
 merged six regression fixes, the Docker/pnpm fix, dependency updates and the
 134-item backlog reconciliation. It recovered eight of nineteen review
-reports at an older baseline. This continuation covers the eleven missing
-reports; it does not claim the older eight were rerun against this baseline.
+reports at an older baseline. This continuation targets the eleven missing
+review areas; incomplete reports and omitted files remain explicit. It does
+not claim the older eight were rerun against this baseline.
 
 ## Scope
 
