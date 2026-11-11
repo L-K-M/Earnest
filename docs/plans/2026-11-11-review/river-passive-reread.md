@@ -27,3 +27,13 @@ current-base sync rule: a new reading event is not a stale passive override.
   in-flight intent and failure retry. Keep sync conflict and outbox rules intact.
 - Run targeted regressions before/after, then full web typecheck, lint, tests,
   build and generated-client validation. CI/review must pass before merge.
+
+## Review round 1: preserve the age of failed intent
+
+A failed passive enqueue can be retried after a newer unread arrives. That
+retry must not obtain a fresh base and overwrite the newer unread. Reproduce
+this before changing the retry path. Stamp pending intent with the seen
+revision observed at the actual reading event and discard it if that revision
+changes. Retain the queued intent object while it is in flight so local unread
+can cancel it and an old callback cannot overwrite a newer reading event.
+No change to sync conflict policy or the ReaderActions API is needed.
