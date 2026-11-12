@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import GRDB
 import EarnestKit
 
@@ -10,6 +11,7 @@ final class Cache: SyncStore, @unchecked Sendable {
     static let mediaLimit = 2000
     private let db: DatabaseQueue
     private let key: String
+    private let decodedSnapshot = Mutex<(data: Data, snapshot: SyncSnapshot)?>(nil)
 
     /// Location of the SQLite file shared by every identity.
     static func databaseURL(in directory: URL?) throws -> URL {
@@ -100,8 +102,18 @@ final class Cache: SyncStore, @unchecked Sendable {
         let data = try db.read { db in
             try Data.fetchOne(db, sql: "SELECT value FROM snapshots WHERE key = ?", arguments: [key])
         }
-        guard let data else { return SyncSnapshot() }
-        return try JSONDecoder().decode(SyncSnapshot.self, from: data)
+        // Another Cache may write the same identity, including updates that
+        // leave the cursor unchanged. Reuse a decode only for identical bytes.
+        return try decodedSnapshot.withLock { cached in
+            guard let data else {
+                cached = nil
+                return SyncSnapshot()
+            }
+            if let cached, cached.data == data { return cached.snapshot }
+            let snapshot = try JSONDecoder().decode(SyncSnapshot.self, from: data)
+            cached = (data, snapshot)
+            return snapshot
+        }
     }
 
     func save(_ snapshot: SyncSnapshot) throws {
