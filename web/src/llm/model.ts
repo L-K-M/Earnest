@@ -7,6 +7,8 @@ export type LLMModel = Schemas['LLMModelSettings']
 export type LLMSettings = Schemas['LLMSettings']
 export type LLMProviderInput = Schemas['LLMProviderInput']
 export type LLMSettingsInput = Schemas['LLMSettingsInput']
+export type DiscoveredModel = Schemas['DiscoveredModel']
+export type LLMModels = Schemas['LLMModels']
 
 export const LLM_TASKS = ['embed', 'classify', 'blurb', 'summary', 'edition', 'compile_rule', 'ask'] as const
 export type LLMTaskName = (typeof LLM_TASKS)[number]
@@ -22,7 +24,7 @@ export const LLM_DEFAULT_BASE_URLS: Record<LLMProviderKind, string> = {
 }
 
 const MAX_PROVIDERS = 32
-const MAX_MODELS = 128
+export const MAX_MODELS = 128
 const MAX_MONEY = '99999999.999999'
 const PROVIDER_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const DECIMAL = /^\d+(?:\.\d{1,6})?$/
@@ -42,6 +44,22 @@ export type ProviderDraft = Omit<LLMProvider, 'kind' | 'token_field' | 'timeout_
   original_name: string | null
 }
 export type ModelDraft = Omit<LLMModel, 'dimensions'> & {dimensions: string}
+
+// The badge summarizes the draft, not the server: a typed key is only
+// "entered" until Save, and the clear flag schedules removal.
+export type LLMKeyStatus = 'saved' | 'entered' | 'removal' | 'none'
+export function apiKeyStatus(provider: Pick<ProviderDraft, 'has_api_key' | 'api_key' | 'clear_api_key'>): LLMKeyStatus {
+  if (provider.api_key.trim()) return 'entered'
+  if (provider.clear_api_key) return 'removal'
+  return provider.has_api_key ? 'saved' : 'none'
+}
+export const LLM_KEY_STATUS_LABELS: Record<LLMKeyStatus, string> = {
+  saved: 'API key saved',
+  entered: 'API key entered · unsaved',
+  removal: 'Key removal pending',
+  none: 'No API key',
+}
+
 export type LLMSettingsDraft = {
   revision: number
   providers: ProviderDraft[]
@@ -78,26 +96,83 @@ export function draftFromSettings(settings: LLMSettings): LLMSettingsDraft {
   }
 }
 
-// inputFromDraft builds the PUT body. A typed key is sent as a replacement, a
-// checked clear flag removes the saved key, and neither sends the read-only
-// has_api_key field. A blank field keeps whatever the server holds.
+// providerInput builds the per-provider request object shared by the settings
+// PUT and model discovery. A typed key is sent as a replacement, a checked
+// clear flag removes the saved key, and neither sends the read-only
+// has_api_key field. A blank field keeps whatever the server holds, so an
+// unchanged saved provider lets the server inherit its stored key.
+export function providerInput(provider: ProviderDraft): LLMProviderInput {
+  const input: LLMProviderInput = {
+    name: provider.name,
+    kind: provider.kind,
+    base_url: provider.base_url,
+    monthly_limit_usd: provider.monthly_limit_usd,
+    timeout_seconds: Number(provider.timeout_seconds),
+    token_field: provider.token_field,
+    clear_api_key: provider.clear_api_key,
+  }
+  const key = provider.api_key.trim()
+  if (key) return {...input, api_key: key, clear_api_key: false}
+  return input
+}
+
+// Compare exact in-memory draft values. A hash can collide after a key edit
+// and wrongly accept a catalogue fetched with different credentials.
+export function sameDiscoveryProvider(a: ProviderDraft, b: ProviderDraft): boolean {
+  return a.name === b.name && a.kind === b.kind && a.base_url === b.base_url
+    && a.api_key === b.api_key && a.clear_api_key === b.clear_api_key
+    && a.has_api_key === b.has_api_key && a.original_name === b.original_name
+    && a.monthly_limit_usd === b.monthly_limit_usd
+    && a.timeout_seconds === b.timeout_seconds && a.token_field === b.token_field
+}
+
+// The only task with an embedding contract; everything else is chat work.
+export type LLMCapability = 'chat' | 'embedding'
+export function taskCapability(task: string): LLMCapability {
+  return task === 'embed' ? 'embedding' : 'chat'
+}
+
+// capabilityFor reads the catalogue flag for one capability. Undefined means
+// the provider did not say, never that the model cannot do it.
+export function capabilityFor(model: DiscoveredModel, capability: LLMCapability): boolean | undefined {
+  return capability === 'chat' ? model.chat : model.embedding
+}
+
+// draftFromDiscovered seeds the price review. Catalogue fields prefill when the
+// provider published them; only a model known to be chat-only may default
+// embedding price and geometry to zero, and only a known embedding-only model
+// may default chat prices to zero. Everything else stays blank so a missing
+// applicable price or embedding geometry demands explicit input: unknown is
+// never free.
+export function draftFromDiscovered(model: DiscoveredModel): ModelDraft {
+  const chatOnly = model.chat === true && model.embedding === false
+  const embeddingOnly = model.embedding === true && model.chat === false
+  return {
+    name: model.id,
+    input_per_1m: model.input_per_1m ?? (embeddingOnly ? '0' : ''),
+    output_per_1m: model.output_per_1m ?? (embeddingOnly ? '0' : ''),
+    embedding_per_1m: model.embedding_per_1m ?? (chatOnly ? '0' : ''),
+    dimensions: model.dimensions === undefined ? (chatOnly ? '0' : '') : String(model.dimensions),
+    truncatable: model.truncatable ?? false,
+  }
+}
+
+// validateDiscoveredModel reuses the configured-model rules and adds the
+// geometry a known embedding model needs: the provider saying a model can
+// embed means its dimensions must be real, not a placeholder.
+export function validateDiscoveredModel(draft: ModelDraft, model: DiscoveredModel, otherNames: Set<string>): string[] {
+  const problems = validateModel(draft, otherNames)
+  if (model.embedding === true && (!WHOLE.test(draft.dimensions) || Number(draft.dimensions) < 1)) {
+    problems.push(`${draft.name ? `Model ${draft.name}` : 'A model'}: dimensions are required for a model the provider says can embed.`)
+  }
+  return problems
+}
+
+// inputFromDraft builds the PUT body; see providerInput for the key rules.
 export function inputFromDraft(draft: LLMSettingsDraft): Omit<LLMSettingsInput, 'op_id'> {
   return {
     revision: draft.revision,
-    providers: draft.providers.map(provider => {
-      const input: LLMProviderInput = {
-        name: provider.name,
-        kind: provider.kind,
-        base_url: provider.base_url,
-        monthly_limit_usd: provider.monthly_limit_usd,
-        timeout_seconds: Number(provider.timeout_seconds),
-        token_field: provider.token_field,
-        clear_api_key: provider.clear_api_key,
-      }
-      const key = provider.api_key.trim()
-      if (key) return {...input, api_key: key, clear_api_key: false}
-      return input
-    }),
+    providers: draft.providers.map(providerInput),
     tasks: draft.tasks.map(task => ({task: task.task, provider: task.provider, model: task.model})),
     models: draft.models.map(model => ({
       name: model.name,
