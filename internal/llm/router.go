@@ -40,10 +40,11 @@ func NewRouter(cfg Config, client *outbound.Client) (*Router, error) {
 	}
 	for task, taskConfig := range cfg.Tasks {
 		provider := cfg.Providers[taskConfig.Provider]
-		if task == TaskEmbed && provider.Kind == KindGemini && provider.MonthlyLimitUSD > 0 && cfg.Models[taskConfig.Model].EmbeddingPer1M > 0 {
+		info, priced := LookupModel(cfg.Models, taskConfig.Provider, taskConfig.Model)
+		if task == TaskEmbed && provider.Kind == KindGemini && provider.MonthlyLimitUSD > 0 && info.EmbeddingPer1M > 0 {
 			return nil, fmt.Errorf("%w: capped Gemini embeddings require billable token counts", ErrUnsupported)
 		}
-		if _, ok := cfg.Models[taskConfig.Model]; !ok {
+		if !priced {
 			return nil, fmt.Errorf("llm: task %s model %q has no price configuration", task, taskConfig.Model)
 		}
 	}

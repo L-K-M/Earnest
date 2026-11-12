@@ -1146,6 +1146,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/settings/llm/models/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["check-llm-model"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/state:batch": {
         parameters: {
             query?: never;
@@ -1527,6 +1543,10 @@ export interface components {
             password: string;
             username: string;
         };
+        DefaultRoutes: {
+            embedding: components["schemas"]["TaskConfig"];
+            text: components["schemas"]["TaskConfig"];
+        };
         Device: {
             /** Format: date-time */
             created_at: string;
@@ -1578,6 +1598,7 @@ export interface components {
             input_per_1m?: string;
             name: string;
             output_per_1m?: string;
+            supports_custom_dimensions?: boolean;
             truncatable?: boolean;
         };
         Edition: {
@@ -1785,6 +1806,14 @@ export interface components {
             subscription_id?: number;
             title?: string;
         };
+        LLMModelCheckInput: {
+            /** @enum {string} */
+            capability: "chat" | "embedding";
+            model: components["schemas"]["LLMModelSettings"];
+            provider: components["schemas"]["LLMProviderInput"];
+            /** Format: int64 */
+            revision: number;
+        };
         LLMModelSettings: {
             /** Format: int64 */
             dimensions: number;
@@ -1792,6 +1821,8 @@ export interface components {
             input_per_1m: string;
             name: string;
             output_per_1m: string;
+            provider?: string;
+            supports_custom_dimensions?: boolean;
             truncatable: boolean;
         };
         LLMModels: {
@@ -1824,6 +1855,7 @@ export interface components {
             token_field: string;
         };
         LLMSettings: {
+            defaults?: components["schemas"]["DefaultRoutes"];
             models: components["schemas"]["LLMModelSettings"][] | null;
             providers: components["schemas"]["LLMProviderSettings"][] | null;
             /** Format: int64 */
@@ -1831,6 +1863,7 @@ export interface components {
             tasks: components["schemas"]["LLMTaskSettings"][] | null;
         };
         LLMSettingsInput: {
+            defaults?: components["schemas"]["DefaultRoutes"];
             models: components["schemas"]["LLMModelSettings"][] | null;
             op_id: string;
             providers: components["schemas"]["LLMProviderInput"][] | null;
@@ -1839,6 +1872,8 @@ export interface components {
             tasks: components["schemas"]["LLMTaskSettings"][] | null;
         };
         LLMTaskSettings: {
+            /** @enum {string} */
+            mode?: "off" | "default" | "custom";
             model: string;
             provider: string;
             task: string;
@@ -1878,6 +1913,13 @@ export interface components {
             scopes: string[] | null;
             /** Format: int64 */
             user_id: number;
+        };
+        ModelCheck: {
+            compatible: boolean;
+            /** Format: int64 */
+            dimensions?: number;
+            message: string;
+            supports_custom_dimensions?: boolean;
         };
         Mute: {
             deleted: boolean;
@@ -2283,6 +2325,10 @@ export interface components {
             /** Format: int64 */
             sanitizer_version: number;
             untrusted: boolean;
+        };
+        TaskConfig: {
+            model: string;
+            provider: string;
         };
         ThroughBody: {
             /** Format: date-time */
@@ -12738,6 +12784,120 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LLMModels"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Gone */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    "check-llm-model": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LLMModelCheckInput"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelCheck"];
                 };
             };
             /** @description Bad Request */

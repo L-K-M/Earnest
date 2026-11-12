@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -19,15 +20,16 @@ import (
 // DiscoveredModel is a catalogue suggestion, not a configured model. Missing
 // capability and price fields mean unknown, never false or free.
 type DiscoveredModel struct {
-	ID             string  `json:"id"`
-	Name           string  `json:"name"`
-	Chat           *bool   `json:"chat,omitempty"`
-	Embedding      *bool   `json:"embedding,omitempty"`
-	InputPer1M     *string `json:"input_per_1m,omitempty"`
-	OutputPer1M    *string `json:"output_per_1m,omitempty"`
-	EmbeddingPer1M *string `json:"embedding_per_1m,omitempty"`
-	Dimensions     *int    `json:"dimensions,omitempty"`
-	Truncatable    *bool   `json:"truncatable,omitempty"`
+	ID                       string  `json:"id"`
+	Name                     string  `json:"name"`
+	Chat                     *bool   `json:"chat,omitempty"`
+	Embedding                *bool   `json:"embedding,omitempty"`
+	InputPer1M               *string `json:"input_per_1m,omitempty"`
+	OutputPer1M              *string `json:"output_per_1m,omitempty"`
+	EmbeddingPer1M           *string `json:"embedding_per_1m,omitempty"`
+	Dimensions               *int    `json:"dimensions,omitempty"`
+	Truncatable              *bool   `json:"truncatable,omitempty"`
+	SupportsCustomDimensions *bool   `json:"supports_custom_dimensions,omitempty"`
 }
 
 const maxCataloguePages = 100
@@ -158,8 +160,10 @@ type catalogueEntry struct {
 	Type          string   `json:"type"`
 	Methods       []string `json:"supportedGenerationMethods"`
 	Spec          struct {
-		Name    string `json:"name"`
-		Pricing struct {
+		Name                     string          `json:"name"`
+		EmbeddingDimensions      json.RawMessage `json:"embeddingDimensions"`
+		SupportsCustomDimensions json.RawMessage `json:"supportsCustomDimensions"`
+		Pricing                  struct {
 			Input struct {
 				USD json.Number `json:"usd"`
 			} `json:"input"`
@@ -221,6 +225,12 @@ func decodeCatalogue(raw []byte, kind ProviderKind, venice bool) ([]DiscoveredMo
 				continue
 			}
 			model.Name = entry.Spec.Name
+			if n, err := strconv.Atoi(string(entry.Spec.EmbeddingDimensions)); err == nil && n > 0 && n <= 65536 {
+				model.Dimensions = &n
+			}
+			if raw := string(entry.Spec.SupportsCustomDimensions); raw == "true" || raw == "false" {
+				model.SupportsCustomDimensions = boolPointer(raw == "true")
+			}
 			model.Chat, model.Embedding = boolPointer(entry.Type == "text"), boolPointer(entry.Type == "embedding")
 			// Venice publishes these rates in USD per million tokens. Other
 			// compatible APIs have no common price schema, so do not guess units.

@@ -68,6 +68,45 @@ type Config struct {
 	Providers map[string]ProviderConfig
 	Tasks     map[Task]TaskConfig
 	Models    map[string]ModelInfo
+	Defaults  *DefaultRoutes  `json:",omitempty"`
+	TaskModes map[Task]string `json:",omitempty"`
+}
+
+// DefaultRoutes records editor inheritance; Tasks always contains effective routes.
+type DefaultRoutes struct {
+	Text      TaskConfig `json:"text"`
+	Embedding TaskConfig `json:"embedding"`
+}
+
+// ModelKey distinguishes provider-specific rates from legacy global entries.
+// Model identifiers cannot contain control characters, so the separator is unambiguous.
+func ModelKey(provider, model string) string {
+	if provider == "" {
+		return model
+	}
+	return provider + "\x00" + model
+}
+
+func SplitModelKey(key string) (provider, model string) {
+	if provider, model, ok := strings.Cut(key, "\x00"); ok {
+		return provider, model
+	}
+	return "", key
+}
+
+// LookupModel prefers destination-specific metadata, retaining legacy defaults.
+func LookupModel(models map[string]ModelInfo, provider, model string) (ModelInfo, bool) {
+	if info, ok := models[ModelKey(provider, model)]; ok {
+		return info, true
+	}
+	info, ok := models[model]
+	return info, ok
+}
+
+// ModelFor returns the metadata for a route already validated by the router.
+func ModelFor(models map[string]ModelInfo, route Route) ModelInfo {
+	info, _ := LookupModel(models, route.Provider.Name(), route.Model)
+	return info
 }
 
 // ProviderConfig configures one named provider.
@@ -85,8 +124,8 @@ type ProviderConfig struct {
 
 // TaskConfig routes one task to a provider and model.
 type TaskConfig struct {
-	Provider string
-	Model    string
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
 }
 
 // ModelInfo is a model's price and embedding geometry.
@@ -100,6 +139,8 @@ type ModelInfo struct {
 	// Truncatable allows vectors longer than StorageDimensions to be cut.
 	// Models that are not Matryoshka-style must leave it false.
 	Truncatable bool
+	// SupportsCustomDimensions permits provider-side resizing, never local truncation.
+	SupportsCustomDimensions bool
 }
 
 // defaultModels carries the prices from docs/research/llm.md's cost table
@@ -280,11 +321,12 @@ func loadTasks(providers map[string]ProviderConfig, models map[string]ModelInfo)
 // modelJSON is one EARNEST_LLM_MODELS entry. Pointer fields distinguish an
 // absent override from an explicit zero.
 type modelJSON struct {
-	InputPer1M     json.Number `json:"input_per_1m"`
-	OutputPer1M    json.Number `json:"output_per_1m"`
-	EmbeddingPer1M json.Number `json:"embedding_per_1m"`
-	Dimensions     *int        `json:"dimensions"`
-	Truncatable    *bool       `json:"truncatable"`
+	InputPer1M               json.Number `json:"input_per_1m"`
+	OutputPer1M              json.Number `json:"output_per_1m"`
+	EmbeddingPer1M           json.Number `json:"embedding_per_1m"`
+	Dimensions               *int        `json:"dimensions"`
+	Truncatable              *bool       `json:"truncatable"`
+	SupportsCustomDimensions *bool       `json:"supports_custom_dimensions"`
 }
 
 // loadModels returns the default price table overlaid with
@@ -320,8 +362,11 @@ func loadModels() (map[string]ModelInfo, error) {
 		if entry.Truncatable != nil {
 			info.Truncatable = *entry.Truncatable
 		}
+		if entry.SupportsCustomDimensions != nil {
+			info.SupportsCustomDimensions = *entry.SupportsCustomDimensions
+		}
 		if entry.Dimensions != nil {
-			if *entry.Dimensions < 0 || (*entry.Dimensions > StorageDimensions && !info.Truncatable) {
+			if *entry.Dimensions < 0 || (*entry.Dimensions > StorageDimensions && !info.Truncatable && !info.SupportsCustomDimensions) {
 				return nil, fmt.Errorf("%s: model %s dimensions %d out of range", envModels, name, *entry.Dimensions)
 			}
 			info.Dimensions = *entry.Dimensions
