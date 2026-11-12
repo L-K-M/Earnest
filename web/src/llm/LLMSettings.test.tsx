@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import {afterEach, expect, it, vi} from 'vitest'
 import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react'
+import {QueryClient, QueryClientProvider, useQuery} from '@tanstack/react-query'
 import {request, RequestError} from '../request'
 import {LLM_TASKS, type LLMProviderInput, type LLMSettings} from './model'
 import {LLMSettings as LLMSettingsSection} from './LLMSettings'
@@ -44,12 +45,29 @@ const providerOf = (body: Body, name: string): ProviderBody => {
   return found
 }
 
+function renderSection(pipeline = false) {
+  const client = new QueryClient({defaultOptions: {queries: {retry: false}}})
+  render(<QueryClientProvider client={client}>
+    <LLMSettingsSection />
+    {pipeline && <PipelineStatus />}
+  </QueryClientProvider>)
+}
+
+function PipelineStatus() {
+  const status = useQuery({
+    queryKey: ['pipeline'],
+    queryFn: () => request<{ask: string}>('/v1/pipeline'),
+    staleTime: 30_000,
+  })
+  return <p>Ask {status.data?.ask ?? 'loading'}</p>
+}
+
 function mount(server: LLMSettings = fixture) {
   vi.mocked(request).mockImplementation(async (path: string, options?: RequestInit) => {
     if (path === '/v1/settings/llm' && !options?.method) return server
     return {...server, revision: server.revision + 1}
   })
-  render(<LLMSettingsSection />)
+  renderSection()
 }
 
 const confirm = (value = true) => vi.spyOn(window, 'confirm').mockReturnValue(value)
@@ -70,7 +88,7 @@ it('loads the shared settings, lists all seven tasks and issues no mutations on 
 
 it('shows an error and a Load button when the settings cannot load', async () => {
   vi.mocked(request).mockRejectedValue(new Error('offline'))
-  render(<LLMSettingsSection />)
+  renderSection()
   expect(await screen.findByRole('alert')).toBeTruthy()
   expect(screen.getByText(/offline/)).toBeTruthy()
   expect(screen.getByRole('button', {name: 'Load'})).toBeTruthy()
@@ -94,6 +112,36 @@ it('keeps a saved key when the replacement field is blank and omits has_api_key'
   expect(body.revision).toBe(3)
   expect(body.op_id).toEqual(expect.any(String))
   expect(body.tasks).toHaveLength(7)
+})
+
+it.each([true, false])('refreshes cached task availability after setting Ask enabled=%s', async enabled => {
+  let active = !enabled
+  const settings = (revision: number): LLMSettings => ({
+    ...fixture,
+    revision,
+    tasks: (fixture.tasks ?? []).map(task => task.task === 'ask'
+      ? {...task, provider: active ? 'local' : '', model: active ? 'local-chat' : ''}
+      : task),
+  })
+  vi.mocked(request).mockImplementation(async (path: string, options?: RequestInit) => {
+    if (path === '/v1/pipeline') return {ask: active ? 'enabled' : 'disabled'}
+    if (options?.method === 'PUT') {
+      active = enabled
+      return settings(4)
+    }
+    return settings(3)
+  })
+  renderSection(true)
+  await screen.findByText(`Ask ${enabled ? 'disabled' : 'enabled'}`)
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+
+  fireEvent.change(screen.getByLabelText('ask provider'), {target: {value: enabled ? 'local' : ''}})
+  if (enabled) fireEvent.change(screen.getByLabelText('ask model'), {target: {value: 'local-chat'}})
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+
+  await screen.findByText(/LLM services saved/)
+  expect(await screen.findByText(`Ask ${enabled ? 'enabled' : 'disabled'}`)).toBeTruthy()
+  expect(vi.mocked(request).mock.calls.filter(([path]) => path === '/v1/pipeline')).toHaveLength(2)
 })
 
 it('does not mark the draft dirty when a saved key is left blank', async () => {

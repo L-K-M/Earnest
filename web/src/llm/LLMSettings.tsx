@@ -1,4 +1,5 @@
 import {useCallback, useEffect, useRef, useState} from 'react'
+import {useQueryClient} from '@tanstack/react-query'
 import {request, RequestError} from '../request'
 import {useBlocker} from '../router'
 import {
@@ -61,6 +62,7 @@ function emptyProvider(): ProviderDraft {
 // owns the only copy; this form edits a draft and Save replaces the whole
 // provider, task and model configuration in one request.
 export function LLMSettings() {
+  const queryClient = useQueryClient()
   const [loaded, setLoaded] = useState<LLMSettingsData | null>(null)
   const [draft, setDraft] = useState<LLMSettingsDraft | null>(null)
   const [problems, setProblems] = useState<string[]>([])
@@ -201,6 +203,8 @@ export function LLMSettings() {
         setProviderForm(null)
         setModelForm(false)
         setNotice('LLM services saved.')
+        // The shell gates Ask on this cache, not on the settings response.
+        void queryClient.invalidateQueries({queryKey: ['pipeline']})
       } catch (error) {
         if (error instanceof RequestError && error.status === 409) {
           // A conflict means the saved configuration moved on. Keep the draft
