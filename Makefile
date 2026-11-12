@@ -26,6 +26,7 @@ build: web-build
 test:
 	$(GO) test -race -count=1 ./...
 	sh scripts/backup_test.sh
+	python3 scripts/build_test.py
 	python3 scripts/package_client_test.py
 
 lint:
