@@ -158,7 +158,7 @@ import AppKit
         if section == .frontPage, let frontPage {
             let coverageIDs = Set(frontPage.sections.flatMap(\.stories).flatMap { $0.coverage.map(\.entry.id) })
             let restoredIDs = Set(restored.map(\.id))
-            restored += self.entries.filter { coverageIDs.contains($0.id) && !restoredIDs.contains($0.id) }
+            restored += self.entries.filter { coverageIDs.contains($0.id) && !restoredIDs.contains($0.id) && !isGone($0) }
         }
         self.entries = keepingVisitedArticles(restored)
         cachedPresentation = true
@@ -199,7 +199,8 @@ import AppKit
     /// on it. Keep the open article until the selection moves on.
     private func keepingOpenArticle(_ fresh: [APIEntry]) -> [APIEntry] {
         guard let selected, !fresh.contains(where: { $0.id == selected }),
-              let open = entries.first(where: { $0.id == selected }) ?? readingEntry.flatMap({ $0.id == selected ? $0 : nil })
+              let open = entries.first(where: { $0.id == selected }) ?? readingEntry.flatMap({ $0.id == selected ? $0 : nil }),
+              !isGone(open)
         else { return fresh }
         var kept = fresh
         // All articles reads newest first; every other list is chronological.
@@ -676,14 +677,14 @@ import AppKit
     }
     var canActOnEntry: Bool {
         guard let selected, canBrowse, app.engine != nil, app.principalID > 0 else { return false }
-        return entries.contains { $0.id == selected && !$0.deleted }
+        return entries.contains { $0.id == selected && !isGone($0) }
     }
 
     /// Apply a reading action to the open article, or to the row a context
     /// menu was opened on.
     func command(_ command: EntryCommand, entryID: Int64? = nil) {
         let target = entryID ?? selected
-        guard let entry = entries.first(where: { $0.id == target && !$0.deleted }), let engine = app.engine,
+        guard let entry = entries.first(where: { $0.id == target && !isGone($0) }), let engine = app.engine,
               app.principalID > 0 else { return }
         guard let generation = try? engine.snapshot().cursor?.generation else {
             app.connectionNote = "Still syncing; try again in a moment."
@@ -930,6 +931,7 @@ import AppKit
     /// Activity rows open the article an agent acted on. Agent-surfaced
     /// articles block automatic images, like agent-note search matches.
     func selectActivity(_ item: ActivityItem?) {
+        pendingRestoredSelection = nil
         guard let item else {
             selectFromList(nil)
             return

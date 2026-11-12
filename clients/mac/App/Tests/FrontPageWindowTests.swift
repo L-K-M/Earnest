@@ -218,7 +218,11 @@ import EarnestKit
         ])
         defer { model.signOut(); session.invalidateAndCancel() }
         await window.refreshFrontPage()
+        window.selected = 9
         try model.engine?.markGone(entryID: 9)
+        XCTAssertFalse(window.canActOnEntry)
+        window.restoreCachedEntries([])
+        XCTAssertFalse(window.entries.contains { $0.id == 9 })
         XCTAssertEqual(window.visibleEntryIDs(), [10, 11, 12])
         for id: Int64 in [10, 11, 12] { try model.engine?.markGone(entryID: id) }
         XCTAssertTrue(window.visibleEntryIDs().isEmpty)
@@ -258,6 +262,23 @@ import EarnestKit
         XCTAssertNil(window.pendingRestoredSelection)
         window.pendingRestoredSelection = 9
         window.frontPagePeriod = .weekly
+        XCTAssertNil(window.pendingRestoredSelection)
+    }
+
+    func testActivitySelectionCancelsDelayedRestoration() async throws {
+        let (model, window, session) = try makeModel([
+            .init(path: "/v1/front-page", body: pageJSON(period: "daily", revision: "r1")),
+        ])
+        defer { model.signOut(); session.invalidateAndCancel() }
+        await window.refreshFrontPage()
+        window.section = .activity
+        window.pendingRestoredSelection = 9
+        window.selectActivity(ActivityItem(.object([
+            "id": .integer(8), "action": .string("notification.created"),
+            "target": .object(["id": .integer(19)])
+        ])))
+        model.rebuildPresentation()
+        XCTAssertNil(window.selected)
         XCTAssertNil(window.pendingRestoredSelection)
     }
 

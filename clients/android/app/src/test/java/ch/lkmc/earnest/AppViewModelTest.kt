@@ -41,6 +41,7 @@ class AppViewModelTest {
     private val contentUrlQueries = CopyOnWriteArrayList<String?>()
     @Volatile private var frontPageOverride: String? = null
     @Volatile private var frontPageStatus: Int = 200
+    @Volatile private var frontPageGate: (() -> Unit)? = null
     private class Sessions(initial: AuthenticatedSession?) : SessionStore {
         private val stored = java.util.concurrent.atomic.AtomicReference(initial)
         var value: AuthenticatedSession?
@@ -91,6 +92,7 @@ class AppViewModelTest {
             "/v1/opml:import" -> """[{"path":[],"deferred":true,"subscription":{"id":3,"feed_id":5,"title":"Feed","url":"https://feed.test/rss","site_url":"https://feed.test","folder_id":0,"cadence":"today","extract":"none","rev":1,"deleted":false,"private":false,"muted":false,"initial_through_seq":0,"initial_fetch_pending":false,"health":{"next_fetch_at":"2026-11-10T00:00:00Z","consecutive_failures":0,"http_status":200,"posts_per_day":1.0,"firehose":false}}}]"""
             else -> "[]"
         }
+        if (path == "/v1/front-page") frontPageGate?.invoke()
         val status = when (path) {
             unauthorizedPath -> 401
             "/v1/activity/agent-changes" -> agentChangesStatus
@@ -970,6 +972,28 @@ class AppViewModelTest {
         assertEquals("rev-2", model.state.value.frontPage.page?.revision)
         assertEquals(requests, calls.count { it == "/v1/front-page" })
         assertTrue(SessionCache(app, identity).withEngine { it.snapshot().outbox }.isEmpty())
+        Unit
+    }
+
+    @Test fun applyingAnOfferPreservesCoverageAlreadyInFlight() = runBlocking(Dispatchers.IO) {
+        frontPageOverride = frontPageJson("rev-1", "daily")
+        val model = model()
+        await("front page") { model.state.value.frontPage.page?.revision == "rev-1" }
+        frontPageOverride = frontPageJson("rev-2", "daily")
+        model.refresh()
+        await("first offer") { model.state.value.frontPage.pendingRevision == "rev-2" }
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        frontPageOverride = frontPageJson("rev-3", "daily")
+        frontPageGate = { entered.countDown(); check(release.await(10, java.util.concurrent.TimeUnit.SECONDS)) }
+        try {
+            model.refresh()
+            assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            model.refreshFrontPage()
+            assertEquals("rev-2", model.state.value.frontPage.page?.revision)
+        } finally { release.countDown(); frontPageGate = null }
+        await("newer offer") { model.state.value.frontPage.pendingRevision == "rev-3" }
+        assertEquals("rev-2", model.state.value.frontPage.page?.revision)
         Unit
     }
 

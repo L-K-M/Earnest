@@ -1245,7 +1245,7 @@ class AppViewModel internal constructor(
         if (pending != null) {
             val expected = frontPageEpoch.get()
             val (cache, session) = activeAccount("Still signing in; the front page did not refresh.") ?: return
-            val request = frontPageRequest.incrementAndGet()
+            val request = frontPageRequest.get()
             publishFrontPage(expected, session, cache, request) {
                 // Identical coverage revisions can belong to different accounts.
                 if (it.frontPage.period != pending.period || it.frontPage.pendingPage !== pending) it
