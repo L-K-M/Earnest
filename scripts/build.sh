@@ -15,7 +15,7 @@
 #             macOS hosts only.
 #   android — Android debug APK (gradlew :app:assembleDebug)
 #             → dist/earnest-debug.apk. The only signed variant — no release
-#             signing is configured. Install with `adb install -r`.
+#             signing is configured. Add --install to install via adb.
 #
 # Usage:
 #   scripts/build.sh                 # every target this host can build
@@ -23,16 +23,18 @@
 #                                    # infeasible target into an error, not a skip)
 #   scripts/build.sh --debug mac     # Debug Xcode configuration (the other
 #                                    # targets have no debug/release split)
-#   scripts/build.sh --install       # build the mac app and install it to
-#                                    # /Applications/Earnest.app (macOS only),
-#                                    # then reveal the installed copy
+#   scripts/build.sh --install       # build both native apps; install the Mac
+#                                    # app to /Applications/Earnest.app and the
+#                                    # Android APK to a connected device
+#   scripts/build.sh android --install # build and install only the Android app
+#                                    # (no connected device: skip installation)
 #   scripts/build.sh --clean         # remove dist/
 #
 # VERSION and REVISION stamp the binary and the image; they default to
 # `git describe` / the short HEAD.
 #
-# Exit status is non-zero if any requested target fails to build. Targets that
-# simply can't build on this host (missing toolchain, wrong OS) are reported
+# Exit status is non-zero if any requested target fails to build or install.
+# Targets that can't build on this host (missing toolchain, wrong OS) are reported
 # as skipped, and only fail the run when you named them explicitly.
 set -uo pipefail
 
@@ -77,20 +79,10 @@ case "$(uname -s)" in
   *) HOST="unknown" ;;
 esac
 
-# --install installs the mac app: with no explicit targets it builds just that
-# (not the whole matrix), and with explicit targets it makes sure `mac` is in.
-if $INSTALL; then
-  if [[ "$HOST" != "macos" ]]; then
-    echo "!! --install installs the macOS app; it is only supported on a macOS host" >&2
-    exit 2
-  fi
-  if [[ ${#REQUESTED[@]} -eq 0 ]]; then
-    REQUESTED=(mac); EXPLICIT=1
-  else
-    found=0
-    for t in "${REQUESTED[@]}"; do [[ "$t" == "mac" ]] && found=1; done
-    [[ $found -eq 0 ]] && REQUESTED+=(mac)
-  fi
+# Without explicit targets, --install builds the native clients this host can
+# build. Explicit targets keep their usual feasibility checks and selection.
+if $INSTALL && [[ ${#REQUESTED[@]} -eq 0 ]]; then
+  REQUESTED=(mac android)
 fi
 
 # Default to all targets; feasibility is decided per-target below.
@@ -310,6 +302,51 @@ detect_android_sdk() {
   return 1
 }
 
+install_android() {
+  local sdk="$1" adb="adb" devices serial state extra selected="" ready=0 unavailable=0
+  if [[ -x "$sdk/platform-tools/adb" ]]; then
+    adb="$sdk/platform-tools/adb"
+  elif ! have adb; then
+    echo "!! android: adb not found; install Android SDK platform tools" >&2
+    record "android: install FAILED (adb not found)"; return 1
+  fi
+
+  if ! devices="$("$adb" devices)"; then
+    echo "!! android: could not list connected devices" >&2
+    record "android: install FAILED (adb devices)"; return 1
+  fi
+  while read -r serial state extra; do
+    [[ -z "$serial" || "$serial" == "List" || "$serial" == \* ]] && continue
+    [[ -n "${ANDROID_SERIAL:-}" && "$serial" != "$ANDROID_SERIAL" ]] && continue
+    if [[ "$state" == "device" ]]; then
+      selected="$serial"
+      ready=$((ready + 1))
+    else
+      unavailable=1
+    fi
+  done <<< "$devices"
+
+  if [[ $ready -eq 0 ]]; then
+    if [[ -n "${ANDROID_SERIAL:-}" || $unavailable -eq 1 ]]; then
+      echo "!! android: no ready device${ANDROID_SERIAL:+ matching ANDROID_SERIAL=$ANDROID_SERIAL}; enable and authorize USB debugging, or reconnect the device" >&2
+      record "android: install FAILED (device not ready)"; return 1
+    fi
+    echo ".. android: installation skipped (no connected device)"
+    record "android: install skipped (no connected device)"; return 0
+  fi
+  if [[ $ready -gt 1 ]]; then
+    echo "!! android: multiple devices connected; set ANDROID_SERIAL to choose one (see adb devices)" >&2
+    record "android: install FAILED (multiple devices)"; return 1
+  fi
+
+  echo "-- installing dist/earnest-debug.apk to $selected"
+  if "$adb" -s "$selected" install -r "$DIST/earnest-debug.apk"; then
+    record "android: installed -> $selected"
+  else
+    record "android: install FAILED (adb install)"; return 1
+  fi
+}
+
 build_android() {
   echo "== android (debug APK) =="
   if [[ "$HOST" != "linux" && "$HOST" != "macos" ]]; then
@@ -340,6 +377,10 @@ build_android() {
   else
     echo "!! android: gradle build failed" >&2
     record "android: FAILED (gradle)"; return 1
+  fi
+
+  if $INSTALL; then
+    install_android "$sdk" || return 1
   fi
 }
 
