@@ -199,8 +199,9 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     }, 10)
   })
 
-  // Only opening queues an automatic read. Deduplicate outstanding writes,
-  // but allow a later open after an explicit unread, even from another client.
+  // Only a user's open action queues an automatic read, never rendering or
+  // fetching. Deduplicate outstanding writes, but allow a later user open
+  // after an explicit unread, even from another client.
   useEffect(() => {
     const inFlight = new Set<number>()
     const timer = window.setInterval(() => {

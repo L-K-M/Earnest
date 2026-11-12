@@ -27,8 +27,9 @@ function mount(shortcuts=true, blurbStatus="disabled", selected=entries[0], rows
   const actions: ReaderActions = {act,state:entry=>entry.state}
   const onSelect=vi.fn()
   const onOpen=vi.fn()
-  const view=render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'today',title:'Today'}} subscriptions={subscriptions} actions={actions} selected={selected} onSelect={onSelect} onOpen={onOpen} reading={reading} shortcuts={shortcuts} counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>)
-  return {act,actions,onSelect,onOpen,container:view.container}
+  const client = new QueryClient({defaultOptions:{queries:{retry:false}}})
+  const view=render(<QueryClientProvider client={client}><River view={{kind:'today',title:'Today'}} subscriptions={subscriptions} actions={actions} selected={selected} onSelect={onSelect} onOpen={onOpen} reading={reading} shortcuts={shortcuts} counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>)
+  return {act,actions,onSelect,onOpen,client,container:view.container}
 }
 function scroller() { return screen.getByLabelText('Article list') }
 function scrollPast(id: number) {
@@ -41,9 +42,9 @@ function positionWrites(): number[] {
     .map(([, options]) => JSON.parse(String((options as RequestInit).body)).seq as number)
 }
 describe('river interactions', () => {
-  it('does not mark rows seen merely because they render', async () => {
+  it.each([false,true])('does not mark rows seen merely because they render (reading: %s)', async reading => {
     vi.stubGlobal('IntersectionObserver', Observer)
-    const {act}=mount()
+    const {act}=mount(true,'disabled',entries[0],entries,[],reading)
     await screen.findByText('Article 1')
     // The replaced mechanism observed intersections; one must not mark a row now.
     const row=observed.find(element=>(element as HTMLElement).dataset.entry==='1')
@@ -51,6 +52,17 @@ describe('river interactions', () => {
     if (row && callback) callback([{target:row,isIntersecting:true,intersectionRatio:1} as IntersectionObserverEntry],{} as IntersectionObserver)
     await new Promise(resolve => window.setTimeout(resolve, 700))
     expect(act).not.toHaveBeenCalled()
+  })
+  it('does not mark the displayed article read during a background refresh', async () => {
+    const {act: write,client,onOpen}=mount(true,'disabled',entries[0],entries,[],true)
+    await screen.findByText('Article 1')
+    await act(async () => {await client.invalidateQueries({queryKey:['river']})})
+    const listRequests = vi.mocked(request).mock.calls.filter(([path]) => path.startsWith('/v1/entries?'))
+    expect(listRequests).toHaveLength(2)
+    await new Promise(resolve => window.setTimeout(resolve, 700))
+    expect(write).not.toHaveBeenCalled()
+    expect(onOpen).not.toHaveBeenCalled()
+    expect(positionWrites()).toEqual([])
   })
   it('keeps scrolled-past rows unread without advancing the resume position', async () => {
     const {act}=mount()
