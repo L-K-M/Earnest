@@ -395,7 +395,7 @@ dd {margin: 0}
 .section-nav a {display: block; padding: .4rem .6rem; border-radius: var(--r2); color: var(--ink-muted); text-decoration: none}
 .section-nav a:hover, .section-nav a[aria-current="page"] {background: var(--hover); color: var(--ink)}
 .section-nav a[aria-current="page"] {font-weight: 600}
-.field-error {color: var(--error, #a42a21); font-size: .875rem}
+.field-error {color: var(--danger); font-size: .875rem}
 @container page (max-width: 52rem) {
   .settings-layout {grid-template-columns: minmax(0, 1fr)}
   .section-nav {position: static; margin-bottom: var(--s3)}
