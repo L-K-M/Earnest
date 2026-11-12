@@ -4,10 +4,14 @@ import {request, RequestError} from '../request'
 import {useBlocker} from '../router'
 import {
   LLM_DEFAULT_BASE_URLS,
+  LLM_KEY_STATUS_LABELS,
   LLM_PROVIDER_KINDS,
   LLM_TOKEN_FIELDS,
+  MAX_MODELS,
+  apiKeyStatus,
   draftFromSettings,
   inputFromDraft,
+  taskCapability,
   validateDraft,
   validateModel,
   validateProvider,
@@ -19,6 +23,7 @@ import {
   type ModelDraft,
   type ProviderDraft,
 } from './model'
+import {DiscoveryPanel} from './Discovery'
 
 const newOp = () => crypto.randomUUID()
 const message = (error: unknown, fallback: string) => error instanceof Error && error.message ? error.message : fallback
@@ -70,6 +75,10 @@ export function LLMSettings() {
   const [busy, setBusy] = useState(false)
   const [providerForm, setProviderForm] = useState<{mode: 'add'} | {mode: 'edit'; index: number} | null>(null)
   const [modelForm, setModelForm] = useState(false)
+  // Which catalogue panel is open: beside one provider row or inside one
+  // task's routing row. The panel inside the provider editor keeps its own
+  // open state because its values change while it is mounted.
+  const [discovery, setDiscovery] = useState<{target: 'provider' | 'task'; index: number} | null>(null)
   // The op_id of the request whose outcome is uncertain, so a retry of the
   // identical body reuses it instead of risking a second apply.
   const attempt = useRef<{body: string; opID: string} | null>(null)
@@ -85,6 +94,7 @@ export function LLMSettings() {
       setDraft(draftFromSettings(next))
       setProviderForm(null)
       setModelForm(false)
+      setDiscovery(null)
       setNotice(notice)
     } catch (error) {
       setProblems([message(error, 'Could not load the LLM services.')])
@@ -102,14 +112,12 @@ export function LLMSettings() {
   useBlocker(dirty || hasOpenEditor, 'Leave without saving your LLM service settings?')
 
   function setTask(index: number, patch: Partial<LLMTask>) {
-    if (!draft) return
-    setDraft({...draft, tasks: draft.tasks.map((task, i) => i === index ? {...task, ...patch} : task)})
+    setDraft(current => current ? {...current, tasks: current.tasks.map((task, i) => i === index ? {...task, ...patch} : task)} : current)
     setNotice('')
   }
 
   function setModel(index: number, patch: Partial<ModelDraft>) {
-    if (!draft) return
-    setDraft({...draft, models: draft.models.map((model, i) => i === index ? {...model, ...patch} : model)})
+    setDraft(current => current ? {...current, models: current.models.map((model, i) => i === index ? {...model, ...patch} : model)} : current)
     setNotice('')
   }
 
@@ -120,6 +128,7 @@ export function LLMSettings() {
     if (found.length) { setProblems(found); return }
     setDraft({...draft, providers: [...draft.providers, provider]})
     setProviderForm(null)
+    setDiscovery(null)
     setProblems([])
     setNotice('')
   }
@@ -143,6 +152,7 @@ export function LLMSettings() {
         : draft.tasks,
     })
     setProviderForm(null)
+    setDiscovery(null)
     setProblems([])
     setNotice('')
   }
@@ -159,7 +169,15 @@ export function LLMSettings() {
       tasks: draft.tasks.map(task => task.provider === provider.name ? {task: task.task, provider: '', model: ''} : task),
     })
     if (providerForm?.mode === 'edit' && providerForm.index === index) setProviderForm(null)
+    setDiscovery(null)
     setProblems([])
+    setNotice('')
+  }
+
+  // Catalogue imports enter the same draft the manual model form writes to;
+  // only Save persists them.
+  function importModels(models: ModelDraft[]) {
+    setDraft(current => current ? {...current, models: [...current.models, ...models]} : current)
     setNotice('')
   }
 
@@ -209,6 +227,7 @@ export function LLMSettings() {
         setDraft(draftFromSettings(next))
         setProviderForm(null)
         setModelForm(false)
+        setDiscovery(null)
         setNotice('LLM services saved.')
         // The shell gates Ask on this cache, not on the settings response.
         void queryClient.invalidateQueries({queryKey: ['pipeline']})
@@ -248,44 +267,72 @@ export function LLMSettings() {
       <ul className="settings-list">
         {draft.providers.map((provider, index) => <li key={index}>
           {providerForm?.mode === 'edit' && providerForm.index === index
-            ? <ProviderForm initial={provider} onCancel={() => setProviderForm(null)} onSubmit={values => updateProvider(index, values)} />
+            ? <ProviderForm initial={provider} revision={draft.revision} configured={new Set(draft.models.map(model => model.name))} room={MAX_MODELS - draft.models.length} onImport={importModels} onCancel={() => setProviderForm(null)} onSubmit={values => updateProvider(index, values)} />
             : <>
               <div className="settings-row-head">
                 <strong>{provider.name}</strong>
                 <span className="chip">{provider.kind}</span>
-                {provider.has_api_key ? <span className="chip" data-tone="green">API key saved</span> : <span className="chip" data-tone="amber">No API key</span>}
+                <span className="chip" data-tone={apiKeyStatus(provider) === 'saved' ? 'green' : apiKeyStatus(provider) === 'entered' ? 'blue' : 'amber'}>{LLM_KEY_STATUS_LABELS[apiKeyStatus(provider)]}</span>
               </div>
               <p className="settings-row-detail muted">{provider.base_url} · {/^0+(?:\.0+)?$/.test(provider.monthly_limit_usd) ? 'no monthly limit' : `$${provider.monthly_limit_usd} per month`} · {provider.timeout_seconds}s timeout · {provider.token_field}</p>
               <div className="button-row">
                 <button type="button" disabled={busy || providerForm !== null} onClick={() => setProviderForm({mode: 'edit', index})}>Edit</button>
                 <button type="button" disabled={busy || providerForm !== null} onClick={() => removeProvider(index)}>Remove</button>
+                <button type="button" disabled={busy || providerForm !== null} onClick={() => setDiscovery(discovery?.target === 'provider' && discovery.index === index ? null : {target: 'provider', index})}>Fetch models</button>
               </div>
+              {discovery?.target === 'provider' && discovery.index === index && <DiscoveryPanel
+                disabled={busy}
+                provider={provider}
+                revision={draft.revision}
+                capability={null}
+                taskLabel={null}
+                configured={new Set(draft.models.map(model => model.name))}
+                room={MAX_MODELS - draft.models.length}
+                onImport={importModels}
+                onClose={() => setDiscovery(null)} />}
             </>}
         </li>)}
       </ul>
-      {providerForm?.mode === 'add' && <ProviderForm initial={emptyProvider()} onCancel={() => setProviderForm(null)} onSubmit={addProvider} />}
+      {providerForm?.mode === 'add' && <ProviderForm initial={emptyProvider()} revision={draft.revision} configured={new Set(draft.models.map(model => model.name))} room={MAX_MODELS - draft.models.length} onImport={importModels} onCancel={() => setProviderForm(null)} onSubmit={addProvider} />}
 
       <h3>Task routing</h3>
       <p className="hint">All seven tasks are always listed. Choose a provider and a model to turn a task on, or set the provider to Disabled to turn it off.</p>
       <ul className="settings-list">
-        {draft.tasks.map((task, index) => <li key={index}>
-          <div className="settings-row-head"><strong>{task.task}</strong>{!task.provider && <span className="chip">Off</span>}</div>
-          <label>Provider
-            <select aria-label={`${task.task} provider`} value={task.provider} disabled={busy} onChange={e => {
-              const provider = e.target.value
-              setTask(index, {provider, model: provider ? task.model : ''})
-            }}>
-              <option value="">Disabled</option>
-              {draft.providers.map(item => <option key={item.name} value={item.name}>{item.name} ({item.kind})</option>)}
-            </select>
-          </label>
-          <label>Model
-            <select aria-label={`${task.task} model`} value={task.model} disabled={busy || !task.provider} onChange={e => setTask(index, {model: e.target.value})}>
-              <option value="">No model</option>
-              {draft.models.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}
-            </select>
-          </label>
-        </li>)}
+        {draft.tasks.map((task, index) => {
+          const provider = draft.providers.find(item => item.name === task.provider)
+          return <li key={index}>
+            <div className="settings-row-head"><strong>{task.task}</strong>{!task.provider && <span className="chip">Off</span>}</div>
+            <label>Provider
+              <select aria-label={`${task.task} provider`} value={task.provider} disabled={busy} onChange={e => {
+                const provider = e.target.value
+                setTask(index, {provider, model: provider ? task.model : ''})
+              }}>
+                <option value="">Disabled</option>
+                {draft.providers.map(item => <option key={item.name} value={item.name}>{item.name} ({item.kind})</option>)}
+              </select>
+            </label>
+            <label>Model
+              <select aria-label={`${task.task} model`} value={task.model} disabled={busy || !task.provider} onChange={e => setTask(index, {model: e.target.value})}>
+                <option value="">No model</option>
+                <optgroup label="Configured / manual models">{draft.models.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</optgroup>
+              </select>
+            </label>
+            {provider && <div className="button-row">
+              <button type="button" disabled={busy} onClick={() => setDiscovery(discovery?.target === 'task' && discovery.index === index ? null : {target: 'task', index})}>Fetch models</button>
+            </div>}
+            {provider && discovery?.target === 'task' && discovery.index === index && <DiscoveryPanel
+              disabled={busy}
+              provider={provider}
+              revision={draft.revision}
+              capability={taskCapability(task.task)}
+              taskLabel={task.task}
+              configured={new Set(draft.models.map(model => model.name))}
+              room={MAX_MODELS - draft.models.length}
+              onPick={name => setTask(index, {provider: provider.name, model: name})}
+              onImport={importModels}
+              onClose={() => setDiscovery(null)} />}
+          </li>
+        })}
       </ul>
 
       <details>
@@ -310,7 +357,7 @@ export function LLMSettings() {
   </section>
 }
 
-function ProviderForm({initial, onSubmit, onCancel}: {initial: ProviderDraft; onSubmit: (values: ProviderFormValues) => void; onCancel: () => void}) {
+function ProviderForm({initial, revision, configured, room, onImport, onSubmit, onCancel}: {initial: ProviderDraft; revision: number; configured: Set<string>; room: number; onImport: (models: ModelDraft[]) => void; onSubmit: (values: ProviderFormValues) => void; onCancel: () => void}) {
   const [name, setName] = useState(initial.name)
   const [kind, setKind] = useState<LLMProviderKind>(initial.kind)
   const [baseURL, setBaseURL] = useState(initial.base_url)
@@ -319,6 +366,21 @@ function ProviderForm({initial, onSubmit, onCancel}: {initial: ProviderDraft; on
   const [limit, setLimit] = useState(initial.monthly_limit_usd)
   const [timeoutSeconds, setTimeoutSeconds] = useState(initial.timeout_seconds)
   const [tokenField, setTokenField] = useState<LLMTokenField>(initial.token_field)
+  const [discovering, setDiscovering] = useState(false)
+  // The values under edit, rebuilt every render so the panel can tell when
+  // they drift from whatever a running fetch was launched with.
+  const current: ProviderDraft = {
+    name: name.trim(),
+    kind,
+    base_url: baseURL.trim(),
+    has_api_key: initial.has_api_key,
+    monthly_limit_usd: limit,
+    timeout_seconds: timeoutSeconds,
+    token_field: tokenField,
+    api_key: apiKey,
+    clear_api_key: clearKey,
+    original_name: initial.original_name,
+  }
   return <div className="llm-provider-form">
     <label>Name<input value={name} onChange={e => setName(e.target.value)} autoCapitalize="none" spellCheck={false} /></label>
     <label>Kind
@@ -341,7 +403,10 @@ function ProviderForm({initial, onSubmit, onCancel}: {initial: ProviderDraft; on
     <div className="button-row">
       <button type="button" onClick={() => onSubmit({name: name.trim(), kind, base_url: baseURL.trim(), api_key: apiKey, clear_api_key: clearKey, monthly_limit_usd: limit, timeout_seconds: timeoutSeconds, token_field: tokenField})}>Apply provider</button>
       <button type="button" onClick={onCancel}>Cancel</button>
+      <button type="button" onClick={() => setDiscovering(!discovering)}>Fetch models</button>
     </div>
+    <p className="hint">Apply provider writes these edits to the draft; Save persists the whole configuration.</p>
+    {discovering && <DiscoveryPanel provider={current} revision={revision} capability={null} taskLabel={null} configured={configured} room={room} onImport={onImport} onClose={() => setDiscovering(false)} />}
   </div>
 }
 

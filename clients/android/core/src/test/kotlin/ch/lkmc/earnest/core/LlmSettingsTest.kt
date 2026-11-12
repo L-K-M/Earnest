@@ -330,6 +330,110 @@ class LlmSettingsTest {
     }
 
     @Test
+    fun discoverPostsTheRevisionAndTheDraftProvider() = runBlocking {
+        val (api, requests) = client {
+            response(it, body = """{"models":[{"id":"gpt-5","name":"GPT 5","chat":true,"input_per_1m":"1.25","output_per_1m":"10"}]}""")
+        }
+        val found = api.discoverLlmModels(
+            LlmModelsInput(
+                revision = 7,
+                provider = LlmProviderInput(
+                    name = "openai",
+                    kind = LlmProviderKind.OPENAI,
+                    baseUrl = "https://api.openai.com/v1",
+                    apiKey = "sk-typed",
+                ),
+            ),
+            settings(),
+        )
+        val request = requests.single()
+        assertEquals("POST", request.method)
+        assertEquals("/v1/settings/llm/models", request.url.encodedPath)
+        val body = request.bodyObject()
+        assertEquals(setOf("revision", "provider"), body.keys)
+        assertEquals("7", body.getValue("revision").jsonPrimitive.content)
+        val provider = body.getValue("provider").jsonObject
+        assertEquals("sk-typed", provider.getValue("api_key").jsonPrimitive.content)
+        assertFalse(provider.containsKey("has_api_key"))
+        assertEquals(
+            listOf(LlmDiscoveredModel("gpt-5", "GPT 5", chat = true, inputPer1m = "1.25", outputPer1m = "10")),
+            found.models,
+        )
+    }
+
+    @Test
+    fun discoverDecodesSparseEntriesAndANullList() = runBlocking {
+        val (api, _) = client {
+            response(it, body = """
+                {"models":[{"id":"sparse","name":"Sparse"},
+                  {"id":"full","name":"Full","chat":true,"embedding":false,"input_per_1m":"1",
+                    "output_per_1m":"2","embedding_per_1m":"3","dimensions":1536,"truncatable":true}]}
+            """.trimIndent())
+        }
+        val found = api.discoverLlmModels(
+            LlmModelsInput(0, LlmProviderInput("openai", LlmProviderKind.OPENAI, "https://api.openai.com/v1")),
+            settings(),
+        )
+        // Missing fields mean unknown: they decode as absent, never as false or zero.
+        assertEquals(LlmDiscoveredModel("sparse", "Sparse"), found.models!![0])
+        assertNull(found.models!![0].chat)
+        assertNull(found.models!![0].inputPer1m)
+        assertNull(found.models!![0].dimensions)
+        assertEquals(LlmDiscoveredModel("full", "Full", true, false, "1", "2", "3", 1536, true), found.models!![1])
+
+        val (emptyApi, _) = client { response(it, body = """{"models":null}""") }
+        assertNull(
+            emptyApi.discoverLlmModels(
+                LlmModelsInput(0, LlmProviderInput("openai", LlmProviderKind.OPENAI, "https://api.openai.com/v1")),
+                settings(),
+            ).models,
+        )
+    }
+
+    @Test
+    fun discoverValidationFailsBeforeAnyRequest() = runBlocking {
+        val baseline = settings(revision = 2, providers = listOf(provider("openai", hasApiKey = true)))
+        val openai = LlmProviderInput("openai", LlmProviderKind.OPENAI, "https://api.openai.com/v1")
+        val invalid = listOf(
+            LlmModelsInput(-1, openai),
+            LlmModelsInput(0, LlmProviderInput("OpenAI", LlmProviderKind.OPENAI, "https://api.openai.com/v1")),
+            LlmModelsInput(0, LlmProviderInput("openai", LlmProviderKind.OPENAI, "ftp://api.openai.com/v1")),
+            LlmModelsInput(0, LlmProviderInput("openai", LlmProviderKind.OPENAI, "https://api.openai.com/v1", monthlyLimitUsd = "-1")),
+            LlmModelsInput(0, LlmProviderInput("openai", LlmProviderKind.OPENAI, "https://api.openai.com/v1", timeoutSeconds = 0)),
+            LlmModelsInput(0, openai.copy(apiKey = "sk", clearApiKey = true)),
+            // A stored key is never forwarded to a moved destination.
+            LlmModelsInput(2, LlmProviderInput("openai", LlmProviderKind.OPENAI, "https://api.openai.com/v2")),
+            LlmModelsInput(2, LlmProviderInput("openai", LlmProviderKind.ANTHROPIC, "https://api.openai.com/v1")),
+        )
+        for ((index, document) in invalid.withIndex()) {
+            val (api, requests) = client { error("unexpected request") }
+            val failure = runCatching { api.discoverLlmModels(document, baseline) }.exceptionOrNull()
+            assertTrue("case $index accepted: $document", failure is IllegalArgumentException)
+            assertTrue("case $index sent a request", requests.isEmpty())
+        }
+        // The same moved destination is fine with a replacement key or a clear.
+        val (api, requests) = client { response(it, body = """{"models":[]}""") }
+        api.discoverLlmModels(LlmModelsInput(2, LlmProviderInput("openai", LlmProviderKind.OPENAI, "https://api.openai.com/v2", apiKey = "sk-new")), baseline)
+        api.discoverLlmModels(LlmModelsInput(2, LlmProviderInput("openai", LlmProviderKind.OPENAI, "https://api.openai.com/v2", clearApiKey = true)), baseline)
+        assertEquals(2, requests.size)
+    }
+
+    @Test
+    fun discoverConflictIsAnApiException() = runBlocking {
+        val (api, _) = client {
+            response(it, status = 409, body = """{"type":"about:blank","title":"Conflict","status":409,"error":"revision_conflict"}""")
+        }
+        val error = runCatching {
+            api.discoverLlmModels(
+                LlmModelsInput(3, LlmProviderInput("openai", LlmProviderKind.OPENAI, "https://api.openai.com/v1", apiKey = "sk-private")),
+                settings(),
+            )
+        }.exceptionOrNull() as ApiException
+        assertTrue(error.isConflict)
+        assertFalse("the problem detail must not leak the typed key", error.message!!.contains("sk-private"))
+    }
+
+    @Test
     fun movingAKeyedProviderRequiresAReplacementKeyOrAnExplicitClear() = runBlocking {
         val baseline = settings(
             revision = 2,

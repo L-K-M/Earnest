@@ -34,6 +34,7 @@ filter:
     - put-settings
     - get-llm-settings
     - put-llm-settings
+    - discover-llm-models
     - entry-counts
     - search
     - list-saved-searches

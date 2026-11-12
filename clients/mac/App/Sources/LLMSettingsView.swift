@@ -23,6 +23,17 @@ extension APILLMTask {
 /// disabled.
 @MainActor struct LLMSettingsView: View {
     @ObservedObject var settings: LLMSettingsModel
+    @State private var discoveryTarget: LLMDiscoveryTarget?
+
+    /// Fetch the catalogue for a provider row and open the browser. The
+    /// request previews the provider as currently edited; nothing persists.
+    private func discover(providerID: UUID, providerName: String, task: APILLMTask? = nil) {
+        settings.fetchModels(providerID: providerID)
+        // A rejected fetch reports on the pane; the sheet opens only when
+        // there is a configuration to preview.
+        guard settings.loaded else { return }
+        discoveryTarget = LLMDiscoveryTarget(providerID: providerID, providerName: providerName, task: task)
+    }
 
     var body: some View {
         Form {
@@ -48,7 +59,11 @@ extension APILLMTask {
                     LLMProviderEditor(
                         provider: $provider,
                         onRemove: { settings.removeProvider(id: provider.id) },
-                        onKindChange: { kind in settings.setProviderKind(kind, id: provider.id) }
+                        onKindChange: { kind in settings.setProviderKind(kind, id: provider.id) },
+                        onDiscover: {
+                            discover(providerID: provider.id,
+                                     providerName: provider.name.isEmpty ? "New provider" : provider.name)
+                        }
                     )
                 }
                 Button("Add Provider") { settings.addProvider() }
@@ -60,12 +75,15 @@ extension APILLMTask {
 
             SwiftUI.Section {
                 ForEach($settings.draft.tasks) { $task in
-                    LLMTaskEditor(task: $task, providers: settings.draft.providers, models: settings.draft.models)
+                    LLMTaskEditor(task: $task, providers: settings.draft.providers, models: settings.draft.models) {
+                        guard let providerID = settings.providerID(named: task.provider) else { return }
+                        discover(providerID: providerID, providerName: task.provider, task: task.task)
+                    }
                 }
             } header: {
                 Text("Tasks")
             } footer: {
-                Text("A task is disabled until both a provider and a model are chosen. Anthropic providers cannot embed.")
+                Text("A task is disabled until both a provider and a model are chosen. Anthropic providers cannot embed. Fetch models browses a provider's catalogue; a route changes only on an explicit choice.")
             }
 
             DisclosureGroup("Models and Pricing") {
@@ -85,6 +103,9 @@ extension APILLMTask {
         }
         .formStyle(.grouped)
         .frame(height: 560)
+        .sheet(item: $discoveryTarget) { target in
+            LLMDiscoveryView(settings: settings, target: target)
+        }
     }
 }
 
@@ -128,6 +149,7 @@ extension APILLMTask {
     @Binding var provider: LLMProviderDraft
     let onRemove: () -> Void
     let onKindChange: (APILLMProviderKind) -> Void
+    let onDiscover: () -> Void
 
     var body: some View {
         DisclosureGroup {
@@ -170,8 +192,9 @@ extension APILLMTask {
                 }
                 LabeledContent("API key") {
                     HStack(spacing: 8) {
-                        Text(provider.hasAPIKey ? "Saved on server" : "None")
-                            .foregroundStyle(.secondary)
+                        Text(provider.keyStatus.title)
+                            .foregroundStyle(provider.keyStatus == .none || provider.keyStatus == .removal
+                                             ? Color.orange : Color.secondary)
                         SecureField("Replace key", text: $provider.apiKey)
                             .frame(width: 150)
                             .disabled(provider.clearAPIKey)
@@ -179,6 +202,10 @@ extension APILLMTask {
                 }
                 Toggle("Remove the saved key", isOn: $provider.clearAPIKey)
                     .disabled(!provider.hasAPIKey)
+                Button("Fetch models…", action: onDiscover)
+                Text("Fetching previews this provider exactly as edited; a typed key is used but never persisted.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Button("Remove Provider", role: .destructive, action: onRemove)
             }
             .padding(.vertical, 4)
@@ -188,8 +215,9 @@ extension APILLMTask {
                 Text(provider.kind.rawValue)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text(provider.hasAPIKey ? "Key saved" : "No key")
-                    .foregroundStyle(provider.hasAPIKey ? Color.secondary : Color.orange)
+                Text(provider.keyStatus.title)
+                    .foregroundStyle(provider.keyStatus == .none || provider.keyStatus == .removal
+                                     ? Color.orange : Color.secondary)
             }
         }
     }
@@ -199,6 +227,7 @@ extension APILLMTask {
     @Binding var task: LLMTaskDraft
     let providers: [LLMProviderDraft]
     let models: [LLMModelDraft]
+    let onDiscover: () -> Void
 
     /// Anthropic has no embeddings dialect, so it is not offered for embed.
     private var providerChoices: [LLMProviderDraft] {
@@ -230,14 +259,18 @@ extension APILLMTask {
             }
             if !task.provider.isEmpty {
                 LabeledContent("Model") {
-                    Picker("Model", selection: $task.model) {
-                        Text("Choose a model").tag("")
-                        ForEach(models) { model in
-                            Text(model.name.isEmpty ? "New model" : model.name).tag(model.name)
+                    HStack(spacing: 8) {
+                        Picker("Model", selection: $task.model) {
+                            Text("Choose a model").tag("")
+                            ForEach(models) { model in
+                                Text(model.name.isEmpty ? "New model" : model.name).tag(model.name)
+                            }
                         }
+                        .labelsHidden()
+                        .frame(width: 180)
+                        Button("Fetch models…", action: onDiscover)
+                            .disabled(!providers.contains { $0.name == task.provider })
                     }
-                    .labelsHidden()
-                    .frame(width: 180)
                 }
             }
         }
