@@ -61,6 +61,7 @@ func (s *server) mediaRoutes() {
 			return &mediaOutput{Status: http.StatusOK, ContentType: file.ContentType, CacheControl: cache, ETag: etag, Body: file.Body}, nil
 		})
 	}
+	register("/v1/entries/{id}/image", "entry-image", "Get an article’s stored feature image", s.svc.EntryImage)
 	register("/v1/entries/{id}/thumbnail", "entry-thumbnail", "Get an article's stored thumbnail", s.svc.EntryThumbnail)
 	register("/v1/subscriptions/{id}/icon", "subscription-icon", "Get a subscription's stored feed icon", s.svc.SubscriptionIcon)
 }

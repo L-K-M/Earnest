@@ -1198,6 +1198,169 @@
         ],
         "type": "object"
       },
+      "FrontPage": {
+        "additionalProperties": false,
+        "properties": {
+          "period": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "sections": {
+            "items": {
+              "$ref": "#/components/schemas/FrontPageSection"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "selected_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "window_end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "window_start": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "period",
+          "window_start",
+          "window_end",
+          "selected_at",
+          "revision",
+          "sections"
+        ],
+        "type": "object"
+      },
+      "FrontPageCoverage": {
+        "additionalProperties": false,
+        "properties": {
+          "entry": {
+            "$ref": "#/components/schemas/Entry"
+          },
+          "source_title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "entry",
+          "source_title"
+        ],
+        "type": "object"
+      },
+      "FrontPageSection": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "stories": {
+            "items": {
+              "$ref": "#/components/schemas/FrontPageStory"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "stories"
+        ],
+        "type": "object"
+      },
+      "FrontPageStory": {
+        "additionalProperties": false,
+        "properties": {
+          "coverage": {
+            "items": {
+              "$ref": "#/components/schemas/FrontPageCoverage"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "entry": {
+            "$ref": "#/components/schemas/Entry"
+          },
+          "excerpt": {
+            "type": "string"
+          },
+          "feed_count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "image_url": {
+            "type": "string"
+          },
+          "published_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "source_title": {
+            "type": "string"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/FrontPageSummary"
+          }
+        },
+        "required": [
+          "id",
+          "entry",
+          "source_title",
+          "published_at",
+          "feed_count",
+          "excerpt",
+          "coverage"
+        ],
+        "type": "object"
+      },
+      "FrontPageSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "claims": {
+            "items": {
+              "$ref": "#/components/schemas/GroundedClaim"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "excerpt_notice": {
+            "type": "string"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "prompt_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "claims",
+          "model",
+          "prompt_version",
+          "generated_at"
+        ],
+        "type": "object"
+      },
       "GroundedClaim": {
         "additionalProperties": false,
         "properties": {
@@ -7947,6 +8110,160 @@
         ]
       }
     },
+    "/v1/entries/{id}/image": {
+      "get": {
+        "operationId": "entry-image",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Version from the listed URL. A matching version is cached for good; any other value still returns the current image.",
+            "explode": false,
+            "in": "query",
+            "name": "v",
+            "schema": {
+              "description": "Version from the listed URL. A matching version is cached for good; any other value still returns the current image.",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-None-Match",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "contentMediaType": "application/octet-stream",
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "image/png": {
+                "schema": {
+                  "contentMediaType": "application/octet-stream",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The stored image",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Type": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The cached copy is current"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ],
+        "summary": "Get an article’s stored feature image"
+      }
+    },
     "/v1/entries/{id}/send/{provider}": {
       "post": {
         "operationId": "send-article",
@@ -9745,6 +10062,146 @@
           },
           {
             "csrf": [],
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/front-page": {
+      "get": {
+        "operationId": "front-page",
+        "parameters": [
+          {
+            "explode": false,
+            "in": "query",
+            "name": "period",
+            "schema": {
+              "default": "daily",
+              "enum": [
+                "daily",
+                "weekly"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrontPage"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Gone"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
             "session": []
           }
         ]

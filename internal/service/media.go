@@ -139,7 +139,10 @@ func queueEntryImage(ctx context.Context, tx pgx.Tx, entry int64, candidates []s
   source_url=CASE WHEN EXCLUDED.status='none' THEN NULL ELSE entry_images.source_url END,
   content_type=CASE WHEN EXCLUDED.status='none' THEN NULL ELSE entry_images.content_type END,
   body=CASE WHEN EXCLUDED.status='none' THEN NULL ELSE entry_images.body END,
-  etag=CASE WHEN EXCLUDED.status='none' THEN NULL ELSE entry_images.etag END
+  etag=CASE WHEN EXCLUDED.status='none' THEN NULL ELSE entry_images.etag END,
+  feature_body=CASE WHEN EXCLUDED.status='none' THEN NULL ELSE entry_images.feature_body END,
+  feature_content_type=CASE WHEN EXCLUDED.status='none' THEN NULL ELSE entry_images.feature_content_type END,
+  feature_etag=CASE WHEN EXCLUDED.status='none' THEN NULL ELSE entry_images.feature_etag END
  WHERE entry_images.candidates IS DISTINCT FROM EXCLUDED.candidates`, entry, candidates, status, at); err != nil {
 		return fmt.Errorf("queue entry image: %w", err)
 	}
@@ -484,27 +487,35 @@ func (s *Service) resolveEntryImage(ctx context.Context, job imageJob) error {
 			transient = transient || transientMedia(err)
 			continue
 		}
-		thumb, err := s.decodeMedia(ctx, data, media.Thumbnail)
+		var thumb media.Encoded
+		feature, err := s.decodeMedia(ctx, data, func(img image.Image) (media.Encoded, error) {
+			var err error
+			thumb, err = media.Thumbnail(img)
+			if err != nil {
+				return media.Encoded{}, err
+			}
+			return media.Feature(img)
+		})
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
 			continue
 		}
-		return s.storeEntryImage(ctx, job, mediaReady, candidate, &thumb, time.Time{})
+		return s.storeEntryImage(ctx, job, mediaReady, candidate, &thumb, &feature, time.Time{})
 	}
 	if ctx.Err() != nil {
 		return nil
 	}
 	if transient && job.attempts < mediaMaxAttempts {
-		return s.storeEntryImage(ctx, job, mediaPending, "", nil, s.now().Add(mediaRetryDelay(job.attempts)))
+		return s.storeEntryImage(ctx, job, mediaPending, "", nil, nil, s.now().Add(mediaRetryDelay(job.attempts)))
 	}
-	return s.storeEntryImage(ctx, job, mediaFailed, "", nil, time.Time{})
+	return s.storeEntryImage(ctx, job, mediaFailed, "", nil, nil, time.Time{})
 }
 
 // storeEntryImage writes a pass's result unless ingest replaced the
 // candidates meanwhile; the replacement is then pending and wins.
-func (s *Service) storeEntryImage(ctx context.Context, job imageJob, status, source string, thumb *media.Encoded, retryAt time.Time) error {
+func (s *Service) storeEntryImage(ctx context.Context, job imageJob, status, source string, thumb, feature *media.Encoded, retryAt time.Time) error {
 	now := s.now()
 	var err error
 	switch {
@@ -527,7 +538,17 @@ func (s *Service) storeEntryImage(ctx context.Context, job imageJob, status, sou
 				job.entryID, status, source, thumb.ContentType, thumb.Body, etag, now); err != nil {
 				return err
 			}
-			if old != nil && *old == etag {
+			featureChanged := false
+			if feature != nil {
+				f := feature
+				tag := mediaETag(f.Body)
+				result, err := tx.Exec(ctx, `UPDATE entry_images SET feature_body=$2,feature_content_type=$3,feature_etag=$4 WHERE entry_id=$1 AND feature_etag IS DISTINCT FROM $4`, job.entryID, f.Body, f.ContentType, tag)
+				if err != nil {
+					return err
+				}
+				featureChanged = result.RowsAffected() > 0
+			}
+			if old != nil && *old == etag && !featureChanged {
 				return nil
 			}
 			return s.announceEntryMedia(ctx, tx, job.entryID)
