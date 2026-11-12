@@ -17,6 +17,7 @@ vi.mock('./request', async original => ({...await original<typeof import('./requ
 vi.mock('./syncBridge', () => ({useReaderSync: () => ({state: (value: Entry) => value.state, act, actRange, newestSeq: () => 120, retry: vi.fn(), status: 'Reading actions synced.', error: ''})}))
 vi.mock('./offline/Offline', () => ({OfflineStatus: () => null, useOnline: () => true, registerOffline: vi.fn().mockResolvedValue(undefined), clearOffline: vi.fn().mockResolvedValue(undefined)}))
 vi.mock('./River', () => ({River: ({view, onOpen, onMenu}: {view: View; onOpen: (entry: Entry) => void; onMenu?: (event: ReactMouseEvent<HTMLElement>, entry: Entry, items: []) => void}) => <section><h2>{view.title} list</h2>{entries.map(entry => <button key={entry.id} onClick={() => onOpen(entry as Entry)} onContextMenu={event => onMenu?.(event, entry as Entry, [])}>Open {entry.title}</button>)}</section>}))
+vi.mock('./FrontPage', () => ({FrontPage: () => <section><h2>Front page list</h2></section>}))
 vi.mock('./ArticleReader', () => ({Reader: ({entry}: {entry: Entry}) => <article><h2>{entry.title}</h2></article>}))
 
 beforeEach(() => {
@@ -59,12 +60,12 @@ async function start(path: string) {
   await import('./main')
 }
 
-it('goes home to Today from the logo, closing an open article', async () => {
+it('goes home to the front page from the logo, closing an open article', async () => {
   await start('/feeds/8/articles/4')
   await screen.findByRole('heading', {name: 'Article 4'}, {timeout: 5000})
   fireEvent.click(screen.getByRole('link', {name: 'Earnest'}))
-  await waitFor(() => expect(location.pathname).toBe('/today'))
-  expect(await screen.findByRole('heading', {name: 'Today list'})).toBeTruthy()
+  await waitFor(() => expect(location.pathname).toBe('/front'))
+  expect(await screen.findByRole('heading', {name: 'Front page list'})).toBeTruthy()
   expect(screen.queryByRole('heading', {name: 'Article 4'})).toBeNull()
 })
 
@@ -108,14 +109,14 @@ it('opens the focused feed\'s menu below it with Shift+F10 or the Menu key', asy
 it('closes a menu with Escape without closing the open article', async () => {
   await start('/feeds/8/articles/4')
   await screen.findByRole('heading', {name: 'Article 4'}, {timeout: 5000})
-  const today = screen.getByRole('link', {name: 'Today'})
-  fireEvent.contextMenu(today, {clientX: 30, clientY: 40})
+  const feed = screen.getByRole('link', {name: 'Rust'})
+  fireEvent.contextMenu(feed, {clientX: 30, clientY: 40})
   const item = screen.getByRole('menuitem', {name: 'Mark all as read'})
   expect(document.activeElement).toBe(item)
   fireEvent.keyDown(item, {key: 'Escape'})
   expect(screen.queryByRole('menu')).toBeNull()
   expect(location.pathname).toBe('/feeds/8/articles/4')
-  expect(document.activeElement).toBe(today)
+  expect(document.activeElement).toBe(feed)
 })
 
 it('offers folder management only for a folder', async () => {
@@ -184,8 +185,8 @@ it('consumes the folder prefill instead of overriding later subscribe drafts', a
   fireEvent.click(await screen.findByRole('menuitem', {name: 'Add feed inside this folder'}))
   const region = await screen.findByRole('region', {name: 'Subscribe'})
   fireEvent.change(within(region).getByLabelText('Folder'), {target: {value: '0'}})
-  fireEvent.click(screen.getByRole('link', {name: 'Today'}))
-  await screen.findByRole('heading', {name: 'Today list'})
+  fireEvent.click(screen.getByRole('link', {name: 'Front page'}))
+  await screen.findByRole('heading', {name: 'Front page list'})
   fireEvent.click(screen.getByRole('link', {name: 'Manage feeds'}))
   const again = await screen.findByRole('region', {name: 'Subscribe'})
   expect((within(again).getByLabelText('Folder') as HTMLSelectElement).value).toBe('0')

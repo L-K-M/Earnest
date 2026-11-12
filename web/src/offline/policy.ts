@@ -19,8 +19,8 @@ export function cacheKind(raw: string, origin: string, method='GET'): 'shell' | 
   const url = new URL(raw,origin)
   if (method !== 'GET' || url.origin !== origin) return null
   if (url.pathname === '/' || brandImages.includes(url.pathname) || /^\/assets\/[^/]+\.(js|css|woff2?)$/.test(url.pathname)) return 'shell'
-  if (/^\/v1\/entries\/[1-9]\d*\/content$/.test(url.pathname)) return 'content'
-  if (/^\/v1\/(me|subscriptions|folders|labels|settings|saved-searches|pipeline)$/.test(url.pathname)) return 'resource'
+  if (/^\/v1\/entries\/[1-9]\d*\/(content|image)$/.test(url.pathname)) return 'content'
+  if (/^\/v1\/(me|subscriptions|folders|labels|settings|saved-searches|pipeline|front-page)$/.test(url.pathname)) return 'resource'
   // A single article's metadata lets an article link reopen offline.
   if (url.pathname === '/v1/entries' || /^\/v1\/entries\/[1-9]\d*$/.test(url.pathname) || /^\/v1\/positions\/[^/]+$/.test(url.pathname)) return 'reading'
   return null

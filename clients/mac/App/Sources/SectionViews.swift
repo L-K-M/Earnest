@@ -285,9 +285,9 @@ extension FeedInfo {
     private func cadenceFooter(_ cadence: Cadence) -> some View {
         Group {
             switch cadence {
-            case .now: Text("New articles join the river and may notify under a rule.")
-            case .today: Text("New articles join the river and leave it after the Today period.")
-            case .week: Text("New articles collect in the weekly Edition instead of the river.")
+            case .now: Text("Arrive in the river at once; rules may notify. The front page selects from every cadence.")
+            case .today: Text("Arrive in the river, kept for the days you choose. The front page selects from every cadence.")
+            case .week: Text("Arrives in the river and stays longer; the front page selects from every cadence.")
             }
         }
         .font(.caption)

@@ -9,6 +9,7 @@ filter:
     - device-poll
     - list-entries
     - get-entry
+    - front-page
     - entry-content
     - entry-content-url
     - cancel-notification

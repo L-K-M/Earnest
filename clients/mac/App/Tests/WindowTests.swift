@@ -53,11 +53,11 @@ import EarnestKit
         let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: ContentTokens(), session: session)
         let model = try makeModel(api: api)
         defer { model.signOut(); session.invalidateAndCancel() }
-        let first = WindowModel(app: model)
+        let first = WindowModel(app: model, section: .allArticles)
         first.entries = [try entry(42), try entry(43)]
-        let second = WindowModel(app: model)
+        let second = WindowModel(app: model, section: .allArticles)
         // A new window seeds its list from a sibling on the same section.
-        XCTAssertEqual(second.entries.map(\.id), [42, 43])
+        XCTAssertEqual(second.entries.map(\.id), [43, 42])
 
         first.section = .later
         second.section = .done
@@ -82,8 +82,8 @@ import EarnestKit
     func testReadingActionInOneWindowAppearsInTheOtherAfterRebuild() throws {
         let model = try makeModel()
         defer { model.signOut() }
-        let first = WindowModel(app: model)
-        let second = WindowModel(app: model)
+        let first = WindowModel(app: model, section: .allArticles)
+        let second = WindowModel(app: model, section: .allArticles)
         first.section = .later
         second.section = .done
         first.entries = [try entry(42), try entry(43)]
@@ -107,12 +107,12 @@ import EarnestKit
     func testNewWindowUsesCurrentSharedSnapshotWithoutASibling() throws {
         let model = try makeModel()
         defer { model.signOut() }
-        let existing = WindowModel(app: model)
+        let existing = WindowModel(app: model, section: .allArticles)
         existing.section = .done
         existing.entries = []
 
-        let opened = WindowModel(app: model)
-        XCTAssertEqual(opened.rows.map(\.id), [42, 43])
+        let opened = WindowModel(app: model, section: .allArticles)
+        XCTAssertEqual(opened.rows.map(\.id), [43, 42])
         XCTAssertEqual(existing.section, .done)
         XCTAssertTrue(existing.entries.isEmpty)
     }
@@ -131,9 +131,9 @@ import EarnestKit
             try engine.replaceRiverResources(mutes: muted ? [.object([
                 "id": .integer(1), "kind": .string("keyword"), "value": .string("Article"),
             ])] : [], settings: .object(["today_decay_days": .integer(2)]))
-            let today = WindowModel(app: model)
+            let today = WindowModel(app: model, section: .allArticles)
             await today.refreshEntries()
-            let acting = WindowModel(app: model)
+            let acting = WindowModel(app: model, section: .allArticles)
             acting.section = .done
             model.rebuildPresentation()
             XCTAssertTrue(today.rows.isEmpty)
@@ -162,7 +162,7 @@ import EarnestKit
         let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: ContentTokens(), session: session)
         let model = try makeModel(api: api)
         defer { resume.signal(); model.signOut(); session.invalidateAndCancel() }
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         window.entries = []
         window.selectFromList(42)
         await fulfillment(of: [requested], timeout: 5)
@@ -190,17 +190,17 @@ import EarnestKit
         let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: ContentTokens(), session: session)
         let model = try makeModel(api: api, unreadOnly: true)
         defer { model.signOut(); session.invalidateAndCancel() }
-        let window = WindowModel(app: model)
-        XCTAssertEqual(window.rows.map(\.id), [42, 43])
+        let window = WindowModel(app: model, section: .allArticles)
+        XCTAssertEqual(window.rows.map(\.id), [43, 42])
         var seen = State(principal: 7, entryID: 42)
         seen.seen = Stamp(value: .text("seen"), rev: 2)
         try model.engine?.mergeBootstrap([seen])
         model.rebuildPresentation()
-        XCTAssertEqual(window.rows.map(\.id), [42, 43])
-        XCTAssertFalse(try XCTUnwrap(window.rows.first).unread)
+        XCTAssertEqual(window.rows.map(\.id), [43, 42])
+        XCTAssertFalse(try XCTUnwrap(window.rows.first { $0.id == 42 }).unread)
         await window.refreshEntries()
         model.rebuildPresentation()
-        XCTAssertEqual(window.rows.map(\.id), [42, 43])
+        XCTAssertEqual(window.rows.map(\.id), [43, 42])
         window.requestListReload()
         await window.refreshEntries()
         model.rebuildPresentation()
@@ -211,7 +211,7 @@ import EarnestKit
     func testUnreadVisitIsReappliedWhenParentSectionIsReopened() throws {
         let model = try makeModel(unreadOnly: true)
         defer { model.signOut() }
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         window.selected = 42
         var seen = State(principal: 7, entryID: 42)
         seen.seen = Stamp(value: .text("seen"), rev: 2)
@@ -219,9 +219,9 @@ import EarnestKit
         window.selected = 43
         window.selected = nil
         model.rebuildPresentation()
-        XCTAssertEqual(window.rows.map(\.id), [42, 43])
-        window.section = .edition
-        window.section = .today
+        XCTAssertEqual(window.rows.map(\.id), [43, 42])
+        window.section = .later
+        window.section = .allArticles
         model.rebuildPresentation()
         XCTAssertEqual(window.rows.map(\.id), [43])
     }
@@ -229,8 +229,8 @@ import EarnestKit
     func testUnreadVisitCannotRetainMetadataAcrossRestore() throws {
         let model = try makeModel(unreadOnly: true)
         defer { model.signOut() }
-        let window = WindowModel(app: model)
-        XCTAssertEqual(window.rows.map(\.id), [42, 43])
+        let window = WindowModel(app: model, section: .allArticles)
+        XCTAssertEqual(window.rows.map(\.id), [43, 42])
         try model.engine?.bootstrap(Cursor(generation: "restored", rev: 0))
         window.resetListAfterRestore()
         model.rebuildPresentation()
@@ -241,10 +241,10 @@ import EarnestKit
     func testGoneEntryDisappearsFromBothWindows() throws {
         let model = try makeModel()
         defer { model.signOut() }
-        let first = WindowModel(app: model)
-        let second = WindowModel(app: model)
-        XCTAssertEqual(first.rows.map(\.id), [42, 43])
-        XCTAssertEqual(second.rows.map(\.id), [42, 43])
+        let first = WindowModel(app: model, section: .allArticles)
+        let second = WindowModel(app: model, section: .allArticles)
+        XCTAssertEqual(first.rows.map(\.id), [43, 42])
+        XCTAssertEqual(second.rows.map(\.id), [43, 42])
 
         try model.engine?.markGone(entryID: 42)
         model.rebuildPresentation()
@@ -256,26 +256,26 @@ import EarnestKit
     func testWindowCommandsAffectOnlyTheirWindow() throws {
         let model = try makeModel()
         defer { model.signOut() }
-        let first = WindowModel(app: model)
-        let second = WindowModel(app: model)
+        let first = WindowModel(app: model, section: .allArticles)
+        let second = WindowModel(app: model, section: .allArticles)
         first.entries = [try entry(42), try entry(43)]
         second.entries = first.entries
         model.rebuildPresentation()
 
         second.move(1)
-        XCTAssertEqual(second.selected, 42)
+        XCTAssertEqual(second.selected, 43)
         XCTAssertNil(first.selected)
 
         first.paletteCommands().first { $0.title == "Go to Done" }?.action()
         XCTAssertEqual(first.section, .done)
-        XCTAssertEqual(second.section, .today)
+        XCTAssertEqual(second.section, .allArticles)
 
         first.openDeepLink(URL(string: "earnest://entry/43")!)
         XCTAssertEqual(first.selected, 43)
-        XCTAssertEqual(first.section, .today)
+        XCTAssertEqual(first.section, .frontPage)
         XCTAssertEqual(first.imageMode, .click)
-        XCTAssertEqual(second.selected, 42)
-        XCTAssertEqual(second.section, .today)
+        XCTAssertEqual(second.selected, 43)
+        XCTAssertEqual(second.section, .allArticles)
         XCTAssertEqual(second.imageMode, .proxied)
     }
 }

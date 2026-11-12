@@ -184,10 +184,11 @@ internal fun SettingsScreen(
                 )
                 Text("Show only unread")
             }
-            Text("Read articles stay until you reopen or refresh the list. Saved shelves and search are not filtered.")
+            Text("Read articles stay until you reopen or refresh the list. Front page, saved shelves and search include read articles.")
         }
 
-        Section("Today decay") {
+        Section("River retention") {
+            Text("Cadence and retention apply to river lists. Front page always covers the past 24 hours or 7 days across your unmuted feeds.")
             Text("${settings.todayDecayDays} days")
             Slider(
                 value = settings.todayDecayDays.toFloat(),
@@ -196,7 +197,7 @@ internal fun SettingsScreen(
                 },
                 valueRange = 1f..365f,
                 steps = 363,
-                modifier = Modifier.semantics { contentDescription = "Today decay days" },
+                modifier = Modifier.semantics { contentDescription = "River retention in days" },
             )
         }
 

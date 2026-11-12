@@ -4,7 +4,7 @@ export type EntryState = components['schemas']['State']
 export type Subscription = components['schemas']['Subscription']
 export type Register = 'seen' | 'shelf' | 'kept'
 export type Value = 'seen' | 'unseen' | 'none' | 'later' | 'done' | boolean
-export type View = {kind: 'today' | 'edition' | 'later' | 'kept' | 'done' | 'feed' | 'folder' | 'label'; id?: number; title: string}
+export type View = {kind: 'today' | 'edition' | 'all' | 'later' | 'kept' | 'done' | 'feed' | 'folder' | 'label'; id?: number; title: string}
 export type ReaderActions = {
   deleted?: (entry: Entry) => boolean
   state: (entry: Entry) => EntryState
@@ -14,18 +14,22 @@ export function viewKey(view: View): string { return `${view.kind}${view.id === 
 export type RangeScope = {kind: 'subscriptions' | 'folder'; ids: number[]}
 
 // The sync range "Mark the rest read" covers for a view. Today covers the
-// subscriptions it shows: every cadence except This week, which belongs to the
-// Edition, and no muted feed, since the river hides those. A feed or folder
-// covers itself, muted or not. Other views offer no such command.
+// subscriptions it shows: every cadence except This week, and no muted feed,
+// since the river hides those. A feed or folder covers itself, muted or not.
+// Other views offer no such command.
 export function viewScope(view: View, subscriptions: Subscription[]): RangeScope | null {
   if (view.kind === 'feed' && view.id !== undefined) return {kind: 'subscriptions', ids: [view.id]}
   if (view.kind === 'folder' && view.id !== undefined) return {kind: 'folder', ids: [view.id]}
+  if (view.kind === 'all') {
+    const ids = subscriptions.filter(sub => !sub.deleted).map(sub => sub.id)
+    return ids.length ? {kind: 'subscriptions', ids} : null
+  }
   if (view.kind !== 'today') return null
   const ids = subscriptions.filter(sub => !sub.deleted && !sub.muted && sub.cadence !== 'week').map(sub => sub.id)
   return ids.length ? {kind: 'subscriptions', ids} : null
 }
 export function entryQuery(view: View, group?: 'cluster'): URLSearchParams {
-  const query = new URLSearchParams({view: view.kind === 'today' ? 'river' : ['later', 'kept', 'done'].includes(view.kind) ? view.kind : 'all', limit: '100', direction: 'backward'})
+  const query = new URLSearchParams({view: view.kind === 'today' ? 'river' : ['later', 'kept', 'done', 'all'].includes(view.kind) ? view.kind : 'all', limit: '100', direction: 'backward'})
   if (view.kind === 'edition') {query.set('view', 'river');query.set('cadence', 'week')}
   if (view.kind === 'feed') query.set('subscription_id', String(view.id))
   if (view.kind === 'folder') query.set('folder_id', String(view.id))

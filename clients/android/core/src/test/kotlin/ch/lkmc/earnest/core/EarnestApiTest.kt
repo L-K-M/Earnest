@@ -85,6 +85,8 @@ class EarnestApiTest {
             "/v1/entries/1/thumbnail?v=a,b",
             "/v1/entries/1/thumbnail?v=" + "a".repeat(65),
             "/v1/entries/1/thumbnail/../icon",
+            "/v1/subscriptions/1/image",
+            "/v1/subscriptions/1/image?v=abc",
             "https://evil.test/v1/entries/1/thumbnail",
             "//v1/entries/1/thumbnail",
         )) {
@@ -116,15 +118,22 @@ class EarnestApiTest {
                 Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
                     .code(200).message("test").body(byteArrayOf(1, 2, 3).toResponseBody("image/png".toMediaType())).build()
             }.build())
-            for (path in listOf("/v1/entries/12/thumbnail", "/v1/entries/12/thumbnail?v=0a1b_2c", "/v1/subscriptions/5/icon?v=ff-ee")) {
+            for (path in listOf(
+                "/v1/entries/12/thumbnail",
+                "/v1/entries/12/thumbnail?v=0a1b_2c",
+                "/v1/entries/12/image?v=feature",
+                "/v1/subscriptions/5/icon?v=ff-ee",
+            )) {
                 val bytes = api.media(path)
                 assertEquals(byteArrayOf(1, 2, 3).toList(), bytes!!.toList())
             }
-            assertEquals(3, requests.size)
+            assertEquals(4, requests.size)
             assertEquals("/v1/entries/12/thumbnail", requests[0].url.encodedPath)
             assertNull(requests[0].url.query)
             assertEquals("0a1b_2c", requests[1].url.queryParameter("v"))
-            assertEquals("/v1/subscriptions/5/icon", requests[2].url.encodedPath)
+            assertEquals("/v1/entries/12/image", requests[2].url.encodedPath)
+            assertEquals("feature", requests[2].url.queryParameter("v"))
+            assertEquals("/v1/subscriptions/5/icon", requests[3].url.encodedPath)
             requests.forEach {
                 assertEquals("image/png, image/jpeg", it.header("Accept"))
                 assertEquals(token?.let { value -> "Bearer $value" }, it.header("Authorization"))

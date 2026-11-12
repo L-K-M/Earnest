@@ -18,7 +18,7 @@ export function newOp(): string { return crypto.randomUUID() }
 export const CADENCES = [
   {value: 'now', label: 'Now', hint: 'Arrive in the river at once; rules may notify.'},
   {value: 'today', label: 'Today', hint: 'Arrive in the river, kept for the days you choose.'},
-  {value: 'week', label: 'This week', hint: 'Held for the weekly edition instead of the river.'},
+  {value: 'week', label: 'This week', hint: 'Arrives in the river and stays longer; the front page selects from every cadence.'},
 ] as const
 export type Cadence = (typeof CADENCES)[number]['value']
 

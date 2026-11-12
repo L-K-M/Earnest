@@ -20,6 +20,7 @@ vi.mock('./River',() => ({River: function River({view,onOpen,unreadOnly,onUnread
   useState(() => {listMounted(view); return null})
   return <section data-unread-only={unreadOnly}><h2>{view.title} list</h2><button aria-pressed={!unreadOnly} onClick={() => onUnreadOnlyChange?.(false)}>Show all</button><button aria-pressed={unreadOnly} onClick={() => onUnreadOnlyChange?.(true)}>Show only unread</button>{entries.map(entry => <button key={entry.id} onClick={() => onOpen(entry as Entry)}>Open {entry.title}</button>)}</section>
 }}))
+vi.mock('./FrontPage',() => ({FrontPage:({onOpen}: {onOpen: (entry: Entry) => void}) => <section><h2>Front page list</h2><button onClick={() => onOpen(entries[0] as Entry)}>Open front story</button></section>}))
 vi.mock('./ArticleReader',() => ({Reader:({entry,onClose}: {entry: Entry; onClose: () => void}) => <article><h2>{entry.title}</h2><button onClick={onClose}>Back</button></article>}))
 
 let queryClient: QueryClient
@@ -58,15 +59,15 @@ it('opens the article named in the URL and closes it with Escape', async () => {
 })
 
 it('opens from the list with a new history entry and goes back to it', async () => {
-  await start('/today')
+  await start('/articles')
   fireEvent.click(await screen.findByRole('button',{name:'Open Article 5'},{timeout:5000}))
-  await waitFor(() => expect(location.pathname).toBe('/today/articles/5'))
+  await waitFor(() => expect(location.pathname).toBe('/articles/5'))
   // The list's copy renders the article at once; the refresh behind it
   // (which never answers here) is not waited for.
   expect(await screen.findByRole('heading',{name:'Article 5'})).toBeTruthy()
   await waitFor(() => expect(vi.mocked(request).mock.calls.some(([path]) => path === '/v1/entries/5')).toBe(true))
   fireEvent.click(screen.getByRole('button',{name:'Back'}))
-  await waitFor(() => expect(location.pathname).toBe('/today'))
+  await waitFor(() => expect(location.pathname).toBe('/articles'))
 })
 
 it('keeps a list visit while opening and closing articles, but renews it on intentional parent navigation', async () => {
@@ -100,8 +101,8 @@ it.each([false, true])('uses the saved unread default (%s) until the user overri
   expect(screen.getByRole('heading', {name: 'Article 4'})).toBeTruthy()
   expect(location.pathname).toBe('/feeds/8/articles/4')
   expect(listMounted).toHaveBeenCalledTimes(1)
-  fireEvent.click(screen.getByRole('link', {name: 'Today'}))
-  await screen.findByRole('heading', {name: 'Today list'})
+  fireEvent.click(screen.getByRole('link', {name: 'All articles'}))
+  await screen.findByRole('heading', {name: 'All articles list'})
   expect(screen.getByRole('button', {name: 'Show only unread', pressed: true})).toBeTruthy()
   expect(vi.mocked(request).mock.calls.some(([path, options]) => path === '/v1/settings' && options?.method === 'PUT')).toBe(false)
   expect(act).not.toHaveBeenCalled()
@@ -139,11 +140,20 @@ it('renews an unread list visit after a quick toggle even when the saved default
   expect(screen.getByRole('button', {name: 'Show only unread', pressed: true})).toBeTruthy()
 })
 
+it('opens a front-page story as an explicit read and does not write on render', async () => {
+  await start('/front')
+  await screen.findByRole('heading', {name: 'Front page list'}, {timeout: 5000})
+  expect(act).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', {name: 'Open front story'}))
+  await waitFor(() => expect(location.pathname).toBe('/front/articles/4'))
+  await waitFor(() => expect(act).toHaveBeenCalledWith(entries[0], 'seen', 'seen', 'passive'))
+})
+
 it('explains an article that no longer exists instead of showing a blank pane', async () => {
   await start('/today/articles/77')
   const problem = await screen.findByRole('heading',{name:'This article is no longer available'},{timeout:5000})
   await waitFor(() => expect(document.activeElement).toBe(problem))
-  await waitFor(() => expect(document.title).toBe('Article unavailable · Today · Earnest'))
+  await waitFor(() => expect(document.title).toBe('Article unavailable · Front page · Earnest'))
 })
 
 it('reports an unknown address and a deleted feed in words', async () => {
@@ -171,12 +181,13 @@ it('offers an undo for a deliberate action and restores the previous value with 
 
 it('follows go-to shortcuts without letting the second key act on the list', async () => {
   await start('/today')
-  await screen.findByRole('heading',{name:'Today list'},{timeout:5000})
+  await screen.findByRole('heading',{name:'Front page list'},{timeout:5000})
   // Single-key shortcuts wait for the account's setting to load.
   await reactAct(async () => {await new Promise(resolve => setTimeout(resolve, 50))})
   fireEvent.keyDown(document.body,{key:'g'})
   fireEvent.keyDown(document.body,{key:'e'})
-  await waitFor(() => expect(location.pathname).toBe('/edition'))
+  await waitFor(() => expect(location.pathname).toBe('/front'))
+  expect(location.search).toBe('?period=weekly')
   expect(act).not.toHaveBeenCalled()
 })
 
@@ -201,7 +212,7 @@ it('persists sidebar drops and refreshes folder and feed placement without navig
     if (path === '/v1/subscriptions') return [{id:8, title:'Rust', url:'https://feed.test', deleted:false, folder_id:folderID}]
     return fallback(path, options)
   })
-  await start('/today')
+  await start('/front')
   const feed = await screen.findByRole('link', {name:'Rust'}, {timeout:5000})
   const dataTransfer = {setData: vi.fn(), effectAllowed: '', dropEffect: ''}
   fireEvent.dragStart(feed, {dataTransfer})
@@ -211,7 +222,7 @@ it('persists sidebar drops and refreshes folder and feed placement without navig
   fireEvent.dragStart(screen.getByRole('link', {name:'Child'}), {dataTransfer})
   fireEvent.drop(screen.getByRole('link', {name:'Parent'}).closest('.nav-folder-row')!, {dataTransfer})
   await waitFor(() => expect(screen.getByRole('link', {name:'Parent'}).closest('li')!.contains(screen.getByRole('link', {name:'Child'}))).toBe(true))
-  expect(location.pathname).toBe('/today')
+  expect(location.pathname).toBe('/front')
   expect(folderID).toBe(2)
   expect(parentID).toBe(1)
 })

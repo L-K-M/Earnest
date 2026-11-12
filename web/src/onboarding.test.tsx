@@ -95,7 +95,7 @@ describe('decay input and volume polling', () => {
     render(<Onboarding onComplete={done} />)
     fireEvent.click(screen.getByRole('button', {name: /Skip/}))
     await screen.findByText('How do you like to read?')
-    const input = screen.getByLabelText(/Today items stay for this many days/) as HTMLInputElement
+    const input = screen.getByLabelText(/River retention in days/) as HTMLInputElement
     fireEvent.change(input, {target: {value: ''}})
     // Clearing the field falls back to the default instead of NaN.
     expect(input.value).toBe('2')

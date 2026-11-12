@@ -44,9 +44,6 @@ class RiverFixtureTest {
             assertEquals(file.name, expected, actual)
             val expectedRiver = fixture.getValue("expected_ids").jsonArray.map { it.jsonPrimitive.long }.toSet()
             assertEquals(file.name, expectedRiver, members)
-            val ui = UiState(snapshot = snapshot, states = states, cadences = cadences, riverEntryIds = members)
-            assertEquals(expected, todayEntries(ui).map { it.id }.toSet())
-            assertEquals(expectedRiver - expected, editionEntries(ui).map { it.id }.toSet())
         }
     }
 }

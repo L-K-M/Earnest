@@ -130,12 +130,13 @@ export function Onboarding({onComplete}: {onComplete: () => void}) {
   }
 
   return <section className="card" aria-labelledby="mode-title"><p className="step muted">Step 3 of 3</p><h2 id="mode-title" ref={heading} tabIndex={-1}>How do you like to read?</h2>
+    <p>Front page brings together today's and this week's stories across your feeds. All articles lets you browse chronologically. These preferences apply to river lists.</p>
     <form onSubmit={start}>
       <fieldset><legend>Reading mode</legend>
         <label><input type="radio" name="reading_mode" checked={settings.reading_mode === 'river'} onChange={() => setSettings({...settings, reading_mode: 'river'})} /> A river that ends: resume where you left off; what you skip stays searchable.</label>
         <label><input type="radio" name="reading_mode" checked={settings.reading_mode === 'unread_counts'} onChange={() => setSettings({...settings, reading_mode: 'unread_counts'})} /> Unread counts: every feed keeps a count until you clear it.</label>
       </fieldset>
-      {settings.reading_mode === 'river' && <label>Today items stay for this many days<input type="number" min={1} max={365} value={settings.today_decay_days} onChange={e => {
+      {settings.reading_mode === 'river' && <label>River retention in days<input type="number" min={1} max={365} value={settings.today_decay_days} onChange={e => {
         const today_decay_days = e.target.valueAsNumber
         setSettings({...settings, today_decay_days: Number.isFinite(today_decay_days) ? today_decay_days : defaultReadingSettings().today_decay_days})
       }} required /></label>}

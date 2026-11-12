@@ -191,6 +191,13 @@ class EarnestApi(
 
     suspend fun entry(id: Long): Entry = get(url("/v1/entries/$id")).decode()
 
+    /**
+     * The server-selected front page for [period]. The response is already
+     * ranked and summarized; the client never reorders it.
+     */
+    suspend fun frontPage(period: FrontPagePeriod = FrontPagePeriod.DAILY): FrontPage =
+        get(url("/v1/front-page") { it.addQueryParameter("period", period.wireName) }).decode()
+
     suspend fun content(id: Long): Content = get(url("/v1/entries/$id/content")).decode()
 
     /**
@@ -232,7 +239,7 @@ class EarnestApi(
                         response.use {
                             when (it.code) {
                                 404 -> null
-                                200 -> mediaBody(it)
+                                200 -> mediaBody(it, if (path.substringBefore('?').endsWith("/image")) MAX_FEATURE_BYTES else MAX_MEDIA_BYTES)
                                 else -> throw problem(it.code, it.body?.string().orEmpty())
                             }
                         }
@@ -247,7 +254,7 @@ class EarnestApi(
      * The stored image: a bounded PNG or JPEG body. A 200 with any other type,
      * an empty body or an oversized one is an error, not an absent image.
      */
-    private fun mediaBody(response: Response): ByteArray {
+    private fun mediaBody(response: Response, limit: Int): ByteArray {
         val type = response.body?.contentType()
         if (type == null || !type.type.equals("image", ignoreCase = true) ||
             !(type.subtype.equals("png", ignoreCase = true) || type.subtype.equals("jpeg", ignoreCase = true))
@@ -255,20 +262,20 @@ class EarnestApi(
             throw ApiException(response.code, null, "Earnest request failed (${response.code}): unexpected media type")
         }
         val body = response.body
-        if (body == null || body.contentLength() > MAX_MEDIA_BYTES) {
+        if (body == null || body.contentLength() > limit) {
             throw ApiException(response.code, null, "Earnest request failed (${response.code}): invalid media size")
         }
         val out = java.io.ByteArrayOutputStream()
         body.byteStream().use { stream ->
             val buffer = ByteArray(8192)
-            while (out.size() <= MAX_MEDIA_BYTES) {
-                val read = stream.read(buffer, 0, minOf(buffer.size, MAX_MEDIA_BYTES + 1 - out.size()))
+            while (out.size() <= limit) {
+                val read = stream.read(buffer, 0, minOf(buffer.size, limit + 1 - out.size()))
                 if (read < 0) break
                 out.write(buffer, 0, read)
             }
         }
         val bytes = out.toByteArray()
-        if (bytes.isEmpty() || bytes.size > MAX_MEDIA_BYTES) {
+        if (bytes.isEmpty() || bytes.size > limit) {
             throw ApiException(response.code, null, "Earnest request failed (${response.code}): invalid media size")
         }
         return bytes
@@ -483,11 +490,15 @@ class EarnestApi(
         private val OPML_MEDIA_TYPE = "text/x-opml".toMediaType()
 
         /**
-         * The only paths the media GET may target: an entry thumbnail or a
-         * subscription icon, each with an optional content version.
+         * The only paths the media GET may target: an entry thumbnail or front-
+         * page image, or a subscription icon, each with an optional content
+         * version.
          */
-        private val MEDIA_PATH =
-            Regex("""^/v1/(entries|subscriptions)/[1-9][0-9]{0,18}/(thumbnail|icon)(\?v=[A-Za-z0-9_-]{1,64})?$""")
+        private val MEDIA_PATH = Regex(
+            """^/v1/entries/[1-9][0-9]{0,18}/(thumbnail|image)(\?v=[A-Za-z0-9_-]{1,64})?$""" +
+                """|^/v1/subscriptions/[1-9][0-9]{0,18}/icon(\?v=[A-Za-z0-9_-]{1,64})?$""",
+        )
         private const val MAX_MEDIA_BYTES = 2 * 1024 * 1024
+        private const val MAX_FEATURE_BYTES = 8 * 1024 * 1024
     }
 }

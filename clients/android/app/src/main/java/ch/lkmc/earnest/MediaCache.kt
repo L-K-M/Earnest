@@ -60,8 +60,22 @@ internal class MediaCache(
     // scrolling offline does not issue a request per row appearance.
     private val failures = ConcurrentHashMap<String, Long>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val storageLock = Any()
+    private val epochs = mutableMapOf<String, Long>()
 
     fun close() = scope.cancel()
+
+    /** Invalidates pending writes before removing this account's private images. */
+    fun clearAccount(accountKey: String) = synchronized(storageLock) {
+        require(ACCOUNT_KEY.matches(accountKey))
+        epochs[accountKey] = (epochs[accountKey] ?: 0L) + 1
+        val prefix = "$accountKey\n"
+        memory.snapshot().keys.filter { it.startsWith(prefix) }.forEach(memory::remove)
+        failures.keys.removeAll { it.startsWith(prefix) }
+        inFlight.keys.filter { it.startsWith(prefix) }.forEach { key -> inFlight.remove(key)?.cancel() }
+        File(root, accountKey).deleteRecursively()
+        Unit
+    }
 
     /**
      * The bitmap for [path] under [accountKey], or null when none is stored or
@@ -71,6 +85,7 @@ internal class MediaCache(
      */
     suspend fun load(accountKey: String, path: String, fetch: suspend (String) -> ByteArray?): ImageBitmap? {
         require(ACCOUNT_KEY.matches(accountKey)) { "invalid account cache key" }
+        val epoch = synchronized(storageLock) { epochs[accountKey] ?: 0L }
         val key = "$accountKey\n$path"
         memory.get(key)?.let { return (it as? Bitmap)?.asImageBitmap() }
         failures[key]?.let { if (clock() - it < RETRY_DELAY_MS) return null }
@@ -78,30 +93,35 @@ internal class MediaCache(
             scope.async {
                 try {
                     val bitmap = try {
-                        fetchBitmap(accountKey, path, fetch)
+                        fetchBitmap(accountKey, path, epoch, fetch)
                     } catch (error: CancellationException) {
                         throw error
                     } catch (_: Exception) {
                         failures[key] = clock()
                         return@async null
                     }
-                    failures.remove(key)
-                    memory.put(key, bitmap ?: Miss)
-                    bitmap
+                    synchronized(storageLock) {
+                        if ((epochs[accountKey] ?: 0L) != epoch) return@synchronized null
+                        failures.remove(key)
+                        memory.put(key, bitmap ?: Miss)
+                        bitmap
+                    }
                 } finally {
-                    inFlight.remove(key)
+                    synchronized(storageLock) {
+                        if ((epochs[accountKey] ?: 0L) == epoch) inFlight.remove(key)
+                    }
                 }
             }
         }
         return job.await()?.asImageBitmap()
     }
 
-    private suspend fun fetchBitmap(accountKey: String, path: String, fetch: suspend (String) -> ByteArray?): Bitmap? {
+    private suspend fun fetchBitmap(accountKey: String, path: String, epoch: Long, fetch: suspend (String) -> ByteArray?): Bitmap? {
         val target = versionedFile(accountKey, path)
         if (target != null && target.isFile) {
             val cached = runCatching {
                 target.setLastModified(System.currentTimeMillis())
-                target.readBytes().decode()
+                target.readBytes().decode(path)
             }.getOrNull()
             if (cached != null) return cached
         }
@@ -109,10 +129,11 @@ internal class MediaCache(
         // Bodies over the cap never reach the decoder or the disk: the HTTP
         // layer already bounds a response, and this keeps that promise even
         // for a fetch from somewhere else.
-        if (bytes.size > MAX_BYTES) return null
-        val bitmap = bytes.decode() ?: return null
-        if (target != null) {
-            runCatching { writeDisk(target, bytes) }
+        if (bytes.size > maxBytesFor(path)) return null
+        val bitmap = bytes.decode(path) ?: return null
+        synchronized(storageLock) {
+            if ((epochs[accountKey] ?: 0L) != epoch) return null
+            if (target != null) runCatching { writeDisk(target, bytes) }
         }
         return bitmap
     }
@@ -140,18 +161,26 @@ internal class MediaCache(
     /**
      * Decodes a stored image. The body is capped before this runs, and the
      * dimensions are checked first so an oversized frame cannot exhaust
-     * memory: the server only stores images of at most 192 pixels.
+     * memory: thumbnails stay small, while a front-page image may be up to
+     * 1200 pixels on its long side.
      */
-    private fun ByteArray.decode(): Bitmap? {
+    private fun ByteArray.decode(path: String): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(this, 0, size, bounds)
+        val maxSide = maxSideFor(path)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0 ||
-            bounds.outWidth > MAX_SIDE || bounds.outHeight > MAX_SIDE
+            bounds.outWidth > maxSide || bounds.outHeight > maxSide
         ) {
             return null
         }
         return BitmapFactory.decodeByteArray(this, 0, size)
     }
+
+    private fun maxSideFor(path: String): Int = if (isFrontPageImage(path)) MAX_FEATURE_SIDE else MAX_SIDE
+
+    private fun maxBytesFor(path: String): Int = if (isFrontPageImage(path)) MAX_FEATURE_BYTES else MAX_BYTES
+
+    private fun isFrontPageImage(path: String): Boolean = path.substringBefore('?').endsWith("/image")
 
     private fun sha256(value: String): String =
         MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
@@ -162,8 +191,10 @@ internal class MediaCache(
     companion object {
         private const val MEMORY_BYTES = 8 * 1024 * 1024
         private const val MAX_BYTES = 512 * 1024
+        private const val MAX_FEATURE_BYTES = 8 * 1024 * 1024
         private const val MAX_DISK_FILES = 2000
         private const val MAX_SIDE = 1024
+        private const val MAX_FEATURE_SIDE = 1200
         private const val RETRY_DELAY_MS = 60_000L
         private val ACCOUNT_KEY = Regex("[0-9a-f]{64}")
     }

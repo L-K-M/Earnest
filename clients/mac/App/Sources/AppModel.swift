@@ -215,6 +215,7 @@ struct ReaderPreferencesScope: Equatable {
             // and so does a feed: link's New Subscription offer.
             let links = windows.compactMap { window in window.pendingDeepLink.map { (window, $0) } }
             let offers = windows.filter(\.subscribing).map { ($0, $0.subscribeURL) }
+            if let identity, identity.server != url { try? cache?.clearFrontPages() }
             endSession()
             for (window, link) in links { window.deferDeepLink(link) }
             for (window, address) in offers {
@@ -240,6 +241,9 @@ struct ReaderPreferencesScope: Equatable {
 
     func signOut() {
         if let serverURL { identities.remove(server: serverURL) }
+        // The front page is private reading data; an explicit sign-out drops
+        // it even though the shared cache survives for an offline relaunch.
+        try? cache?.clearFrontPages()
         endSession()
         do { try tokens?.delete() } catch { report(error) }
     }
@@ -297,6 +301,7 @@ struct ReaderPreferencesScope: Equatable {
         let resolved = resolution.identity
         if case .verified = resolution { try identities.save(resolved) }
         if let identity, identity != resolved {
+            try? cache?.clearFrontPages()
             endSession()
             loggedIn = true
             startSession()
@@ -584,16 +589,19 @@ struct ReaderPreferencesScope: Equatable {
     func refresh() async {
         guard loggedIn else { return }
         let sections = Set(windows.map(\.section))
-        if sections.contains(.today) || sections.contains(.edition) || sections.contains(.feeds) {
+        if sections.contains(.frontPage) || sections.contains(.allArticles) || sections.contains(.feeds) {
             await refreshFeeds()
         }
-        if sections.contains(.today) {
+        if sections.contains(.frontPage) {
             async let briefsTask: Void = refreshBriefs()
             async let changesTask: Void = refreshAgentChanges()
             _ = await (briefsTask, changesTask)
         }
         if sections.contains(.activity) { await refreshActivity() }
-        for window in windows { await window.refreshEntries() }
+        for window in windows {
+            if window.section == .frontPage { await window.refreshFrontPage() }
+            else { await window.refreshEntries() }
+        }
         rebuildPresentation()
         // An optional counts endpoint must not delay the primary reading refresh.
         if readerSettings.readingMode == .unreadCounts {

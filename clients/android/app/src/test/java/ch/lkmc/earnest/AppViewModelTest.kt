@@ -38,6 +38,8 @@ class AppViewModelTest {
     private val calls = CopyOnWriteArrayList<String>()
     private val payloads = CopyOnWriteArrayList<String>()
     private val contentUrlQueries = CopyOnWriteArrayList<String?>()
+    @Volatile private var frontPageOverride: String? = null
+    @Volatile private var frontPageStatus: Int = 200
     private class Sessions(initial: AuthenticatedSession?) : SessionStore {
         private val stored = java.util.concurrent.atomic.AtomicReference(initial)
         var value: AuthenticatedSession?
@@ -78,6 +80,7 @@ class AppViewModelTest {
         }
         if (path.endsWith("/content-url")) contentUrlQueries += chain.request().url.query
         val body = when (path) {
+            "/v1/front-page" -> frontPageOverride ?: frontPageJson("rev-1", "daily")
             "/v1/entries/2/content-url" -> """{"url":"https://content.test/signed","expires_at":"2026-11-03T01:00:00Z"}"""
             "/v1/settings" -> """{"today_decay_days":2,"rev":0}"""
             "/v1/changes" -> """{"changes":[],"next":{"generation":"g1","rev":0},"next_cursor":"g1:0"}"""
@@ -90,6 +93,7 @@ class AppViewModelTest {
         val status = when (path) {
             unauthorizedPath -> 401
             "/v1/activity/agent-changes" -> agentChangesStatus
+            "/v1/front-page" -> frontPageStatus
             else -> 200
         }
         val responseBody = if (path == cancelledPath) object : okhttp3.ResponseBody() {
@@ -100,6 +104,11 @@ class AppViewModelTest {
         Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(status).message("test")
             .body(responseBody).build()
     }.build())
+
+    private fun frontPageJson(revision: String, period: String): String {
+        val entry = """{"id":2,"subscription_id":3,"feed_id":5,"seq":4,"first_seen_at":"2026-11-03T00:00:00Z","published_at":"2026-11-02T12:00:00Z","title":"Front headline","url":"https://news.test/article","author":"Author","rev":2,"deleted":false,"state":{"principal":1,"entry_id":2,"seen":{"value":"unseen","rev":1,"occurred_at":"2026-11-03T00:00:00Z","actor":1,"source":"passive"},"shelf":{"value":"none","rev":1,"occurred_at":"2026-11-03T00:00:00Z","actor":1,"source":"passive"},"kept":{"value":false,"rev":1,"occurred_at":"2026-11-03T00:00:00Z","actor":1,"source":"passive"},"state_rev":1}}"""
+        return """{"period":"$period","window_start":"2026-11-02T10:00:00Z","window_end":"2026-11-03T10:00:00Z","selected_at":"2026-11-03T10:00:00Z","revision":"$revision","sections":[{"name":"Across your feeds","stories":[{"id":"story-1","entry":$entry,"source_title":"Source A","published_at":"2026-11-02T12:00:00Z","feed_count":1,"excerpt":"Excerpt","coverage":[{"entry":$entry,"source_title":"Source A"}]}]}]}"""
+    }
 
     private suspend fun model(): AppViewModel {
         SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
@@ -914,6 +923,79 @@ class AppViewModelTest {
         }
 
         withTimeout(15000) { model.state.first { !it.loading } }
+        Unit
+    }
+
+    @Test fun frontPageLoadsAndCachesWithoutWritingReadState() = runBlocking(Dispatchers.IO) {
+        frontPageOverride = frontPageJson("rev-1", "daily")
+        val model = model()
+        await("front page") { model.state.value.frontPage.page?.revision == "rev-1" }
+        assertEquals("rev-1", SessionCache(app, identity).cachedFrontPage(FrontPagePeriod.DAILY)?.revision)
+        assertNotNull(SessionCache(app, identity).cachedFrontPageAt(FrontPagePeriod.DAILY))
+        assertTrue(SessionCache(app, identity).withEngine { it.snapshot().outbox }.isEmpty())
+        assertTrue(calls.none { it == "/v1/state:batch" })
+        Unit
+    }
+
+    @Test fun backgroundRefreshOffersNewCoverageWithoutReplacingTheVisit() = runBlocking(Dispatchers.IO) {
+        frontPageOverride = frontPageJson("rev-1", "daily")
+        val model = model()
+        await("front page") { model.state.value.frontPage.page?.revision == "rev-1" }
+        val orderBefore = model.state.value.frontPage.page?.sections?.map { section -> section.stories.map { it.id } }
+
+        frontPageOverride = frontPageJson("rev-2", "daily")
+        model.refresh()
+        await("pending revision") { model.state.value.frontPage.pendingRevision == "rev-2" }
+        assertEquals("rev-1", model.state.value.frontPage.page?.revision)
+        assertEquals(orderBefore, model.state.value.frontPage.page?.sections?.map { section -> section.stories.map { it.id } })
+
+        model.refreshFrontPage()
+        await("explicit refresh") { model.state.value.frontPage.page?.revision == "rev-2" }
+        assertNull(model.state.value.frontPage.pendingRevision)
+        Unit
+    }
+
+    @Test fun frontPageOfflineKeepsTheCachedPageAndTime() = runBlocking(Dispatchers.IO) {
+        frontPageOverride = frontPageJson("rev-1", "daily")
+        val model = model()
+        await("front page") { model.state.value.frontPage.page?.revision == "rev-1" }
+        val updatedAt = model.state.value.frontPage.updatedAt
+        assertNotNull(updatedAt)
+
+        frontPageStatus = 500
+        model.refreshFrontPage()
+        await("offline notice") { model.state.value.frontPage.error == "Offline. Showing the last updated page." }
+        assertEquals("rev-1", model.state.value.frontPage.page?.revision)
+        assertEquals(updatedAt, model.state.value.frontPage.updatedAt)
+
+        frontPageStatus = 200
+        model.refreshFrontPage()
+        await("online again") { model.state.value.frontPage.error == null }
+        assertEquals("rev-1", model.state.value.frontPage.page?.revision)
+        Unit
+    }
+
+    @Test fun logoutClearsTheFrontPageCache() = runBlocking(Dispatchers.IO) {
+        frontPageOverride = frontPageJson("rev-1", "daily")
+        val model = model()
+        await("front page") { model.state.value.frontPage.page?.revision == "rev-1" }
+        model.logout()
+        assertNull(SessionCache(app, identity).cachedFrontPage(FrontPagePeriod.DAILY))
+        assertNull(model.state.value.frontPage.page)
+        Unit
+    }
+
+    @Test fun switchingFrontPagePeriodsLoadsTheOtherWindow() = runBlocking(Dispatchers.IO) {
+        frontPageOverride = frontPageJson("rev-1", "daily")
+        val model = model()
+        await("daily front page") { model.state.value.frontPage.page?.revision == "rev-1" }
+
+        frontPageOverride = frontPageJson("rev-week", "weekly")
+        model.openFrontPage(FrontPagePeriod.WEEKLY)
+        await("weekly front page") { model.state.value.frontPage.page?.revision == "rev-week" }
+        assertEquals(FrontPagePeriod.WEEKLY, model.state.value.frontPage.period)
+        assertEquals("rev-week", SessionCache(app, identity).cachedFrontPage(FrontPagePeriod.WEEKLY)?.revision)
+        assertTrue(SessionCache(app, identity).withEngine { it.snapshot().outbox }.isEmpty())
         Unit
     }
 }
