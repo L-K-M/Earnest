@@ -7,6 +7,7 @@ import androidx.test.core.app.ApplicationProvider
 import ch.lkmc.earnest.core.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.withLock
@@ -952,6 +953,24 @@ class AppViewModelTest {
         model.refreshFrontPage()
         await("explicit refresh") { model.state.value.frontPage.page?.revision == "rev-2" }
         assertNull(model.state.value.frontPage.pendingRevision)
+        Unit
+    }
+
+    @Test fun unchangedCoverageRefreshesItsReadIndicator() = runBlocking(Dispatchers.IO) {
+        frontPageOverride = frontPageJson("rev-1", "daily")
+        val model = model()
+        await("front page") { model.state.value.frontPage.page?.revision == "rev-1" }
+        frontPageOverride = frontPageJson("rev-1", "daily").replace("\"unseen\"", "\"seen\"")
+        model.refresh()
+        val cache = SessionCache(app, identity)
+        await("updated read indicator") {
+            model.state.value.frontPage.page?.sections?.first()?.stories?.first()
+                ?.coverage?.first()?.entry?.state?.seen?.value == JsonPrimitive("seen")
+        }
+        assertEquals(JsonPrimitive("seen"), model.state.value.frontPage.page?.sections?.first()?.stories?.first()
+            ?.coverage?.first()?.entry?.state?.seen?.value)
+        assertNull(model.state.value.frontPage.pendingRevision)
+        assertTrue(cache.withEngine { it.snapshot().outbox }.isEmpty())
         Unit
     }
 

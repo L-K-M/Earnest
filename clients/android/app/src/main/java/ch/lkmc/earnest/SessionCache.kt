@@ -76,6 +76,8 @@ internal object SyncAccess {
 
 /** Reload, mutate and flush form one critical section for every snapshot writer. */
 internal class SessionCache(context: Context, val identity: AccountIdentity) {
+    private val frontPageLock = Any()
+    private var frontPagesWritable = true
     val db = AppDatabase.get(context, identity.cacheKey)
     val preferences = context.getSharedPreferences("session-${identity.cacheKey}", Context.MODE_PRIVATE)
     val legacyCacheRetained = context.getDatabasePath("earnest.db").exists()
@@ -184,18 +186,22 @@ internal class SessionCache(context: Context, val identity: AccountIdentity) {
         preferences.getLong(frontPageAtKey(period), 0L).takeIf { it > 0L }
 
     /** Stores a successful page and its fetch time. A failed commit leaves the previous page. */
-    fun cacheFrontPage(period: FrontPagePeriod, page: FrontPage): Boolean = try {
-        preferences.edit()
-            .putString(frontPageKey(period), json.encodeToString(FrontPage.serializer(), page))
-            .putLong(frontPageAtKey(period), System.currentTimeMillis())
-            .commit()
-    } catch (_: Exception) {
-        false
+    fun cacheFrontPage(period: FrontPagePeriod, page: FrontPage): Boolean = synchronized(frontPageLock) {
+        if (!frontPagesWritable) return@synchronized false
+        try {
+            preferences.edit()
+                .putString(frontPageKey(period), json.encodeToString(FrontPage.serializer(), page))
+                .putLong(frontPageAtKey(period), System.currentTimeMillis())
+                .commit()
+        } catch (_: Exception) {
+            false
+        }
     }
 
-    /** Drops the stored pages for this account; logout calls it so a later sign-in starts clean. */
-    fun clearFrontPages() {
-        preferences.edit {
+    /** Logout retires this cache instance before deleting pages, including for late responses. */
+    fun clearFrontPages() = synchronized(frontPageLock) {
+        frontPagesWritable = false
+        preferences.edit(commit = true) {
             FrontPagePeriod.entries.forEach { period ->
                 remove(frontPageKey(period))
                 remove(frontPageAtKey(period))

@@ -9,6 +9,7 @@ import ch.lkmc.earnest.core.FrontPagePeriod
 import ch.lkmc.earnest.core.FrontPageSection
 import ch.lkmc.earnest.core.FrontPageStory
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -100,5 +101,17 @@ class FrontPageCacheTest {
         val cache = SessionCache(context, accountA)
         cache.preferences.edit { putString("front_page_daily", "not json") }
         assertNull(cache.cachedFrontPage(FrontPagePeriod.DAILY))
+    }
+
+    @Test fun aLateResponseCannotRecreatePagesAfterSignOut() {
+        val oldSession = SessionCache(context, accountA)
+        oldSession.cacheFrontPage(FrontPagePeriod.DAILY, page("before"))
+        oldSession.clearFrontPages()
+        assertFalse(oldSession.cacheFrontPage(FrontPagePeriod.DAILY, page("late")))
+        val newSession = SessionCache(context, accountA)
+        assertNull(newSession.cachedFrontPage(FrontPagePeriod.DAILY))
+        newSession.cacheFrontPage(FrontPagePeriod.DAILY, page("new-session"))
+        assertFalse(oldSession.cacheFrontPage(FrontPagePeriod.DAILY, page("stale")))
+        assertEquals("new-session", newSession.cachedFrontPage(FrontPagePeriod.DAILY)?.revision)
     }
 }

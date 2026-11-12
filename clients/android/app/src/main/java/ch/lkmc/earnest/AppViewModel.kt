@@ -1279,7 +1279,7 @@ class AppViewModel internal constructor(
                         val previous = it.frontPage.page
                         val changed = previous != null && previous.revision != page.revision
                         it.copy(frontPage = it.frontPage.copy(
-                            page = if (previous == null) page else previous,
+                            page = if (previous == null || !changed) page else previous,
                             updatedAt = if (previous == null || !changed) System.currentTimeMillis() else it.frontPage.updatedAt,
                             pendingRevision = if (changed) page.revision else null,
                             error = null,
