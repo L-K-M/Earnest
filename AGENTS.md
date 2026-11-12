@@ -21,7 +21,8 @@ clients live in `clients/mac` and `clients/android`.
 |---|---|
 | Build every target this host can | `scripts/build.sh` → `dist/` (targets: `web`, `binary`, `docker`, `mac`, `android`) |
 | Build the binary | `make build` or `scripts/build.sh binary` → `dist/earnest` |
-| Build + install the Mac app | `scripts/build.sh --install` → `/Applications/Earnest.app` (macOS only) |
+| Build + install native apps | `scripts/build.sh --install` → `/Applications/Earnest.app` (macOS) + connected Android device |
+| Build + install the Android app | `scripts/build.sh android --install` → connected device (skips install if none) |
 | Build the Android APK | `scripts/build.sh android` → `dist/earnest-debug.apk` |
 | Tests + vet + gofmt | `make test`, `make lint` |
 | Build the image | `make docker-build` or `scripts/build.sh docker` → `earnest:local` |

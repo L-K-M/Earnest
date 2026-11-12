@@ -7,6 +7,25 @@ tools `36.1.0` and platform tools. Set `ANDROID_HOME` to the SDK directory.
 From the repository root:
 
 ```sh
+scripts/build.sh android --install
+```
+
+This stages `dist/earnest-debug.apk` and installs it to a connected device using
+`adb install -r`. The script finds `adb` in the detected SDK's `platform-tools`
+directory or on `PATH`. With no connected device, installation is skipped and
+the APK remains in `dist/`. Enable USB debugging and authorize this computer
+on the phone. If multiple devices are connected, select one with
+`ANDROID_SERIAL=<serial> scripts/build.sh android --install` (find its serial
+with `adb devices`). An unavailable selected device or a failed install makes
+the command fail.
+
+Run `scripts/build.sh --install` to build and install both native apps where
+supported, including `/Applications/Earnest.app` on macOS. Use
+`scripts/build.sh mac --install` to install only the Mac app.
+
+To run the Android tests and lint before building and installing manually:
+
+```sh
 cd clients/android
 ./gradlew :core:test :app:testDebugUnitTest :app:assembleDebug lint
 adb install -r app/build/outputs/apk/debug/app-debug.apk
@@ -70,9 +89,13 @@ HTTP stays disabled in every build.
 ## Reading offline
 
 The app caches the sync snapshot (entries, subscriptions and state) in Room
-and caches article content when you open it. Lists work without a connection;
-the reader falls back to the cached content when the signed content URL cannot
-be fetched. Swipe a row left a short distance for Later, or a long distance
+and caches article content when you open it. Snapshot reads use bounded chunks
+so a large account does not exceed Android's SQLite cursor window. This also
+restores oversized caches written by older versions, including unsent actions,
+without clearing app data or changing the database format.
+
+Lists work without a connection; the reader falls back to the cached content
+when the signed content URL cannot be fetched. Swipe a row left a short distance for Later, or a long distance
 for Done; the label appears during the gesture and an undo action is offered
 in a snackbar that names the action and auto-dismisses. The swipe background
 is hidden until the row moves. Rows also offer Keep, Unkeep and, once read,
@@ -202,9 +225,10 @@ that action only while permission is missing.
 ## Verification
 
 `:core:test` runs the shared sync vectors and the OpenAPI contract test;
-`:app:testDebugUnitTest` covers snapshot replacement failure, concurrent
-foreground/background writes, account isolation, offline cadence restoration,
-Today session membership, passive seen on scroll, missing notification metadata,
+`:app:testDebugUnitTest` covers snapshot replacement failure, oversized snapshot
+recovery and cold reopen with unsent actions and multibyte text, transactional
+chunk reads, concurrent foreground/background writes, account isolation,
+offline cadence restoration, Today session membership, passive seen on scroll, missing notification metadata,
 agent-change retrieval, WebView error fallback, deep-link parsing, brief labels,
 widget headline selection, theme persistence, notification channels and server
 notification text, notification permission timing, cadence selection, swipe
