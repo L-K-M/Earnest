@@ -29,6 +29,8 @@ data class LlmProviderDraft(
     val timeoutSeconds: String = "60",
     val tokenField: LlmTokenField = LlmTokenField.MAX_COMPLETION_TOKENS,
     val hasApiKey: Boolean = false,
+    // Retain the task reference while the editable Name field is empty.
+    internal val routedName: String = name,
 )
 
 data class LlmSettingsDraft(
@@ -84,6 +86,16 @@ fun LlmProviderDraft.toInput(): LlmProviderInput = LlmProviderInput(
         ?: throw IllegalArgumentException("timeout_seconds must be a whole number"),
     tokenField = tokenField,
 )
+
+/** Applies a provider edit and keeps the routes bound to its name. */
+internal fun LlmSettingsDraft.editProvider(index: Int, replacement: LlmProviderDraft): LlmSettingsDraft {
+    val previous = providers.getOrNull(index) ?: return this
+    val edited = replacement.copy(routedName = replacement.name.ifEmpty { previous.routedName })
+    return copy(
+        providers = providers.mapIndexed { i, provider -> if (i == index) edited else provider },
+        tasks = retargetProvider(tasks, previous.routedName, edited.name),
+    )
+}
 
 /** Points assigned tasks at a renamed provider without claiming disabled routes. */
 internal fun retargetProvider(tasks: List<LlmTaskRoute>, old: String, replacement: String): List<LlmTaskRoute> {

@@ -100,21 +100,10 @@ internal fun LlmServicesSection(
         current.providers.forEachIndexed { index, provider ->
             ProviderCard(
                 provider = provider,
-                referencedBy = current.tasks.filter { it.provider == provider.name && it.provider.isNotEmpty() }
+                referencedBy = current.tasks.filter { it.provider == provider.routedName && it.provider.isNotEmpty() }
                     .map { it.task },
                 onTransform = { transformed ->
-                    model.updateLlmSettingsDraft { draftCopy ->
-                        draftCopy.copy(
-                            providers = draftCopy.providers.mapIndexed { i, item -> if (i == index) transformed else item },
-                            // Retarget complete names only. Transient empty names
-                            // must never claim the disabled-task marker.
-                            tasks = if (transformed.name != provider.name) {
-                                retargetProvider(draftCopy.tasks, provider.name, transformed.name)
-                            } else {
-                                draftCopy.tasks
-                            },
-                        )
-                    }
+                    model.updateLlmSettingsDraft { it.editProvider(index, transformed) }
                 },
                 onRemove = {
                     model.updateLlmSettingsDraft { draftCopy ->
