@@ -140,6 +140,56 @@ public struct APILLMModelSettings: Codable, Sendable, Equatable {
     }
 }
 
+/// One catalogue entry a provider reports through discovery. It is a
+/// suggestion, not a configured model: a missing capability or price field
+/// means unknown, never false or free.
+public struct APIDiscoveredModel: Codable, Sendable, Equatable {
+    public var id: String
+    public var name: String
+    public var chat: Bool?
+    public var embedding: Bool?
+    public var inputPer1M: String?
+    public var outputPer1M: String?
+    public var embeddingPer1M: String?
+    public var dimensions: Int64?
+    public var truncatable: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, chat, embedding
+        case inputPer1M = "input_per_1m"
+        case outputPer1M = "output_per_1m"
+        case embeddingPer1M = "embedding_per_1m"
+        case dimensions, truncatable
+    }
+
+    public init(id: String, name: String, chat: Bool? = nil, embedding: Bool? = nil,
+                inputPer1M: String? = nil, outputPer1M: String? = nil,
+                embeddingPer1M: String? = nil, dimensions: Int64? = nil,
+                truncatable: Bool? = nil) {
+        self.id = id
+        self.name = name
+        self.chat = chat
+        self.embedding = embedding
+        self.inputPer1M = inputPer1M
+        self.outputPer1M = outputPer1M
+        self.embeddingPer1M = embeddingPer1M
+        self.dimensions = dimensions
+        self.truncatable = truncatable
+    }
+}
+
+/// The catalogue response. `models` is nullable on the wire; clients treat
+/// null the same as an empty catalogue.
+public struct APIDiscoveredModels: Codable, Sendable, Equatable {
+    public var models: [APIDiscoveredModel]?
+
+    enum CodingKeys: String, CodingKey { case models }
+
+    public init(models: [APIDiscoveredModel]? = nil) {
+        self.models = models
+    }
+}
+
 /// The redacted server-wide LLM configuration. `revision` 0 means the
 /// deployment's environment defaults; 1 or more is a saved configuration.
 public struct APILLMSettings: Codable, Sendable, Equatable {
@@ -285,7 +335,7 @@ func isValidLLMModelName(_ name: String) -> Bool {
 /// A nonnegative decimal with at most six places, within the server's money
 /// bound. The digits are parsed as an integer count of millionths, so no
 /// floating-point rounding can occur.
-func isValidLLMMoney(_ text: String) -> Bool {
+public func isValidLLMMoney(_ text: String) -> Bool {
     let trimmed = text.trimmingCharacters(in: .whitespaces)
     guard !trimmed.isEmpty, !trimmed.hasPrefix("-") else { return false }
     let body = trimmed.hasPrefix("+") ? String(trimmed.dropFirst()) : trimmed

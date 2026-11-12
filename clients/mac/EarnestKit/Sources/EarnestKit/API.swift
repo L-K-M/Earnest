@@ -388,6 +388,19 @@ public final class EarnestAPI: Sendable {
         )
         return try await generated { try adapt(try await client.putLlmSettings(.init(body: .json(body))).ok.body.json) }
     }
+    /// Previews the model catalogue one draft provider exposes. The call
+    /// persists nothing, enables no task and sends no inference request; a
+    /// stale `revision` fails with a conflict. The provider is sent exactly as
+    /// a save would send it, so a blank key inherits the stored credential
+    /// only for the same destination. Results are catalogue suggestions the
+    /// caller must keep in memory only.
+    public func discoverLLMModels(revision: Int64, provider: APILLMProviderInput) async throws -> [APIDiscoveredModel] {
+        let body = Components.Schemas.LLMModelsInput(provider: try adapt(provider), revision: revision)
+        let catalogue: APIDiscoveredModels = try await generated {
+            try adapt(try await client.discoverLlmModels(.init(body: .json(body))).ok.body.json)
+        }
+        return catalogue.models ?? []
+    }
     /// Exact unread totals. Callers gate this on the unread-count reading
     /// mode; river mode must never request it.
     public func unreadCounts() async throws -> APIUnreadCounts {

@@ -163,6 +163,88 @@ final class LLMHTTP: URLProtocol {
         LLMHTTP.assertFinished()
     }
 
+    @Test func discoveredModelDecodesUnknownFieldsAsAbsent() throws {
+        let sparse = try JSONDecoder().decode(APIDiscoveredModel.self, from: Data(#"{"id":"m1","name":"Model"}"#.utf8))
+        #expect(sparse.id == "m1" && sparse.name == "Model")
+        #expect(sparse.chat == nil && sparse.embedding == nil, "unknown capability is never false")
+        #expect(sparse.inputPer1M == nil && sparse.outputPer1M == nil && sparse.embeddingPer1M == nil,
+                "unknown price is never zero")
+        #expect(sparse.dimensions == nil && sparse.truncatable == nil)
+
+        let full = try JSONDecoder().decode(APIDiscoveredModel.self, from: Data(
+            #"{"id":"e","name":"E","chat":false,"embedding":true,"embedding_per_1m":"0.020000","dimensions":1536,"truncatable":true}"#.utf8))
+        #expect(full.chat == false && full.embedding == true)
+        #expect(full.embeddingPer1M == "0.020000" && full.dimensions == 1536 && full.truncatable == true)
+        #expect(full.inputPer1M == nil, "absent fields stay absent, not zero")
+    }
+
+    @Test func llmModelDiscoveryPostsRevisionAndOneProvider() async throws {
+        let session = LLMHTTP.install([
+            .init(method: "POST", path: "/v1/settings/llm/models",
+                  body: #"{"models":[{"id":"m","name":"M","chat":true},{"id":"e","name":"E"}]}"#,
+                  checkBody: { body in
+                      let fields = try JSONDecoder().decode(APIValue.self, from: try #require(body))
+                      #expect(fields["revision"]?.int64Value == 2)
+                      let provider = try #require(fields["provider"])
+                      #expect(provider["name"]?.stringValue == "openai")
+                      #expect(provider["kind"]?.stringValue == "openai")
+                      #expect(provider["base_url"]?.stringValue == "https://api.openai.com/v1")
+                      #expect(provider["api_key"] == nil, "a blank draft key is omitted for inheritance")
+                      #expect(provider["clear_api_key"]?.boolValue == false)
+                      #expect(fields["providers"] == nil && fields["tasks"] == nil && fields["models"] == nil,
+                              "discovery is a provider preview, not a settings save")
+                  }),
+        ])
+        defer { session.invalidateAndCancel() }
+        let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: TestTokens(), session: session)
+        let provider = APILLMProviderInput(name: "openai", kind: .openai, baseURL: "https://api.openai.com/v1",
+                                           monthlyLimitUSD: "0", timeoutSeconds: 60,
+                                           tokenField: .maxCompletionTokens)
+        let models = try await api.discoverLLMModels(revision: 2, provider: provider)
+        #expect(models.count == 2)
+        #expect(models[0].id == "m" && models[0].chat == true)
+        #expect(models[1].chat == nil)
+        LLMHTTP.assertFinished()
+    }
+
+    @Test func llmModelDiscoverySendsATypedDraftKey() async throws {
+        let session = LLMHTTP.install([
+            .init(method: "POST", path: "/v1/settings/llm/models", body: #"{"models":[]}"#,
+                  checkBody: { body in
+                      let fields = try JSONDecoder().decode(APIValue.self, from: try #require(body))
+                      #expect(fields["provider"]?["api_key"]?.stringValue == "sk-draft",
+                              "the preview uses the draft exactly as a save would")
+                  }),
+        ])
+        defer { session.invalidateAndCancel() }
+        let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: TestTokens(), session: session)
+        let provider = APILLMProviderInput(name: "local", kind: .openai, baseURL: "http://nas.local:11434/v1",
+                                           apiKey: "sk-draft", monthlyLimitUSD: "0", timeoutSeconds: 30,
+                                           tokenField: .maxTokens)
+        let models = try await api.discoverLLMModels(revision: 0, provider: provider)
+        #expect(models.isEmpty)
+        LLMHTTP.assertFinished()
+    }
+
+    @Test func llmModelDiscoveryConflictIsAProblem() async throws {
+        let session = LLMHTTP.install([
+            .init(method: "POST", path: "/v1/settings/llm/models", status: 409,
+                  body: #"{"type":"about:blank","title":"Conflict","status":409,"detail":"LLM settings changed; reload before fetching models"}"#),
+        ])
+        defer { session.invalidateAndCancel() }
+        let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: TestTokens(), session: session)
+        let provider = APILLMProviderInput(name: "openai", kind: .openai, baseURL: "https://api.openai.com/v1",
+                                           monthlyLimitUSD: "0", timeoutSeconds: 60,
+                                           tokenField: .maxCompletionTokens)
+        do {
+            _ = try await api.discoverLLMModels(revision: 1, provider: provider)
+            Issue.record("Expected a conflict")
+        } catch let error as APIProblem {
+            #expect(error.status == 409)
+        }
+        LLMHTTP.assertFinished()
+    }
+
     @Test func llmConflictIsAProblem() async throws {
         let session = LLMHTTP.install([
             .init(method: "PUT", path: "/v1/settings/llm", status: 409,
