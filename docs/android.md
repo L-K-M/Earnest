@@ -7,6 +7,25 @@ tools `36.1.0` and platform tools. Set `ANDROID_HOME` to the SDK directory.
 From the repository root:
 
 ```sh
+scripts/build.sh android --install
+```
+
+This stages `dist/earnest-debug.apk` and installs it to a connected device using
+`adb install -r`. The script finds `adb` in the detected SDK's `platform-tools`
+directory or on `PATH`. With no connected device, installation is skipped and
+the APK remains in `dist/`. Enable USB debugging and authorize this computer
+on the phone. If multiple devices are connected, select one with
+`ANDROID_SERIAL=<serial> scripts/build.sh android --install` (find its serial
+with `adb devices`). An unavailable selected device or a failed install makes
+the command fail.
+
+Run `scripts/build.sh --install` to build and install both native apps where
+supported, including `/Applications/Earnest.app` on macOS. Use
+`scripts/build.sh mac --install` to install only the Mac app.
+
+To run the Android tests and lint before building and installing manually:
+
+```sh
 cd clients/android
 ./gradlew :core:test :app:testDebugUnitTest :app:assembleDebug lint
 adb install -r app/build/outputs/apk/debug/app-debug.apk
