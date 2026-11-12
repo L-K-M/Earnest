@@ -3,7 +3,7 @@ import {afterEach, expect, it, vi} from 'vitest'
 import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {QueryClient, QueryClientProvider, useQuery} from '@tanstack/react-query'
 import {request, RequestError} from '../request'
-import {LLM_TASKS, type LLMProviderInput, type LLMSettings} from './model'
+import {LLM_TASKS, type DiscoveredModel, type LLMProviderInput, type LLMSettings} from './model'
 import {LLMSettings as LLMSettingsSection} from './LLMSettings'
 
 vi.mock('../request', async importOriginal => {
@@ -38,6 +38,8 @@ type Body = {revision: number; op_id: string; providers: ProviderBody[]; tasks: 
 
 const putCalls = () => vi.mocked(request).mock.calls.filter(([path, options]) => path === '/v1/settings/llm' && options?.method === 'PUT')
 const getCalls = () => vi.mocked(request).mock.calls.filter(([path, options]) => path === '/v1/settings/llm' && !options?.method)
+const modelCalls = () => vi.mocked(request).mock.calls.filter(([path]) => path === '/v1/settings/llm/models')
+const lastDiscovery = () => JSON.parse(String(modelCalls().at(-1)?.[1]?.body)) as {revision: number; provider: ProviderBody}
 const lastPut = () => JSON.parse(String(putCalls().at(-1)?.[1]?.body)) as Body
 const providerOf = (body: Body, name: string): ProviderBody => {
   const found = body.providers.find(provider => provider.name === name)
@@ -93,6 +95,25 @@ it('shows an error and a Load button when the settings cannot load', async () =>
   expect(screen.getByText(/offline/)).toBeTruthy()
   expect(screen.getByRole('button', {name: 'Load'})).toBeTruthy()
   expect(putCalls()).toHaveLength(0)
+})
+
+it('shows the draft key status: saved, entered-unsaved, removal pending and none', async () => {
+  mount()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  expect(screen.getByText('API key saved')).toBeTruthy()
+  expect(screen.getByText('No API key')).toBeTruthy()
+
+  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
+  fireEvent.change(screen.getByLabelText('API key'), {target: {value: 'sk-unsaved'}})
+  fireEvent.click(screen.getByRole('button', {name: 'Apply provider'}))
+  expect(screen.getByText('API key entered · unsaved')).toBeTruthy()
+  expect(screen.queryByText('API key saved')).toBeNull()
+
+  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
+  fireEvent.change(screen.getByLabelText('API key'), {target: {value: ''}})
+  fireEvent.click(screen.getByLabelText('Clear the saved API key'))
+  fireEvent.click(screen.getByRole('button', {name: 'Apply provider'}))
+  expect(screen.getByText('Key removal pending')).toBeTruthy()
 })
 
 it('keeps a saved key when the replacement field is blank and omits has_api_key', async () => {
@@ -427,4 +448,231 @@ it('keeps typed keys in component state only', async () => {
   for (const store of [localStorage, sessionStorage]) {
     for (let i = 0; i < store.length; i++) expect(store.getItem(store.key(i) ?? '') ?? '').not.toContain('sk-secret-value')
   }
+})
+
+const catalogue: DiscoveredModel[] = [
+  {id: 'gpt-5', name: 'GPT-5', chat: true, embedding: false, input_per_1m: '1.25', output_per_1m: '10'},
+  {id: 'embed-one', name: 'Embed One', chat: false, embedding: true, embedding_per_1m: '0.1', dimensions: 512},
+  {id: 'dual-use', name: 'Dual Use', chat: true, embedding: true, input_per_1m: '2', output_per_1m: '4', embedding_per_1m: '0.5', dimensions: 768},
+  {id: 'text-embedding-3-small', name: 'Embedding Small', embedding: true, embedding_per_1m: '0.04', dimensions: 512},
+  {id: 'mystery', name: 'Mystery'},
+]
+
+function mountCatalogue(answer: {models: DiscoveredModel[]} | (() => never), server: LLMSettings = fixture) {
+  vi.mocked(request).mockImplementation(async (path: string, options?: RequestInit) => {
+    if (path === '/v1/settings/llm/models') {
+      if (typeof answer === 'function') answer()
+      return answer as {models: DiscoveredModel[]}
+    }
+    if (path === '/v1/settings/llm' && !options?.method) return server
+    return {...server, revision: server.revision + 1}
+  })
+  renderSection()
+}
+
+const fetchButtons = () => screen.getAllByRole('button', {name: 'Fetch models'})
+
+it('fetches the catalogue with the draft provider and lets the server inherit a blank key', async () => {
+  mountCatalogue({models: catalogue})
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(fetchButtons()[0])
+  expect(await screen.findByText('GPT-5 (gpt-5)')).toBeTruthy()
+  const sent = lastDiscovery()
+  expect(sent.revision).toBe(3)
+  expect(sent.provider.name).toBe('openai')
+  expect(sent.provider.api_key).toBeUndefined()
+  expect(sent.provider.clear_api_key).toBe(false)
+  expect(sent.provider.has_api_key).toBeUndefined()
+  expect(putCalls()).toHaveLength(0)
+})
+
+it('sends a replacement key typed in the editor without applying it', async () => {
+  mountCatalogue({models: catalogue})
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
+  fireEvent.change(screen.getByLabelText('API key'), {target: {value: 'sk-editor-only'}})
+  // The editor's Fetch models button renders before the other rows' buttons.
+  fireEvent.click(fetchButtons()[0])
+  expect(await screen.findByText('Mystery (mystery)')).toBeTruthy()
+  expect(lastDiscovery().provider.api_key).toBe('sk-editor-only')
+  expect(screen.getByText(/Apply provider writes these edits to the draft/)).toBeTruthy()
+  expect(putCalls()).toHaveLength(0)
+})
+
+it('filters known-incompatible models for a task and labels unknown capabilities', async () => {
+  mountCatalogue({models: catalogue})
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  // Providers occupy the first two Fetch models buttons; embed's is third.
+  fireEvent.click(fetchButtons()[2])
+  expect(await screen.findByText('Embed One (embed-one)')).toBeTruthy()
+  expect(screen.queryByText('GPT-5 (gpt-5)')).toBeNull()
+  expect(screen.getByText(/cannot do embedding work/)).toBeTruthy()
+  expect(screen.getByText('capabilities unknown')).toBeTruthy()
+  expect(screen.getByText('Embedding Small (text-embedding-3-small)')).toBeTruthy()
+})
+
+it('searches the catalogue without changing the task route', async () => {
+  mountCatalogue({models: catalogue})
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(fetchButtons()[3])
+  expect(await screen.findByText('GPT-5 (gpt-5)')).toBeTruthy()
+  fireEvent.change(screen.getByLabelText('Search catalogue'), {target: {value: 'dual'}})
+  expect(screen.queryByText('GPT-5 (gpt-5)')).toBeNull()
+  expect(screen.getByText('Dual Use (dual-use)')).toBeTruthy()
+  expect(valueOf('blurb provider')).toBe('local')
+  expect(valueOf('blurb model')).toBe('local-chat')
+})
+
+it('imports a configured catalogue ID without touching its prices', async () => {
+  mountCatalogue({models: catalogue})
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(fetchButtons()[0])
+  await screen.findByText('Embedding Small (text-embedding-3-small)')
+  fireEvent.click(screen.getByLabelText('Select text-embedding-3-small'))
+  fireEvent.click(screen.getByLabelText('Select mystery'))
+  fireEvent.click(screen.getByRole('button', {name: /Import selected/}))
+  expect(await screen.findByText(/rates are suggestions/i)).toBeTruthy()
+  // The already-configured ID keeps its prices and never reaches the review.
+  expect(screen.queryByLabelText('text-embedding-3-small configured name')).toBeNull()
+  expect(screen.getByLabelText('mystery configured name')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', {name: 'Back to catalogue'}))
+  expect(screen.getByLabelText('Select text-embedding-3-small')).toBeTruthy()
+})
+
+it('requires missing applicable prices and geometry in the price review', async () => {
+  mountCatalogue({models: catalogue})
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(fetchButtons()[0])
+  await screen.findByText('Mystery (mystery)')
+  fireEvent.click(screen.getByLabelText('Select mystery'))
+  fireEvent.click(screen.getByRole('button', {name: /Import selected/}))
+  fireEvent.click(await screen.findByRole('button', {name: 'Import model to draft'}))
+  expect(await screen.findByRole('alert')).toBeTruthy()
+  expect(screen.getAllByText(/non-negative amount/)).toHaveLength(3)
+  expect(screen.getByText(/must be a whole number/)).toBeTruthy()
+  expect(putCalls()).toHaveLength(0)
+})
+
+it('defaults only the inapplicable side for a known embedding-only model', async () => {
+  mountCatalogue({models: catalogue})
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(fetchButtons()[0])
+  await screen.findByText('Embed One (embed-one)')
+  fireEvent.click(screen.getByLabelText('Select embed-one'))
+  fireEvent.click(screen.getByRole('button', {name: /Import selected/}))
+  expect((await screen.findByLabelText('embed-one input price') as HTMLInputElement).value).toBe('0')
+  expect((screen.getByLabelText('embed-one output price') as HTMLInputElement).value).toBe('0')
+  expect((screen.getByLabelText('embed-one embedding price') as HTMLInputElement).value).toBe('0.1')
+  expect((screen.getByLabelText('embed-one dimensions') as HTMLInputElement).value).toBe('512')
+  fireEvent.click(screen.getByRole('button', {name: 'Import model to draft'}))
+  await screen.findByText(/added to the draft/)
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText(/LLM services saved/)
+  expect(lastPut().models.find(model => model.name === 'embed-one')).toMatchObject({input_per_1m: '0', output_per_1m: '0', embedding_per_1m: '0.1', dimensions: 512})
+})
+
+it('defaults embedding price and geometry to zero for a known chat-only model', async () => {
+  mountCatalogue({models: catalogue})
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(fetchButtons()[0])
+  await screen.findByText('GPT-5 (gpt-5)')
+  fireEvent.click(screen.getByLabelText('Select gpt-5'))
+  fireEvent.click(screen.getByRole('button', {name: /Import selected/}))
+  expect((await screen.findByLabelText('gpt-5 embedding price') as HTMLInputElement).value).toBe('0')
+  expect((screen.getByLabelText('gpt-5 dimensions') as HTMLInputElement).value).toBe('0')
+  expect((screen.getByLabelText('gpt-5 input price') as HTMLInputElement).value).toBe('1.25')
+})
+
+it('routes a task only after an explicit selection and review', async () => {
+  mountCatalogue({models: catalogue})
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(fetchButtons()[2])
+  expect(await screen.findByText('Embed One (embed-one)')).toBeTruthy()
+  expect(valueOf('embed model')).toBe('text-embedding-3-small')
+  fireEvent.click(screen.getAllByRole('button', {name: 'Use for embed'})[0])
+  fireEvent.click(await screen.findByRole('button', {name: 'Import model to draft'}))
+  await screen.findByText(/added to the draft/)
+  expect(valueOf('embed model')).toBe('embed-one')
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText(/LLM services saved/)
+  expect(lastPut().tasks.find(task => task.task === 'embed')).toEqual({task: 'embed', provider: 'openai', model: 'embed-one'})
+})
+
+it('discards catalogue results when the provider draft changes', async () => {
+  mountCatalogue({models: catalogue})
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(fetchButtons()[2])
+  expect(await screen.findByText('Embed One (embed-one)')).toBeTruthy()
+  fireEvent.change(screen.getByLabelText('embed provider'), {target: {value: 'local'}})
+  expect(await screen.findByText(/results were discarded/)).toBeTruthy()
+  expect(screen.queryByText('Embed One (embed-one)')).toBeNull()
+})
+
+it('keeps configured selections usable when discovery fails', async () => {
+  mountCatalogue(() => { throw new RequestError(503, 'provider returned no model catalogue') })
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(fetchButtons()[2])
+  expect(await screen.findByRole('alert')).toBeTruthy()
+  expect(screen.getByText(/no model catalogue/)).toBeTruthy()
+  expect(valueOf('embed model')).toBe('text-embedding-3-small')
+  // Configured models remain the fallback when the catalogue is unavailable.
+  fireEvent.change(screen.getByLabelText('embed model'), {target: {value: 'local-chat'}})
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText(/LLM services saved/)
+  expect(lastPut().tasks.find(task => task.task === 'embed')).toEqual({task: 'embed', provider: 'openai', model: 'local-chat'})
+})
+
+it('falls back to manual entry when the server cannot discover', async () => {
+  mountCatalogue(() => { throw new RequestError(404, 'not found') })
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(fetchButtons()[0])
+  expect(await screen.findByText(/does not support model discovery; add models manually/)).toBeTruthy()
+})
+
+it('asks for a reload when the settings revision is stale', async () => {
+  mountCatalogue(() => { throw new RequestError(409, 'revision conflict') })
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(fetchButtons()[0])
+  expect(await screen.findByText(/Reload, then fetch again/)).toBeTruthy()
+  expect(putCalls()).toHaveLength(0)
+})
+
+it('refuses catalogue imports beyond the free configured-model slots', async () => {
+  const models = Array.from({length: 127}, (_, i) => ({name: `m${i}`, input_per_1m: '0', output_per_1m: '0', embedding_per_1m: '0', dimensions: 0, truncatable: false}))
+  mountCatalogue({models: catalogue}, {...fixture, models})
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(fetchButtons()[0])
+  await screen.findByText('GPT-5 (gpt-5)')
+  fireEvent.click(screen.getByLabelText('Select gpt-5'))
+  fireEvent.click(screen.getByLabelText('Select mystery'))
+  fireEvent.click(screen.getByRole('button', {name: /Import selected/}))
+  expect(await screen.findByText(/1 slot is free/)).toBeTruthy()
+  expect(putCalls()).toHaveLength(0)
+})
+
+it('keeps an entered key visibly unsaved after failure, then shows saved after retry and reload', async () => {
+  let fail = true
+  vi.mocked(request).mockImplementation(async (_path, options) => {
+    if (options?.method === 'PUT') {
+      if (fail) throw new RequestError(503, 'Try again')
+      return {...fixture, revision: 4}
+    }
+    return fixture
+  })
+  renderSection()
+  await screen.findByText('API key saved')
+  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
+  fireEvent.change(screen.getByLabelText('API key'), {target: {value: 'replacement-key'}})
+  fireEvent.click(screen.getByRole('button', {name: 'Apply provider'}))
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText('Try again')
+  expect(screen.getByText('API key entered · unsaved')).toBeTruthy()
+  fail = false
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText('LLM services saved.')
+  expect(screen.getByText('API key saved')).toBeTruthy()
+  expect(screen.queryByText('API key entered · unsaved')).toBeNull()
+  fireEvent.click(screen.getByRole('button', {name: 'Reload'}))
+  await screen.findByText('LLM services reloaded.')
+  expect(screen.getByText('API key saved')).toBeTruthy()
 })

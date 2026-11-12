@@ -106,11 +106,30 @@ class LlmSettingsAppTest {
                 val raw = request.body?.let { body ->
                     okio.Buffer().also { body.writeTo(it) }.readUtf8()
                 }.orEmpty()
+                // The server answers the stored settings: a retained or new
+                // key reports has_api_key, an explicit clear reports none.
+                val storedKeys = Json.parseToJsonElement(getBody).jsonObject
+                    .getValue("providers").jsonArray.associate {
+                        it.jsonObject.getValue("name").jsonPrimitive.content to
+                            it.jsonObject.getValue("has_api_key").jsonPrimitive.content.toBoolean()
+                    }
                 val echoed = JsonObject(Json.parseToJsonElement(raw).jsonObject.toMutableMap().apply {
                     put("revision", JsonPrimitive(putRevision))
+                    put("providers", kotlinx.serialization.json.JsonArray(getValue("providers").jsonArray.map {
+                        val provider = it.jsonObject.toMutableMap()
+                        provider["has_api_key"] = JsonPrimitive(
+                            when {
+                                provider["clear_api_key"]?.jsonPrimitive?.content?.toBoolean() == true -> false
+                                provider.containsKey("api_key") -> true
+                                else -> storedKeys[provider.getValue("name").jsonPrimitive.content] == true
+                            },
+                        )
+                        JsonObject(provider)
+                    }))
                 })
                 putStatus to echoed.toString()
             } else 200 to getBody
+            "/v1/settings/llm/models" -> 200 to """{"models":[]}"""
             "/v1/changes" -> {
                 val rev = request.url.queryParameter("rev")?.toLongOrNull() ?: 0
                 200 to """{"changes":[],"next":{"generation":"g1","rev":$rev},"next_cursor":"g1:$rev"}"""
@@ -535,5 +554,197 @@ class LlmSettingsAppTest {
         withTimeout(15_000) { model.state.first { it.llmSettingsUi.error != null && !it.llmSettingsUi.saving } }
         assertTrue(llmPuts().isEmpty())
         assertTrue(model.state.value.llmSettingsUi.error!!.contains("every known task"))
+    }
+
+    private fun discoveries(): List<Call> =
+        calls.filter { it.method == "POST" && it.path == "/v1/settings/llm/models" }
+
+    @Test fun fetchSendsTheDraftProviderWithTheTypedKeyAndPublishesTheCatalogue() = runBlocking(Dispatchers.IO) {
+        respond = { request ->
+            if (request.url.encodedPath == "/v1/settings/llm/models") {
+                200 to """{"models":[{"id":"gpt-5","name":"GPT 5","chat":true,"input_per_1m":"1.25"},{"id":"e3","name":"E3","embedding":true,"dimensions":1536}]}"""
+            } else defaultRespond(request)
+        }
+        val model = model()
+        model.loadedLlm()
+        model.updateLlmSettingsDraft { draft ->
+            draft.copy(providers = draft.providers.map { it.copy(apiKeyInput = "sk-preview") })
+        }
+        model.fetchLlmModels(0)
+        withTimeout(15_000) { model.state.first { it.llmSettingsUi.discovery?.models != null } }
+
+        val sent = discoveries().single()
+        val body = Json.parseToJsonElement(sent.body).jsonObject
+        assertEquals("3", body.getValue("revision").jsonPrimitive.content)
+        val provider = body.getValue("provider").jsonObject
+        assertEquals("openai", provider.getValue("name").jsonPrimitive.content)
+        assertEquals("sk-preview", provider.getValue("api_key").jsonPrimitive.content)
+        assertFalse(provider.containsKey("has_api_key"))
+
+        val discovery = model.state.value.llmSettingsUi.discovery!!
+        assertFalse(discovery.loading)
+        assertNull(discovery.error)
+        assertEquals(listOf("gpt-5", "e3"), discovery.models!!.map { it.id })
+        assertNull(discovery.models!![1].chat)
+        assertFalse("the catalogue key must not hold the typed key", discovery.providerKey.contains("sk-preview"))
+        assertTrue("discovery never PUTs", llmPuts().isEmpty())
+        assertTrue("the draft and its edits survive the fetch", model.state.value.llmSettingsUi.draft != null)
+    }
+
+    @Test fun fetchFailureKeepsTheDraftAndManualEntryWorks() = runBlocking(Dispatchers.IO) {
+        respond = { request ->
+            if (request.url.encodedPath == "/v1/settings/llm/models") 404 to """{"error":"not_found"}"""
+            else defaultRespond(request)
+        }
+        val model = model()
+        model.loadedLlm()
+        model.fetchLlmModels(0)
+        withTimeout(15_000) { model.state.first { it.llmSettingsUi.discovery?.error != null } }
+        val discovery = model.state.value.llmSettingsUi.discovery!!
+        assertFalse(discovery.loading)
+        assertNull(discovery.models)
+        assertTrue(discovery.error!!.contains("manually"))
+        assertEquals("a failed fetch leaves the configured table untouched", setOf("text-embedding-3-small"), model.state.value.llmSettingsUi.loaded?.models?.map { it.name }?.toSet())
+    }
+
+    @Test fun aStaleRevisionAsksForAReloadWithoutLosingTheDraft() = runBlocking(Dispatchers.IO) {
+        respond = { request ->
+            if (request.url.encodedPath == "/v1/settings/llm/models") 409 to """{"error":"revision_conflict"}"""
+            else defaultRespond(request)
+        }
+        val model = model()
+        model.loadedLlm()
+        model.updateLlmSettingsDraft { draft ->
+            draft.copy(providers = draft.providers.map { it.copy(timeoutSeconds = "90") })
+        }
+        model.fetchLlmModels(0)
+        withTimeout(15_000) { model.state.first { it.llmSettingsUi.discovery?.error != null } }
+        assertTrue(model.state.value.llmSettingsUi.discovery!!.error!!.contains("Reload"))
+        assertFalse("a discovery conflict does not put the draft into a save conflict", model.state.value.llmSettingsUi.conflict)
+        assertEquals("90", model.state.value.llmSettingsUi.draft?.providers?.single()?.timeoutSeconds)
+    }
+
+    @Test fun anUnauthorizedFetchExpiresTheSessionOnce() = runBlocking(Dispatchers.IO) {
+        respond = { request ->
+            if (request.url.encodedPath == "/v1/settings/llm/models") 401 to """{"error":"unauthorized"}"""
+            else defaultRespond(request)
+        }
+        val sessions = Sessions(AuthenticatedSession(identity, "token"))
+        val model = model(sessions = sessions)
+        model.loadedLlm()
+        model.fetchLlmModels(0)
+        withTimeout(15_000) { model.loggedIn.first { !it } }
+        assertNull(sessions.current())
+        assertNull(model.state.value.llmSettingsUi.discovery)
+        assertEquals(1, discoveries().size)
+    }
+
+    @Test fun aProviderEditDropsTheCatalogueAndALateReplyCannotPublish() = runBlocking(Dispatchers.IO) {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        respond = { request ->
+            if (request.url.encodedPath == "/v1/settings/llm/models") {
+                entered.complete(Unit)
+                runBlocking { release.await() }
+                200 to """{"models":[{"id":"late-model","name":"Late"}]}"""
+            } else defaultRespond(request)
+        }
+        val model = model()
+        model.loadedLlm()
+        model.fetchLlmModels(0)
+        try {
+            withTimeout(5_000) { entered.await() }
+            // Editing the provider's fingerprint must discard the pending entry.
+            model.updateLlmSettingsDraft { draft ->
+                draft.copy(providers = draft.providers.map { it.copy(timeoutSeconds = "90") })
+            }
+        } finally {
+            release.complete(Unit)
+        }
+        delay(300)
+        val discovery = model.state.value.llmSettingsUi.discovery
+        assertTrue("the edit dropped the catalogue before the reply landed", discovery == null || discovery.models?.none { it.id == "late-model" } != false)
+    }
+
+    @Test fun dismissingTheCatalogueDropsTheLateReply() = runBlocking(Dispatchers.IO) {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        respond = { request ->
+            if (request.url.encodedPath == "/v1/settings/llm/models") {
+                entered.complete(Unit)
+                runBlocking { release.await() }
+                200 to """{"models":[{"id":"late-model","name":"Late"}]}"""
+            } else defaultRespond(request)
+        }
+        val model = model()
+        model.loadedLlm()
+        model.fetchLlmModels(0)
+        try {
+            withTimeout(5_000) { entered.await() }
+            model.dismissLlmDiscovery()
+        } finally {
+            release.complete(Unit)
+        }
+        delay(300)
+        assertNull(model.state.value.llmSettingsUi.discovery)
+    }
+
+    @Test fun signingOutDropsTheCatalogueAndBlocksItsReply() = runBlocking(Dispatchers.IO) {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        respond = { request ->
+            if (request.url.encodedPath == "/v1/settings/llm/models") {
+                entered.complete(Unit)
+                runBlocking { release.await() }
+                200 to """{"models":[{"id":"late-model","name":"Late"}]}"""
+            } else defaultRespond(request)
+        }
+        val sessions = Sessions(AuthenticatedSession(identity, "token-a"))
+        val model = model(sessions = sessions)
+        model.loadedLlm()
+        model.fetchLlmModels(0)
+        try {
+            withTimeout(5_000) { entered.await() }
+            model.logout()
+        } finally {
+            release.complete(Unit)
+        }
+        delay(300)
+        assertNull(model.state.value.llmSettingsUi.discovery)
+        // Signing back in starts a clean epoch: the stale reply cannot publish.
+        sessions.value = AuthenticatedSession(identity, "token-a")
+        model.onLoggedIn()
+        withTimeout(15_000) { model.state.first { it.accountKey == identity.cacheKey } }
+        model.loadedLlm()
+        delay(300)
+        assertNull(model.state.value.llmSettingsUi.discovery)
+    }
+
+    @Test fun fetchBeforeLoadingReportsInsteadOfRequesting() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.fetchLlmModels(0)
+        delay(300)
+        assertTrue(discoveries().isEmpty())
+        assertTrue(model.state.value.llmSettingsUi.error!!.contains("Load the LLM services settings"))
+    }
+
+    @Test fun aSavedProviderKeepsItsCatalogueWhileATypedKeyDropsIt() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadedLlm()
+        model.fetchLlmModels(0)
+        withTimeout(15_000) { model.state.first { it.llmSettingsUi.discovery?.models != null } }
+        // Saving without a key edit keeps the fingerprint; the catalogue stays.
+        model.saveLlmSettings()
+        withTimeout(15_000) { model.state.first { it.llmSettingsUi.success } }
+        assertNotNull(model.state.value.llmSettingsUi.discovery)
+
+        model.updateLlmSettingsDraft { draft ->
+            draft.copy(providers = draft.providers.map { it.copy(apiKeyInput = "sk-rotated") })
+        }
+        model.fetchLlmModels(0)
+        withTimeout(15_000) { model.state.first { it.llmSettingsUi.discovery?.models != null } }
+        model.saveLlmSettings()
+        withTimeout(15_000) { model.state.first { it.llmSettingsUi.success } }
+        assertNull("the consumed key changed the fingerprint", model.state.value.llmSettingsUi.discovery)
     }
 }

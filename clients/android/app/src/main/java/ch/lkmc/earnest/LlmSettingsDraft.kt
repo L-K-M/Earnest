@@ -1,5 +1,7 @@
 package ch.lkmc.earnest
 
+import java.security.MessageDigest
+
 import ch.lkmc.earnest.core.LlmModel
 import ch.lkmc.earnest.core.LlmProvider
 import ch.lkmc.earnest.core.LlmProviderInput
@@ -86,6 +88,53 @@ fun LlmProviderDraft.toInput(): LlmProviderInput = LlmProviderInput(
         ?: throw IllegalArgumentException("timeout_seconds must be a whole number"),
     tokenField = tokenField,
 )
+
+/**
+ * The four states the provider card's API-key badge distinguishes. The badge
+ * summarizes the draft, not the server: a typed key is only "entered" until
+ * Save, and the clear flag schedules a removal.
+ */
+enum class LlmApiKeyStatus {
+    SAVED,
+    ENTERED_UNSAVED,
+    REMOVAL_PENDING,
+    NONE,
+}
+
+/** The badge reads the saved flag, the trimmed draft key and the clear flag. */
+fun LlmProviderDraft.apiKeyStatus(): LlmApiKeyStatus = when {
+    apiKeyInput.trim().isNotEmpty() -> LlmApiKeyStatus.ENTERED_UNSAVED
+    clearApiKey -> LlmApiKeyStatus.REMOVAL_PENDING
+    hasApiKey -> LlmApiKeyStatus.SAVED
+    else -> LlmApiKeyStatus.NONE
+}
+
+fun LlmApiKeyStatus.label(): String = when (this) {
+    LlmApiKeyStatus.SAVED -> "API key saved"
+    LlmApiKeyStatus.ENTERED_UNSAVED -> "API key entered · unsaved"
+    LlmApiKeyStatus.REMOVAL_PENDING -> "Key removal pending"
+    LlmApiKeyStatus.NONE -> "No API key"
+}
+
+/**
+ * The identity of the provider draft a catalogue reply belongs to, so stale
+ * results can be dropped: any edit, including an unsaved key change,
+ * produces a different fingerprint. The typed key participates only through
+ * a SHA-256 digest, avoiding the easy collisions of String.hashCode without
+ * retaining the key itself. The value never leaves memory.
+ */
+internal fun LlmProviderDraft.discoveryFingerprint(): String = listOf(
+    name,
+    kind.name,
+    baseUrl,
+    monthlyLimitUsd,
+    timeoutSeconds,
+    tokenField.name,
+    hasApiKey.toString(),
+    clearApiKey.toString(),
+    MessageDigest.getInstance("SHA-256").digest(apiKeyInput.toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(it) },
+).joinToString("\u0001")
 
 /** Applies a provider edit and keeps the routes bound to its name. */
 internal fun LlmSettingsDraft.editProvider(index: Int, replacement: LlmProviderDraft): LlmSettingsDraft {

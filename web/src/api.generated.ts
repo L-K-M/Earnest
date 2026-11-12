@@ -1097,6 +1097,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/settings/llm/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["discover-llm-models"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/state:batch": {
         parameters: {
             query?: never;
@@ -1519,6 +1535,18 @@ export interface components {
             access_token: string;
             token_type: string;
         };
+        DiscoveredModel: {
+            chat?: boolean;
+            /** Format: int64 */
+            dimensions?: number;
+            embedding?: boolean;
+            embedding_per_1m?: string;
+            id: string;
+            input_per_1m?: string;
+            name: string;
+            output_per_1m?: string;
+            truncatable?: boolean;
+        };
         Edition: {
             /** Format: date-time */
             created_at: string;
@@ -1692,6 +1720,14 @@ export interface components {
             name: string;
             output_per_1m: string;
             truncatable: boolean;
+        };
+        LLMModels: {
+            models: components["schemas"]["DiscoveredModel"][] | null;
+        };
+        LLMModelsInput: {
+            provider: components["schemas"]["LLMProviderInput"];
+            /** Format: int64 */
+            revision: number;
         };
         LLMProviderInput: {
             api_key?: string;
@@ -12302,6 +12338,120 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LLMSettings"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Gone */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    "discover-llm-models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LLMModelsInput"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LLMModels"];
                 };
             };
             /** @description Bad Request */

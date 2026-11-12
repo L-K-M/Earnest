@@ -306,6 +306,20 @@ class EarnestApi(
     }
 
     /**
+     * Previews one draft provider's model catalogue without persisting
+     * anything: the server stores no key, routes no task and logs no
+     * operation. [input] carries the loaded revision and the draft provider,
+     * which may include an unsaved replacement key; [baseline] is the loaded
+     * redacted settings so a stored key is never forwarded to a changed
+     * destination. A 409 means the settings changed since the load; a 404 an
+     * older server without discovery.
+     */
+    suspend fun discoverLlmModels(input: LlmModelsInput, baseline: LlmSettings?): LlmDiscoveredModels {
+        validateLlmModelsInput(input, baseline)
+        return post(url("/v1/settings/llm/models"), encoder.encodeToJsonElement(LlmModelsInput.serializer(), input)).decode()
+    }
+
+    /**
      * Replaces the reader slice. The supplied [opId] is sent verbatim (no
      * implicit new ID), [ReaderSettings.rev] is never sent, and the returned
      * settings carry the server's new revision.

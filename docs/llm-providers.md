@@ -262,3 +262,41 @@ startup error, not a runtime surprise.
 - **Tainted output.** Model output is data. The pipeline renders it as plain
   text and verifies citations against the cited content version before
   display; see the threat model in [research/llm.md](research/llm.md).
+
+## Discover provider models
+
+Use **Fetch models** beside a provider or in task routing on web, Mac or
+Android. Fetching uses the provider details currently in the editor, including
+an unsaved replacement key. It does not save settings, enable tasks or send
+an inference request. Applying provider edits updates the draft; **Save**
+persists the complete configuration.
+
+Key status distinguishes a saved key, an entered but unsaved key, pending
+key removal, and no key. A saved-key badge does not certify that the provider
+accepts the credential. Fetching can report authentication and access errors.
+
+The server discovers OpenAI-compatible, Anthropic and Gemini catalogues.
+Venice's catalogue includes text and embedding models; unrelated image,
+audio and video models are excluded. Known capabilities filter task choices;
+unknown capabilities are labelled rather than inferred from model names.
+Configured/manual entries remain available if discovery fails, is unsupported,
+or no longer lists a selected model. Older Earnest servers support manual
+entry only.
+
+Search the returned catalogue and select the models you want. New entries
+open pricing review. Published rates are suggestions in USD per million
+tokens; missing applicable rates and embedding geometry need explicit input.
+Unknown prices are never treated as zero. Prices remain shared by model ID,
+so importing an already configured ID keeps its existing prices. Only selected
+models enter the settings draft, and the 128 configured-model limit does not
+limit catalogue browsing. Save after reviewing prices and task routing.
+
+`POST /v1/settings/llm/models` takes a settings revision and a single provider
+input. It requires the same human-admin access as settings and returns only
+normalized catalogue metadata. A stale revision returns 409. Saved credentials
+can be reused only with the same provider name, URL and protocol; a preview
+cannot silently send a stored key to a different destination. Discovery obeys
+the outbound allowlist and timeout, does not follow redirects, and bounds
+pagination and response size. Results are kept only in client memory and are
+invalidated when provider or session state changes. Provider error bodies and
+credentials are not returned or written to the operation log.
