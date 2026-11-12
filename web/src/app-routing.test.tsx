@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import {useState, type ReactNode} from 'react'
+import {useState, type ReactElement, type ReactNode} from 'react'
 import {afterEach, beforeEach, expect, it, vi} from 'vitest'
 import {act as reactAct, cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {createRoot} from 'react-dom/client'
+import type {QueryClient} from '@tanstack/react-query'
 import {request, RequestError} from './request'
 import {defaultSettings} from './Settings'
 import type {Entry, View} from './reader'
@@ -15,12 +16,13 @@ vi.mock('react-dom/client',() => ({createRoot:vi.fn()}))
 vi.mock('./request',async original => ({...await original<typeof import('./request')>(), request:vi.fn(), setCSRF:vi.fn()}))
 vi.mock('./syncBridge',() => ({useReaderSync:() => ({state:(value: Entry) => value.state,act,actRange:vi.fn(),retry:vi.fn(),status:'Reading actions synced.',error:''})}))
 vi.mock('./offline/Offline',() => ({OfflineStatus:() => null,useOnline:() => true,registerOffline:vi.fn().mockResolvedValue(undefined),clearOffline:vi.fn().mockResolvedValue(undefined)}))
-vi.mock('./River',() => ({River: function River({view,onOpen,unreadOnly}: {view: View; onOpen: (entry: Entry) => void; unreadOnly?: boolean}) {
+vi.mock('./River',() => ({River: function River({view,onOpen,unreadOnly,onUnreadOnlyChange}: {view: View; onOpen: (entry: Entry) => void; unreadOnly?: boolean; onUnreadOnlyChange?: (value: boolean) => void}) {
   useState(() => {listMounted(view); return null})
-  return <section data-unread-only={unreadOnly}><h2>{view.title} list</h2>{entries.map(entry => <button key={entry.id} onClick={() => onOpen(entry as Entry)}>Open {entry.title}</button>)}</section>
+  return <section data-unread-only={unreadOnly}><h2>{view.title} list</h2><button aria-pressed={!unreadOnly} onClick={() => onUnreadOnlyChange?.(false)}>Show all</button><button aria-pressed={unreadOnly} onClick={() => onUnreadOnlyChange?.(true)}>Show only unread</button>{entries.map(entry => <button key={entry.id} onClick={() => onOpen(entry as Entry)}>Open {entry.title}</button>)}</section>
 }}))
 vi.mock('./ArticleReader',() => ({Reader:({entry,onClose}: {entry: Entry; onClose: () => void}) => <article><h2>{entry.title}</h2><button onClick={onClose}>Back</button></article>}))
 
+let queryClient: QueryClient
 beforeEach(async () => {
   HTMLDialogElement.prototype.showModal = function() {this.setAttribute('open','')}
   HTMLDialogElement.prototype.close = function() {this.removeAttribute('open');this.dispatchEvent(new Event('close'))}
@@ -35,7 +37,7 @@ beforeEach(async () => {
     if (path === '/v1/pipeline') return {ask:'disabled'}
     return []
   })
-  vi.mocked(createRoot).mockImplementation(() => ({render:(node: ReactNode) => {render(node)},unmount:() => undefined}))
+  vi.mocked(createRoot).mockImplementation(() => ({render:(node: ReactNode) => {queryClient = (node as ReactElement<{client: QueryClient}>).props.client; render(node)},unmount:() => undefined}))
 })
 afterEach(() => {cleanup();localStorage.clear();vi.clearAllMocks()})
 
@@ -81,6 +83,60 @@ it('keeps a list visit while opening and closing articles, but renews it on inte
   await screen.findByRole('heading', {name: 'Article 4'})
   fireEvent.click(screen.getByRole('link', {name: 'Rust'}))
   await waitFor(() => expect(listMounted).toHaveBeenCalledTimes(2))
+})
+
+it.each([false, true])('uses the saved unread default (%s) until the user overrides it for this session', async defaultUnread => {
+  const fallback = vi.mocked(request).getMockImplementation()!
+  vi.mocked(request).mockImplementation(async (path, options) => path === '/v1/settings' ? {...defaultSettings, show_only_unread: defaultUnread, rev: 1} : fallback(path, options))
+  await start('/feeds/8')
+  await screen.findByRole('heading', {name: 'Rust list'}, {timeout: 5000})
+  await waitFor(() => expect(screen.getByRole('button', {name: 'Show only unread'}).getAttribute('aria-pressed')).toBe(String(defaultUnread)))
+  fireEvent.click(screen.getByRole('button', {name: defaultUnread ? 'Show all' : 'Show only unread'}))
+  expect(screen.getByRole('button', {name: 'Show only unread'}).getAttribute('aria-pressed')).toBe(String(!defaultUnread))
+  expect(listMounted).toHaveBeenCalledTimes(1)
+  fireEvent.click(screen.getByRole('button', {name: 'Open Article 4'}))
+  await screen.findByRole('heading', {name: 'Article 4'})
+  fireEvent.click(screen.getByRole('button', {name: 'Show only unread'}))
+  expect(screen.getByRole('heading', {name: 'Article 4'})).toBeTruthy()
+  expect(location.pathname).toBe('/feeds/8/articles/4')
+  expect(listMounted).toHaveBeenCalledTimes(1)
+  fireEvent.click(screen.getByRole('link', {name: 'Today'}))
+  await screen.findByRole('heading', {name: 'Today list'})
+  expect(screen.getByRole('button', {name: 'Show only unread', pressed: true})).toBeTruthy()
+  expect(vi.mocked(request).mock.calls.some(([path, options]) => path === '/v1/settings' && options?.method === 'PUT')).toBe(false)
+  expect(act).not.toHaveBeenCalled()
+  cleanup()
+  await start('/feeds/8')
+  await screen.findByRole('heading', {name: 'Rust list'}, {timeout: 5000})
+  await waitFor(() => expect(screen.getByRole('button', {name: 'Show only unread'}).getAttribute('aria-pressed')).toBe(String(defaultUnread)))
+})
+
+it('preserves a quick choice when background settings change', async () => {
+  await start('/feeds/8')
+  await screen.findByRole('heading', {name: 'Rust list'}, {timeout: 5000})
+  // Even choosing the already-active All mode is an explicit session choice.
+  fireEvent.click(screen.getByRole('button', {name: 'Show all'}))
+  reactAct(() => {queryClient.setQueryData(['settings'], {...defaultSettings, show_only_unread: true, rev: 2})})
+  await reactAct(async () => {await new Promise(resolve => setTimeout(resolve, 20))})
+  expect(screen.getByRole('button', {name: 'Show all', pressed: true})).toBeTruthy()
+  expect(queryClient.getQueryData<{show_only_unread: boolean}>(['settings'])?.show_only_unread).toBe(true)
+})
+
+it('renews an unread list visit after a quick toggle even when the saved default is All', async () => {
+  await start('/feeds/8')
+  await screen.findByRole('heading', {name: 'Rust list'}, {timeout: 5000})
+  fireEvent.click(screen.getByRole('button', {name: 'Show only unread'}))
+  fireEvent.click(screen.getByRole('button', {name: 'Open Article 4'}))
+  await screen.findByRole('heading', {name: 'Article 4'})
+  expect(listMounted).toHaveBeenCalledTimes(1)
+  fireEvent.click(screen.getByRole('button', {name: 'Back'}))
+  await waitFor(() => expect(location.pathname).toBe('/feeds/8'))
+  expect(listMounted).toHaveBeenCalledTimes(1)
+  fireEvent.click(screen.getByRole('button', {name: 'Open Article 4'}))
+  await screen.findByRole('heading', {name: 'Article 4'})
+  fireEvent.click(screen.getByRole('link', {name: 'Rust'}))
+  await waitFor(() => expect(listMounted).toHaveBeenCalledTimes(2))
+  expect(screen.getByRole('button', {name: 'Show only unread', pressed: true})).toBeTruthy()
 })
 
 it('explains an article that no longer exists instead of showing a blank pane', async () => {

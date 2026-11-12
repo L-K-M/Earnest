@@ -49,8 +49,8 @@ export function Settings({settings, onSaved}: {settings: ReadingSettings; onSave
   }
   return <form onSubmit={save} onChange={() => setSaved(false)}><h2>Reading settings</h2>
     <label>Reading mode<select value={draft.reading_mode} onChange={e => setDraft({...draft, reading_mode: e.target.value as ReadingSettings['reading_mode']})}><option value="river">A river that ends</option><option value="unread_counts">Unread counts</option></select></label>
-    <label><input type="checkbox" checked={draft.show_only_unread ?? false} onChange={e => setDraft({...draft, show_only_unread: e.target.checked})} aria-describedby="unread-mode-help" /> Show only unread</label>
-    <p id="unread-mode-help" className="muted">Read articles stay in the current list until you reopen or refresh it. Later, Kept, Done and search always show all matching articles.</p>
+    <label><input type="checkbox" checked={draft.show_only_unread ?? false} onChange={e => setDraft({...draft, show_only_unread: e.target.checked})} aria-describedby="unread-mode-help" /> Show only unread by default</label>
+    <p id="unread-mode-help" className="muted">Show all and Show only unread above the article list let you switch for the current tab; reloading or signing out restores this default. Read articles stay in the current list until you reopen or refresh it. Later, Kept, Done and search always show all matching articles.</p>
     <label>Today items stay for this many days<input type="number" min="1" max="365" value={draft.today_decay_days} onChange={e => setDraft({...draft, today_decay_days: e.target.valueAsNumber})} required /></label>
     <label><input type="checkbox" checked={draft.single_key_shortcuts} onChange={e => setDraft({...draft, single_key_shortcuts: e.target.checked})} /> Single-key shortcuts</label>
     <Typography value={draft} onChange={value => setDraft({...draft, ...value})} />

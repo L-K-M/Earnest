@@ -56,21 +56,22 @@ function newTabClick(event: ReactMouseEvent): boolean {
   return event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey
 }
 
-export function River({view, subscriptions, actions, selected, onSelect, onOpen, onMenu, shortcuts, counts, summary, onNewestLoaded, unreadOnly = false, reading = false, since = '1970-01-01T00:00:00Z', sessionStart = '1970-01-01T00:00:00Z'}: {since?:string; sessionStart?:string; onNewestLoaded?: (seq: number) => void; view: View; subscriptions: Subscription[]; actions: ReaderActions; selected: Entry | null; onSelect: (entry: Entry) => void; onOpen: (entry: Entry, mode?: OpenMode) => void; onMenu?: (event: ReactMouseEvent<HTMLElement>, entry: Entry, items: MenuItem[]) => void; shortcuts: boolean; counts: boolean; summary: SessionSummary; unreadOnly?: boolean; reading?: boolean}) {
+export function River({view, subscriptions, actions, selected, onSelect, onOpen, onMenu, shortcuts, counts, summary, onNewestLoaded, unreadOnly = false, onUnreadOnlyChange, reading = false, since = '1970-01-01T00:00:00Z', sessionStart = '1970-01-01T00:00:00Z'}: {since?:string; sessionStart?:string; onNewestLoaded?: (seq: number) => void; view: View; subscriptions: Subscription[]; actions: ReaderActions; selected: Entry | null; onSelect: (entry: Entry) => void; onOpen: (entry: Entry, mode?: OpenMode) => void; onMenu?: (event: ReactMouseEvent<HTMLElement>, entry: Entry, items: MenuItem[]) => void; shortcuts: boolean; counts: boolean; summary: SessionSummary; unreadOnly?: boolean; onUnreadOnlyChange?: (value: boolean) => void; reading?: boolean}) {
   const pipeline = usePipeline()
   const key = viewKey(view)
   const scroller = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const [scrollMargin, setScrollMargin] = useState(0)
   const heading = useRef<HTMLHeadingElement>(null)
-  const pending = useRef(new Map<number, {seenRev: number}>())
+  const pending = useRef(new Map<number, {entry: Entry; seenRev: number}>())
   const focusNext = useRef<number | null>(null)
   const [error, setError] = useState('')
   const [cluster, setCluster] = useState(false)
   const position = useQuery({queryKey: ['position', key], queryFn: ({signal}) => request<{seq: number}>(`/v1/positions/${encodeURIComponent(key)}`, {signal})})
   // Positions still sync reading progress, but never bound the article list.
   // Each visit starts at the newest page and loads older pages below it.
-  const filterUnread = unreadOnly && !['later', 'kept', 'done'].includes(view.kind)
+  const canFilterUnread = !['later', 'kept', 'done'].includes(view.kind)
+  const filterUnread = unreadOnly && canFilterUnread
   const list = useInfiniteQuery({
     queryKey: ['river', key, 'newest', cluster, filterUnread],
     initialPageParam: undefined as PageParam,
@@ -81,13 +82,17 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
       return request<Page>(`/v1/entries?${query}`, {signal})
     },
     getNextPageParam: (last): PageParam => last.next_cursor || undefined,
-    refetchOnMount: 'always', refetchOnWindowFocus: false, staleTime: Infinity,
+    // Switching back to a cached filter must fetch changes since its last use.
+    refetchOnMount: 'always', refetchOnWindowFocus: false, staleTime: 0,
   })
   const loaded = list.data?.pages.flatMap(page => page.entries) ?? []
   // Membership belongs to this mounted parent list, not to the open article,
   // a sync revision, or a fetched page. Grouped and flat lists keep their own
-  // representatives so retaining rows cannot undo "One per story".
-  const [admitted, setAdmitted] = useState<{flat: Entry[]; clustered: Entry[]; groups: ClusterGroup[]}>({flat: [], clustered: [], groups: []})
+  // representatives so retaining rows cannot undo "One per story". Switching
+  // visibility deliberately starts a new snapshot without remounting the list
+  // (which would lose focus, grouping and queued user-open read intents).
+  const [admission, setAdmitted] = useState<{unread: boolean; flat: Entry[]; clustered: Entry[]; groups: ClusterGroup[]}>({unread: filterUnread, flat: [], clustered: [], groups: []})
+  const admitted = admission.unread === filterUnread ? admission : {unread: filterUnread, flat: [], clustered: [], groups: []}
   const representation = cluster ? 'clustered' : 'flat'
   const retained = filterUnread ? retainUnreadEntries(admitted[representation], loaded, actions.state, actions.deleted) : admitted[representation]
   const groups = new Map((filterUnread ? admitted.groups : []).map(group => [group.entry.id, group]))
@@ -96,7 +101,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   }
   const rememberedGroups = [...groups.values()]
   const groupsChanged = filterUnread && (rememberedGroups.length !== admitted.groups.length || rememberedGroups.some((group, index) => group !== admitted.groups[index]))
-  if (retained !== admitted[representation] || groupsChanged) setAdmitted({...admitted, [representation]: retained, groups: rememberedGroups})
+  if (admitted !== admission || retained !== admitted[representation] || groupsChanged) setAdmitted({...admitted, [representation]: retained, groups: rememberedGroups})
   const represented = new Set<number>()
   const candidates = filterUnread ? retained : loaded
   const entries = orderEntries(cluster && filterUnread ? candidates.filter(entry => {
@@ -112,7 +117,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     const result = await list.refetch()
     if (!result.isSuccess || !filterUnread) return
     const fresh = retainUnreadEntries([], result.data.pages.flatMap(page => page.entries), actionsRef.current.state, actionsRef.current.deleted)
-    setAdmitted({flat: [], clustered: [], groups: result.data.pages.flatMap(page => page.groups ?? []), [representation]: fresh})
+    setAdmitted({unread: filterUnread, flat: [], clustered: [], groups: result.data.pages.flatMap(page => page.groups ?? []), [representation]: fresh})
   }
   const clusterInfo = new Map(rememberedGroups.map(group => [group.entry.id, group.also_in]))
   // Rows are measured (measureElement on each row) so long titles, blurbs and
@@ -206,8 +211,14 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     const inFlight = new Set<number>()
     const timer = window.setInterval(() => {
       const due = [...pending.current].flatMap(([id, intent]) => {
-        const entry = entriesRef.current.find(entry => entry.id === id)
-        return entry ? [{entry, intent}] : []
+        // A filter switch may omit an opened article from its first page.
+        // Keep the user's intent, but never write against a known tombstone.
+        const entry = entriesRef.current.find(entry => entry.id === id) ?? intent.entry
+        if (entry.deleted || actionsRef.current.deleted?.(entry)) {
+          pending.current.delete(id)
+          return []
+        }
+        return [{entry, intent}]
       })
       for (const {entry, intent} of due) {
         if (inFlight.has(entry.id)) continue
@@ -244,7 +255,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   }, [key])
 
   const queueSeen = useCallback((entry: Entry) => {
-    pending.current.set(entry.id, {seenRev: actionsRef.current.state(entry).seen.rev})
+    pending.current.set(entry.id, {entry, seenRev: actionsRef.current.state(entry).seen.rev})
   }, [])
 
   const open = useCallback((entry: Entry, mode?: OpenMode) => {
@@ -329,6 +340,10 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
         <button type="button" className="icon-button" title="Refresh articles" disabled={!list.isSuccess || list.isRefetching} onClick={() => {void reload()}}><Icon name="refresh" /><span className="sr-only">Refresh articles</span></button>
       </div>
       <div className="pane-tools">
+        {canFilterUnread && onUnreadOnlyChange && <div className="article-visibility" role="group" aria-label="Article visibility">
+          <button type="button" className="quiet small" aria-pressed={!filterUnread} onClick={() => onUnreadOnlyChange(false)}>Show all</button>
+          <button type="button" className="quiet small" aria-pressed={filterUnread} onClick={() => onUnreadOnlyChange(true)}>Show only unread</button>
+        </div>}
         <button type="button" className="quiet small toggle" aria-pressed={cluster} disabled={!list.isSuccess || list.isFetching} onClick={() => setCluster(value => !value)}><Icon name="stack" size={16} />One per story</button>
         {view.kind === 'feed' && <Link className="pane-link" to={`/feeds#subscription-${view.id}`}>Feed settings</Link>}
         {counts && list.isSuccess && <p className="pane-count">{unread} unread in loaded {cluster ? 'stories' : 'articles'}</p>}
