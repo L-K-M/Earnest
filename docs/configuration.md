@@ -61,6 +61,13 @@ ntfy server, topic and token are per-user settings, not environment variables. W
 
 ## LLM providers and tasks
 
+You can configure providers, task routing and model prices in **Settings >
+LLM services** in all three clients. Settings are shared server-wide, keys
+are encrypted in Postgres, and saves apply without restarting. The variables
+below supply defaults only until the first Settings save; saved configuration
+then takes precedence across restarts. See [LLM providers](llm-providers.md)
+for key replacement, revision conflicts and local-server requirements.
+
 All tasks are disabled until both task settings are supplied. A provider requires its kind and base URL; its key can be empty for local servers. A zero or unset limit means no cap. Calls atomically reserve a conservative cost estimate in Postgres before contacting the provider, so concurrent calls cannot oversubscribe the cap. Completed synchronous calls reconcile the reservation to reported usage; uncertain calls retain their estimate, and batch submissions retain the full estimate. The bound depends on configured prices and provider usage staying within the reserved token estimate. Configure model prices before enabling an unknown model.
 
 | Name | Default | What it does | When you need it |

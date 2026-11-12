@@ -10,6 +10,8 @@ import ch.lkmc.earnest.core.Annotation
 import ch.lkmc.earnest.core.ApiException
 import ch.lkmc.earnest.core.EarnestApi
 import ch.lkmc.earnest.core.KeptImportReport
+import ch.lkmc.earnest.core.LlmSettings
+import ch.lkmc.earnest.core.LlmSettingsInput
 import ch.lkmc.earnest.core.MAX_KEPT_IMPORT_BYTES
 import ch.lkmc.earnest.core.MAX_OPML_IMPORT_BYTES
 import ch.lkmc.earnest.core.OpmlSummary
@@ -68,6 +70,7 @@ data class UiState(
     val readerSettings: ReaderSettings = ReaderSettings(),
     val readerSettingsRev: Long = 0,
     val readerSettingsUi: ReaderSettingsUi = ReaderSettingsUi(),
+    val llmSettingsUi: LlmSettingsUi = LlmSettingsUi(),
     val keptImport: KeptImportUi = KeptImportUi(),
     val opml: OpmlUi = OpmlUi(),
     val unreadCounts: UnreadCounts? = null,
@@ -105,6 +108,38 @@ data class ReaderSettingsUi(
 data class FrozenReaderSettings(
     val settings: ReaderSettings,
     val opId: String,
+)
+
+/**
+ * The LLM services screen's draft and save state. The server owns these
+ * settings, so nothing here is cached, synced or persisted: a load fetches
+ * them, a save replaces them, and the typed key material in the draft lives
+ * only in this in-memory state. [epoch] is the ownership epoch stamped by a
+ * login, logout, session expiry or identity change, so a request verified for
+ * an older scope can never publish into its replacement.
+ */
+data class LlmSettingsUi(
+    val loading: Boolean = false,
+    val saving: Boolean = false,
+    val error: String? = null,
+    val success: Boolean = false,
+    val draft: LlmSettingsDraft? = null,
+    val loaded: LlmSettings? = null,
+    val loadedRevision: Long = 0,
+    val conflict: Boolean = false,
+    val frozen: FrozenLlmSettings? = null,
+    val epoch: Long = 0,
+    val loadRequest: Long = 0,
+    val saveRequest: Long = 0,
+)
+
+/**
+ * The exact LLM save body and op ID an ambiguous failure must resend, plus
+ * the draft it was built from so edits made during a retry stay dirty.
+ */
+data class FrozenLlmSettings(
+    val input: LlmSettingsInput,
+    val draft: LlmSettingsDraft,
 )
 
 /**
@@ -169,6 +204,12 @@ class AppViewModel internal constructor(
     private val readerLoadId = AtomicLong()
     private val readerSaveId = AtomicLong()
     private val readerCountsId = AtomicLong()
+    // LLM services requests bind to the account and ownership epoch captured
+    // before dispatch, like reader settings, but they never touch the
+    // snapshot: the server is the only storage.
+    private val llmEpoch = AtomicLong()
+    private val llmLoadId = AtomicLong()
+    private val llmSaveId = AtomicLong()
 
     internal val search = SearchModel(viewModelScope) {
         activeAccount("Still signing in; search did not run.")?.let { (cache, session) ->
@@ -209,6 +250,7 @@ class AppViewModel internal constructor(
     /** Called only after /v1/me established the authenticated account. */
     fun onLoggedIn() {
         val epoch = readerEpoch.incrementAndGet()
+        val llmEpochValue = llmEpoch.incrementAndGet()
         search.reset()
         account = null
         activeSession = null
@@ -217,7 +259,10 @@ class AppViewModel internal constructor(
         markedUnread.clear()
         savedCadence.clear()
         _sessionNotice.value = null
-        _state.value = UiState(readerSettingsUi = ReaderSettingsUi(epoch = epoch))
+        _state.value = UiState(
+            readerSettingsUi = ReaderSettingsUi(epoch = epoch),
+            llmSettingsUi = LlmSettingsUi(epoch = llmEpochValue),
+        )
         viewModelScope.launch(Dispatchers.IO) {
             val session = sessions.current()
             if (session == null) {
@@ -248,6 +293,7 @@ class AppViewModel internal constructor(
                             loadedRev = restored.readerSettingsRev,
                             epoch = epoch,
                         ),
+                        llmSettingsUi = LlmSettingsUi(epoch = llmEpochValue),
                         unreadCounts = cache.cachedUnreadCounts(restored.snapshot.cursor.generation),
                         unreadCountsSyncedAt = cache.cachedUnreadCountsAt(restored.snapshot.cursor.generation),
                     )
@@ -258,6 +304,7 @@ class AppViewModel internal constructor(
                     _state.value = UiState(
                         error = failureText("Could not restore the account cache", error),
                         readerSettingsUi = ReaderSettingsUi(epoch = epoch),
+                        llmSettingsUi = LlmSettingsUi(epoch = llmEpochValue),
                     )
                     _loggedIn.value = true
                 } else if (sessions.current() == null) {
@@ -317,7 +364,10 @@ class AppViewModel internal constructor(
         savedCadence.clear()
         account = null
         keptImportDocument = null
-        _state.value = UiState(readerSettingsUi = ReaderSettingsUi(epoch = readerEpoch.incrementAndGet()))
+        _state.value = UiState(
+            readerSettingsUi = ReaderSettingsUi(epoch = readerEpoch.incrementAndGet()),
+            llmSettingsUi = LlmSettingsUi(epoch = llmEpoch.incrementAndGet()),
+        )
         _loggedIn.value = false
     }
 
@@ -698,6 +748,267 @@ class AppViewModel internal constructor(
                             saving = false,
                             frozen = it.readerSettingsUi.frozen,
                             error = failureText("Could not save settings", error),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Explicit load of the server-managed LLM services settings. They are
+     * never cached or synced, so every presentation loads them fresh. The
+     * verified session and ownership epoch are captured before dispatch, so a
+     * result cannot publish under an account it was not fetched for, and a
+     * load older than the known revision cannot regress it. A draft edited
+     * while the load is in flight is preserved.
+     */
+    fun loadLlmSettings() {
+        val intent = _state.value
+        val expected = intent.llmSettingsUi.epoch
+        val (cache, session) = activeAccount("Still signing in; LLM services did not load.") ?: return
+        loadLlmSettings(expected, session, cache, reset = false)
+    }
+
+    /** Discards the draft and typed key material, then loads the newest settings. */
+    fun reloadLlmSettings() {
+        val intent = _state.value
+        val expected = intent.llmSettingsUi.epoch
+        val (cache, session) = activeAccount("Still signing in; LLM services did not load.") ?: return
+        loadLlmSettings(expected, session, cache, reset = true)
+    }
+
+    private fun loadLlmSettings(expected: Long, session: AuthenticatedSession, cache: SessionCache, reset: Boolean) {
+        val request = llmLoadId.incrementAndGet()
+        // Reload must not erase a frozen save or race its returned revision.
+        publishLlm(expected, session, cache, { !it.saving }) {
+            it.copy(llmSettingsUi = it.llmSettingsUi.copy(
+                loading = true,
+                error = null,
+                success = if (reset) false else it.llmSettingsUi.success,
+                loadRequest = request,
+                draft = if (reset) null else it.llmSettingsUi.draft,
+                frozen = if (reset) null else it.llmSettingsUi.frozen,
+            ))
+        }
+        viewModelScope.launch(readerDispatcher) {
+            if (!loadLlmOwner(session, cache, expected, request)) return@launch
+            try {
+                val settings = apiFactory(session).llmSettings()
+                if (!loadLlmOwner(session, cache, expected, request)) return@launch
+                publishLlm(expected, session, cache, { it.loadRequest == request }) { current ->
+                    val ui = current.llmSettingsUi
+                    val canonical = if (settings.revision > ui.loadedRevision) settings else ui.loaded ?: settings
+                    val canonicalRevision = maxOf(settings.revision, ui.loadedRevision)
+                    current.copy(
+                        llmSettingsUi = ui.copy(
+                            loading = false,
+                            // A dirty draft keeps the baseline it was edited on.
+                            loaded = if (ui.draft == null) canonical else ui.loaded,
+                            loadedRevision = if (ui.draft == null) canonicalRevision else ui.loadedRevision,
+                            conflict = if (ui.draft == null) false else ui.conflict,
+                            success = false,
+                        ),
+                    )
+                }
+            } catch (error: ApiException) {
+                if (!loadLlmOwner(session, cache, expected, request)) return@launch
+                if (error.isUnauthorized && sessions.current() == session) expireSessionIfCurrent(session)
+                publishLlm(expected, session, cache, { it.loadRequest == request }) {
+                    it.copy(llmSettingsUi = it.llmSettingsUi.copy(loading = false, error = failureText("Could not load LLM services", error)))
+                }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (loadLlmOwner(session, cache, expected, request)) {
+                    publishLlm(expected, session, cache, { it.loadRequest == request }) {
+                        it.copy(llmSettingsUi = it.llmSettingsUi.copy(loading = false, error = failureText("Could not load LLM services", error)))
+                    }
+                }
+            }
+        }
+    }
+
+    /** Edits the draft; editing invalidates a frozen retry. A 409 conflict stays until Reload. */
+    fun updateLlmSettingsDraft(transform: (LlmSettingsDraft) -> LlmSettingsDraft) {
+        _state.update { current ->
+            val ui = current.llmSettingsUi
+            val base = ui.draft ?: ui.loaded?.toDraft() ?: return@update current
+            val next = transform(base)
+            val edited = next != base
+            current.copy(
+                llmSettingsUi = ui.copy(
+                    draft = next,
+                    frozen = if (edited) null else ui.frozen,
+                    error = null,
+                    success = false,
+                ),
+            )
+        }
+    }
+
+    /**
+     * Saves the draft as a whole-configuration replacement. The loaded
+     * revision and a fresh op ID go out together; an ambiguous failure
+     * freezes the exact body and op ID so [retryLlmSettingsSave] can resend
+     * them unchanged, while a 409 keeps the draft and requires an explicit
+     * Reload. Keys never leave the draft except in the request body, and the
+     * draft is dropped on success.
+     */
+    fun saveLlmSettings() {
+        val intent = _state.value
+        val ui = intent.llmSettingsUi
+        val expected = ui.epoch
+        val (cache, session) = activeAccount("Still signing in; LLM services did not save.") ?: return
+        val loaded = ui.loaded
+        if (loaded == null) {
+            publishLlm(expected, session, cache) {
+                it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = "Load the LLM services settings before saving."))
+            }
+            return
+        }
+        if (ui.conflict) {
+            publishLlm(expected, session, cache) {
+                it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = "Reload the LLM services settings before saving again."))
+            }
+            return
+        }
+        val draft = ui.draft ?: loaded.toDraft()
+        val frozen = ui.frozen
+        val candidate = try {
+            draft.toInput(frozen?.input?.opId ?: newLlmOpId())
+        } catch (error: IllegalArgumentException) {
+            publishLlm(expected, session, cache) {
+                it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = error.message ?: "The LLM services settings are invalid."))
+            }
+            return
+        }
+        // Reuse the frozen op ID only when the draft is identical to the
+        // frozen request; a changed draft needs a fresh intentional op ID.
+        val input = if (frozen != null && frozen.input != candidate) candidate.copy(opId = newLlmOpId()) else candidate
+        saveLlmSettings(input, draft, loaded, expected, session, cache)
+    }
+
+    /**
+     * Retries the ambiguous save with the identical frozen body and op ID.
+     * The dispatch shares the scope captured from the same state as the
+     * frozen body, so a reset in between cannot lend the retry a replacement
+     * account's state.
+     */
+    fun retryLlmSettingsSave() {
+        val intent = _state.value
+        val ui = intent.llmSettingsUi
+        val frozen = ui.frozen ?: return
+        val loaded = ui.loaded ?: return
+        val expected = ui.epoch
+        val (cache, session) = activeAccount("Still signing in; LLM services did not save.") ?: return
+        publishLlm(expected, session, cache) {
+            it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = null, success = false))
+        }
+        saveLlmSettings(frozen.input, frozen.draft, loaded, expected, session, cache)
+    }
+
+    private fun newLlmOpId(): String = "llm-settings-${java.util.UUID.randomUUID()}"
+
+    /**
+     * Claims the busy flag atomically so a second save while one is active is
+     * rejected before dispatch, then runs the request. [loaded] is the
+     * baseline the revision came from, captured from the same state as the
+     * body. Every await and publication is fenced by the state-resident epoch
+     * and [saveRequest], so a rejected or stale request can neither borrow a
+     * replacement scope nor invalidate a newer owner's active request.
+     */
+    private fun saveLlmSettings(
+        input: LlmSettingsInput,
+        draft: LlmSettingsDraft,
+        loaded: LlmSettings,
+        expected: Long,
+        session: AuthenticatedSession,
+        cache: SessionCache,
+    ) {
+        val request = llmSaveId.incrementAndGet()
+        val claimed = AtomicBoolean()
+        publishLlm(expected, session, cache, { !it.saving && !it.loading && it.loaded != null }) {
+            claimed.set(true)
+            it.copy(llmSettingsUi = it.llmSettingsUi.copy(
+                saving = true, error = null, success = false, conflict = false,
+                frozen = FrozenLlmSettings(input, draft), saveRequest = request,
+            ))
+        }
+        if (!claimed.get()) return
+        viewModelScope.launch(readerDispatcher) {
+            if (!saveLlmOwner(session, cache, expected, request)) return@launch
+            try {
+                val updated = apiFactory(session).updateLlmSettings(input, loaded)
+                if (!saveLlmOwner(session, cache, expected, request)) return@launch
+                publishLlm(expected, session, cache, { it.saveRequest == request }) { current ->
+                    val ui = current.llmSettingsUi
+                    // Edits made during the save stay dirty on the new baseline
+                    // and require a reload before the next save.
+                    val editedDraft = ui.draft?.takeIf { it != draft }
+                    current.copy(
+                        llmSettingsUi = ui.copy(
+                            saving = false,
+                            success = editedDraft == null,
+                            error = if (editedDraft != null) "Your edits were made during the save. Reload before saving them." else null,
+                            loaded = updated,
+                            loadedRevision = updated.revision,
+                            draft = editedDraft,
+                            conflict = editedDraft != null,
+                            frozen = null,
+                        ),
+                    )
+                }
+            } catch (error: ApiException) {
+                if (!saveLlmOwner(session, cache, expected, request)) return@launch
+                // A 401 invalidates the token: never replay or publish the save.
+                if (error.isUnauthorized) {
+                    publishLlm(expected, session, cache, { it.saveRequest == request }) {
+                        it.copy(llmSettingsUi = it.llmSettingsUi.copy(saving = false, frozen = null, error = failureText("Could not save LLM services", error)))
+                    }
+                    expireSessionIfCurrent(session)
+                    return@launch
+                }
+                // A 409 preserves the draft and its key material and requires
+                // an explicit reload; the save is never retried automatically.
+                if (error.isConflict) {
+                    publishLlm(expected, session, cache, { it.saveRequest == request }) {
+                        it.copy(llmSettingsUi = it.llmSettingsUi.copy(
+                            saving = false,
+                            conflict = true,
+                            frozen = null,
+                            error = null,
+                        ))
+                    }
+                    return@launch
+                }
+                val deterministic = error.status in 400..499
+                publishLlm(expected, session, cache, { it.saveRequest == request }) {
+                    it.copy(llmSettingsUi = it.llmSettingsUi.copy(
+                        saving = false,
+                        frozen = if (deterministic) null else it.llmSettingsUi.frozen,
+                        error = failureText("Could not save LLM services", error),
+                    ))
+                }
+            } catch (error: IllegalArgumentException) {
+                // Deterministic client-side validation: never freeze or retry.
+                if (!saveLlmOwner(session, cache, expected, request)) return@launch
+                publishLlm(expected, session, cache, { it.saveRequest == request }) {
+                    it.copy(llmSettingsUi = it.llmSettingsUi.copy(
+                        saving = false,
+                        frozen = null,
+                        error = "Could not save LLM services: ${error.message ?: "invalid settings"}",
+                    ))
+                }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (saveLlmOwner(session, cache, expected, request)) {
+                    publishLlm(expected, session, cache, { it.saveRequest == request }) {
+                        it.copy(llmSettingsUi = it.llmSettingsUi.copy(
+                            saving = false,
+                            frozen = it.llmSettingsUi.frozen,
+                            error = failureText("Could not save LLM services", error),
                         ))
                     }
                 }
@@ -1289,6 +1600,42 @@ class AppViewModel internal constructor(
     }
 
     /**
+     * The verified LLM scope still owns this account. The epoch is checked on
+     * the counter and inside the published state, so a replacement state
+     * stamped with a newer epoch can never satisfy an older intent. LLM
+     * settings are not part of the snapshot, so no generation fence applies.
+     */
+    private fun llmCurrent(session: AuthenticatedSession, cache: SessionCache, expected: Long): Boolean =
+        llmEpoch.get() == expected && _state.value.llmSettingsUi.epoch == expected && currentOrExpired(session, cache)
+
+    /** [llmCurrent] plus ownership of the in-flight LLM load request. */
+    private fun loadLlmOwner(session: AuthenticatedSession, cache: SessionCache, expected: Long, request: Long): Boolean =
+        llmCurrent(session, cache, expected) && _state.value.llmSettingsUi.loadRequest == request
+
+    /** [llmCurrent] plus ownership of the in-flight LLM save request. */
+    private fun saveLlmOwner(session: AuthenticatedSession, cache: SessionCache, expected: Long, request: Long): Boolean =
+        llmCurrent(session, cache, expected) && _state.value.llmSettingsUi.saveRequest == request
+
+    /**
+     * Applies [transform] only while the captured epoch and account still own
+     * the state and [owns] accepts the current request identity. The checks
+     * run inside the CAS update, so a reset can never lend the publication a
+     * new scope.
+     */
+    private fun publishLlm(
+        expected: Long,
+        session: AuthenticatedSession,
+        cache: SessionCache,
+        owns: (LlmSettingsUi) -> Boolean = { true },
+        transform: (UiState) -> UiState,
+    ) {
+        _state.update { current ->
+            val ui = current.llmSettingsUi
+            if (llmEpoch.get() == expected && ui.epoch == expected && owns(ui) && isCurrent(session, cache)) transform(current) else current
+        }
+    }
+
+    /**
      * Projects cached reader settings into the UI after a cache restore. A new
      * generation drops the draft and the pending request: revisions across
      * generations are incomparable, so the restored baseline always wins. The
@@ -1337,7 +1684,10 @@ class AppViewModel internal constructor(
         markedUnread.clear()
         savedCadence.clear()
         keptImportDocument = null
-        _state.value = UiState(readerSettingsUi = ReaderSettingsUi(epoch = readerEpoch.incrementAndGet()))
+        _state.value = UiState(
+            readerSettingsUi = ReaderSettingsUi(epoch = readerEpoch.incrementAndGet()),
+            llmSettingsUi = LlmSettingsUi(epoch = llmEpoch.incrementAndGet()),
+        )
         if (_loggedIn.value) _sessionNotice.value = "Your session expired. Sign in again."
         _loggedIn.value = false
     }

@@ -19,6 +19,14 @@ enum ErrorPresentation {
         return false
     }
 
+    /// A revision conflict: the draft was loaded from an older configuration
+    /// and must be reloaded before it can be saved.
+    static func isConflict(_ error: Error) -> Bool {
+        if let problem = error as? APIProblem { return problem.status == 409 }
+        if case APIError.httpStatus(409) = error { return true }
+        return false
+    }
+
     /// Failures that can clear without user action: connection dropouts and
     /// timeouts, rate limiting, server errors, and malformed responses (the
     /// generated client surfaces undecodable bodies as DecodingError). Auth

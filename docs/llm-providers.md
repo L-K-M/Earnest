@@ -9,9 +9,9 @@ rules it enforces. The product rationale is in
 ## Off by default
 
 Every task is disabled unless both its provider and model are configured.
-With no `EARNEST_LLM_*` variables set, `llm.Load` returns an empty routing
-table, every task reports `llm.ErrDisabled`, and no request leaves the
-process. The UI shows nothing because there is nothing to show.
+With no saved configuration or `EARNEST_LLM_*` variables, every task reports
+`llm.ErrDisabled` and no model request leaves the process. Settings always
+shows the LLM services editor, including when every task is disabled.
 
 ## Provider kinds
 
@@ -26,7 +26,63 @@ the kind selects the wire dialect. For OpenAI-compatible servers the base URL
 includes the version segment (`/v1` for OpenAI and Ollama, `/v1beta` for
 Gemini).
 
-## Configuration
+## Configure in Settings
+
+Open **Settings > LLM services** in the web, Mac or Android client. These
+settings apply to the whole server, not just your account or device:
+
+1. Add a named provider, choose OpenAI-compatible, Anthropic or Gemini, and
+   enter its API base URL. Supply a key if the service needs one. Set a
+   monthly USD cap, timeout and, for older compatible servers, `max_tokens`.
+2. Review the model price table. Add your model ID and its input, output and
+   embedding prices per million tokens. Local models can have explicit zero
+   prices. Embedding models also need the correct dimensions and truncation
+   setting. Unknown models are never silently treated as free.
+3. Choose a provider and model for each task you want to enable. Leave a
+   task's provider and model empty to disable it.
+4. Save. New HTTP requests and worker passes use the saved configuration
+   without restarting. Work already in progress finishes with its original
+   configuration. Saving validates configuration but does not call a provider
+   or verify its credentials.
+
+Keys are write-only. A blank key field preserves the existing key; use the
+explicit clear control to remove it. Changing a keyed provider's URL or
+protocol requires a replacement key or explicit removal, so an old secret
+cannot silently travel to a new destination. The server encrypts the saved
+configuration using `EARNEST_SECRET_KEY`; keep that key with database backups.
+Clients never store provider keys in their offline cache or preferences.
+
+The editor loads deployment environment defaults until the first save
+(revision zero). Afterwards the saved database configuration replaces those
+defaults, including after a restart. Clearing all task routes and saving keeps
+models disabled even if the deployment still has LLM environment variables.
+Environment changes no longer override a saved configuration.
+
+Reads and writes use `GET` and `PUT /v1/settings/llm`. They require a human
+principal with the `admin` scope, which normal sessions and native app tokens
+hold. Agent and Google Reader credentials cannot manage this configuration.
+Writes include a revision and an `op_id`; a stale revision returns 409 rather
+than overwriting another client's changes. Reload and review before saving
+again. Only redacted responses enter the operation log; provider keys never
+enter the change feed.
+
+The outbound private-host allowlist remains deployment configuration. A local
+model server such as `ollama:11434` still needs
+`EARNEST_OUTBOUND_ALLOW_PRIVATE=ollama:11434` and a service restart. Settings
+cannot bypass address checks. Prices and caps are exact decimal USD with up
+to six fractional digits; zero cap means unlimited. The editor supports up to
+32 providers and 128 models, and timeouts from 1 to 600 seconds.
+
+Edition batch handles retain an encrypted snapshot of the configuration that
+submitted them. Pending batches use their original provider, credentials,
+model and prices for collection and reconciliation, including after a server
+restart. Editing settings does not abandon or regenerate that paid work.
+Historical credentials are removed when their jobs finish. Clearing a key
+removes it from new routing, not from a batch already accepted by its provider.
+Disabling the edition task pauses collection until you re-enable it; it does
+not cancel work already running at the provider.
+
+## Environment defaults
 
 All variables are optional. Provider names are case-insensitive and stored
 lowercase; use letters, digits and dashes. The binary reads them from its own

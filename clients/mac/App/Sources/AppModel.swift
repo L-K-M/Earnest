@@ -72,6 +72,7 @@ struct ReaderPreferencesScope: Equatable {
     var sessionActions = SessionCounts()
     private var windowRefs: [WindowRef] = []
     private var preferenceRefs: [PreferencesRef] = []
+    private var llmSettingsRefs: [LLMSettingsRef] = []
 
     private struct WindowRef {
         weak var value: WindowModel?
@@ -79,6 +80,10 @@ struct ReaderPreferencesScope: Equatable {
 
     private struct PreferencesRef {
         weak var value: ReaderSettingsModel?
+    }
+
+    private struct LLMSettingsRef {
+        weak var value: LLMSettingsModel?
     }
 
     struct ImportReport: Identifiable, Equatable {
@@ -97,6 +102,29 @@ struct ReaderPreferencesScope: Equatable {
     func register(preferences: ReaderSettingsModel) {
         preferenceRefs.removeAll { $0.value == nil || $0.value === preferences }
         preferenceRefs.append(PreferencesRef(value: preferences))
+    }
+
+    /// Open windows in registration order; dead references are pruned on read.
+    var llmSettingsModels: [LLMSettingsModel] {
+        llmSettingsRefs.removeAll { $0.value == nil }
+        return llmSettingsRefs.compactMap(\.value)
+    }
+
+    func register(llmSettings: LLMSettingsModel) {
+        llmSettingsRefs.removeAll { $0.value == nil || $0.value === llmSettings }
+        llmSettingsRefs.append(LLMSettingsRef(value: llmSettings))
+    }
+
+    /// The server-wide LLM settings belong to one signed-in identity. A
+    /// sign-out, a server change or a different account ends the session, so a
+    /// draft and its typed key never carry across.
+    func llmSettingsScope() -> LLMSettingsScope? {
+        guard loggedIn else { return nil }
+        return LLMSettingsScope(session: session, principalID: principalID)
+    }
+
+    func ownsLLMSettings(_ scope: LLMSettingsScope) -> Bool {
+        loggedIn && llmSettingsScope() == scope
     }
 
     /// Open windows in registration order; dead references are pruned on read.
@@ -174,6 +202,7 @@ struct ReaderPreferencesScope: Equatable {
         error = nil
         for window in windows { window.endSession() }
         for preferences in preferenceModels { preferences.endSession() }
+        for settings in llmSettingsModels { settings.endSession() }
     }
 
     func connect() {
@@ -296,6 +325,9 @@ struct ReaderPreferencesScope: Equatable {
                 try? cache.clear()
             }
         }
+        // A newly established account enables its account-bound drafts; an
+        // unchanged session leaves them alone.
+        for settings in llmSettingsModels { settings.refreshScope() }
         if case .offline = resolution {
             connectionNote = "Offline. Showing what was last synced."
             return false

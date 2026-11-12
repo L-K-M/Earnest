@@ -139,6 +139,57 @@ class OpenApiContractTest {
                 "op-1",
             ),
         ),
+        "LLMSettings" to encode(
+            LlmSettings.serializer(),
+            LlmSettings(
+                9007199254740993,
+                listOf(
+                    LlmProvider(
+                        "openai",
+                        LlmProviderKind.OPENAI,
+                        "https://api.openai.com/v1",
+                        true,
+                        "20.000000",
+                        60,
+                        LlmTokenField.MAX_COMPLETION_TOKENS,
+                    ),
+                ),
+                listOf(LlmTaskRoute("embed", "openai", "text-embedding-3-small")),
+                listOf(LlmModel("text-embedding-3-small", "0.000000", "0.000000", "0.020000", 1536, true)),
+            ),
+        ),
+        "LLMProviderSettings" to encode(
+            LlmProvider.serializer(),
+            LlmProvider("openai", LlmProviderKind.ANTHROPIC, "https://api.anthropic.com", true, "0", 120, LlmTokenField.MAX_TOKENS),
+        ),
+        "LLMProviderInput" to encode(
+            LlmProviderInput.serializer(),
+            LlmProviderInput(
+                "openai",
+                LlmProviderKind.OPENAI,
+                "https://api.openai.com/v1",
+                "sk-test",
+                false,
+                "20.000000",
+                60,
+                LlmTokenField.MAX_COMPLETION_TOKENS,
+            ),
+        ),
+        "LLMTaskSettings" to encode(LlmTaskRoute.serializer(), LlmTaskRoute("compile_rule", "local", "llama3")),
+        "LLMModelSettings" to encode(
+            LlmModel.serializer(),
+            LlmModel("llama3", "0", "0", "0", 1024, false),
+        ),
+        "LLMSettingsInput" to encode(
+            LlmSettingsInput.serializer(),
+            LlmSettingsInput(
+                9007199254740993,
+                "op-1",
+                listOf(LlmProviderInput("openai", LlmProviderKind.OPENAI, "https://api.openai.com/v1", apiKey = "sk-test")),
+                listOf(LlmTaskRoute("embed", "openai", "text-embedding-3-small")),
+                listOf(LlmModel("text-embedding-3-small", "0.000000", "0.000000", "0.020000", 1536, true)),
+            ),
+        ),
     )
 
     @Test

@@ -1360,6 +1360,225 @@
         ],
         "type": "object"
       },
+      "LLMModelSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "dimensions": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "embedding_per_1m": {
+            "type": "string"
+          },
+          "input_per_1m": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "output_per_1m": {
+            "type": "string"
+          },
+          "truncatable": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "input_per_1m",
+          "output_per_1m",
+          "embedding_per_1m",
+          "dimensions",
+          "truncatable"
+        ],
+        "type": "object"
+      },
+      "LLMProviderInput": {
+        "additionalProperties": false,
+        "properties": {
+          "api_key": {
+            "type": "string"
+          },
+          "base_url": {
+            "type": "string"
+          },
+          "clear_api_key": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "monthly_limit_usd": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "timeout_seconds": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "token_field": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "base_url",
+          "monthly_limit_usd",
+          "timeout_seconds",
+          "token_field"
+        ],
+        "type": "object"
+      },
+      "LLMProviderSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "base_url": {
+            "type": "string"
+          },
+          "has_api_key": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "monthly_limit_usd": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "timeout_seconds": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "token_field": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "base_url",
+          "has_api_key",
+          "monthly_limit_usd",
+          "timeout_seconds",
+          "token_field"
+        ],
+        "type": "object"
+      },
+      "LLMSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/LLMModelSettings"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "providers": {
+            "items": {
+              "$ref": "#/components/schemas/LLMProviderSettings"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/LLMTaskSettings"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "revision",
+          "providers",
+          "tasks",
+          "models"
+        ],
+        "type": "object"
+      },
+      "LLMSettingsInput": {
+        "additionalProperties": false,
+        "properties": {
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/LLMModelSettings"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "op_id": {
+            "type": "string"
+          },
+          "providers": {
+            "items": {
+              "$ref": "#/components/schemas/LLMProviderInput"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/LLMTaskSettings"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "revision",
+          "providers",
+          "tasks",
+          "models",
+          "op_id"
+        ],
+        "type": "object"
+      },
+      "LLMTaskSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task",
+          "provider",
+          "model"
+        ],
+        "type": "object"
+      },
       "Label": {
         "additionalProperties": false,
         "properties": {
@@ -15916,6 +16135,255 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ReaderSettings"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Gone"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "csrf": [],
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/settings/llm": {
+      "get": {
+        "operationId": "get-llm-settings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LLMSettings"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Gone"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      },
+      "put": {
+        "operationId": "put-llm-settings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LLMSettingsInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LLMSettings"
                 }
               }
             },

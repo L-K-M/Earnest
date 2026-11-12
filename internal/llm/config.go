@@ -113,6 +113,15 @@ var defaultModels = map[string]ModelInfo{
 	"bge-m3":                 {Dimensions: 1024},
 }
 
+// DefaultConfig returns an independent price table with every task disabled.
+func DefaultConfig() Config {
+	models := make(map[string]ModelInfo, len(defaultModels))
+	for name, info := range defaultModels {
+		models[name] = info
+	}
+	return Config{Providers: map[string]ProviderConfig{}, Tasks: map[Task]TaskConfig{}, Models: models}
+}
+
 // Limits returns the configured monthly cap per provider. A provider
 // capped at zero, or absent from the result, has no cap.
 func (c Config) Limits() map[string]USD {

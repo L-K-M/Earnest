@@ -30,7 +30,8 @@ The package uses Apple's `swift-openapi-generator` 1.14.0 build plugin with
 Package.swift and resolved in Package.resolved. Swift 6.2 or later is required;
 Linux validation uses Swift 6.3.3. The target's `openapi.json` is a relative
 symlink to the repository's committed `api/openapi.json`, not a copied schema.
-The configuration filters generation to the operations the repository uses.
+The configuration filters generation to the operations the repository uses,
+including the LLM settings operations.
 Generated Swift files live under `.build` and are not checked in. See the
 [generator documentation](https://github.com/apple/swift-openapi-generator).
 
@@ -273,6 +274,41 @@ only removes its definition, not articles. Search and saved-search management
 require connectivity; they do not pretend an offline request succeeded. Search
 state is window-local, cleared on sign-out and invalidated after a server
 restore. A failed AI availability check still leaves full-text search usable.
+
+## LLM service settings
+
+Earnest > Settings… > LLM Services edits the server-wide LLM configuration:
+providers, task routing, and model pricing. These are human admin settings shared
+by every account; changing them affects the whole server, and API keys are
+encrypted on the server and never returned to any client. The pane makes no
+request until you choose Reload, and nothing is saved until you choose Save;
+busy, saved, failed and conflicting states are shown. A revision conflict keeps
+the draft and requires Reload before another save.
+
+Providers add, edit and remove by name, kind (OpenAI, Anthropic or Gemini) and
+base URL, with a monthly USD limit, request timeout and completion token field.
+The API key control is a write-only replacement: the pane shows only whether a
+key is stored, and a typed replacement or an explicit remove is sent on the next
+save. An absent key keeps the stored one; changing a keyed provider's URL or kind
+requires a replacement key or an explicit remove, so a stored secret is never
+forwarded to a different destination. Renaming a keyed provider also requires
+replacement or removal, since names identify stored keys. A failed Reload
+keeps a revision conflict active until a newer configuration is loaded.
+Typed keys are cleared after a successful
+save, a reload, and on sign-out or an account change, and are never written to
+preferences, caches or logs.
+
+Tasks route each of the seven purposes (embed, classify, blurb, summary,
+edition, compile_rule, ask) to a provider and a configured model, or are disabled
+by leaving both empty; disabled tasks make no outbound calls. The advanced model
+editor adds and removes named models with their three USD-per-million-token
+prices, embedding dimensions (up to 65536 with truncatable) and the truncatable
+toggle. Prices are decimal text end to end, so exact configured prices never
+drift through floating point. Local models need explicit zero prices; Earnest
+does not invent price entries. Anthropic providers cannot embed.
+
+The pane notes that local servers need the server's outbound allowlist
+(`EARNEST_OUTBOUND_ALLOW_PRIVATE`); the client adds no bypass.
 
 ## Regression checks
 
