@@ -165,10 +165,10 @@ type catalogueEntry struct {
 		SupportsCustomDimensions json.RawMessage `json:"supportsCustomDimensions"`
 		Pricing                  struct {
 			Input struct {
-				USD json.Number `json:"usd"`
+				USD json.RawMessage `json:"usd"`
 			} `json:"input"`
 			Output struct {
-				USD json.Number `json:"usd"`
+				USD json.RawMessage `json:"usd"`
 			} `json:"output"`
 		} `json:"pricing"`
 	} `json:"model_spec"`
@@ -235,9 +235,9 @@ func decodeCatalogue(raw []byte, kind ProviderKind, venice bool) ([]DiscoveredMo
 			// Venice publishes these rates in USD per million tokens. Other
 			// compatible APIs have no common price schema, so do not guess units.
 			if *model.Chat {
-				model.InputPer1M, model.OutputPer1M = cataloguePrice(entry.Spec.Pricing.Input.USD), cataloguePrice(entry.Spec.Pricing.Output.USD)
+				model.InputPer1M, model.OutputPer1M = optionalCataloguePrice(entry.Spec.Pricing.Input.USD), optionalCataloguePrice(entry.Spec.Pricing.Output.USD)
 			} else {
-				model.EmbeddingPer1M = cataloguePrice(entry.Spec.Pricing.Input.USD)
+				model.EmbeddingPer1M = optionalCataloguePrice(entry.Spec.Pricing.Input.USD)
 			}
 		}
 		if model.Name == "" || len(model.Name) > 256 || strings.ContainsFunc(model.Name, unicode.IsControl) {
@@ -257,4 +257,14 @@ func cataloguePrice(number json.Number) *string {
 	}
 	text := value.String()
 	return &text
+}
+
+// Invalid optional prices leave only that rate unknown, so other models and
+// usable metadata remain available in the catalogue.
+func optionalCataloguePrice(raw json.RawMessage) *string {
+	var number json.Number
+	if err := json.Unmarshal(raw, &number); err != nil {
+		return nil
+	}
+	return cataloguePrice(number)
 }

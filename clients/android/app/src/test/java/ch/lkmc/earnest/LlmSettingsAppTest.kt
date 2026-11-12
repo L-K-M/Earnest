@@ -4,6 +4,12 @@ import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import ch.lkmc.earnest.core.EarnestApi
 import ch.lkmc.earnest.core.LlmProviderKind
+import ch.lkmc.earnest.core.LlmTask
+import ch.lkmc.earnest.core.LlmTaskMode
+import ch.lkmc.earnest.core.LlmSettingsDefaults
+import ch.lkmc.earnest.core.LlmModelCapability
+import ch.lkmc.earnest.core.LlmModel
+import ch.lkmc.earnest.core.LlmDefaultRoute
 import ch.lkmc.earnest.core.LlmTaskRoute
 import ch.lkmc.earnest.core.Revision
 import ch.lkmc.earnest.core.River
@@ -306,6 +312,7 @@ class LlmSettingsAppTest {
         model.reloadLlmSettings()
         withTimeout(15_000) { model.state.first { !it.llmSettingsUi.loading && it.llmSettingsUi.error != null } }
         assertTrue("a failed Reload must keep the stale-baseline conflict", model.state.value.llmSettingsUi.conflict)
+        assertEquals("90", model.state.value.llmSettingsUi.draft?.providers?.first()?.timeoutSeconds)
         assertEquals(3L, model.state.value.llmSettingsUi.loadedRevision)
         val attempts = llmPuts().size
         model.saveLlmSettings()
@@ -559,6 +566,22 @@ class LlmSettingsAppTest {
     private fun discoveries(): List<Call> =
         calls.filter { it.method == "POST" && it.path == "/v1/settings/llm/models" }
 
+    @Test fun reopeningTheCatalogueReusesItsResults() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadedLlm()
+        model.fetchLlmModels(0)
+        withTimeout(15_000) { model.state.first { it.llmSettingsUi.discovery?.models != null } }
+        model.dismissLlmDiscovery()
+        model.updateLlmSettingsDraft { it.copy(providers = it.providers +
+            LlmProviderDraft("other", LlmProviderKind.OPENAI, "https://other.test/v1")) }
+        model.fetchLlmModels(1)
+        withTimeout(15_000) { model.state.first { it.llmSettingsUi.discovery?.providerIndex == 1 && it.llmSettingsUi.discovery?.models != null } }
+        model.dismissLlmDiscovery()
+        model.fetchLlmModels(0)
+        delay(300)
+        assertEquals(2, discoveries().size)
+    }
+
     @Test fun fetchSendsTheDraftProviderWithTheTypedKeyAndPublishesTheCatalogue() = runBlocking(Dispatchers.IO) {
         respond = { request ->
             if (request.url.encodedPath == "/v1/settings/llm/models") {
@@ -620,7 +643,7 @@ class LlmSettingsAppTest {
         model.fetchLlmModels(0)
         withTimeout(15_000) { model.state.first { it.llmSettingsUi.discovery?.error != null } }
         assertTrue(model.state.value.llmSettingsUi.discovery!!.error!!.contains("Reload"))
-        assertFalse("a discovery conflict does not put the draft into a save conflict", model.state.value.llmSettingsUi.conflict)
+        assertTrue("a stale discovery revision offers a reload before saving", model.state.value.llmSettingsUi.conflict)
         assertEquals("90", model.state.value.llmSettingsUi.draft?.providers?.single()?.timeoutSeconds)
     }
 
@@ -746,5 +769,230 @@ class LlmSettingsAppTest {
         model.saveLlmSettings()
         withTimeout(15_000) { model.state.first { it.llmSettingsUi.success } }
         assertNull("the consumed key changed the fingerprint", model.state.value.llmSettingsUi.discovery)
+    }
+}
+
+@OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
+@SQLiteMode(SQLiteMode.Mode.NATIVE)
+class LlmSettingsModesAppTest {
+    private val app get() = ApplicationProvider.getApplicationContext<Application>()
+    private val identity = AccountIdentity("https://nas.test", 1, 1)
+    private data class Call(val method: String, val path: String, val body: String, val authorization: String? = null)
+    private val calls = CopyOnWriteArrayList<Call>()
+
+    private class Sessions(initial: AuthenticatedSession?) : SessionStore {
+        private val stored = java.util.concurrent.atomic.AtomicReference(initial)
+        var value: AuthenticatedSession?
+            get() = stored.get()
+            set(value) { stored.set(value) }
+        var beforeClear: (() -> Unit)? = null
+        val clearAttempted = CompletableDeferred<Unit>()
+        override fun current() = stored.get()
+        override fun clearToken() {
+            beforeClear?.invoke()
+            stored.set(null)
+            clearAttempted.complete(Unit)
+        }
+        override fun clearToken(expected: AuthenticatedSession): Boolean {
+            beforeClear?.invoke()
+            try {
+                while (true) {
+                    val current = stored.get()
+                    if (current != expected) return false
+                    if (stored.compareAndSet(current, null)) return true
+                }
+            } finally { clearAttempted.complete(Unit) }
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Before fun setup() { Dispatchers.setMain(UnconfinedTestDispatcher()) }
+    @After fun teardown() { Dispatchers.resetMain() }
+
+    private fun llmJson(
+        revision: Long = 3,
+        providers: String = """[{"name":"openai","kind":"openai","base_url":"https://api.openai.com/v1","has_api_key":true,"monthly_limit_usd":"20.000000","timeout_seconds":60,"token_field":"max_completion_tokens"}]""",
+        tasks: String = """[{"task":"embed","provider":"openai","model":"text-embedding-3-small"},{"task":"classify","provider":"","model":""},{"task":"blurb","provider":"","model":""},{"task":"summary","provider":"","model":""},{"task":"edition","provider":"","model":""},{"task":"compile_rule","provider":"","model":""},{"task":"ask","provider":"","model":""}]""",
+        models: String = """[{"name":"text-embedding-3-small","input_per_1m":"0.000000","output_per_1m":"0.000000","embedding_per_1m":"0.020000","dimensions":1536,"truncatable":true}]""",
+    ): String = """{"revision":$revision,"providers":$providers,"tasks":$tasks,"models":$models}"""
+
+    private var getBody = llmJson()
+    private var respond: (Request) -> Pair<Int, String> = { request ->
+        val path = request.url.encodedPath
+        when (path) {
+            "/v1/settings" -> 200 to """{"reading_mode":"river","today_decay_days":2,"single_key_shortcuts":true,""" +
+                """"theme":"system","measure":66,"font":"serif","feed_overrides":{},"rev":1}"""
+            "/v1/settings/llm" -> if (request.method == "PUT") 200 to getBody else 200 to getBody
+            "/v1/settings/llm/models" -> 200 to """{"models":[]}"""
+            "/v1/changes" -> {
+                val rev = request.url.queryParameter("rev")?.toLongOrNull() ?: 0
+                200 to """{"changes":[],"next":{"generation":"g1","rev":$rev},"next_cursor":"g1:$rev"}"""
+            }
+            "/v1/entries:counts" -> 200 to """{"by_subscription":{"3":4},"later":1,"kept":2,"total":7}"""
+            "/v1/mutes" -> 200 to """[{"id":7,"kind":"author","value":"spam","rev":3}]"""
+            "/v1/tokens", "/v1/briefs/today", "/v1/activity/agent-changes" -> 200 to "[]"
+            else -> 200 to "[]"
+        }
+    }
+
+    private fun api(token: String = "token") = EarnestApi(identity.server, token, OkHttpClient.Builder().addInterceptor { chain ->
+        val request = chain.request()
+        calls += Call(request.method, request.url.encodedPath, request.body?.let { body ->
+            okio.Buffer().also { body.writeTo(it) }.readUtf8()
+        }.orEmpty(), request.header("Authorization"))
+        val (code, body) = respond(request)
+        Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(code).message("test")
+            .body(body.toResponseBody()).build()
+    }.build())
+
+    private suspend fun model(
+        sessions: Sessions = Sessions(AuthenticatedSession(identity, "token")),
+        dispatcher: CoroutineDispatcher = Dispatchers.IO,
+    ): AppViewModel {
+        val cache = SessionCache(app, identity)
+        cache.withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val model = AppViewModel(app, sessions, MutableSharedFlow(extraBufferCapacity = 1), readerDispatcher = dispatcher) { api(it.token) }
+        withTimeout(15000) { model.state.first { !it.loading && calls.any { it.path == "/v1/tokens" } } }
+        return model
+    }
+
+    private suspend fun AppViewModel.loadedLlm() {
+        loadLlmSettings()
+        withTimeout(15_000) { state.first { it.llmSettingsUi.loadedRevision == 3L && !it.llmSettingsUi.loading } }
+    }
+
+    @Test fun savingDefaultModeSendsDefaultsAndEffectiveRoutes() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadedLlm()
+        model.updateLlmSettingsDraft { draft ->
+            draft.copy(
+                defaults = LlmSettingsDefaults(text = LlmDefaultRoute("openai", "text-embedding-3-small")),
+                tasks = draft.tasks.map {
+                    if (it.task == "summary") LlmTaskRoute("summary", "openai", "text-embedding-3-small", LlmTaskMode.DEFAULT) else it
+                },
+            )
+        }
+        model.saveLlmSettings()
+        withTimeout(15_000) { model.state.first { it.llmSettingsUi.success } }
+        val body = Json.parseToJsonElement(calls.single { it.method == "PUT" && it.path == "/v1/settings/llm" }.body).jsonObject
+        assertEquals(
+            "openai",
+            body.getValue("defaults").jsonObject.getValue("text").jsonObject.getValue("provider").jsonPrimitive.content,
+        )
+        val summary = body.getValue("tasks").jsonArray.map { it.jsonObject }
+            .first { it.getValue("task").jsonPrimitive.content == "summary" }
+        assertEquals("default", summary.getValue("mode").jsonPrimitive.content)
+        assertEquals("openai", summary.getValue("provider").jsonPrimitive.content)
+        assertEquals("text-embedding-3-small", summary.getValue("model").jsonPrimitive.content)
+    }
+
+    @Test fun selectingCatalogueModelAddsScopedRecordAndRoutesTask() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadedLlm()
+        model.selectLlmModel(
+            0,
+            LlmModel("gpt-5", inputPer1m = "1", outputPer1m = "2", provider = "openai"),
+            LlmTask.SUMMARY,
+        )
+        val draft = model.state.value.llmSettingsUi.draft!!
+        assertEquals("openai", draft.models.first { it.name == "gpt-5" }.provider)
+        assertEquals(LlmTaskMode.CUSTOM, draft.tasks.first { it.task == "summary" }.mode)
+        assertEquals("gpt-5", draft.tasks.first { it.task == "summary" }.model)
+
+        // Selecting an already configured model keeps its saved prices.
+        model.selectLlmModel(
+            0,
+            LlmModel("gpt-5", inputPer1m = "9", outputPer1m = "9", provider = "openai"),
+            LlmTask.BLURB,
+        )
+        assertEquals("1", model.state.value.llmSettingsUi.draft!!.models.first { it.name == "gpt-5" }.inputPer1m)
+
+        model.saveLlmSettings()
+        withTimeout(15_000) { model.state.first { it.llmSettingsUi.success } }
+        val body = Json.parseToJsonElement(calls.single { it.method == "PUT" && it.path == "/v1/settings/llm" }.body).jsonObject
+        val sent = body.getValue("models").jsonArray.map { it.jsonObject }
+            .first { it.getValue("name").jsonPrimitive.content == "gpt-5" }
+        assertEquals("openai", sent.getValue("provider").jsonPrimitive.content)
+        assertEquals("1", sent.getValue("input_per_1m").jsonPrimitive.content)
+    }
+
+    @Test fun checkModelPostsTheDraftAndPublishesTheResult() = runBlocking(Dispatchers.IO) {
+        respond = { request ->
+            if (request.url.encodedPath == "/v1/settings/llm/models/check") {
+                200 to """{"compatible":true,"dimensions":1536,"supports_custom_dimensions":true,"message":"checked"}"""
+            } else {
+                val path = request.url.encodedPath
+                when (path) {
+                    "/v1/settings" -> 200 to """{"reading_mode":"river","today_decay_days":2,"single_key_shortcuts":true,""" +
+                        """"theme":"system","measure":66,"font":"serif","feed_overrides":{},"rev":1}"""
+                    "/v1/settings/llm" -> 200 to getBody
+                    "/v1/changes" -> {
+                        val rev = request.url.queryParameter("rev")?.toLongOrNull() ?: 0
+                        200 to """{"changes":[],"next":{"generation":"g1","rev":$rev},"next_cursor":"g1:$rev"}"""
+                    }
+                    "/v1/entries:counts" -> 200 to """{"by_subscription":{"3":4},"later":1,"kept":2,"total":7}"""
+                    "/v1/mutes" -> 200 to """[{"id":7,"kind":"author","value":"spam","rev":3}]"""
+                    "/v1/tokens", "/v1/briefs/today", "/v1/activity/agent-changes" -> 200 to "[]"
+                    else -> 200 to "[]"
+                }
+            }
+        }
+        val model = model()
+        model.loadedLlm()
+        model.checkLlmModel(
+            0,
+            LlmModel(
+                "text-embedding-3-small",
+                inputPer1m = "0",
+                outputPer1m = "0",
+                embeddingPer1m = "0.02",
+                dimensions = 1024,
+                truncatable = true,
+                provider = "openai",
+            ),
+            LlmModelCapability.EMBEDDING,
+        )
+        withTimeout(15_000) { model.state.first { it.llmSettingsUi.check?.result != null } }
+        val check = model.state.value.llmSettingsUi.check!!
+        assertTrue(check.result!!.compatible)
+        assertEquals(1536L, check.result!!.dimensions)
+        assertEquals("checked", check.result!!.message)
+        val sent = calls.single { it.path == "/v1/settings/llm/models/check" }
+        val body = Json.parseToJsonElement(sent.body).jsonObject
+        assertEquals("3", body.getValue("revision").jsonPrimitive.content)
+        assertEquals("embedding", body.getValue("capability").jsonPrimitive.content)
+        assertEquals("openai", body.getValue("model").jsonObject.getValue("provider").jsonPrimitive.content)
+        // A check never writes the draft or the saved settings.
+        assertNull(model.state.value.llmSettingsUi.draft)
+        assertTrue(calls.none { it.method == "PUT" && it.path == "/v1/settings/llm" })
+    }
+
+    @Test fun togglingPreservesAnExplicitRouteAndInheritsADefaultOtherwise() {
+        val defaults = LlmSettingsDefaults(text = LlmDefaultRoute("default-provider", "default-model"))
+        val custom = LlmTaskRoute("summary", "custom-provider", "custom-model", LlmTaskMode.CUSTOM)
+        val disabled = toggleTaskRoute(custom, false, defaults)
+        assertEquals(LlmTaskMode.OFF, disabled.mode)
+        val enabled = toggleTaskRoute(disabled, true, defaults)
+        assertEquals(LlmTaskMode.CUSTOM, enabled.mode)
+        assertEquals("custom-provider", enabled.provider)
+        // An empty route inherits the default.
+        val empty = LlmTaskRoute("summary", "", "", LlmTaskMode.OFF)
+        assertEquals(LlmTaskMode.DEFAULT, toggleTaskRoute(empty, true, defaults).mode)
+    }
+
+    @Test fun discardDropsTheDraftAndTypedKeyMaterial() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadedLlm()
+        model.updateLlmSettingsDraft { draft ->
+            draft.copy(providers = draft.providers.map { it.copy(apiKeyInput = "sk-typed") })
+        }
+        model.discardLlmSettingsDraft()
+        val ui = model.state.value.llmSettingsUi
+        assertNull(ui.draft)
+        assertNull(ui.frozen)
+        assertFalse(ui.conflict)
+        assertTrue(calls.none { it.method == "PUT" && it.path == "/v1/settings/llm" })
     }
 }

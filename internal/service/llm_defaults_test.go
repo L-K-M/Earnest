@@ -2,6 +2,7 @@ package service
 
 import (
 	"github.com/L-K-M/Earnest/internal/llm"
+	"github.com/L-K-M/Earnest/internal/store/storetest"
 	"testing"
 )
 
@@ -105,5 +106,41 @@ func TestEditionSnapshotKeepsProviderSpecificPrices(t *testing.T) {
 		if !ok || got.InputPer1M != want {
 			t.Fatalf("%s original price lost: %+v", provider, got)
 		}
+	}
+}
+
+func TestLLMScopedDefaultsPersist(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	in := llmSettingsTestInput()
+	in.Defaults = &llm.DefaultRoutes{Embedding: llm.TaskConfig{Provider: "local", Model: "text-embedding-qwen3-8b"}}
+	in.Tasks[0] = LLMTaskSettings{Task: "embed", Mode: "default"}
+	in.Models[0].Name = "text-embedding-qwen3-8b"
+	in.Models[0].Provider = "local"
+	in.Models[0].Dimensions = 4096
+	in.Models[0].SupportsCustomDimensions = true
+	in.Models[0].EmbeddingPer1M = "0.012500"
+	in.Models[0].InputPer1M = "0.000000"
+	in.Models[0].OutputPer1M = "0.000000"
+	if _, err := f.s.PutLLMSettings(t.Context(), f.a, in); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.s.GetLLMSettings(t.Context(), f.a)
+	if err != nil || got.Defaults == nil || got.Defaults.Embedding != in.Defaults.Embedding {
+		t.Fatalf("persisted defaults: %+v %v", got, err)
+	}
+	if len(got.Models) != 1 || got.Models[0] != in.Models[0] || got.Tasks[0].Mode != "default" || got.Tasks[0].Model != in.Models[0].Name {
+		t.Fatalf("persisted metadata and effective route: %+v", got)
+	}
+	for _, task := range got.Tasks[1:] {
+		if task.Provider != "" || task.Model != "" {
+			t.Fatal("saving a default enabled another feature")
+		}
+	}
+}
+
+func TestLLMBatchSnapshotDoesNotInventMissingPrices(t *testing.T) {
+	cfg := llm.Config{Tasks: map[llm.Task]llm.TaskConfig{llm.TaskEdition: {Provider: "test", Model: "unpriced"}}}
+	if _, found := llm.LookupModel(editionBatchConfig(cfg).Models, "test", "unpriced"); found {
+		t.Fatal("snapshot invented a free price for an unpriced route")
 	}
 }

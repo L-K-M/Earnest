@@ -42,7 +42,11 @@ func TestCheckLLMModelIsolation(t *testing.T) {
 	}))
 	defer provider.Close()
 	u, _ := url.Parse(provider.URL)
-	f.s.outbound, _ = outbound.New(outbound.Config{AllowHosts: []string{u.Host}, Spacing: time.Nanosecond})
+	client, err := outbound.New(outbound.Config{AllowHosts: []string{u.Host}, Spacing: time.Nanosecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.s.outbound = client
 	settings := llmSettingsTestInput()
 	settings.Providers[0].BaseURL = provider.URL + "/v1"
 	model := settings.Models[0]

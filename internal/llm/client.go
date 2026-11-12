@@ -143,7 +143,7 @@ func (c *Client) embedRaw(ctx context.Context, route Route, req EmbedRequest, in
 	if err := errors.Join(err, pricingErr, recordErr); err != nil {
 		return nil, err
 	}
-	if result == nil {
+	if result == nil || len(result.Vectors) != len(req.Texts) {
 		return nil, ErrInvalidOutput
 	}
 	return result, nil

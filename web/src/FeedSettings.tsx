@@ -224,7 +224,7 @@ function SubscribeForm({folders, busy, act, prefill, onPrefillApplied}: {folders
   </section>
 }
 
-function OPMLTools({busy, act}: {busy: boolean; act: Act}) {
+export function OPMLTools({busy, act}: {busy: boolean; act: Act}) {
   const [file, setFile] = useState<File | null>(null)
   const [report, setReport] = useState<OPMLResult[] | null>(null)
   const [error, setError] = useState('')
@@ -277,7 +277,7 @@ function OPMLTools({busy, act}: {busy: boolean; act: Act}) {
   </section>
 }
 
-function KeptImportTools({busy, act}: {busy: boolean; act: Act}) {
+export function KeptImportTools({busy, act}: {busy: boolean; act: Act}) {
   const [file, setFile] = useState<File | null>(null)
   const [text, setText] = useState('')
   const [subscribe, setSubscribe] = useState(false)

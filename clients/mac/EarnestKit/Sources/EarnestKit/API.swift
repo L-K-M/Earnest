@@ -412,6 +412,7 @@ public final class EarnestAPI: Sendable {
     public func updateLLMSettings(_ input: APILLMSettingsInput, previous: APILLMSettings? = nil) async throws -> APILLMSettings {
         try validateLLMSettings(input, previous: previous)
         let body = Components.Schemas.LLMSettingsInput(
+            defaults: try input.defaults.map { try adapt($0) },
             models: try input.models.map { try adapt($0) },
             opId: input.opID,
             providers: try input.providers.map { try adapt($0) },
@@ -419,6 +420,22 @@ public final class EarnestAPI: Sendable {
             tasks: try input.tasks.map { try adapt($0) }
         )
         return try await generated { try adapt(try await client.putLlmSettings(.init(body: .json(body))).ok.body.json) }
+    }
+    /// Checks one draft provider/model pair with a fixed sample. It persists
+    /// nothing and changes no route; `revision` must match the loaded
+    /// configuration. The returned geometry is an observation the caller may
+    /// apply to its draft only.
+    public func checkLLMModel(revision: Int64, provider: APILLMProviderInput, model: APILLMModelSettings,
+                              capability: APILLMModelCapability) async throws -> APILLMModelCheck {
+        let body = Components.Schemas.LLMModelCheckInput(
+            capability: .init(rawValue: capability.rawValue) ?? .chat,
+            model: try adapt(model),
+            provider: try adapt(provider),
+            revision: revision
+        )
+        return try await generated {
+            try adapt(try await client.checkLlmModel(.init(body: .json(body))).ok.body.json)
+        }
     }
     /// Previews the model catalogue one draft provider exposes. The call
     /// persists nothing, enables no task and sends no inference request; a

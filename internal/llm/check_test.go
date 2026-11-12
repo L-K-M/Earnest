@@ -49,12 +49,41 @@ func TestClientScopedModelPrice(t *testing.T) {
 }
 
 func TestResizeSupportDoesNotPermitLocalTruncation(t *testing.T) {
+	calls := 0
 	provider := &fakeProvider{name: "local", embed: func(EmbedRequest) (*EmbedResult, error) {
+		calls++
 		return &EmbedResult{Vectors: [][]float32{make([]float32, 4096)}}, nil
 	}}
 	client, _ := newTestClient(t, provider, nil, map[string]ModelInfo{"test-model": {Dimensions: 4096, SupportsCustomDimensions: true}})
 	_, _, err := client.Embed(context.Background(), TaskBlurb, EmbedRequest{Texts: []string{"example"}})
-	if !errors.Is(err, ErrDimensions) {
+	if !errors.Is(err, ErrDimensions) || calls != 1 {
 		t.Fatalf("silently truncated: %v", err)
+	}
+}
+
+func TestEmbedUsesProviderSideResize(t *testing.T) {
+	calls := 0
+	provider := &fakeProvider{name: "local", embed: func(req EmbedRequest) (*EmbedResult, error) {
+		calls++
+		if req.Dimensions != StorageDimensions {
+			t.Fatalf("requested %d dimensions", req.Dimensions)
+		}
+		return &EmbedResult{Vectors: [][]float32{make([]float32, req.Dimensions)}, Usage: Usage{Input: 10}}, nil
+	}}
+	client, spend := newTestClient(t, provider, nil, map[string]ModelInfo{ModelKey("local", "test-model"): {EmbeddingPer1M: 1000000, Dimensions: 4096, SupportsCustomDimensions: true}})
+	vectors, _, err := client.Embed(t.Context(), TaskBlurb, EmbedRequest{Texts: []string{"example"}})
+	if err != nil || calls != 1 || len(vectors) != 1 || len(spend.adds) != 1 || spend.adds[0] != 10 {
+		t.Fatalf("resize: calls=%d vectors=%d spend=%v err=%v", calls, len(vectors), spend.adds, err)
+	}
+}
+
+func TestEmbedRejectsIncompleteVectorBatch(t *testing.T) {
+	provider := &fakeProvider{name: "local", embed: func(EmbedRequest) (*EmbedResult, error) {
+		return &EmbedResult{}, nil
+	}}
+	client, _ := newTestClient(t, provider, nil, map[string]ModelInfo{"test-model": {}})
+	_, _, err := client.Embed(t.Context(), TaskBlurb, EmbedRequest{Texts: []string{"example"}})
+	if !errors.Is(err, ErrInvalidOutput) {
+		t.Fatalf("empty batch: %v", err)
 	}
 }

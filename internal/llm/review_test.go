@@ -61,7 +61,7 @@ func TestRejectedEmbeddingRecordsUsage(t *testing.T) {
 		return &EmbedResult{Vectors: [][]float32{{float32(math.NaN())}}, Usage: Usage{Input: 150}}, nil
 	}}
 	client, spend := newTestClient(t, provider, nil, map[string]ModelInfo{"test-model": {EmbeddingPer1M: 1000000}})
-	result, _, err := client.Embed(context.Background(), TaskBlurb, EmbedRequest{})
+	result, _, err := client.Embed(context.Background(), TaskBlurb, EmbedRequest{Texts: []string{"example"}})
 	if result != nil || !errors.Is(err, ErrDimensions) {
 		t.Fatalf("result=%v error=%v", result, err)
 	}

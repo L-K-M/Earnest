@@ -229,3 +229,13 @@ func TestVeniceDiscoveryRequestsAllTypes(t *testing.T) {
 		t.Fatalf("Venice discovery: %+v %v", models, err)
 	}
 }
+
+func TestVeniceMalformedOptionalPricing(t *testing.T) {
+	for _, price := range []string{`true`, `"unknown"`, `{}`, `[]`} {
+		raw := []byte(`{"data":[{"id":"chat","type":"text","model_spec":{"pricing":{"input":{"usd":` + price + `},"output":{"usd":0.5}}}}]}`)
+		models, _, err := decodeCatalogue(raw, KindOpenAI, true)
+		if err != nil || len(models) != 1 || models[0].InputPer1M != nil || models[0].OutputPer1M == nil || *models[0].OutputPer1M != "0.500000" {
+			t.Fatalf("invalid optional price must not discard catalogue: %+v %v", models, err)
+		}
+	}
+}

@@ -178,6 +178,79 @@ final class LLMHTTP: URLProtocol {
         #expect(full.inputPer1M == nil, "absent fields stay absent, not zero")
     }
 
+    @Test func discoveredModelDecodesCustomDimensionSupport() throws {
+        let model = try JSONDecoder().decode(APIDiscoveredModel.self, from: Data(
+            #"{"id":"e","name":"E","supports_custom_dimensions":true}"#.utf8))
+        #expect(model.supportsCustomDimensions == true)
+        #expect(model.dimensions == nil, "resizing support is not a native width")
+    }
+
+    @Test func defaultsModesAndScopedModelsRoundTrip() throws {
+        var input = validInput()
+        input.defaults = APILLMDefaults(
+            text: APILLMDefaultRoute(provider: "local", model: "local-chat"),
+            embedding: APILLMDefaultRoute(provider: "openai", model: "text-embedding-3-small"))
+        input.tasks[0].mode = .default
+        input.tasks[1].mode = .default
+        input.tasks[2].mode = .off
+        input.models[1].provider = "local"
+        input.models[1].supportsCustomDimensions = true
+        let fields = try JSONDecoder().decode(APIValue.self, from: JSONEncoder().encode(input))
+        #expect(fields["defaults"]?["text"]?["provider"]?.stringValue == "local")
+        #expect(fields["defaults"]?["embedding"]?["model"]?.stringValue == "text-embedding-3-small")
+        let tasks = try #require(fields["tasks"]?.arrayValue)
+        #expect(tasks[0]["mode"]?.stringValue == "default")
+        #expect(tasks[2]["mode"]?.stringValue == "off")
+        let models = try #require(fields["models"]?.arrayValue)
+        #expect(models[1]["provider"]?.stringValue == "local")
+        #expect(models[1]["supports_custom_dimensions"]?.boolValue == true)
+    }
+
+    @Test func legacySettingsDecodeWithoutNewFields() throws {
+        let data = Data(#"{"revision":1,"providers":[],"tasks":[{"task":"embed","provider":"p","model":"m"},{"task":"classify","provider":"","model":""},{"task":"blurb","provider":"","model":""},{"task":"summary","provider":"","model":""},{"task":"edition","provider":"","model":""},{"task":"compile_rule","provider":"","model":""},{"task":"ask","provider":"","model":""}],"models":[{"name":"m","input_per_1m":"0","output_per_1m":"0","embedding_per_1m":"0","dimensions":0,"truncatable":false}]}"#.utf8)
+        let settings = try JSONDecoder().decode(APILLMSettings.self, from: data)
+        #expect(settings.defaults == nil)
+        #expect(settings.tasks[0].mode == nil, "a missing mode is the legacy explicit route")
+        #expect(settings.models[0].provider.isEmpty)
+        #expect(settings.models[0].supportsCustomDimensions == false)
+    }
+
+    @Test func checkModelPostsRevisionProviderModelAndCapability() async throws {
+        let session = LLMHTTP.install([
+            .init(method: "POST", path: "/v1/settings/llm/models/check",
+                  body: #"{"compatible":true,"dimensions":4096,"supports_custom_dimensions":true,"message":"Embedding model checked successfully."}"#,
+                  checkBody: { body in
+                      let fields = try JSONDecoder().decode(APIValue.self, from: try #require(body))
+                      #expect(fields["revision"]?.int64Value == 7)
+                      #expect(fields["capability"]?.stringValue == "embedding")
+                      let provider = try #require(fields["provider"])
+                      #expect(provider["name"]?.stringValue == "openai")
+                      #expect(provider["base_url"]?.stringValue == "https://api.openai.com/v1")
+                      let model = try #require(fields["model"])
+                      #expect(model["name"]?.stringValue == "text-embedding-3-small")
+                      #expect(model["provider"]?.stringValue == "openai")
+                      #expect(model["supports_custom_dimensions"]?.boolValue == true)
+                  }),
+        ])
+        defer { session.invalidateAndCancel() }
+        let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: TestTokens(), session: session)
+        let provider = APILLMProviderInput(name: "openai", kind: .openai,
+                                           baseURL: "https://api.openai.com/v1",
+                                           monthlyLimitUSD: "0", timeoutSeconds: 60,
+                                           tokenField: .maxCompletionTokens)
+        let model = APILLMModelSettings(name: "text-embedding-3-small", provider: "openai",
+                                        supportsCustomDimensions: true,
+                                        inputPer1M: "0", outputPer1M: "0", embeddingPer1M: "0.02",
+                                        dimensions: 4096, truncatable: false)
+        let result = try await api.checkLLMModel(revision: 7, provider: provider,
+                                                 model: model, capability: .embedding)
+        #expect(result.compatible)
+        #expect(result.dimensions == 4096)
+        #expect(result.supportsCustomDimensions == true)
+        #expect(result.message.contains("checked"))
+        LLMHTTP.assertFinished()
+    }
+
     @Test func llmModelDiscoveryPostsRevisionAndOneProvider() async throws {
         let session = LLMHTTP.install([
             .init(method: "POST", path: "/v1/settings/llm/models",
@@ -353,6 +426,74 @@ final class LLMHTTP: URLProtocol {
         var over = validInput()
         over.models[0].dimensions = 65537
         #expect(throws: APILLMSettingsError.self) { try validateLLMSettings(over) }
+    }
+
+    @Test func validationRejectsCustomModeWithoutARoute() {
+        var input = validInput()
+        input.tasks[1].mode = .custom
+        input.tasks[1].provider = ""
+        input.tasks[1].model = ""
+        #expect(throws: APILLMSettingsError.self) { try validateLLMSettings(input) }
+    }
+
+    @Test func validationAcceptsWideModelsThatTruncateOrResize() throws {
+        var resized = validInput()
+        resized.models[0].dimensions = 4096
+        resized.models[0].truncatable = false
+        resized.models[0].supportsCustomDimensions = true
+        try validateLLMSettings(resized)
+
+        var truncated = validInput()
+        truncated.models[0].dimensions = 4096
+        truncated.models[0].truncatable = true
+        truncated.models[0].supportsCustomDimensions = false
+        try validateLLMSettings(truncated)
+    }
+
+    @Test func validationResolvesDefaultRoutesAndRejectsMissingOnes() throws {
+        var input = validInput()
+        input.defaults = APILLMDefaults(
+            text: APILLMDefaultRoute(provider: "local", model: "local-chat"),
+            embedding: APILLMDefaultRoute(provider: "openai", model: "text-embedding-3-small"))
+        input.tasks[0].mode = .default
+        input.tasks[1].mode = .default
+        try validateLLMSettings(input)
+
+        var noDefaults = input
+        noDefaults.defaults = nil
+        #expect(throws: APILLMSettingsError.self) { try validateLLMSettings(noDefaults) }
+
+        var unknownModel = input
+        unknownModel.defaults?.text.model = "not-configured"
+        #expect(throws: APILLMSettingsError.self) { try validateLLMSettings(unknownModel) }
+
+        var anthropicEmbed = input
+        anthropicEmbed.defaults?.embedding = APILLMDefaultRoute(provider: "local", model: "local-chat")
+        anthropicEmbed.providers[1].kind = .anthropic
+        #expect(throws: APILLMSettingsError.self) { try validateLLMSettings(anthropicEmbed) }
+    }
+
+    @Test func validationUsesProviderScopedModelIdentity() throws {
+        var input = validInput()
+        input.models[1].provider = "local"
+        try validateLLMSettings(input)
+
+        // The same name under a different provider is a different identity.
+        var sameName = validInput()
+        sameName.models.append(APILLMModelSettings(name: "text-embedding-3-small", provider: "local",
+                                                   inputPer1M: "0", outputPer1M: "0", embeddingPer1M: "0",
+                                                   dimensions: 0, truncatable: false))
+        try validateLLMSettings(sameName)
+
+        var duplicate = validInput()
+        duplicate.models.append(APILLMModelSettings(name: "text-embedding-3-small", provider: "",
+                                                   inputPer1M: "0", outputPer1M: "0", embeddingPer1M: "0",
+                                                   dimensions: 0, truncatable: false))
+        #expect(throws: APILLMSettingsError.self) { try validateLLMSettings(duplicate) }
+
+        var unknownProvider = validInput()
+        unknownProvider.models[1].provider = "missing"
+        #expect(throws: APILLMSettingsError.self) { try validateLLMSettings(unknownProvider) }
     }
 
     @Test func validationRejectsTooManyEntries() {
