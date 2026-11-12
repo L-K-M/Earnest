@@ -10,6 +10,8 @@ import ch.lkmc.earnest.core.Annotation
 import ch.lkmc.earnest.core.ApiException
 import ch.lkmc.earnest.core.EarnestApi
 import ch.lkmc.earnest.core.KeptImportReport
+import ch.lkmc.earnest.core.LlmDiscoveredModel
+import ch.lkmc.earnest.core.LlmModelsInput
 import ch.lkmc.earnest.core.LlmSettings
 import ch.lkmc.earnest.core.LlmSettingsInput
 import ch.lkmc.earnest.core.MAX_KEPT_IMPORT_BYTES
@@ -128,9 +130,27 @@ data class LlmSettingsUi(
     val loadedRevision: Long = 0,
     val conflict: Boolean = false,
     val frozen: FrozenLlmSettings? = null,
+    val discovery: LlmDiscoveryUi? = null,
     val epoch: Long = 0,
     val loadRequest: Long = 0,
     val saveRequest: Long = 0,
+)
+
+/**
+ * The model-catalogue preview's transient state. Results are memory-only and
+ * bound to the provider draft they were fetched with: [providerKey] is that
+ * draft's fingerprint at dispatch, so a provider edit, reload, save,
+ * sign-out or account change either drops the entry or stales the reply.
+ * [request] identifies the in-flight fetch that owns [loading]. The typed
+ * key never enters this state; only its fingerprint did, at dispatch.
+ */
+data class LlmDiscoveryUi(
+    val providerIndex: Int,
+    val providerKey: String,
+    val request: Long,
+    val loading: Boolean = false,
+    val models: List<LlmDiscoveredModel>? = null,
+    val error: String? = null,
 )
 
 /**
@@ -210,6 +230,7 @@ class AppViewModel internal constructor(
     private val llmEpoch = AtomicLong()
     private val llmLoadId = AtomicLong()
     private val llmSaveId = AtomicLong()
+    private val llmDiscoveryId = AtomicLong()
 
     internal val search = SearchModel(viewModelScope) {
         activeAccount("Still signing in; search did not run.")?.let { (cache, session) ->
@@ -789,6 +810,7 @@ class AppViewModel internal constructor(
                 loadRequest = request,
                 draft = if (reset) null else it.llmSettingsUi.draft,
                 frozen = if (reset) null else it.llmSettingsUi.frozen,
+                discovery = if (reset) null else it.llmSettingsUi.discovery,
             ))
         }
         viewModelScope.launch(readerDispatcher) {
@@ -829,7 +851,11 @@ class AppViewModel internal constructor(
         }
     }
 
-    /** Edits the draft; editing invalidates a frozen retry. A 409 conflict stays until Reload. */
+    /**
+     * Edits the draft; editing invalidates a frozen retry. A 409 conflict
+     * stays until Reload. Catalogue results bound to a provider draft are
+     * discarded when that provider's fingerprint changed.
+     */
     fun updateLlmSettingsDraft(transform: (LlmSettingsDraft) -> LlmSettingsDraft) {
         _state.update { current ->
             val ui = current.llmSettingsUi
@@ -842,8 +868,123 @@ class AppViewModel internal constructor(
                     frozen = if (edited) null else ui.frozen,
                     error = null,
                     success = false,
+                    discovery = ui.discovery?.takeIf { it.stillValidFor(next.providers) },
                 ),
             )
+        }
+    }
+
+    /** Catalogue results stay valid only while the keyed provider draft is unchanged. */
+    private fun LlmDiscoveryUi.stillValidFor(providers: List<LlmProviderDraft>): Boolean =
+        providers.getOrNull(providerIndex)?.discoveryFingerprint() == providerKey
+
+    /**
+     * The discovery entry still owns its provider's fingerprint: the request
+     * identity inside [publishLlm]'s owns-check plus this keeps a late reply
+     * from publishing against an edited or replaced draft.
+     */
+    private fun LlmSettingsUi.discoveryCurrent(): Boolean {
+        val entry = discovery ?: return false
+        return entry.stillValidFor((draft ?: loaded?.toDraft())?.providers.orEmpty())
+    }
+
+    /**
+     * Fetches one draft provider's model catalogue through the admin
+     * no-store preview. The draft provider goes verbatim; including an
+     * unsaved replacement key; under the same epoch and session guards as
+     * every LLM request. Results land in [LlmSettingsUi.discovery] keyed to
+     * the provider's fingerprint; a provider edit, reload, sign-out or
+     * account change drops them. A 404 means the server predates discovery
+     * and manual entry remains the fallback.
+     */
+    fun fetchLlmModels(providerIndex: Int) {
+        val intent = _state.value
+        val ui = intent.llmSettingsUi
+        val expected = ui.epoch
+        val (cache, session) = activeAccount("Still signing in; model discovery did not run.") ?: return
+        val loaded = ui.loaded
+        val draft = ui.draft ?: loaded?.toDraft()
+        val provider = draft?.providers?.getOrNull(providerIndex)
+        if (loaded == null || provider == null) {
+            publishLlm(expected, session, cache) {
+                it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = "Load the LLM services settings before fetching models."))
+            }
+            return
+        }
+        val request = llmDiscoveryId.incrementAndGet()
+        publishLlm(expected, session, cache) {
+            it.copy(
+                llmSettingsUi = it.llmSettingsUi.copy(
+                    discovery = LlmDiscoveryUi(providerIndex, provider.discoveryFingerprint(), request, loading = true),
+                ),
+            )
+        }
+        viewModelScope.launch(readerDispatcher) {
+            if (!discoveryLlmOwner(session, cache, expected, request)) return@launch
+            try {
+                val input = LlmModelsInput(loaded.revision, provider.toInput())
+                val results = apiFactory(session).discoverLlmModels(input, loaded)
+                publishLlm(expected, session, cache, { it.discovery?.request == request && it.discoveryCurrent() }) { current ->
+                    val entry = current.llmSettingsUi.discovery
+                    current.copy(
+                        llmSettingsUi = current.llmSettingsUi.copy(
+                            discovery = entry?.copy(loading = false, models = results.models.orEmpty(), error = null),
+                        ),
+                    )
+                }
+            } catch (error: ApiException) {
+                if (!discoveryLlmOwner(session, cache, expected, request)) return@launch
+                if (error.isUnauthorized && sessions.current() == session) {
+                    expireSessionIfCurrent(session)
+                    return@launch
+                }
+                val message = when {
+                    error.status == 404 -> "This server does not support model discovery; add models manually."
+                    error.isConflict -> "The saved settings changed on the server. Reload them, then fetch again."
+                    else -> failureText("Could not fetch the model catalogue", error)
+                }
+                publishLlm(expected, session, cache, { it.discovery?.request == request }) { current ->
+                    current.copy(
+                        llmSettingsUi = current.llmSettingsUi.copy(
+                            discovery = current.llmSettingsUi.discovery?.copy(loading = false, error = message),
+                        ),
+                    )
+                }
+            } catch (error: IllegalArgumentException) {
+                // Deterministic client-side validation: report, never retry.
+                if (!discoveryLlmOwner(session, cache, expected, request)) return@launch
+                publishLlm(expected, session, cache, { it.discovery?.request == request }) { current ->
+                    current.copy(
+                        llmSettingsUi = current.llmSettingsUi.copy(
+                            discovery = current.llmSettingsUi.discovery?.copy(
+                                loading = false,
+                                error = error.message ?: "The provider is not valid.",
+                            ),
+                        ),
+                    )
+                }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (!discoveryLlmOwner(session, cache, expected, request)) return@launch
+                publishLlm(expected, session, cache, { it.discovery?.request == request }) { current ->
+                    current.copy(
+                        llmSettingsUi = current.llmSettingsUi.copy(
+                            discovery = current.llmSettingsUi.discovery?.copy(
+                                loading = false,
+                                error = failureText("Could not fetch the model catalogue", error),
+                            ),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    /** Dismisses the catalogue; a late reply finds no owning request and is dropped. */
+    fun dismissLlmDiscovery() {
+        _state.update { current ->
+            current.copy(llmSettingsUi = current.llmSettingsUi.copy(discovery = null))
         }
     }
 
@@ -956,6 +1097,10 @@ class AppViewModel internal constructor(
                             draft = editedDraft,
                             conflict = editedDraft != null,
                             frozen = null,
+                            // The saved provider's fingerprint may have
+                            // changed (a typed key is consumed), which
+                            // discards the catalogue bound to the old draft.
+                            discovery = ui.discovery?.takeIf { it.stillValidFor((editedDraft ?: updated.toDraft()).providers) },
                         ),
                     )
                 }
@@ -1615,6 +1760,10 @@ class AppViewModel internal constructor(
     /** [llmCurrent] plus ownership of the in-flight LLM save request. */
     private fun saveLlmOwner(session: AuthenticatedSession, cache: SessionCache, expected: Long, request: Long): Boolean =
         llmCurrent(session, cache, expected) && _state.value.llmSettingsUi.saveRequest == request
+
+    /** [llmCurrent] plus ownership of the in-flight catalogue request. */
+    private fun discoveryLlmOwner(session: AuthenticatedSession, cache: SessionCache, expected: Long, request: Long): Boolean =
+        llmCurrent(session, cache, expected) && _state.value.llmSettingsUi.discovery?.request == request
 
     /**
      * Applies [transform] only while the captured epoch and account still own
