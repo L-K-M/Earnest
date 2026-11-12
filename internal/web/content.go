@@ -253,7 +253,29 @@ func (c *Content) notice(w http.ResponseWriter, r *http.Request, status int, hea
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'"+directive+"; base-uri 'none'; form-action 'none'")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
-	_, _ = io.WriteString(w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font:1rem/1.6 system-ui,sans-serif;color:#202020;background:#fff;max-width:34ch;margin:4rem auto;padding:0 1rem}h1{font-size:1.2rem}</style>`+script+`</head><body><h1>`+html.EscapeString(heading)+`</h1><p>`+html.EscapeString(text)+`</p></body></html>`)
+	palette := articlePalette(r.URL.Query().Get("theme"))
+	_, _ = io.WriteString(w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>`+palette.canvasCSS()+`body{font:1rem/1.6 system-ui,sans-serif;max-width:34ch;margin:4rem auto;padding:0 1rem}h1{font-size:1.2rem}</style>`+script+`</head><body><h1>`+html.EscapeString(heading)+`</h1><p>`+html.EscapeString(text)+`</p></body></html>`)
+}
+
+type contentPalette struct{ scheme, bg, fg, muted, codeBG string }
+
+func articlePalette(theme string) contentPalette {
+	switch theme {
+	case "dark":
+		return contentPalette{"dark", "#242424", "#eee", "#a3a09a", "#2e2e2c"}
+	case "black":
+		return contentPalette{"dark", "#000", "#fff", "#9a9a9a", "#141414"}
+	case "eink":
+		return contentPalette{"light", "#fff", "#000", "#000", "#fff"}
+	default:
+		return contentPalette{"light", "#fff", "#202020", "#6b675e", "#f3f1ea"}
+	}
+}
+
+func (p contentPalette) canvasCSS() string {
+	// Theme the document canvas and browser controls, not only the body box.
+	// Error notices use this too, so an expired article never turns white.
+	return fmt.Sprintf("html{color-scheme:%s;background:%s;color:%s}", p.scheme, p.bg, p.fg)
 }
 
 // ServeHTTP serves a signed article without depending on browser cookies.
@@ -316,16 +338,8 @@ func (c *Content) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// Borders, captions and code blocks need theme-tuned colours so they do
 	// not fall back to browser defaults that clash with the reading theme.
-	bg, fg, muted, codeBg := "#fff", "#202020", "#6b675e", "#f3f1ea"
-	switch r.URL.Query().Get("theme") {
-	case "dark":
-		bg, fg, muted, codeBg = "#242424", "#eee", "#a3a09a", "#2e2e2c"
-	case "black":
-		bg, fg, muted, codeBg = "#000", "#fff", "#9a9a9a", "#141414"
-	case "eink":
-		bg, fg, muted, codeBg = "#fff", "#000", "#000", "#fff"
-	}
-	css := fmt.Sprintf("body{max-width:%dch;margin:2rem auto;padding:0 1rem;font:1.1rem/1.65 %s;background:%s;color:%s;%soverflow-wrap:anywhere}"+
+	palette := articlePalette(r.URL.Query().Get("theme"))
+	css := palette.canvasCSS() + fmt.Sprintf("body{max-width:%dch;margin:2rem auto;padding:0 1rem;font:1.1rem/1.65 %s;background:%s;color:%s;%soverflow-wrap:anywhere}"+
 		"h1,h2,h3,h4{line-height:1.25;margin-top:1.6em;margin-bottom:.5em}h1{font-size:1.6em}h2{font-size:1.35em}h3{font-size:1.15em}h4{font-size:1em}"+
 		"p,ul,ol,dl,blockquote,figure,table,pre{margin:.9em 0}"+
 		"img{max-width:100%%;height:auto}"+
@@ -339,7 +353,7 @@ func (c *Content) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"table{border-collapse:collapse;display:block;overflow-x:auto;max-width:100%%}"+
 		"th,td{border:1px solid %s;padding:.35em .6em;text-align:start;vertical-align:top}"+
 		"hr{border:0;border-top:1px solid %s;margin:2em 0}",
-		measure, font, bg, fg, spacing, codeBg, muted, muted, muted, muted)
+		measure, font, palette.bg, palette.fg, spacing, palette.codeBG, palette.muted, palette.muted, palette.muted, palette.muted)
 	hash := sha256.Sum256([]byte(css))
 	directive, script := c.framePolicy(frameNonce(r))
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src "+c.signer.origin+"; style-src 'sha256-"+base64.StdEncoding.EncodeToString(hash[:])+"'"+directive+"; base-uri 'none'; form-action 'none'")

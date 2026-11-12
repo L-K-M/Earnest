@@ -307,3 +307,107 @@ func TestInitialCohortExtraction(t *testing.T) {
 		t.Fatalf("tombstone resurrected: %d %v", live, err)
 	}
 }
+
+// Seq stays the cross-batch first-seen order: a backdated article arriving in
+// a later fetch gets a later seq than an earlier fetch's newer article, even
+// though its batch sorts oldest to newest.
+func TestFetchBatchOrderKeepsCrossBatchSeq(t *testing.T) {
+	db := storetest.NewTemplate(t).New(t)
+	ctx := context.Background()
+	doc := `<?xml version="1.0"?><rss version="2.0"><channel><title>News</title>` +
+		`<item><guid>first</guid><title>First</title><pubDate>Tue, 02 Feb 2021 00:00:00 GMT</pubDate><description>1</description></item>` +
+		`</channel></rss>`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, doc)
+	}))
+	defer server.Close()
+	host, port := serverHostPort(t, server)
+	f, _ := integrationFetcher(t, db, testClient(t, host), port)
+	feedID := insertFeed(t, db, server.URL)
+	fetch := func() {
+		t.Helper()
+		if err := f.Fetch(ctx, service.FeedToFetch{FeedID: feedID, URL: server.URL}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fetch()
+	// The second fetch lists its newest item first, but one of them is
+	// backdated: within the batch it must still sort oldest to newest.
+	doc = `<?xml version="1.0"?><rss version="2.0"><channel><title>News</title>` +
+		`<item><guid>newer</guid><title>Newer</title><pubDate>Wed, 03 Feb 2021 00:00:00 GMT</pubDate><description>2</description></item>` +
+		`<item><guid>backdated</guid><title>Backdated</title><pubDate>Mon, 01 Feb 2021 00:00:00 GMT</pubDate><description>3</description></item>` +
+		`</channel></rss>`
+	fetch()
+	rows, err := db.Pool().Query(ctx, "SELECT title FROM entries WHERE feed_id=$1 ORDER BY seq", feedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var title string
+		if err := rows.Scan(&title); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, title)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if want := "First,Backdated,Newer"; strings.Join(got, ",") != want {
+		t.Fatalf("seq order = %q, want %q", strings.Join(got, ","), want)
+	}
+}
+
+// The batch order the fetcher reports must become the entries' seq order, so
+// a newest-first page (ORDER BY seq DESC) shows the newest article first.
+func TestFetchBatchOrderPersistsAsSeq(t *testing.T) {
+	db := storetest.NewTemplate(t).New(t)
+	ctx := context.Background()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `<?xml version="1.0"?><rss version="2.0"><channel><title>News</title>`+
+			`<item><guid>newest</guid><title>Newest</title><pubDate>Wed, 03 Feb 2021 00:00:00 GMT</pubDate><description>n</description></item>`+
+			`<item><guid>middle</guid><title>Middle</title><pubDate>Tue, 02 Feb 2021 00:00:00 GMT</pubDate><description>m</description></item>`+
+			`<item><guid>oldest</guid><title>Oldest</title><pubDate>Mon, 01 Feb 2021 00:00:00 GMT</pubDate><description>o</description></item>`+
+			`</channel></rss>`)
+	}))
+	defer server.Close()
+	host, port := serverHostPort(t, server)
+	f, _ := integrationFetcher(t, db, testClient(t, host), port)
+	feedID := insertFeed(t, db, server.URL)
+	if err := f.Fetch(ctx, service.FeedToFetch{FeedID: feedID, URL: server.URL}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := db.Pool().Query(ctx, "SELECT title,seq FROM entries WHERE feed_id=$1 ORDER BY seq", feedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	type row struct {
+		title string
+		seq   int64
+	}
+	var got []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.title, &r.seq); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Oldest", "Middle", "Newest"}
+	if len(got) != len(want) {
+		t.Fatalf("entries = %+v, want %d", got, len(want))
+	}
+	for i, title := range want {
+		if got[i].title != title {
+			t.Fatalf("seq %d holds %q, want %q (order %+v)", got[i].seq, got[i].title, title, got)
+		}
+		if i > 0 && got[i].seq <= got[i-1].seq {
+			t.Fatalf("seq not increasing with publication date: %+v", got)
+		}
+	}
+}

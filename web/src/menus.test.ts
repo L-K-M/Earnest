@@ -10,7 +10,7 @@ const subscriptions = [
 ] as Subscription[]
 
 function services(overrides: Partial<ListMenuServices> = {}): ListMenuServices {
-  return {newest: () => 120, markRange: vi.fn().mockResolvedValue(undefined), confirm: vi.fn(() => true), notify: vi.fn(), go: vi.fn(), openTab: vi.fn(), refreshFeed: vi.fn().mockResolvedValue(undefined), ...overrides}
+  return {newest: () => 120, markRange: vi.fn().mockResolvedValue(undefined), confirm: vi.fn(() => true), notify: vi.fn(), go: vi.fn(), openTab: vi.fn(), refreshFeed: vi.fn().mockResolvedValue(undefined), renameFolder: vi.fn(), newSubfolder: vi.fn(), addFeed: vi.fn(), ...overrides}
 }
 const ids = (items: MenuItem[]) => items.map(item => item === SEPARATOR ? '-' : item.id)
 const item = (items: MenuItem[], id: string) => items.find((value): value is MenuAction => value !== SEPARATOR && value.id === id)!
@@ -43,7 +43,26 @@ describe('listMenu', () => {
     await item(listMenu({kind: 'today', title: 'Today'}, subscriptions, deps), 'mark-all-read').run()
     await item(listMenu({kind: 'folder', id: 3, title: 'News'}, subscriptions, deps), 'mark-all-read').run()
     expect(vi.mocked(deps.markRange).mock.calls).toEqual([[{kind: 'subscriptions', ids: [8, 10]}, 120], [{kind: 'folder', ids: [3]}, 120]])
-    expect(ids(listMenu({kind: 'folder', id: 3, title: 'News'}, subscriptions, deps))).toEqual(['mark-all-read', '-', 'open-tab'])
+  })
+
+  it('offers folder management only for a folder', async () => {
+    const deps = services()
+    const folder = listMenu({kind: 'folder', id: 3, title: 'News'}, subscriptions, deps)
+    expect(ids(folder)).toEqual(['mark-all-read', '-', 'rename-folder', 'add-feed-in-folder', 'new-subfolder', 'open-tab'])
+    await item(folder, 'rename-folder').run()
+    await item(folder, 'add-feed-in-folder').run()
+    await item(folder, 'new-subfolder').run()
+    expect(deps.renameFolder).toHaveBeenCalledWith({id: 3, title: 'News'})
+    expect(deps.addFeed).toHaveBeenCalledWith({id: 3, title: 'News'})
+    expect(deps.newSubfolder).toHaveBeenCalledWith({id: 3, title: 'News'})
+
+    const feed = ids(listMenu({kind: 'feed', id: 8, title: 'Rust'}, subscriptions, deps))
+    const today = ids(listMenu({kind: 'today', title: 'Today'}, subscriptions, deps))
+    for (const menu of [feed, today]) {
+      expect(menu).not.toContain('rename-folder')
+      expect(menu).not.toContain('add-feed-in-folder')
+      expect(menu).not.toContain('new-subfolder')
+    }
   })
 
   it('cannot mark before this device knows any article', () => {

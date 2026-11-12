@@ -100,6 +100,12 @@ type clusterGroup struct {
 	AlsoIn    int   `json:"also_in"`
 }
 
+type folderCreateBody struct {
+	Name     string `json:"name"`
+	ParentID int64  `json:"parent_id,omitempty" minimum:"0"`
+	OpID     string `json:"op_id"`
+}
+
 type folderPatchBody struct {
 	Name     *string `json:"name,omitempty"`
 	ParentID *int64  `json:"parent_id,omitempty" minimum:"0"`
@@ -141,7 +147,10 @@ func (s *server) readerRoutes() {
 		return service.FeedHealth{}, service.ErrNotFound
 	})
 	route(s, http.MethodGet, "/v1/folders", "list-folders", func(ctx context.Context, in *empty) ([]service.Folder, error) { return s.svc.Folders(ctx, actor(ctx)) })
-	route(s, http.MethodPost, "/v1/folders", "create-folder", func(ctx context.Context, in *bodyInput[nameBody]) (service.Folder, error) {
+	route(s, http.MethodPost, "/v1/folders", "create-folder", func(ctx context.Context, in *bodyInput[folderCreateBody]) (service.Folder, error) {
+		if in.Body.ParentID != 0 {
+			return s.svc.CreateSubfolder(ctx, actor(ctx), in.Body.ParentID, in.Body.Name, in.Body.OpID)
+		}
 		return s.svc.CreateFolder(ctx, actor(ctx), in.Body.Name, in.Body.OpID)
 	})
 	route(s, http.MethodPatch, "/v1/folders/{id}", "rename-folder", func(ctx context.Context, in *idBody[folderPatchBody]) (service.Folder, error) {

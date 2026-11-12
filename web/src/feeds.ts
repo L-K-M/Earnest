@@ -191,6 +191,10 @@ export const refreshSubscription = (id: number, opID = newOp()) => request(`/v1/
 export const createFolder = (name: string) => request<Folder>('/v1/folders', {method: 'POST', body: JSON.stringify({name, op_id: newOp()})})
 export const renameFolder = (id: number, name: string) => request<Folder>(`/v1/folders/${id}`, {method: 'PATCH', body: JSON.stringify({name, op_id: newOp()})})
 export const moveFolder = (id: number, parentID: number) => request<Folder>(`/v1/folders/${id}`, {method: 'PATCH', body: JSON.stringify({parent_id: parentID, op_id: newOp()})})
+
+// Create inside the parent atomically, so a failed request cannot strand a
+// newly created folder at the top level or create duplicates on a move retry.
+export const createSubfolder = (name: string, parentID: number) => request<Folder>('/v1/folders', {method: 'POST', body: JSON.stringify({name, parent_id: parentID, op_id: newOp()})})
 export const deleteFolder = (id: number, opID = newOp()) => request(`/v1/folders/${id}?op_id=${encodeURIComponent(opID)}`, {method: 'DELETE'})
 
 export const createMute = (kind: 'keyword' | 'author', value: string) => request<Mute>('/v1/mutes', {method: 'POST', body: JSON.stringify({kind, value, op_id: newOp()})})

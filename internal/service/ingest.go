@@ -94,7 +94,10 @@ type IngestItem struct {
 }
 
 // FetchOutcome reports one attempt. On FetchFailed, Items is empty and
-// ErrorClass is an outbound or parse class shown in feed health.
+// ErrorClass is an outbound or parse class shown in feed health. Items are
+// ordered oldest to newest by usable publisher timestamp within the fetch, so
+// RecordFetch reserves seq in that order; entries.seq remains the
+// cross-batch first-seen order.
 type FetchOutcome struct {
 	FeedID               int64
 	AttemptedAt          time.Time

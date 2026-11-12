@@ -13,6 +13,11 @@ function message(error: unknown, fallback: string): string {
 
 type Act = (work: () => Promise<unknown>, note?: string) => Promise<boolean>
 
+// A folder chosen from its context menu, which the subscribe form adopts as
+// its folder. The token changes on every menu action so an already-mounted
+// form applies a new preselection instead of only reading it on first mount.
+export type FeedPrefill = {folderID: number; token: number}
+
 const URL_ERROR = 'That does not look like a feed address. Give the full URL, starting with https://.'
 const DRAFT_KEY = 'earnest.subscribe.draft'
 type SubscribeDraft = {url: string; title: string; folderID: number; cadence: string; extract: string}
@@ -39,7 +44,7 @@ function readDraft(): SubscribeDraft {
   }
 }
 
-export function Feeds({onChanged}: {onChanged: () => void}) {
+export function Feeds({onChanged, prefill = null, onPrefillApplied}: {onChanged: () => void; prefill?: FeedPrefill | null; onPrefillApplied?: () => void}) {
   const [subs, setSubs] = useState<Subscription[] | null>(null)
   const [folders, setFolders] = useState<Folder[]>([])
   const [mutes, setMutes] = useState<Mute[]>([])
@@ -92,7 +97,7 @@ export function Feeds({onChanged}: {onChanged: () => void}) {
   return <div className="feeds">
     {actionError && <p role="alert">{actionError}</p>}
     {notice && <p role="status">{notice}</p>}
-    <SubscribeForm folders={folders} busy={busy} act={act} />
+    <SubscribeForm folders={folders} busy={busy} act={act} prefill={prefill} onPrefillApplied={onPrefillApplied} />
     <OPMLTools busy={busy} act={act} />
     <KeptImportTools busy={busy} act={act} />
     <FolderSection folders={folders} busy={busy} act={act} />
@@ -101,11 +106,11 @@ export function Feeds({onChanged}: {onChanged: () => void}) {
   </div>
 }
 
-function SubscribeForm({folders, busy, act}: {folders: Folder[]; busy: boolean; act: Act}) {
+function SubscribeForm({folders, busy, act, prefill, onPrefillApplied}: {folders: Folder[]; busy: boolean; act: Act; prefill?: FeedPrefill | null; onPrefillApplied?: () => void}) {
   const [draft] = useState(readDraft)
   const [url, setURL] = useState(draft.url)
   const [title, setTitle] = useState(draft.title)
-  const [folderID, setFolderID] = useState(draft.folderID)
+  const [folderID, setFolderID] = useState(prefill?.folderID ?? draft.folderID)
   const [cadence, setCadence] = useState(draft.cadence)
   const [extract, setExtract] = useState(draft.extract)
   const [isPrivate, setPrivate] = useState(false)
@@ -122,6 +127,19 @@ function SubscribeForm({folders, busy, act}: {folders: Folder[]; busy: boolean; 
       sessionStorage.setItem(DRAFT_KEY, JSON.stringify({url, title, folderID, cadence, extract}))
     } catch { /* Storage can be full or disabled; the form still works. */ }
   }, [url, title, folderID, cadence, extract])
+
+  // A folder context menu can preselect this form after it has mounted. The
+  // choice is adjusted during render, not in an effect, so the draft save
+  // below cannot write the old folder back before the preselection lands.
+  const [appliedPrefill, setAppliedPrefill] = useState(prefill)
+  if (prefill && prefill !== appliedPrefill) {
+    setAppliedPrefill(prefill)
+    setFolderID(prefill.folderID)
+  }
+
+  // This is a one-shot menu intent. Later visits restore the current draft,
+  // rather than applying an old folder choice over the reader's newer edits.
+  useEffect(() => {if (prefill) onPrefillApplied?.()}, [prefill, onPrefillApplied])
 
   // A restored draft may name a folder deleted since; it falls back to none.
   const folderChoice = folders.some(folder => folder.id === folderID) ? folderID : 0

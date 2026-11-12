@@ -19,6 +19,8 @@ export function newestListed(lists: unknown[]): number {
   return newest
 }
 
+export type FolderMenuTarget = {id: number; title: string}
+
 export type ListMenuServices = {
   // The newest article this device knows for the list, read when the item
   // runs: the boundary "Mark all as read" marks through.
@@ -29,6 +31,9 @@ export type ListMenuServices = {
   go: (to: string) => void
   openTab: (href: string) => void
   refreshFeed: (id: number) => Promise<void>
+  renameFolder: (folder: FolderMenuTarget) => void
+  newSubfolder: (parent: FolderMenuTarget) => void
+  addFeed: (folder: FolderMenuTarget) => void
 }
 
 // Actions for Today, a feed or a folder in the sidebar. "Mark all as read"
@@ -37,6 +42,7 @@ export type ListMenuServices = {
 export function listMenu(view: View, subscriptions: Subscription[], services: ListMenuServices): MenuItem[] {
   const scope = viewScope(view, subscriptions)
   const feedID = view.kind === 'feed' ? view.id : undefined
+  const folder = view.kind === 'folder' && view.id !== undefined ? {id: view.id, title: view.title} : undefined
   return tidy([
     scope && {id: 'mark-all-read', label: 'Mark all as read', icon: 'check', disabled: services.newest() <= 0, run: async () => {
       if (!services.confirm(`Mark every article in ${view.title} read? Articles that arrive later stay unread.`)) return
@@ -44,6 +50,9 @@ export function listMenu(view: View, subscriptions: Subscription[], services: Li
       services.notify(`Marked everything in ${view.title} read.`)
     }},
     SEPARATOR,
+    folder !== undefined && {id: 'rename-folder', label: 'Rename folder', icon: 'folder', run: () => services.renameFolder({id: folder.id, title: folder.title})},
+    folder !== undefined && {id: 'add-feed-in-folder', label: 'Add feed inside this folder', icon: 'feeds', run: () => services.addFeed({id: folder.id, title: folder.title})},
+    folder !== undefined && {id: 'new-subfolder', label: 'New subfolder', icon: 'folder', run: () => services.newSubfolder({id: folder.id, title: folder.title})},
     feedID !== undefined && {id: 'refresh-feed', label: 'Refresh feed', icon: 'refresh', run: async () => {
       await services.refreshFeed(feedID)
       services.notify('Refresh requested.')

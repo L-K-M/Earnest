@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Send articles from the web reader to Karakeep or Hister, with encrypted
+  server-side tokens, a default Karakeep list and a default Hister label in
+  Settings. See `docs/article-integrations.md`.
+- Web folder context menus offer Rename folder, Add feed and New subfolder.
 - The Android reader finds text in an article with match counts and
   steps, zooms its text from 80% to 200% with a device-local setting,
   and says so when it shows a cached copy of an article.
@@ -93,6 +97,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- New entries fetched together receive sequences in publisher-date order,
+  so newest-first lists no longer reverse a newest-first feed batch.
+- The web reader hides the iframe's blank document between articles, and
+  article error pages use the reading theme rather than a white background.
+- Web article titles open the original article in a new tab.
 - Feed cache lifetimes now follow observed posting cadence instead of allowing
   a publisher's long `max-age` to stall busy feeds for days. Cadence survives
   unchanged responses and restarts; cache hints are capped at twice the
