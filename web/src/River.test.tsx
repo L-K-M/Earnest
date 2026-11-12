@@ -21,13 +21,14 @@ function withShelf(entry: Entry, value: 'none' | 'later' | 'done'): Entry {
   return {...entry, state: {...entry.state, shelf: {...entry.state.shelf, value}}}
 }
 afterEach(() => {cleanup();vi.clearAllMocks();vi.restoreAllMocks();vi.unstubAllGlobals();virtualItems.items=[0,1];observers.length=0;observed.length=0})
-function mount(shortcuts=true, blurbStatus="disabled", selected=entries[0], rows=entries, subscriptions: Subscription[]=[]) {
+function mount(shortcuts=true, blurbStatus="disabled", selected=entries[0], rows=entries, subscriptions: Subscription[]=[], reading=false) {
   vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {blurb:blurbStatus} : path.startsWith('/v1/positions') ? {seq:0} : {entries:rows})
   const act = vi.fn().mockResolvedValue(undefined)
   const actions: ReaderActions = {act,state:entry=>entry.state}
   const onSelect=vi.fn()
-  const view=render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'today',title:'Today'}} subscriptions={subscriptions} actions={actions} selected={selected} onSelect={onSelect} onOpen={vi.fn()} shortcuts={shortcuts} counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>)
-  return {act,actions,onSelect,container:view.container}
+  const onOpen=vi.fn()
+  const view=render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'today',title:'Today'}} subscriptions={subscriptions} actions={actions} selected={selected} onSelect={onSelect} onOpen={onOpen} reading={reading} shortcuts={shortcuts} counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>)
+  return {act,actions,onSelect,onOpen,container:view.container}
 }
 function scroller() { return screen.getByLabelText('Article list') }
 function scrollPast(id: number) {
@@ -51,15 +52,16 @@ describe('river interactions', () => {
     await new Promise(resolve => window.setTimeout(resolve, 700))
     expect(act).not.toHaveBeenCalled()
   })
-  it('marks a rendered row once it leaves through the top edge', async () => {
+  it('keeps scrolled-past rows unread without advancing the resume position', async () => {
     const {act}=mount()
     await screen.findByText('Article 1')
-    scrollPast(1)
-    await waitFor(()=>expect(act).toHaveBeenCalledWith(entries[0],'seen','seen','passive'),{timeout:1500})
-    expect(act).toHaveBeenCalledTimes(1)
+    scrollPast(2)
+    await new Promise(resolve => window.setTimeout(resolve, 700))
+    expect(act).not.toHaveBeenCalled()
+    expect(positionWrites()).toEqual([])
     expect(screen.queryByText('Article 3')).toBeNull()
   })
-  it('does not mark a row seen while it is still visible below the Today panel', async () => {
+  it('keeps rows unread before and after scrolling past the Today panel', async () => {
     // The agent panel pushes the list down, so the list starts 40px into the
     // scroller. The virtualizer must report rows in scroller coordinates.
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
@@ -73,12 +75,12 @@ describe('river interactions', () => {
     await new Promise(resolve => window.setTimeout(resolve, 700))
     expect(act).not.toHaveBeenCalled()
     scrollPast(2)
-    await waitFor(()=>expect(act).toHaveBeenCalledWith(entries[0],'seen','seen','passive'),{timeout:1500})
+    await new Promise(resolve => window.setTimeout(resolve, 700))
+    expect(act).not.toHaveBeenCalled()
   })
-  it('drops a queued passive seen when the reader marks the row unread', async () => {
+  it('drops a queued open read when the reader marks the row unread', async () => {
     const {act}=mount()
-    await screen.findByText('Article 1')
-    scrollPast(1)
+    fireEvent.click(await screen.findByText('Article 1'))
     fireEvent.keyDown(document.body,{key:'m'})
     expect(act).toHaveBeenCalledWith(entries[0],'seen','unseen')
     await new Promise(resolve => window.setTimeout(resolve, 1300))
@@ -92,7 +94,7 @@ describe('river interactions', () => {
     vi.mocked(request).mockImplementation(async path => path === '/v1/pipeline' ? {blurb:'disabled'} : path.startsWith('/v1/positions') ? {seq:0} : {entries:rows})
     render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><River view={{kind:'feed',id:1,title:'Rust'}} subscriptions={[]} actions={{act,state:entry=>entry.state}} selected={null} onSelect={vi.fn()} onOpen={vi.fn()} onMenu={onMenu} shortcuts counts={false} summary={{seen:0,done:0,later:0,kept:0}} /></QueryClientProvider>)
     const row = (await screen.findByText('Article 1')).closest('a')!
-    scrollPast(1)
+    fireEvent.click(row)
     fireEvent.contextMenu(row)
     expect(onMenu).toHaveBeenCalledWith(expect.anything(), read, expect.any(Array))
     const items = onMenu.mock.calls[0][2] as {id: string; label: string; run: () => Promise<void>}[]
@@ -176,28 +178,64 @@ describe('river interactions', () => {
     fireEvent.click(screen.getByText('Article 1'))
     await waitFor(() => expect(passive()).toHaveLength(2), {timeout: 1500})
   })
-  it('marks the row the selection leaves when j moves down', async () => {
-    const {act,onSelect}=mount()
+  const navigation = [
+    {key:'j', from:0, to:1}, {key:'k', from:1, to:0},
+    {key:'ArrowDown', from:0, to:1}, {key:'ArrowUp', from:1, to:0},
+    {key:'Home', from:1, to:0}, {key:'End', from:0, to:2},
+  ]
+  it.each(navigation)('keeps both rows unread when $key only changes the selection', async ({key, from, to}) => {
+    const {act,onSelect,onOpen}=mount(true,'disabled',entries[from])
     await screen.findByText('Article 1')
-    fireEvent.keyDown(document.body,{key:'j'})
-    expect(onSelect).toHaveBeenCalledWith(entries[1])
-    await waitFor(()=>expect(act).toHaveBeenCalledWith(entries[0],'seen','seen','passive'),{timeout:1500})
+    fireEvent.keyDown(scroller(),{key})
+    expect(onSelect).toHaveBeenCalledWith(entries[to])
+    expect(onOpen).not.toHaveBeenCalled()
+    await new Promise(resolve => window.setTimeout(resolve, 700))
+    expect(act).not.toHaveBeenCalled()
+    expect(positionWrites()).toEqual([])
   })
-  it('marks the row the selection leaves when k moves up', async () => {
-    const {act,onSelect}=mount(true,'disabled',entries[1])
+  it.each(navigation)('preserves an explicit unread when $key opens another article', async ({key, from, to}) => {
+    const {act: write,actions,onOpen}=mount(true,'disabled',entries[from],entries,[],true)
+    const states = new Map(entries.map(entry => [entry.id, entry.state]))
+    actions.state = entry => states.get(entry.id)!
+    write.mockImplementation(async (entry: Entry, register, value) => {
+      if (register !== 'seen') return
+      const state = actions.state(entry)
+      states.set(entry.id, {...state, seen: {...state.seen, value, rev: state.seen.rev + 1}})
+    })
+    const previous = entries[from]
+    const next = entries[to]
+    fireEvent.click(await screen.findByText(previous.title))
+    await waitFor(() => expect(actions.state(previous).seen.value).toBe('seen'),{timeout:1500})
+    // The reader toolbar writes through the same actions without cancelling
+    // the list's queue directly. Leaving must not create a new read intent.
+    await actions.act(previous,'seen','unseen')
+    onOpen.mockClear()
+    fireEvent.keyDown(scroller(),{key})
+    expect(onOpen).toHaveBeenCalledWith(next,'replace')
+    await waitFor(() => expect(actions.state(next).seen.value).toBe('seen'),{timeout:1500})
+    expect(actions.state(previous).seen.value).toBe('unseen')
+    expect(write.mock.calls.filter(call => call[0].id === previous.id && call[3] === 'passive')).toHaveLength(1)
+    scrollPast(2)
+    await new Promise(resolve => window.setTimeout(resolve, 700))
+    expect(actions.state(previous).seen.value).toBe('unseen')
+  })
+  it.each([{key:'j', index:2}, {key:'k', index:0}, {key:'Home', index:0}, {key:'End', index:2}])('does not mark read when $key stays at a list boundary', async ({key, index}) => {
+    const {act,onOpen}=mount(true,'disabled',entries[index],entries,[],true)
     await screen.findByText('Article 1')
-    fireEvent.keyDown(document.body,{key:'k'})
-    expect(onSelect).toHaveBeenCalledWith(entries[0])
-    await waitFor(()=>expect(act).toHaveBeenCalledWith(entries[1],'seen','seen','passive'),{timeout:1500})
+    fireEvent.keyDown(scroller(),{key:'m'})
+    fireEvent.keyDown(scroller(),{key})
+    expect(onOpen).not.toHaveBeenCalled()
+    await new Promise(resolve => window.setTimeout(resolve, 700))
+    expect(act).toHaveBeenCalledExactlyOnceWith(entries[index],'seen','unseen')
   })
   it('never regresses the resume position when an earlier row becomes due later', async () => {
     const {act}=mount(true,'disabled',entries[1])
     await screen.findByText('Article 1')
     fireEvent.click(screen.getByText('Article 1'))
     await waitFor(()=>expect(positionWrites()).toEqual([3]),{timeout:1500})
-    // Reading down the newest-first list must not move the shared high-water
-    // position backwards when the older row becomes due.
-    fireEvent.keyDown(document.body,{key:'j'})
+    // Opening an older article must not move the shared high-water position
+    // backwards when that row becomes due.
+    fireEvent.click(screen.getByText('Article 2'))
     await waitFor(()=>expect(act).toHaveBeenCalledWith(entries[1],'seen','seen','passive'),{timeout:1500})
     expect(positionWrites()).toEqual([3])
   })
@@ -212,7 +250,7 @@ describe('river interactions', () => {
       }
       return path === '/v1/pipeline' ? {blurb:'disabled'} : path.startsWith('/v1/positions') ? {seq:0} : {entries}
     })
-    scrollPast(2)
+    fireEvent.click(screen.getByText('Article 1'))
     await waitFor(()=>expect(positionWrites()).toEqual([3]),{timeout:1500})
     await new Promise(resolve => window.setTimeout(resolve, 700))
     expect(positionWrites()).toEqual([3])
@@ -280,11 +318,10 @@ describe('river interactions', () => {
     expect(vi.mocked(request).mock.calls.some(([path]) => path.includes('group=cluster'))).toBe(true)
   })
 })
-it('retries a scrolled-past row after sync finishes restoring',async()=>{
+it('retries an opened row after sync finishes restoring',async()=>{
   const {act}=mount()
   act.mockRejectedValueOnce(new Error('Reading state is being restored.'))
-  await screen.findByText('Article 1')
-  scrollPast(1)
+  fireEvent.click(await screen.findByText('Article 1'))
   await waitFor(()=>expect(act).toHaveBeenCalledTimes(2),{timeout:2000})
 })
 

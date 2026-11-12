@@ -64,8 +64,6 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   const [scrollMargin, setScrollMargin] = useState(0)
   const heading = useRef<HTMLHeadingElement>(null)
   const pending = useRef(new Map<number, {seenRev: number}>())
-  const rendered = useRef(new Map<number, {start: number; size: number}>())
-  const passed = useRef(new Set<number>())
   const focusNext = useRef<number | null>(null)
   const [error, setError] = useState('')
   const [cluster, setCluster] = useState(false)
@@ -124,7 +122,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   // The Today panel sits above the list inside the scroller, so the list's own
   // top is offset from the scroller's content origin. The virtualizer needs
   // that offset as scrollMargin to report row positions in scroller
-  // coordinates; the seen logic and row transforms then line up.
+  // coordinates so row transforms line up.
   const measureScrollMargin = useCallback(() => {
     const root = scroller.current
     const element = listRef.current
@@ -190,23 +188,6 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     return () => window.cancelAnimationFrame(frame)
   }, [key])
 
-  // Remember which rendered rows have been inside the viewport. A row that
-  // mounts already above the fold (a jump or a prepended page) never enters
-  // this set, so it stays unseen until the reader actually scrolls to it.
-  useEffect(() => {
-    const root = scroller.current
-    const top = root?.scrollTop ?? 0
-    const bottom = top + (root?.clientHeight || window.innerHeight)
-    const next = new Map<number, {start: number; size: number}>()
-    for (const row of visible) {
-      const entry = entries[row.index]
-      if (!entry) continue
-      next.set(entry.id, {start: row.start, size: row.size})
-      if (row.start < bottom && row.start + row.size > top) passed.current.add(entry.id)
-    }
-    rendered.current = next
-  })
-
   // Keyboard movement inside the list carries focus with the selection; the
   // target row may need a frame to render after scrollToIndex.
   useEffect(() => {
@@ -218,8 +199,8 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     }, 10)
   })
 
-  // Deduplicate only outstanding writes. A later open or viewport crossing
-  // must still mark a row seen after an explicit unread, even from another client.
+  // Only opening queues an automatic read. Deduplicate outstanding writes,
+  // but allow a later open after an explicit unread, even from another client.
   useEffect(() => {
     const inFlight = new Set<number>()
     const timer = window.setInterval(() => {
@@ -265,18 +246,6 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     pending.current.set(entry.id, {seenRev: actionsRef.current.state(entry).seen.rev})
   }, [])
 
-  function markScrolledPast() {
-    const root = scroller.current
-    if (!root) return
-    const top = root.scrollTop
-    for (const [id, row] of rendered.current) {
-      if (row.start + row.size > top) continue
-      if (!passed.current.delete(id)) continue
-      const entry = entriesRef.current.find(entry => entry.id === id)
-      if (entry) queueSeen(entry)
-    }
-  }
-
   const open = useCallback((entry: Entry, mode?: OpenMode) => {
     queueSeen(entry)
     onOpen(entry, mode)
@@ -300,13 +269,11 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   const move = useCallback((index: number, from: number, focus: boolean) => {
     const target = entries[index]
     if (!target) return
-    // Moving the selection past a row is the keyboard form of scrolling past it.
-    if (from >= 0) queueSeen(entries[from])
     onSelect(target)
     virtual.scrollToIndex(index, {align: 'auto'})
     if (focus) focusNext.current = target.id
     if (reading && from !== index) open(target, 'replace')
-  }, [entries, onSelect, virtual, reading, open, queueSeen])
+  }, [entries, onSelect, virtual, reading, open])
 
   useEffect(() => {
     function keyboard(event: KeyboardEvent) {
@@ -369,7 +336,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     {feedProblem && <p className="banner inline" role="status"><strong>Failing:</strong> {feedProblem} <Link to={`/feeds#subscription-${view.id}`}>Fix it in feed settings</Link></p>}
     {failure && <p role="alert" className="banner problem inline">{failure} <button type="button" onClick={() => { setError(''); void (position.isError ? position.refetch() : reload()) }}>Try again</button></p>}
     {view.kind === 'edition' && <Edition onOpen={onOpen}/>}
-    <div className="river-scroll" ref={scroller} onScroll={markScrolledPast} onKeyDown={listKeys} tabIndex={-1} aria-label="Article list" aria-busy={loading || undefined}>
+    <div className="river-scroll" ref={scroller} onKeyDown={listKeys} tabIndex={-1} aria-label="Article list" aria-busy={loading || undefined}>
       {view.kind === 'today' && <TodayAgents since={since} onOpen={onOpen}/>}
       {loading && <div className="skeleton-rows" aria-hidden="true">{Array.from({length: SKELETON_ROWS}, (_, index) => <div key={index} className="skeleton-row"><div className="skeleton line" /><div className="skeleton line short" /></div>)}</div>}
       {loading && <p role="status" className="sr-only">Loading articles…</p>}

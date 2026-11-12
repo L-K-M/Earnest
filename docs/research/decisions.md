@@ -46,6 +46,8 @@ Taken by you on 2026-11-07, while triaging the review PRs.
 
 - **Web lists start with the newest articles** (2026-11-11, at your request). Opening a list loads the highest ingest sequences first, then pages toward older entries. Saved reading positions still sync but never filter or delay the list. Edition retains its feed grouping, with newest entries first within each feed. Read/unread state is unchanged by opening a list.
 
+- **Automatic read marks happen only on opening** (2026-11-12, at your request). Scrolling a list, changing its selection without opening, and leaving an article do not mark it read. Marking an open article unread survives `j`/`k` navigation and scrolling until it is explicitly reopened or marked read. This replaces the scroll-past behavior in [ux.md](ux.md#information-model) and [api.md](api.md).
+
 ## Fetching
 
 Taken on 2026-11-09, at your request, while fixing a feed that stopped the server.
