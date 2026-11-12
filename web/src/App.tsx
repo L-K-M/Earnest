@@ -204,6 +204,10 @@ function Session({onLogout}: {onLogout: () => void}) {
   const labels = useQuery({queryKey: ['labels'], enabled: signedIn, queryFn: ({signal}) => request<components['schemas']['Label'][]>('/v1/labels',{signal})})
   const preferences = useQuery({queryKey: ['settings'], enabled: signedIn, queryFn: ({signal}) => request<ReadingSettings>('/v1/settings',{signal})})
   const settings = preferences.data ?? defaultSettings
+  // Quick filtering belongs to this tab's session, not the account settings.
+  // Until a choice is made, follow the saved default as it loads or changes.
+  const [unreadOnlyOverride, setUnreadOnlyOverride] = useState<boolean>()
+  const unreadOnly = unreadOnlyOverride ?? settings.show_only_unread ?? false
   const pipeline = useQuery({queryKey:['pipeline'],enabled:signedIn,queryFn:({signal}) => request<components['schemas']['PipelineStatus']>('/v1/pipeline',{signal}),staleTime:30_000})
   const savedSearches = useSavedSearches(signedIn)
   const unreadCounts = useQuery({queryKey:['unread-counts'],enabled:signedIn && settings.reading_mode === 'unread_counts',queryFn:({signal})=>readUnreadCounts(signal),staleTime:30_000})
@@ -231,7 +235,7 @@ function Session({onLogout}: {onLogout: () => void}) {
   // it is already behind the reader. Opening articles and Back/close are not.
   const [listVisit, setListVisit] = useState({locationKey: location.key, number: 0})
   if (listVisit.locationKey !== location.key) {
-    setListVisit({locationKey: location.key, number: listVisit.number + Number(settings.show_only_unread === true && riverRoute !== null && openID === undefined && location.action === 'push')})
+    setListVisit({locationKey: location.key, number: listVisit.number + Number(unreadOnly && riverRoute !== null && openID === undefined && location.action === 'push')})
   }
   // An article link opened offline cannot fetch the article, but the list it
   // belongs to usually comes from the offline cache a moment later; the retry
@@ -594,7 +598,7 @@ function Session({onLogout}: {onLogout: () => void}) {
       <div id="article-list" className="list-pane" inert={compact && reading}>
         {resolved.missing
           ? <section className="river"><div className="empty-state"><h2 tabIndex={-1}>This {viewRef.kind} is gone</h2><p>It may have been deleted or unsubscribed on another device.</p><p><Link to="/today">Go to Today</Link></p></div></section>
-          : <River since={since} sessionStart={sessionStart} key={`${viewKey(view)}:${listVisit.number}`} onNewestLoaded={seq => setNewestLoaded({key: viewKey(view), seq})} view={view} subscriptions={subs} actions={actions} selected={current} onSelect={setSelected} onOpen={openFromList} onMenu={showArticleMenu} reading={reading} shortcuts={shortcuts} counts={settings.reading_mode === 'unread_counts'} unreadOnly={settings.show_only_unread} summary={summary} />}
+          : <River since={since} sessionStart={sessionStart} key={`${viewKey(view)}:${listVisit.number}`} onNewestLoaded={seq => setNewestLoaded({key: viewKey(view), seq})} view={view} subscriptions={subs} actions={actions} selected={current} onSelect={setSelected} onOpen={openFromList} onMenu={showArticleMenu} reading={reading} shortcuts={shortcuts} counts={settings.reading_mode === 'unread_counts'} unreadOnly={unreadOnly} onUnreadOnlyChange={setUnreadOnlyOverride} summary={summary} />}
       </div>
       {!compact && <ResizeHandle label="Article list width" controls="article-list" {...paneWidths.list} />}
       <div className="reader-pane">

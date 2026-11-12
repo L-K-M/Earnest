@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import {useState} from 'react'
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {act, cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {QueryClient, QueryClientProvider} from '@tanstack/react-query'
@@ -31,8 +32,12 @@ function mount(view: View = feed, unreadOnly = true) {
   vi.mocked(request).mockImplementation(async path => path.startsWith('/v1/positions') ? {seq: 0} : {entries: rows})
   const actions: ReaderActions = {act: vi.fn().mockResolvedValue(undefined), state: entry => states.get(entry.id) ?? entry.state, deleted: entry => entry.deleted || deleted.has(entry.id)}
   const onOpen = vi.fn()
+  function Harness({visit, reading, selected}: {visit: number; reading: boolean; selected: Entry | null}) {
+    const [mode, setMode] = useState(unreadOnly)
+    return <QueryClientProvider client={client}><River key={visit} view={view} subscriptions={[]} actions={actions} selected={selected} onSelect={vi.fn()} onOpen={onOpen} reading={reading} shortcuts counts={false} unreadOnly={mode} onUnreadOnlyChange={setMode} summary={{seen: 0, done: 0, later: 0, kept: 0}} /></QueryClientProvider>
+  }
   function tree(visit = 0, reading = false, selected: Entry | null = null) {
-    return <QueryClientProvider client={client}><River key={visit} view={view} subscriptions={[]} actions={actions} selected={selected} onSelect={vi.fn()} onOpen={onOpen} reading={reading} shortcuts counts={false} unreadOnly={unreadOnly} summary={{seen: 0, done: 0, later: 0, kept: 0}} /></QueryClientProvider>
+    return <Harness visit={visit} reading={reading} selected={selected} />
   }
   const rendered = render(tree())
   return {client, states, deleted, actions, onOpen, tree, ...rendered, setRows: (next: Entry[]) => {rows = next}}
@@ -45,6 +50,59 @@ describe('unread-only list visits', () => {
     expect(screen.queryByText('Article 1')).toBeNull()
     expect(screen.queryByText('Article 3')).toBeNull()
     expect(vi.mocked(request).mock.calls.some(([path]) => path.includes('unread_only=true'))).toBe(true)
+  })
+
+  it.each([feed, {kind: 'today', title: 'Today'}, {kind: 'folder', id: 4, title: 'Folder'}, {kind: 'label', id: 2, title: 'Label'}, {kind: 'edition', title: 'Edition'}] as View[])('switches between unread and all in the $kind list header', async view => {
+    const {actions, onOpen} = mount(view)
+    await screen.findByText('Article 2')
+    expect(screen.getByRole('group', {name: 'Article visibility'})).toBeTruthy()
+    expect(screen.getByRole('button', {name: 'Show only unread', pressed: true})).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', {name: 'Show all', pressed: false}))
+    await screen.findByText('Article 1')
+    expect(screen.getByText('Article 3')).toBeTruthy()
+    expect(screen.getByRole('button', {name: 'Show all', pressed: true})).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', {name: 'Show only unread', pressed: false}))
+    await waitFor(() => expect(screen.queryByText('Article 1')).toBeNull())
+    expect(screen.queryByText('Article 3')).toBeNull()
+    expect(screen.getByText('Article 2')).toBeTruthy()
+    expect(actions.act).not.toHaveBeenCalled()
+    expect(onOpen).not.toHaveBeenCalled()
+  })
+
+  it('starts a fresh unread snapshot on switching modes without losing grouping', async () => {
+    const {states, setRows, rerender, tree, actions, onOpen} = mount()
+    await screen.findByText('Article 2')
+    fireEvent.click(screen.getByRole('button', {name: 'One per story'}))
+    await waitFor(() => expect(vi.mocked(request).mock.calls.some(([path]) => path.includes('group=cluster'))).toBe(true))
+    await screen.findByText('Article 2')
+    states.set(2, article(2, 'seen').state)
+    rerender(tree(0, true, article(2)))
+    expect(screen.getByText('Article 2')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', {name: 'Show all'}))
+    await screen.findByText('Article 1')
+    setRows([article(1, 'seen'), article(2, 'seen'), article(4)])
+    fireEvent.click(screen.getByRole('button', {name: 'Show only unread'}))
+    // Reusing the unread query must still fetch changes made while in All.
+    await screen.findByText('Article 4')
+    expect(screen.queryByText('Article 2')).toBeNull()
+    expect(screen.getByRole('button', {name: 'One per story', pressed: true})).toBeTruthy()
+    expect(vi.mocked(request).mock.calls.filter(([path]) => path.includes('group=cluster') && path.includes('unread_only=true'))).toHaveLength(2)
+    expect(actions.act).not.toHaveBeenCalled()
+    expect(onOpen).not.toHaveBeenCalled()
+  })
+
+  it('can leave a failed unread filter for the all-articles view', async () => {
+    mount(feed, false)
+    await screen.findByText('Article 1')
+    vi.mocked(request).mockImplementation(async path => {
+      if (path.includes('unread_only=true')) throw new Error('Unread list unavailable')
+      return path.startsWith('/v1/positions') ? {seq: 0} : {entries: [article(1, 'seen'), article(2)]}
+    })
+    fireEvent.click(screen.getByRole('button', {name: 'Show only unread'}))
+    await screen.findByRole('alert')
+    fireEvent.click(screen.getByRole('button', {name: 'Show all'}))
+    await screen.findByText('Article 1')
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
   })
 
   it('keeps newly read articles through reader open, selection changes and closing', async () => {
@@ -150,6 +208,7 @@ describe('unread-only list visits', () => {
     mount({kind, title: kind})
     expect(await screen.findByText('Article 1')).toBeTruthy()
     expect(screen.getByText('Article 3')).toBeTruthy()
+    expect(screen.queryByRole('group', {name: 'Article visibility'})).toBeNull()
   })
 
   it('leaves the default all-articles mode unchanged', async () => {

@@ -113,13 +113,19 @@ full-text search without models. When embeddings are enabled, Hybrid search and
 More like this show semantic results. Saved views can be opened, renamed or
 deleted from the search panel without changing their query or filters.
 
-In Reading settings, **Show only unread** filters Today, Edition, feeds,
-folders and labels independently of unread-count display. An article is unread
-when it is unseen and not Done. Articles admitted to a list stay there as you
-read them, move between articles, close the reader, load another page, or sync
-changes from another device. Reopening the parent list or successfully choosing
-Refresh articles reapplies the filter. Background refetches and tab refocus do
-not end the visit. Later, Kept, Done and search remain unfiltered.
+In Reading settings, **Show only unread by default** filters Today, Edition,
+feeds, folders and labels independently of unread-count display. **Show all**
+and **Show only unread** above the article list override that default for the
+current tab without changing the saved preference. Your choice survives moving
+to another list, closing articles and background settings refreshes. Reloading
+or signing out restores the saved default. An article is unread when it is unseen and not Done.
+Articles admitted to a list stay there as you read them, move between articles,
+close the reader, load another page, or sync changes from another device.
+Switching a list to unread takes a fresh eligibility snapshot without closing
+the open article or changing article state. Reopening the parent list or
+successfully choosing Refresh articles reapplies the filter. Background
+refetches and tab refocus do not end the visit. Later, Kept, Done and search
+remain unfiltered.
 
 Only unread-count mode requests and displays unread totals. Per-feed counts come
 from one grouped server query (`/v1/entries:counts`), so totals stay exact
@@ -167,8 +173,8 @@ Only human device/session actors can access settings. PUT is deduplicated per
 principal. Returned `rev` is read-only and is omitted from mutation bodies.
 
 Defaults are river, two Today days (matching the existing river service),
-Show only unread disabled, single-key shortcuts enabled, system palette,
-66 characters and serif. `show_only_unread` is an account-wide boolean; a PUT
+Show only unread by default disabled, single-key shortcuts enabled, system
+palette, 66 characters and serif. `show_only_unread` is an account-wide boolean; a PUT
 that omits it preserves the saved choice so older clients cannot clear it. Palettes
 are system/light/dark/black/eink; fonts are serif/sans/dyslexic. Today decay accepts
 1–365 days. `feed_overrides` maps feed IDs to optional theme, measure and font.

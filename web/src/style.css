@@ -255,6 +255,8 @@ dd {margin: 0}
 .pane-tools {display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1) var(--s2); margin-left: calc(-1 * var(--s2))}
 .pane-tools button {color: var(--ink-muted)}
 .pane-tools button[aria-pressed=true] {color: var(--brand)}
+.article-visibility {display: inline-flex; flex-wrap: wrap; gap: var(--s1); padding: var(--s1); border: 1px solid var(--line); border-radius: var(--r2)}
+.article-visibility button {min-height: var(--control)}
 .pane-link {font-size: var(--step--1); font-weight: 500; padding: .3rem .55rem; color: var(--ink-muted); text-decoration: none; border-radius: var(--r2)}
 .pane-link:hover {background: var(--hover); color: var(--ink)}
 .pane-count {margin: 0 0 0 auto; font-size: var(--step--1); color: var(--ink-muted)}
