@@ -75,6 +75,26 @@ final class IdentityTests: XCTestCase {
 }
 
 final class OfflineCacheTests: XCTestCase {
+    func testWarmSnapshotReflectsWritesAndClearsFromAnotherCache() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        addTeardownBlock { try FileManager.default.removeItem(at: directory) }
+        let identity = try AccountIdentity(server: URL(string: "https://nas.test")!, userID: 1, principalID: 7)
+        let cache = try Cache(identity: identity, directory: directory)
+        let writer = try Cache(identity: identity, directory: directory)
+        var snapshot = SyncSnapshot()
+        snapshot.cursor = Cursor(generation: "g", rev: 12)
+        try writer.save(snapshot)
+        XCTAssertEqual(try cache.load(), snapshot)
+        XCTAssertEqual(try cache.load(), snapshot)
+
+        snapshot.bootstrapComplete = true
+        try writer.save(snapshot)
+        XCTAssertEqual(try cache.load(), snapshot)
+
+        try writer.clear()
+        XCTAssertEqual(try cache.load(), SyncSnapshot())
+    }
+
     func testSnapshotsBriefsAndArticlesAreIsolatedAndDurable() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         addTeardownBlock { try FileManager.default.removeItem(at: directory) }

@@ -1,22 +1,29 @@
 import Foundation
+import Synchronization
 
 /// RFC 3339 wire clocks. The sync model is UTC-only; fractional seconds are
 /// accepted on decode and emitted on encode.
 enum SyncTime {
-    private static var precise: ISO8601DateFormatter {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }
-    private static var plain: ISO8601DateFormatter {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter
-    }
+    // Snapshots process many timestamps at once. Reuse the formatters and
+    // serialize access to Foundation's mutable formatter instances.
+    private static let formatters = {
+        let precise = ISO8601DateFormatter()
+        precise.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return Mutex((precise: precise, plain: plain))
+    }()
+
     /// The Go zero time `0001-01-01T00:00:00Z`, used for unset wire dates.
     static let zero = Date(timeIntervalSince1970: -62135596800)
-    static func parse(_ text: String) -> Date? { precise.date(from: text) ?? plain.date(from: text) }
-    static func string(_ date: Date) -> String { precise.string(from: date) }
+
+    static func parse(_ text: String) -> Date? {
+        formatters.withLock { $0.precise.date(from: text) ?? $0.plain.date(from: text) }
+    }
+
+    static func string(_ date: Date) -> String {
+        formatters.withLock { $0.precise.string(from: date) }
+    }
 }
 
 extension APIValue {

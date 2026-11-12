@@ -302,7 +302,7 @@ public final class EarnestAPI: Sendable {
         // The authenticated server selects its content origin. Never attach API credentials here.
         var unsigned = URLRequest(url: url)
         unsigned.httpShouldHandleCookies = false
-        let (htmlData, htmlResponse) = try await session.data(for: unsigned)
+        let (htmlData, htmlResponse) = try await session.apiData(for: unsigned)
         guard let http = htmlResponse as? HTTPURLResponse else { throw APIError.invalidResponse }
         try validateHTTP(http, data: htmlData)
         guard let html = String(data: htmlData, encoding: .utf8) else { throw APIError.invalidResponse }
@@ -329,7 +329,7 @@ public final class EarnestAPI: Sendable {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         request.setValue("image/png, image/jpeg", forHTTPHeaderField: "Accept")
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await session.apiData(for: request)
         guard let response = response as? HTTPURLResponse else { throw APIError.invalidResponse }
         if response.statusCode == 404 { return nil }
         try validateHTTP(response, data: data)
@@ -618,7 +618,5 @@ func summarizeOPMLResults(_ results: [Components.Schemas.OPMLResult]) -> OPMLImp
 }
 
 func parseAPIDate(_ text: String) -> Date? {
-    let fractional = ISO8601DateFormatter()
-    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return fractional.date(from: text) ?? ISO8601DateFormatter().date(from: text)
+    SyncTime.parse(text)
 }
