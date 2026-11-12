@@ -275,6 +275,23 @@ class ReaderTest {
         assertFalse(shareLink(application, "An article", "https://example.com/article"))
     }
 
+    @Test fun inlineSizingKeepsTheSameReaderSecurityBoundary() {
+        val view = createReaderWebView(
+            ApplicationProvider.getApplicationContext<Context>(), url, "<p>cached</p>",
+            onContentHeight = {},
+        )
+        assertFalse(view.settings.javaScriptEnabled)
+        assertFalse(view.settings.allowFileAccess)
+        assertFalse(view.settings.allowContentAccess)
+        val client = view.webViewClient
+        assertFalse(client.shouldOverrideUrlLoading(view, request()))
+        assertTrue(client.shouldOverrideUrlLoading(view, request("https://publisher.test/article")))
+        assertNotNull(client.shouldInterceptRequest(view, request("https://tracker.test/pixel", main = false)))
+        client.onReceivedError(view, request(), error)
+        assertEquals("https://appassets.androidplatform.net/article/index.html", shadowOf(view).lastLoadedUrl)
+        view.destroy()
+    }
+
     @Test fun noCacheDoesNotLoadEmptyFallback() {
         val view = createReaderWebView(ApplicationProvider.getApplicationContext<Context>(), url, null)
         view.loadUrl(url)

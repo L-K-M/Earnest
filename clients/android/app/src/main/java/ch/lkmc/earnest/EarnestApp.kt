@@ -10,6 +10,7 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -33,6 +34,10 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Notifications
@@ -40,7 +45,6 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -49,6 +53,9 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.NavigationRailItemDefaults
@@ -79,6 +86,7 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -96,10 +104,12 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.repeatOnLifecycle
@@ -127,8 +137,6 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 
 /**
@@ -239,6 +247,10 @@ private fun MainScaffold(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val selected = navigator.currentDestination?.contentKey
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    var feedSelection by rememberFeedSelection(state.accountKey)
+    val detailOnly = navigator.currentDestination?.pane == ListDetailPaneScaffoldRole.Detail &&
+        (section.view == View.FRONT || directive.maxHorizontalPartitions == 1)
     // Entries reached through an agent's output (a notification, a deep link
     // of unknown origin, an agent-change notice) open with click-to-load
     // images; see AppViewModel.openEntry. The set is saved with the navigator's
@@ -332,6 +344,28 @@ private fun MainScaffold(
         offerUndo(action.message) { model.undo(action) }
     }
 
+    fun selectView(destination: View) {
+        model.beginListVisit()
+        showSettings = false
+        feedSelection = FeedSelection.All
+        section = section.copy(view = destination)
+        scope.launch {
+            navigator.navigateTo(ListDetailPaneScaffoldRole.List)
+            drawerState.close()
+        }
+    }
+
+    fun selectFeed(selection: FeedSelection) {
+        model.beginListVisit()
+        showSettings = false
+        feedSelection = selection
+        section = section.copy(view = View.ALL)
+        scope.launch {
+            navigator.navigateTo(ListDetailPaneScaffoldRole.List)
+            drawerState.close()
+        }
+    }
+
     // Every destination draws its icon in its own tone. Labels stay ink: the
     // Material default for a selected label is `secondary`, now orange, which
     // would clash with every destination but Today.
@@ -362,18 +396,33 @@ private fun MainScaffold(
         )
     }.toMap()
 
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        // Closed-drawer edge gestures must not compete with article swipes.
+        gesturesEnabled = drawerState.isOpen,
+        drawerContent = {
+            ReaderDrawer(
+                view = section.view,
+                selection = feedSelection,
+                objects = state.snapshot.objects,
+                onView = ::selectView,
+                onFeed = ::selectFeed,
+                onClose = { scope.launch { drawerState.close() } },
+                onSettings = {
+                    showSettings = true
+                    scope.launch { drawerState.close() }
+                },
+            )
+        },
+    ) {
     NavigationSuiteScaffold(
         navigationSuiteItems = {
-            View.entries.filter { it != View.SEARCH }.forEach { destination ->
+            primaryDestinations.forEach { destination ->
                 item(
                     selected = section.view == destination,
-                    onClick = {
-                        model.beginListVisit()
-                        section = section.copy(view = destination)
-                        scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.List) }
-                    },
+                    onClick = { selectView(destination) },
                     icon = { Icon(destination.icon, contentDescription = null) },
-                    label = { Text(destination.label) },
+                    label = { Text(destination.navigationLabel, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     colors = suiteItemColors.getValue(destination),
                 )
             }
@@ -382,20 +431,31 @@ private fun MainScaffold(
         Scaffold(
             topBar = {
                 EarnestTopBar(
-                    if (showSettings) "Settings" else section.view.label,
+                    when {
+                        showSettings -> "Settings"
+                        detailOnly -> "Article"
+                        section.view == View.ALL -> feedSelection.title(state.snapshot.objects)
+                        else -> section.view.label
+                    },
                     state.loading,
                     model,
                     theme,
                     onThemeChange,
                     notificationsDenied,
                     onRequestNotifications,
-                    onSearch = {
-                        section = section.copy(view = View.SEARCH)
-                        scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.List) }
-                    },
+                    onSearch = { selectView(View.SEARCH) },
                     onSettings = { showSettings = true },
                     onRefresh = {
                         if (section.view == View.FRONT) model.refreshFrontPage() else model.reloadList()
+                    },
+                    navigationIcon = if (showSettings || detailOnly) Icons.AutoMirrored.Filled.ArrowBack else Icons.Filled.Menu,
+                    navigationDescription = if (showSettings || detailOnly) "Back" else "Folders and feeds",
+                    onNavigation = {
+                        when {
+                            showSettings -> showSettings = false
+                            detailOnly -> scope.launch { navigator.navigateBack() }
+                            else -> scope.launch { drawerState.open() }
+                        }
                     },
                 )
             },
@@ -457,6 +517,8 @@ private fun MainScaffold(
                                     unreadSyncedAt = state.unreadCountsSyncedAt,
                                     unreadMode = state.readerSettings.readingMode == ch.lkmc.earnest.core.ReadingMode.UNREAD_COUNTS,
                                     onSubscribe = { showSubscribe = true },
+                                    onFolder = { selectFeed(FeedSelection.Folder(it)) },
+                                    onFeed = { selectFeed(FeedSelection.Subscription(it)) },
                                     onUnsubscribe = { model.unsubscribe(it) },
                                     onCadence = { id, cadence ->
                                         val prior = state.snapshot.objects
@@ -477,9 +539,9 @@ private fun MainScaffold(
                                     entryTitles = state.snapshot.entries.associate { it.id to it.title },
                                     onRevert = { model.revert(it) },
                                 )
-                                else -> EntryListScreen(
-                                    title = section.view.label,
-                                    entries = lists[section.view].orEmpty(),
+                                else -> key(section.view, feedSelection) { EntryListScreen(
+                                    title = if (section.view == View.ALL) feedSelection.title(state.snapshot.objects) else section.view.label,
+                                    entries = if (section.view == View.ALL) feedSelection.filter(lists[section.view].orEmpty(), state.snapshot.objects) else lists[section.view].orEmpty(),
                                     states = state.states,
                                     principalId = state.principalId,
                                     subscriptionTitles = subscriptionTitles,
@@ -507,7 +569,15 @@ private fun MainScaffold(
                                     onKeep = { id -> model.keep(id, undoable) },
                                     onUnkeep = { id -> model.unkeep(id, undoable) },
                                     onMarkUnread = { id -> model.markUnread(id, undoable) },
-                                )
+                                    accountKey = state.accountKey,
+                                    // Wide screens keep the existing side-by-side reader.
+                                    layoutOverride = ArticleLayout.HEADLINES.takeIf { directive.maxHorizontalPartitions > 1 },
+                                    typography = { entry -> state.readerSettings.typographyFor(entry.feedId) },
+                                    onLoadContent = { id ->
+                                        model.markSeen(id)
+                                        model.openEntry(id, agentSelected = id in agentSelected)
+                                    },
+                                ) }
                             }
                         }
                     },
@@ -632,6 +702,8 @@ private fun MainScaffold(
         }
     }
 
+    }
+
     if (showSubscribe) {
         SubscribeDialog(
             onDismiss = { showSubscribe = false },
@@ -656,28 +728,32 @@ private fun EarnestTopBar(
     onSearch: () -> Unit,
     onSettings: () -> Unit,
     onRefresh: () -> Unit,
+    navigationIcon: ImageVector,
+    navigationDescription: String,
+    onNavigation: () -> Unit,
 ) {
     var themeOpen by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     TopAppBar(
-        title = { Text(title) },
+        title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleLarge) },
+        navigationIcon = {
+            IconButton(onClick = onNavigation) { Icon(navigationIcon, contentDescription = navigationDescription) }
+        },
         actions = {
             IconButton(onClick = onSearch) { Icon(Icons.Filled.Search, contentDescription = "Search") }
-            if (notificationsDenied) {
-                TextButton(onClick = onRequestNotifications) { Text("Notifications") }
-            }
             if (loading) {
-                CircularProgressIndicator(
-                    Modifier.size(20.dp),
-                    strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
+                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(
+                        Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
             } else {
                 IconButton(onClick = onRefresh) {
                     Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
                 }
             }
-            TextButton(onClick = { themeOpen = true }) { Text("Theme") }
             // The menu anchors to this Box, beside the button rather than
             // inside the button's content slot.
             Box {
@@ -685,6 +761,16 @@ private fun EarnestTopBar(
                     Icon(Icons.Filled.MoreVert, contentDescription = "More options")
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Theme") },
+                        onClick = { menuOpen = false; themeOpen = true },
+                    )
+                    if (notificationsDenied) {
+                        DropdownMenuItem(
+                            text = { Text("Enable notifications") },
+                            onClick = { menuOpen = false; onRequestNotifications() },
+                        )
+                    }
                     DropdownMenuItem(
                         text = { Text("Settings") },
                         onClick = {
@@ -741,9 +827,8 @@ private fun ThemeDialog(
     )
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ReaderHeader(
+internal fun ReaderHeader(
     entry: CachedEntry,
     source: String,
     isRead: Boolean,
@@ -756,7 +841,8 @@ private fun ReaderHeader(
     onSmallerText: () -> Unit,
     onLargerText: () -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 16.dp)) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp)) {
         Text(
             entry.title,
             style = MaterialTheme.typography.titleMedium,
@@ -774,19 +860,29 @@ private fun ReaderHeader(
                 meta.joinToString(" · "),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
             )
         }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             if (originalUrl(entry) != null) {
                 TextButton(onClick = onOpenOriginal) { Text("Open original") }
-                TextButton(onClick = onCopyLink) { Text("Copy link") }
-                TextButton(onClick = onShare) { Text("Share") }
             }
-            TextButton(onClick = onFind) { Text("Find in article") }
-            TextButton(onClick = onSmallerText) { Text("Smaller text") }
-            TextButton(onClick = onLargerText) { Text("Larger text") }
-            if (isRead) {
-                TextButton(onClick = onMarkUnread) { Text("Mark unread") }
+            Spacer(Modifier.weight(1f))
+            IconButton(onClick = onFind) { Icon(Icons.Filled.Search, contentDescription = "Find in article") }
+            Box {
+                IconButton(onClick = { menuOpen = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "Reader options") }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    if (originalUrl(entry) != null) {
+                        DropdownMenuItem(text = { Text("Share") }, onClick = { menuOpen = false; onShare() })
+                        DropdownMenuItem(text = { Text("Copy link") }, onClick = { menuOpen = false; onCopyLink() })
+                    }
+                    DropdownMenuItem(text = { Text("Smaller text") }, onClick = { menuOpen = false; onSmallerText() })
+                    DropdownMenuItem(text = { Text("Larger text") }, onClick = { menuOpen = false; onLargerText() })
+                    if (isRead) {
+                        DropdownMenuItem(text = { Text("Mark unread") }, onClick = { menuOpen = false; onMarkUnread() })
+                    }
+                }
             }
         }
     }
@@ -822,7 +918,7 @@ private fun FindBar(
 }
 
 @Composable
-private fun EntryListScreen(
+internal fun EntryListScreen(
     title: String,
     entries: List<CachedEntry>,
     states: Map<Long, ch.lkmc.earnest.core.State>,
@@ -847,7 +943,30 @@ private fun EntryListScreen(
     onKeep: (Long) -> Unit,
     onUnkeep: (Long) -> Unit,
     onMarkUnread: (Long) -> Unit,
+    accountKey: String? = null,
+    layoutOverride: ArticleLayout? = null,
+    typography: (CachedEntry) -> ch.lkmc.earnest.core.ReaderTypography = { ch.lkmc.earnest.core.ReaderSettings().typographyFor(it.feedId) },
+    onLoadContent: suspend (Long) -> ContentUrlResult? = { null },
+    inlineContent: @Composable (ContentUrlResult, CachedEntry) -> Unit = { content, entry ->
+        InlineArticleContent(content, typography(entry))
+    },
 ) {
+    val context = LocalContext.current
+    var preferredLayout by remember { mutableStateOf(context.articleLayout()) }
+    val layout = layoutOverride ?: preferredLayout
+    var owner by rememberSaveable { mutableStateOf(accountKey) }
+    var expandedId by rememberSaveable { mutableStateOf<Long?>(null) }
+    if (accountKey != null && owner != accountKey) {
+        if (owner != null) expandedId = null
+        owner = accountKey
+    }
+    var retry by remember { mutableStateOf(0) }
+    val expanded = expandedId?.takeIf { id -> entries.any { it.id == id } && layout == ArticleLayout.READING }
+    val inlineReader = remember(expanded, accountKey) { ReaderLoadState() }
+    LaunchedEffect(expanded, accountKey, retry) {
+        inlineReader.load(expanded, accountKey, onLoadContent)
+    }
+    BackHandler(enabled = expanded != null) { expandedId = null }
     val listState = rememberLazyListState()
     MarkSeenOnScroll(entries, principalId, listState, onSeen)
     val headerCount = (if (briefs.isNotEmpty()) 1 else 0) +
@@ -857,7 +976,16 @@ private fun EntryListScreen(
             listState.scrollToItem(0)
         }
     }
-    LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+    LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+        if (layoutOverride == null) {
+            item(key = "reading-layout") {
+                ArticleLayoutControl(layout, onLayout = {
+                    preferredLayout = it
+                    expandedId = null
+                    context.setArticleLayout(it)
+                })
+            }
+        }
         if (unreadMode) {
             item(key = "unread-counts") {
                 val text = when {
@@ -887,40 +1015,62 @@ private fun EntryListScreen(
         }
         items(entries, key = { it.id }) { entry ->
             val effective = states[entry.id] ?: SyncEngine.initialState(principalId, entry.id)
-            SwipeActionRow(onLater = { onLater(entry.id) }, onDone = { onDone(entry.id) }) {
-                EntryRow(
-                    entry = entry,
-                    state = effective,
-                    source = subscriptionTitles[entry.subscriptionId].orEmpty(),
-                    sourceIcon = subscriptionIcons[entry.subscriptionId],
-                    onClick = { onOpen(entry.id) },
-                )
-            }
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            Surface(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             ) {
-                if (effective.kept.value == kotlinx.serialization.json.JsonPrimitive(true)) {
-                    TextButton(
-                        onClick = { onUnkeep(entry.id) },
-                        colors = ButtonDefaults.textButtonColors(contentColor = LocalTones.current.plum),
-                    ) { Text("Unkeep") }
-                } else {
-                    TextButton(
-                        onClick = { onKeep(entry.id) },
-                        colors = ButtonDefaults.textButtonColors(contentColor = LocalTones.current.plum),
-                    ) { Text("Keep") }
-                }
-                if (canMarkUnread(effective)) {
-                    TextButton(onClick = { onMarkUnread(entry.id) }) { Text("Mark unread") }
+                Column {
+                    SwipeActionRow(onLater = { onLater(entry.id) }, onDone = { onDone(entry.id) }) {
+                        EntryRow(
+                            entry = entry,
+                            state = effective,
+                            source = subscriptionTitles[entry.subscriptionId].orEmpty(),
+                            sourceIcon = subscriptionIcons[entry.subscriptionId],
+                            readingInFeed = layout == ArticleLayout.READING,
+                            expanded = expanded == entry.id,
+                            onClick = {
+                                if (layout == ArticleLayout.READING) {
+                                    expandedId = if (expanded == entry.id) null else entry.id
+                                } else onOpen(entry.id)
+                            },
+                            onOpenReader = { onOpen(entry.id) },
+                            onKeep = { onKeep(entry.id) },
+                            onUnkeep = { onUnkeep(entry.id) },
+                            onLater = { onLater(entry.id) },
+                            onDone = { onDone(entry.id) },
+                            onMarkUnread = { onMarkUnread(entry.id) },
+                        )
+                    }
+                    if (expanded == entry.id) {
+                        when {
+                            inlineReader.loading -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(Modifier.size(24.dp))
+                            }
+                            inlineReader.content != null -> inlineContent(inlineReader.content!!, entry)
+                            else -> Column(Modifier.padding(horizontal = 16.dp)) {
+                                Text(
+                                    inlineReader.error ?: "Could not load this article. Connect and try again, or open a cached article.",
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                                TextButton(onClick = { retry++ }) { Text("Try again") }
+                            }
+                        }
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                            TextButton(onClick = { onOpen(entry.id) }) { Text("Open reader") }
+                            TextButton(onClick = { expandedId = null }) { Text("Collapse") }
+                        }
+                    }
                 }
             }
         }
         item(key = "end") {
             val statement = if (entries.isEmpty()) {
-                "Nothing new. A rare and beautiful thing."
+                "No cached articles for $title."
             } else {
-                "That is everything since ${entries.first().firstSeenAt.dayName()}."
+                "End of cached articles."
             }
             Text(
                 statement,
@@ -960,52 +1110,90 @@ private fun MarkSeenOnScroll(
 }
 
 @Composable
-private fun EntryRow(
+internal fun EntryRow(
     entry: CachedEntry,
     state: ch.lkmc.earnest.core.State,
     source: String,
     sourceIcon: String? = null,
     onClick: () -> Unit,
+    readingInFeed: Boolean = false,
+    expanded: Boolean = false,
+    onOpenReader: () -> Unit = onClick,
+    onKeep: () -> Unit = {},
+    onUnkeep: () -> Unit = {},
+    onLater: () -> Unit = {},
+    onDone: () -> Unit = {},
+    onMarkUnread: () -> Unit = {},
 ) {
-    val unread = state.seen.value == kotlinx.serialization.json.JsonPrimitive(SyncEngine.VALUE_UNSEEN) &&
-        state.shelf.value != kotlinx.serialization.json.JsonPrimitive(SyncEngine.VALUE_DONE)
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(16.dp),
-        verticalAlignment = Alignment.Top,
+    val unread = state.seen.value == JsonPrimitive(SyncEngine.VALUE_UNSEEN) &&
+        state.shelf.value != JsonPrimitive(SyncEngine.VALUE_DONE)
+    val kept = state.kept.value == JsonPrimitive(true)
+    var menuOpen by remember { mutableStateOf(false) }
+    Column(
+        Modifier.fillMaxWidth().clickable(
+            onClickLabel = when {
+                expanded -> "Collapse article"
+                readingInFeed -> "Read in feed"
+                else -> "Open reader"
+            },
+            onClick = onClick,
+        )
+            .semantics { stateDescription = if (unread) "Unread" else "Read" }
+            .padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 16.dp),
     ) {
-        Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (unread) {
-                    Box(
-                        Modifier
-                            .width(8.dp)
-                            .height(8.dp)
-                            .background(LocalTones.current.orange, MaterialTheme.shapes.small),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                }
-                Text(entry.title, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(6.dp).background(if (unread) LocalTones.current.orange else Color.Transparent, RoundedCornerShape(3.dp)))
+            Spacer(Modifier.width(6.dp))
+            if (sourceIcon != null) {
+                MediaImage(sourceIcon, Modifier.size(16.dp), RoundedCornerShape(4.dp))
+                Spacer(Modifier.width(6.dp))
             }
-            if (source.isNotEmpty()) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (sourceIcon != null) {
-                        MediaImage(sourceIcon, Modifier.size(16.dp), RoundedCornerShape(4.dp))
-                        Spacer(Modifier.width(4.dp))
+            Text(
+                source.ifBlank { "Feed" },
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(entry.firstSeenAt.relativeTime(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (kept) Icon(Icons.Filled.Star, contentDescription = "Kept", tint = LocalTones.current.plum, modifier = Modifier.padding(start = 6.dp).size(16.dp))
+            Box {
+                IconButton(onClick = { menuOpen = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "Article actions") }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(text = { Text("Open reader") }, onClick = { menuOpen = false; onOpenReader() })
+                    DropdownMenuItem(text = { Text(if (kept) "Unkeep" else "Keep") }, onClick = { menuOpen = false; if (kept) onUnkeep() else onKeep() })
+                    DropdownMenuItem(text = { Text("Later") }, onClick = { menuOpen = false; onLater() })
+                    DropdownMenuItem(text = { Text("Done") }, onClick = { menuOpen = false; onDone() })
+                    if (canMarkUnread(state)) {
+                        DropdownMenuItem(text = { Text("Mark unread") }, onClick = { menuOpen = false; onMarkUnread() })
                     }
-                    Text(
-                        "$source · ${entry.firstSeenAt.relativeTime()}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                 }
             }
         }
-        entry.thumbnailUrl?.let { thumbnail ->
-            Spacer(Modifier.width(12.dp))
-            MediaImage(thumbnail, Modifier.size(56.dp), RoundedCornerShape(8.dp))
+        Row(Modifier.padding(end = 8.dp), verticalAlignment = Alignment.Top) {
+            Text(
+                entry.title.ifBlank { "Untitled" },
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = if (readingInFeed) 4 else 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).testTag("headline-${entry.id}"),
+            )
+            entry.thumbnailUrl?.let { thumbnail ->
+                Spacer(Modifier.width(12.dp))
+                MediaImage(thumbnail, Modifier.size(56.dp), RoundedCornerShape(8.dp))
+            }
+        }
+        if (readingInFeed) {
+            Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(if (expanded) "Reading in feed" else "Read in feed", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                Icon(
+                    if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                    contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp),
+                )
+            }
         }
     }
 }
@@ -1082,6 +1270,8 @@ private fun FeedsScreen(
     unreadSyncedAt: Long?,
     unreadMode: Boolean,
     onSubscribe: () -> Unit,
+    onFolder: (Long) -> Unit,
+    onFeed: (Long) -> Unit,
     onUnsubscribe: (Long) -> Unit,
     onCadence: (Long, String) -> Unit,
 ) {
@@ -1189,11 +1379,14 @@ private fun FeedsScreen(
         feedGroups(subscriptions, folders).forEach { group ->
             group.title?.let { title ->
                 item(key = group.key) {
-                    Text(
-                        title,
-                        style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    )
+                    TextButton(
+                        onClick = { onFolder(group.key.removePrefix("folder-").toLongOrNull() ?: 0L) },
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    ) {
+                        Icon(FolderIcon, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(title, style = MaterialTheme.typography.titleSmall)
+                    }
                 }
             }
             items(group.subscriptions, key = { it.id }) { subscription ->
@@ -1202,6 +1395,7 @@ private fun FeedsScreen(
                     unreadMode = unreadMode,
                     unreadCount = unreadCounts?.bySubscription?.get(subscription.id),
                     onCadence = onCadence,
+                    onOpen = { onFeed(subscription.id) },
                     onUnsubscribe = onUnsubscribe,
                 )
             }
@@ -1245,6 +1439,7 @@ private fun FeedRow(
     unreadMode: Boolean,
     unreadCount: Long?,
     onCadence: (Long, String) -> Unit,
+    onOpen: () -> Unit,
     onUnsubscribe: (Long) -> Unit,
 ) {
     // The icon path and fetch health live in the subscription's raw JSON.
@@ -1252,12 +1447,13 @@ private fun FeedRow(
     val iconUrl = remember(subscription.raw) { subscription.iconUrl() }
     val health = remember(subscription.raw) { subscription.health() }
     Column(Modifier.fillMaxWidth().padding(16.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             iconUrl?.let {
                 MediaImage(it, Modifier.size(24.dp), RoundedCornerShape(4.dp))
                 Spacer(Modifier.width(8.dp))
             }
-            Text(subscription.name, style = MaterialTheme.typography.bodyLarge)
+            Text(subscription.name, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+            Text("Read", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
         }
         Text(
             subscription.raw.url(),
@@ -1400,11 +1596,6 @@ private fun String.url(): String = runCatching {
     kotlinx.serialization.json.Json.parseToJsonElement(this)
         .jsonObject["url"]?.jsonPrimitive?.content ?: ""
 }.getOrDefault("")
-
-private fun String.dayName(): String = runCatching {
-    val instant = Instant.parse(this)
-    instant.atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("EEEE"))
-}.getOrDefault("today")
 
 internal fun Long.relativeTime(): String {
     val minutes = java.time.Duration.between(Instant.ofEpochMilli(this), Instant.now()).toMinutes()
