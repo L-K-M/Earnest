@@ -363,7 +363,7 @@ class LlmSettingsAppTest {
         model.saveLlmSettings()
         delay(300)
         assertTrue("no baseline means no request", llmPuts().isEmpty())
-        assertEquals("Load the LLM services settings before saving.", model.state.value.llmSettingsUi.error)
+        assertEquals("Load the AI settings before saving.", model.state.value.llmSettingsUi.error)
     }
 
     @Test fun ambiguousFailureFreezesTheExactBodyAndRetryResendsIt() = runBlocking(Dispatchers.IO) {
@@ -748,7 +748,7 @@ class LlmSettingsAppTest {
         model.fetchLlmModels(0)
         delay(300)
         assertTrue(discoveries().isEmpty())
-        assertTrue(model.state.value.llmSettingsUi.error!!.contains("Load the LLM services settings"))
+        assertTrue(model.state.value.llmSettingsUi.error!!.contains("Load the AI settings"))
     }
 
     @Test fun aSavedProviderKeepsItsCatalogueWhileATypedKeyDropsIt() = runBlocking(Dispatchers.IO) {

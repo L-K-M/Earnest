@@ -11,7 +11,7 @@ rules it enforces. The product rationale is in
 Every task is disabled unless both its provider and model are configured.
 With no saved configuration or `EARNEST_LLM_*` variables, every task reports
 `llm.ErrDisabled` and no model request leaves the process. Settings always
-shows the LLM services editor, including when every task is disabled.
+shows the AI editor, including when every task is disabled.
 
 ## Provider kinds
 

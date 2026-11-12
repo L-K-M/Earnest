@@ -871,7 +871,7 @@ class AppViewModel internal constructor(
     fun loadLlmSettings() {
         val intent = _state.value
         val expected = intent.llmSettingsUi.epoch
-        val (cache, session) = activeAccount("Still signing in; LLM services did not load.") ?: return
+        val (cache, session) = activeAccount("Still signing in; AI settings did not load.") ?: return
         loadLlmSettings(expected, session, cache, reset = false)
     }
 
@@ -879,7 +879,7 @@ class AppViewModel internal constructor(
     fun reloadLlmSettings() {
         val intent = _state.value
         val expected = intent.llmSettingsUi.epoch
-        val (cache, session) = activeAccount("Still signing in; LLM services did not load.") ?: return
+        val (cache, session) = activeAccount("Still signing in; AI settings did not load.") ?: return
         loadLlmSettings(expected, session, cache, reset = true)
     }
 
@@ -926,14 +926,14 @@ class AppViewModel internal constructor(
                 if (!loadLlmOwner(session, cache, expected, request)) return@launch
                 if (error.isUnauthorized && sessions.current() == session) expireSessionIfCurrent(session)
                 publishLlm(expected, session, cache, { it.loadRequest == request }) {
-                    it.copy(llmSettingsUi = it.llmSettingsUi.copy(loading = false, error = failureText("Could not load LLM services", error)))
+                    it.copy(llmSettingsUi = it.llmSettingsUi.copy(loading = false, error = failureText("Could not load AI settings", error)))
                 }
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
             } catch (error: Exception) {
                 if (loadLlmOwner(session, cache, expected, request)) {
                     publishLlm(expected, session, cache, { it.loadRequest == request }) {
-                        it.copy(llmSettingsUi = it.llmSettingsUi.copy(loading = false, error = failureText("Could not load LLM services", error)))
+                        it.copy(llmSettingsUi = it.llmSettingsUi.copy(loading = false, error = failureText("Could not load AI settings", error)))
                     }
                 }
             }
@@ -1029,7 +1029,7 @@ class AppViewModel internal constructor(
         val provider = draft?.providers?.getOrNull(providerIndex)
         if (loaded == null || provider == null) {
             publishLlm(expected, session, cache) {
-                it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = "Load the LLM services settings before fetching models."))
+                it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = "Load the AI settings before fetching models."))
             }
             return
         }
@@ -1170,7 +1170,7 @@ class AppViewModel internal constructor(
         val provider = draft?.providers?.getOrNull(providerIndex)
         if (loaded == null || provider == null) {
             publishLlm(expected, session, cache) {
-                it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = "Load the LLM services settings before checking a model."))
+                it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = "Load the AI settings before checking a model."))
             }
             return
         }
@@ -1265,17 +1265,17 @@ class AppViewModel internal constructor(
         val intent = _state.value
         val ui = intent.llmSettingsUi
         val expected = ui.epoch
-        val (cache, session) = activeAccount("Still signing in; LLM services did not save.") ?: return
+        val (cache, session) = activeAccount("Still signing in; AI settings did not save.") ?: return
         val loaded = ui.loaded
         if (loaded == null) {
             publishLlm(expected, session, cache) {
-                it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = "Load the LLM services settings before saving."))
+                it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = "Load the AI settings before saving."))
             }
             return
         }
         if (ui.conflict) {
             publishLlm(expected, session, cache) {
-                it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = "Reload the LLM services settings before saving again."))
+                it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = "Reload the AI settings before saving again."))
             }
             return
         }
@@ -1285,7 +1285,7 @@ class AppViewModel internal constructor(
             draft.toInput(frozen?.input?.opId ?: newLlmOpId())
         } catch (error: IllegalArgumentException) {
             publishLlm(expected, session, cache) {
-                it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = error.message ?: "The LLM services settings are invalid."))
+                it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = error.message ?: "The AI settings are invalid."))
             }
             return
         }
@@ -1307,7 +1307,7 @@ class AppViewModel internal constructor(
         val frozen = ui.frozen ?: return
         val loaded = ui.loaded ?: return
         val expected = ui.epoch
-        val (cache, session) = activeAccount("Still signing in; LLM services did not save.") ?: return
+        val (cache, session) = activeAccount("Still signing in; AI settings did not save.") ?: return
         publishLlm(expected, session, cache) {
             it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = null, success = false))
         }
@@ -1378,7 +1378,7 @@ class AppViewModel internal constructor(
                 // A 401 invalidates the token: never replay or publish the save.
                 if (error.isUnauthorized) {
                     publishLlm(expected, session, cache, { it.saveRequest == request }) {
-                        it.copy(llmSettingsUi = it.llmSettingsUi.copy(saving = false, frozen = null, error = failureText("Could not save LLM services", error)))
+                        it.copy(llmSettingsUi = it.llmSettingsUi.copy(saving = false, frozen = null, error = failureText("Could not save AI settings", error)))
                     }
                     expireSessionIfCurrent(session)
                     return@launch
@@ -1401,7 +1401,7 @@ class AppViewModel internal constructor(
                     it.copy(llmSettingsUi = it.llmSettingsUi.copy(
                         saving = false,
                         frozen = if (deterministic) null else it.llmSettingsUi.frozen,
-                        error = failureText("Could not save LLM services", error),
+                        error = failureText("Could not save AI settings", error),
                     ))
                 }
             } catch (error: IllegalArgumentException) {
@@ -1411,7 +1411,7 @@ class AppViewModel internal constructor(
                     it.copy(llmSettingsUi = it.llmSettingsUi.copy(
                         saving = false,
                         frozen = null,
-                        error = "Could not save LLM services: ${error.message ?: "invalid settings"}",
+                        error = "Could not save AI settings: ${error.message ?: "invalid settings"}",
                     ))
                 }
             } catch (error: kotlinx.coroutines.CancellationException) {
@@ -1422,7 +1422,7 @@ class AppViewModel internal constructor(
                         it.copy(llmSettingsUi = it.llmSettingsUi.copy(
                             saving = false,
                             frozen = it.llmSettingsUi.frozen,
-                            error = failureText("Could not save LLM services", error),
+                            error = failureText("Could not save AI settings", error),
                         ))
                     }
                 }
