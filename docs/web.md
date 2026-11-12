@@ -62,7 +62,12 @@ its direct feeds unfiled. Folder nesting is preserved in sync and OPML exports.
    title to open the original in a new tab. Configure **Article integrations**
    in Settings to send articles to Karakeep or Hister; see
    [article integrations](article-integrations.md).
-5. Use Done (`e`), Later (`s`), Keep (`f`) or unread (`m`). Unread clears Done.
+5. When you open an article from the list, it is marked read. Background
+   fetching, rendering and refreshes never mark an article read. Scrolling
+   past rows, selecting without opening, and leaving an article do not either.
+   If you mark an open article unread, it stays unread when you move to another
+   article; explicitly reopening it marks it read again.
+   Use Done (`e`), Later (`s`), Keep (`f`) or unread (`m`). Unread clears Done.
    Each of these applies at once and offers Undo (`z`) in a short notice that
    restores the registers it changed. `j` and `k` select, and while an article
    is open they open the next or previous one in place, so Back still returns
