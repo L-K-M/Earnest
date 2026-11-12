@@ -817,3 +817,81 @@ func mustHost(t *testing.T, server *httptest.Server) string {
 	}
 	return u.Host
 }
+
+// Feeds list items newest first, but a batch's seq must grow oldest to newest
+// so a newest-first reader (ORDER BY seq DESC) shows the newest article first.
+func TestFetchOrdersBatchOldestToNewest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `<?xml version="1.0"?><rss version="2.0"><channel><title>News</title>`+
+			`<item><guid>newest</guid><title>Newest</title><pubDate>Wed, 03 Feb 2021 00:00:00 GMT</pubDate><description>n</description></item>`+
+			`<item><guid>middle</guid><title>Middle</title><pubDate>Tue, 02 Feb 2021 00:00:00 GMT</pubDate><description>m</description></item>`+
+			`<item><guid>oldest</guid><title>Oldest</title><pubDate>Mon, 01 Feb 2021 00:00:00 GMT</pubDate><description>o</description></item>`+
+			`</channel></rss>`)
+	}))
+	defer server.Close()
+	f, s := testFetcher(t, server)
+	if err := f.Fetch(context.Background(), service.FeedToFetch{FeedID: 1, URL: server.URL}); err != nil {
+		t.Fatal(err)
+	}
+	if s.outcomes[0].Status != service.FetchOK {
+		t.Fatalf("status %s", s.outcomes[0].Status)
+	}
+	got := make([]string, 0, len(s.outcomes[0].Items))
+	for _, item := range s.outcomes[0].Items {
+		got = append(got, item.GUID)
+	}
+	if want := "oldest,middle,newest"; strings.Join(got, ",") != want {
+		t.Fatalf("batch order = %q, want %q", strings.Join(got, ","), want)
+	}
+}
+
+// Missing and equal publisher dates fall back to the feed's document order:
+// an undated item is never treated as a year-one publication, and ties keep
+// the order the publisher chose.
+func TestFetchBatchOrderFallsBackToDocumentOrder(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `<?xml version="1.0"?><rss version="2.0"><channel><title>News</title>`+
+			`<item><guid>equal-a</guid><title>A</title><pubDate>Tue, 02 Feb 2021 00:00:00 GMT</pubDate><description>a</description></item>`+
+			`<item><guid>missing-a</guid><title>B</title><description>b</description></item>`+
+			`<item><guid>older</guid><title>C</title><pubDate>Mon, 01 Feb 2021 00:00:00 GMT</pubDate><description>c</description></item>`+
+			`<item><guid>equal-b</guid><title>D</title><pubDate>Tue, 02 Feb 2021 00:00:00 GMT</pubDate><description>d</description></item>`+
+			`<item><guid>missing-b</guid><title>E</title><description>e</description></item>`+
+			`<item><guid>newer</guid><title>F</title><pubDate>Wed, 03 Feb 2021 00:00:00 GMT</pubDate><description>f</description></item>`+
+			`</channel></rss>`)
+	}))
+	defer server.Close()
+	f, s := testFetcher(t, server)
+	if err := f.Fetch(context.Background(), service.FeedToFetch{FeedID: 1, URL: server.URL}); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(s.outcomes[0].Items))
+	for _, item := range s.outcomes[0].Items {
+		got = append(got, item.GUID)
+	}
+	if want := "older,equal-a,equal-b,newer,missing-a,missing-b"; strings.Join(got, ",") != want {
+		t.Fatalf("batch order = %q, want %q", strings.Join(got, ","), want)
+	}
+}
+
+// Atom entries may carry only <updated>; that is still a usable publisher
+// timestamp and must order the batch.
+func TestFetchBatchOrderUsesUpdatedWithoutPublished(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><title>News</title>`+
+			`<entry><id>newest</id><title>Newest</title><updated>2021-02-03T00:00:00Z</updated></entry>`+
+			`<entry><id>oldest</id><title>Oldest</title><updated>2021-02-01T00:00:00Z</updated></entry>`+
+			`</feed>`)
+	}))
+	defer server.Close()
+	f, s := testFetcher(t, server)
+	if err := f.Fetch(context.Background(), service.FeedToFetch{FeedID: 1, URL: server.URL}); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(s.outcomes[0].Items))
+	for _, item := range s.outcomes[0].Items {
+		got = append(got, item.Title)
+	}
+	if want := "Oldest,Newest"; strings.Join(got, ",") != want {
+		t.Fatalf("batch order = %q, want %q", strings.Join(got, ","), want)
+	}
+}

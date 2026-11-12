@@ -69,6 +69,7 @@ export function frameMessage(data: unknown, nonce: string): FrameMessage | null 
 export function ArticleFrame({src}: {src: string}) {
   const frame = useRef<HTMLIFrameElement>(null)
   const [sized, setSized] = useState<{nonce: string; height: number} | null>(null)
+  const [loaded, setLoaded] = useState('')
   // A fresh token per article, echoed by the page it loads, held in state
   // rather than a memo: the token is load-bearing and a memo cache may be
   // discarded without a prop change. The height is kept with the load that
@@ -109,5 +110,10 @@ export function ArticleFrame({src}: {src: string}) {
     window.addEventListener('message', receive)
     return () => window.removeEventListener('message', receive)
   }, [src, nonce])
-  return <iframe ref={frame} title="Article body" src={framed} sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" style={height === null ? undefined : {height}} />
+  // Do not paint the browser's blank (often white) document between articles.
+  // The nonce-authenticated height report arrives once the themed page has
+  // laid out. Load also reveals network error pages that cannot report back.
+  // A new node per load prevents a late load event revealing the next blank.
+  const ready = height !== null || loaded === nonce
+  return <iframe key={nonce} ref={frame} title="Article body" src={framed} sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" onLoad={() => setLoaded(nonce)} aria-busy={!ready} style={{height: height ?? undefined, visibility: ready ? 'visible' : 'hidden'}} />
 }

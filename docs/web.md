@@ -58,7 +58,10 @@ its direct feeds unfiled. Folder nesting is preserved in sync and OPML exports.
    through the whole article, and after a click inside it the frame passes
    those keys and the single-key shortcuts back to the reader. The pane takes the article's theme.
    Settings control palette, font and a 62–72 character measure; the reader's
-   Typography popover saves a per-feed override keyed by feed ID.
+   Typography popover saves a per-feed override keyed by feed ID. Click the
+   title to open the original in a new tab. Configure **Article integrations**
+   in Settings to send articles to Karakeep or Hister; see
+   [article integrations](article-integrations.md).
 5. Use Done (`e`), Later (`s`), Keep (`f`) or unread (`m`). Unread clears Done.
    Each of these applies at once and offers Undo (`z`) in a short notice that
    restores the registers it changed. `j` and `k` select, and while an article
@@ -77,7 +80,8 @@ its direct feeds unfiled. Folder nesting is preserved in sync and OPML exports.
    Right-click, long-press or press Shift+F10 (or the Menu key) for context
    menus. Today, a folder or a feed in the sidebar offers "Mark all as read",
    which marks through the newest article this browser knows of after a
-   confirmation, and a feed adds Refresh feed and Feed settings. An article
+   confirmation, and a feed adds Refresh feed and Feed settings. A folder
+   adds Rename folder, Add feed inside this folder and New subfolder. An article
    in a list offers its reading actions, Open in new tab, "Mark read up to
    here" (in Today, a feed or a folder) and Copy link to the original. Hold
    Shift while right-clicking for the browser's own menu. The Earnest logo

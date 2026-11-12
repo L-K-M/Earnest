@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -429,7 +430,42 @@ func (f *Fetcher) items(ctx context.Context, claim service.FeedToFetch, list []f
 		result[i].SanitizerVersion = int(extracted.document.Version)
 		result[i].ContentSource = extracted.source
 	}
+	orderIngestBatch(result)
 	return result, nil
+}
+
+// batchOrderTime returns the publisher timestamp that orders one item within
+// a fetched batch, and whether the source supplied one. Publication wins over
+// update so a corrected article keeps its first-publication place, and Atom
+// entries that only carry <updated> still sort by a usable date. The bool is
+// false when neither is usable.
+func batchOrderTime(published, updated *time.Time) (time.Time, bool) {
+	if published != nil {
+		return *published, true
+	}
+	if updated != nil {
+		return *updated, true
+	}
+	return time.Time{}, false
+}
+
+// orderIngestBatch sorts a fetched batch oldest to newest so RecordFetch
+// reserves seq in that order and a newest-first reader (ORDER BY seq DESC)
+// shows the newest article first. Feeds normally list items newest first, so
+// preserving document order runs the batch's seq backwards. Equal or missing
+// publisher dates fall back to the feed's document order: a stable sort
+// breaks ties by position, and an undated item is not a year-one publication,
+// so it follows dated items instead of preceding them.
+func orderIngestBatch(items []service.IngestItem) {
+	sort.SliceStable(items, func(i, j int) bool {
+		ti, oki := batchOrderTime(items[i].PublishedAt, items[i].UpdatedAt)
+		tj, okj := batchOrderTime(items[j].PublishedAt, items[j].UpdatedAt)
+		if !oki || !okj {
+			// Undated items sort after dated ones and keep document order.
+			return oki && !okj
+		}
+		return ti.Before(tj)
+	})
 }
 
 // extractWorkers bounds concurrent full-text extraction. The outbound client

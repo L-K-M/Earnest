@@ -7,6 +7,7 @@ import {Typography, settingsInput, withoutFeedOverride, type ReadingSettings} fr
 import {OfflineArticle, useOnline} from './offline/Offline'
 import {MoreLikeThis} from './search/Search'
 import {Summary} from './pipeline/Pipeline'
+import {SendActions} from './integrations/Integrations'
 import {Icon} from './Icon'
 import {longDate} from './format'
 
@@ -88,6 +89,7 @@ export function Reader({entry, subscription, settings, actions, onClose, onSetti
       <button type="button" className="tool" data-tone="plum" aria-pressed={state.kept.value === true} onClick={() => act('kept', state.kept.value !== true)} title="Keep (f)" aria-keyshortcuts="f"><Icon name="keep" /><span className="label">Keep</span></button>
       <button type="button" className="tool" onClick={() => act('seen', 'unseen')} title="Mark unread (m)" aria-keyshortcuts="m"><Icon name="unread" /><span className="label">Mark unread</span></button>
       <span className="tool-spacer" />
+      <SendActions key={entry.id} entryID={entry.id} onNotify={onNotify} />
       <a className="tool secondary" href={entry.url} target="_blank" rel="noopener noreferrer" title="Open original (v)" aria-keyshortcuts="v"><Icon name="external" /><span className="label">Open original</span></a>
       <button type="button" className={`tool secondary copy${canShare ? ' has-share' : ''}`} onClick={() => {void copyLink()}} title="Copy link to the original"><Icon name="link" /><span className="label">Copy link</span></button>
       {canShare && <button type="button" className="tool secondary" onClick={() => {void share()}} title="Share"><Icon name="share" /><span className="label">Share</span></button>}
@@ -95,7 +97,7 @@ export function Reader({entry, subscription, settings, actions, onClose, onSetti
     </div>
     <div className="reader-scroll">
       <header className="article-header">
-        <h2 id={`${ids}-title`} ref={title} tabIndex={-1} dir="auto">{entry.title || 'Untitled'}</h2>
+        <h2 id={`${ids}-title`} ref={title} tabIndex={-1} dir="auto"><a href={entry.url} target="_blank" rel="noopener noreferrer">{entry.title || 'Untitled'}</a></h2>
         <p className="article-meta"><span dir="auto">{subscription?.title || 'Feed'}</span>{entry.author && <> · <span dir="auto">{entry.author}</span></>}{date && <> · <time dateTime={date}>{longDate(date)}</time></>}{shelf && <> · <span className="chip" data-tone={state.shelf.value === 'done' ? 'green' : 'amber'}>{shelf}</span></>}{state.kept.value === true && <> · <span className="chip" data-tone="plum">Kept</span></>}</p>
       </header>
       <Summary entryID={entry.id}/>

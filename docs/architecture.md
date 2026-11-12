@@ -50,7 +50,9 @@ Each layer talks only to the layer below it. HTTP handlers, the Google Reader ad
 ## Conventions
 
 - **IDs** are 64-bit integers, serialised as JSON numbers. Entry IDs map to Google Reader item IDs without a lookup table.
-- **Ordering** uses `entries.seq`, assigned at ingest. Publisher dates are display only.
+- **Ordering** uses `entries.seq`, assigned at ingest. Within one fetched
+  batch, publisher dates put older entries before newer ones before sequence
+  allocation. Existing sequences and cross-batch cursor boundaries never change.
 - **Time** is UTC `timestamptz` in the database and RFC 3339 in JSON.
 - **Errors** over HTTP are `application/problem+json` (RFC 9457).
 - **Mutations** take a client-generated `op_id`, deduplicated per principal.

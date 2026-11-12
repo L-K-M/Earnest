@@ -112,6 +112,7 @@ func build(svc *service.Service, auth *service.Auth, logger *slog.Logger, baseUR
 	s.mediaRoutes()
 	s.ruleRoutes()
 	s.settingsRoutes()
+	s.integrationRoutes()
 	s.llmSettingsRoutes()
 	s.embedRoutes()
 	s.semanticRoutes()

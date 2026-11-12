@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type {MouseEvent as ReactMouseEvent, ReactNode} from 'react'
 import {afterEach, beforeEach, expect, it, vi} from 'vitest'
-import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react'
+import {cleanup, fireEvent, render, screen, waitFor, within} from '@testing-library/react'
 import {createRoot} from 'react-dom/client'
 import {request} from './request'
 import {defaultSettings} from './Settings'
@@ -20,13 +20,23 @@ vi.mock('./River', () => ({River: ({view, onOpen, onMenu}: {view: View; onOpen: 
 vi.mock('./ArticleReader', () => ({Reader: ({entry}: {entry: Entry}) => <article><h2>{entry.title}</h2></article>}))
 
 beforeEach(() => {
+  // jsdom does not implement scrolling; the router focuses a #fragment target.
+  Element.prototype.scrollIntoView = () => {}
   HTMLDialogElement.prototype.showModal = function() {this.setAttribute('open', '')}
   HTMLDialogElement.prototype.close = function() {this.removeAttribute('open'); this.dispatchEvent(new Event('close'))}
   localStorage.setItem('earnest.csrf', 'token')
-  vi.mocked(request).mockImplementation(async path => {
+  vi.mocked(request).mockImplementation(async (path: string, options?: RequestInit) => {
     if (path === '/v1/me') return {user_id: 1, principal_id: 1}
     if (path === '/v1/settings') return {...defaultSettings, rev: 1}
-    if (path === '/v1/subscriptions') return [{id: 8, feed_id: 42, title: 'Rust', url: 'https://feed.test', deleted: false, folder_id: 0, cadence: 'today', health: {consecutive_failures: 0}}]
+    if (path === '/v1/subscriptions') {
+      if (options?.method === 'POST') return {id: 2, feed_id: 43, title: 'New', url: 'https://example.com/feed', deleted: false, folder_id: 3, cadence: 'today', health: {consecutive_failures: 0}}
+      return [{id: 8, feed_id: 42, title: 'Rust', url: 'https://feed.test', deleted: false, folder_id: 0, cadence: 'today', health: {consecutive_failures: 0}}]
+    }
+    if (path === '/v1/folders/3' && options?.method === 'PATCH') return {id: 3, name: 'Updated', parent_id: 0, rev: 2, deleted: false}
+    if (path === '/v1/folders') {
+      if (options?.method === 'POST') return {id: 7, name: 'Child', parent_id: 3, rev: 1, deleted: false}
+      return [{id: 3, name: 'News', parent_id: 0, rev: 1, deleted: false}]
+    }
     if (path === '/v1/entries/4') return entries[0]
     if (path === '/v1/pipeline') return {ask: 'disabled'}
     return []
@@ -40,6 +50,8 @@ function answer(value: boolean) {
   confirms.push(spy)
   return spy
 }
+const calls = (path: string, method?: string) => vi.mocked(request).mock.calls.filter(([to, options]) => to.startsWith(path) && (!method || options?.method === method))
+const bodyOf = (call: [string, RequestInit?]) => JSON.parse(String(call[1]?.body)) as Record<string, unknown>
 
 async function start(path: string) {
   history.replaceState(null, '', path)
@@ -104,6 +116,79 @@ it('closes a menu with Escape without closing the open article', async () => {
   expect(screen.queryByRole('menu')).toBeNull()
   expect(location.pathname).toBe('/feeds/8/articles/4')
   expect(document.activeElement).toBe(today)
+})
+
+it('offers folder management only for a folder', async () => {
+  await start('/today')
+  const folder = await screen.findByRole('link', {name: 'News'}, {timeout: 5000})
+  fireEvent.contextMenu(folder, {clientX: 30, clientY: 40})
+  expect(await screen.findByRole('menu', {name: 'News actions'})).toBeTruthy()
+  for (const name of ['Mark all as read', 'Rename folder', 'Add feed inside this folder', 'New subfolder', 'Open in new tab']) {
+    expect(screen.getByRole('menuitem', {name})).toBeTruthy()
+  }
+  expect(screen.queryByRole('menuitem', {name: 'Refresh feed'})).toBeNull()
+  fireEvent.keyDown(screen.getByRole('menuitem', {name: 'Open in new tab'}), {key: 'Escape'})
+
+  const feed = await screen.findByRole('link', {name: 'Rust'})
+  fireEvent.contextMenu(feed, {clientX: 30, clientY: 40})
+  expect(await screen.findByRole('menu', {name: 'Rust actions'})).toBeTruthy()
+  for (const name of ['Rename folder', 'Add feed inside this folder', 'New subfolder']) {
+    expect(screen.queryByRole('menuitem', {name})).toBeNull()
+  }
+})
+
+it('renames a folder from its menu without moving it', async () => {
+  await start('/today')
+  const folder = await screen.findByRole('link', {name: 'News'}, {timeout: 5000})
+  fireEvent.contextMenu(folder, {clientX: 30, clientY: 40})
+  fireEvent.click(await screen.findByRole('menuitem', {name: 'Rename folder'}))
+  fireEvent.change(await screen.findByLabelText('Folder name'), {target: {value: 'Updated'}})
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await waitFor(() => expect(calls('/v1/folders/3', 'PATCH')).toHaveLength(1))
+  expect(bodyOf(calls('/v1/folders/3', 'PATCH')[0])).toEqual({name: 'Updated', op_id: expect.any(String)})
+  expect(await screen.findByText('Folder renamed.')).toBeTruthy()
+  expect(screen.queryByRole('dialog', {name: 'Rename folder'})).toBeNull()
+})
+
+it('creates a subfolder under the folder from its menu', async () => {
+  await start('/today')
+  const folder = await screen.findByRole('link', {name: 'News'}, {timeout: 5000})
+  fireEvent.contextMenu(folder, {clientX: 30, clientY: 40})
+  fireEvent.click(await screen.findByRole('menuitem', {name: 'New subfolder'}))
+  fireEvent.change(await screen.findByLabelText('Folder name'), {target: {value: 'Child'}})
+  fireEvent.click(screen.getByRole('button', {name: 'Create'}))
+  await waitFor(() => expect(calls('/v1/folders', 'POST')).toHaveLength(1))
+  expect(bodyOf(calls('/v1/folders', 'POST')[0])).toEqual({name: 'Child', parent_id: 3, op_id: expect.any(String)})
+  expect(calls('/v1/folders/7', 'PATCH')).toHaveLength(0)
+  expect(await screen.findByText('Subfolder created.')).toBeTruthy()
+})
+
+it('prefills the subscribe form with the folder and submits its id', async () => {
+  await start('/today')
+  const folder = await screen.findByRole('link', {name: 'News'}, {timeout: 5000})
+  fireEvent.contextMenu(folder, {clientX: 30, clientY: 40})
+  fireEvent.click(await screen.findByRole('menuitem', {name: 'Add feed inside this folder'}))
+  const input = await screen.findByLabelText('Feed or site URL', {}, {timeout: 5000})
+  const subscribe = within(screen.getByRole('region', {name: 'Subscribe'}))
+  expect((subscribe.getByLabelText('Folder') as HTMLSelectElement).value).toBe('3')
+  fireEvent.change(input, {target: {value: 'https://example.com/feed'}})
+  fireEvent.click(screen.getByRole('button', {name: 'Subscribe'}))
+  await waitFor(() => expect(calls('/v1/subscriptions', 'POST')).toHaveLength(1))
+  expect(bodyOf(calls('/v1/subscriptions', 'POST')[0])).toMatchObject({url: 'https://example.com/feed', folder_id: 3})
+})
+
+it('consumes the folder prefill instead of overriding later subscribe drafts', async () => {
+  await start('/today')
+  const folder = await screen.findByRole('link', {name: 'News'}, {timeout: 5000})
+  fireEvent.contextMenu(folder)
+  fireEvent.click(await screen.findByRole('menuitem', {name: 'Add feed inside this folder'}))
+  const region = await screen.findByRole('region', {name: 'Subscribe'})
+  fireEvent.change(within(region).getByLabelText('Folder'), {target: {value: '0'}})
+  fireEvent.click(screen.getByRole('link', {name: 'Today'}))
+  await screen.findByRole('heading', {name: 'Today list'})
+  fireEvent.click(screen.getByRole('link', {name: 'Manage feeds'}))
+  const again = await screen.findByRole('region', {name: 'Subscribe'})
+  expect((within(again).getByLabelText('Folder') as HTMLSelectElement).value).toBe('0')
 })
 
 it('marks a list read up to an article from its row menu', async () => {
