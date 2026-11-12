@@ -122,6 +122,18 @@ func catalogueGET(ctx context.Context, client *outbound.Client, endpoint string,
 	result, err := client.Do(req, outbound.Policy{Purpose: outbound.LLM, Timeout: timeout, Redirect: outbound.RedirectNone, ExtraPorts: ports})
 	if result != nil && result.Response != nil {
 		defer result.Response.Body.Close()
+		// Outbound returns both a response and an error for several HTTP
+		// statuses. Prefer actionable HTTP guidance before transport errors.
+		switch status := result.Response.StatusCode; {
+		case status == http.StatusUnauthorized || status == http.StatusForbidden:
+			return nil, errors.New("provider rejected access; check the API key and its permissions")
+		case status == http.StatusNotFound || status == http.StatusGone || status == http.StatusMethodNotAllowed:
+			return nil, errors.New("provider does not expose model discovery at this URL; add models manually")
+		case status == http.StatusTooManyRequests:
+			return nil, errors.New("provider rate limit reached; retry fetching models later")
+		case status < 200 || status >= 300:
+			return nil, fmt.Errorf("provider model discovery returned HTTP %d; retry or add models manually", status)
+		}
 	}
 	if err != nil {
 		// Transport errors can embed URLs and upstream response content. Only
@@ -130,16 +142,6 @@ func catalogueGET(ctx context.Context, client *outbound.Client, endpoint string,
 	}
 	if result == nil || result.Response == nil {
 		return nil, errors.New("provider returned no model catalogue")
-	}
-	switch status := result.Response.StatusCode; {
-	case status == http.StatusUnauthorized || status == http.StatusForbidden:
-		return nil, errors.New("provider rejected access; check the API key and its permissions")
-	case status == http.StatusNotFound || status == http.StatusMethodNotAllowed:
-		return nil, errors.New("provider does not expose model discovery at this URL; add models manually")
-	case status == http.StatusTooManyRequests:
-		return nil, errors.New("provider rate limit reached; retry fetching models later")
-	case status < 200 || status >= 300:
-		return nil, fmt.Errorf("provider model discovery returned HTTP %d; retry or add models manually", status)
 	}
 	raw, err := io.ReadAll(result.Response.Body)
 	if err != nil {
@@ -207,10 +209,12 @@ func decodeCatalogue(raw []byte, kind ProviderKind, venice bool) ([]DiscoveredMo
 		case kind == KindAnthropic:
 			model.Chat, model.Embedding = boolPointer(true), boolPointer(false)
 		case kind == KindGemini:
-			model.Chat = boolPointer(slices.Contains(entry.Methods, "generateContent"))
-			model.Embedding = boolPointer(slices.Contains(entry.Methods, "embedContent"))
-			if !*model.Chat && !*model.Embedding {
-				continue
+			if entry.Methods != nil {
+				model.Chat = boolPointer(slices.Contains(entry.Methods, "generateContent"))
+				model.Embedding = boolPointer(slices.Contains(entry.Methods, "embedContent"))
+				if !*model.Chat && !*model.Embedding {
+					continue
+				}
 			}
 		case venice:
 			if entry.Type != "text" && entry.Type != "embedding" {

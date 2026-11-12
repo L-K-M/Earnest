@@ -91,6 +91,18 @@ func TestVeniceCatalogue(t *testing.T) {
 	}
 }
 
+func TestGeminiCatalogueUnknownCapabilities(t *testing.T) {
+	models, _, err := decodeCatalogue([]byte(`{"models":[{"name":"models/unknown"},{"name":"models/null","supportedGenerationMethods":null},{"name":"models/none","supportedGenerationMethods":[]}]}`), KindGemini, false)
+	if err != nil || len(models) != 2 {
+		t.Fatalf("missing capability metadata should remain browsable: %+v %v", models, err)
+	}
+	for _, model := range models {
+		if model.Chat != nil || model.Embedding != nil {
+			t.Fatalf("unknown capabilities became false: %+v", model)
+		}
+	}
+}
+
 func TestDiscoverModelsLargeCatalogue(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		models := make([]map[string]string, 200)
@@ -129,6 +141,10 @@ func TestDiscoverModelsFailuresAreRedacted(t *testing.T) {
 			_, err := DiscoverModels(t.Context(), "test", ProviderConfig{Kind: KindOpenAI, BaseURL: server.URL, APIKey: "secret-key"}, testOutbound(t))
 			if err == nil || strings.Contains(err.Error(), "secret-key") || strings.Contains(err.Error(), server.URL) {
 				t.Fatalf("unsafe or absent error: %v", err)
+			}
+			want := map[int]string{401: "API key and its permissions", 403: "API key and its permissions", 404: "add models manually", 429: "retry fetching models later", 500: "HTTP 500"}[tc.status]
+			if want != "" && !strings.Contains(err.Error(), want) {
+				t.Fatalf("missing actionable guidance %q: %v", want, err)
 			}
 		})
 	}
