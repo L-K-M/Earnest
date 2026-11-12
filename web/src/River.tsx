@@ -63,7 +63,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   const listRef = useRef<HTMLDivElement>(null)
   const [scrollMargin, setScrollMargin] = useState(0)
   const heading = useRef<HTMLHeadingElement>(null)
-  const pending = useRef(new Map<number, {seenRev: number}>())
+  const pending = useRef(new Map<number, {entry: Entry; seenRev: number}>())
   const focusNext = useRef<number | null>(null)
   const [error, setError] = useState('')
   const [cluster, setCluster] = useState(false)
@@ -211,8 +211,14 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
     const inFlight = new Set<number>()
     const timer = window.setInterval(() => {
       const due = [...pending.current].flatMap(([id, intent]) => {
-        const entry = entriesRef.current.find(entry => entry.id === id)
-        return entry ? [{entry, intent}] : []
+        // A filter switch may omit an opened article from its first page.
+        // Keep the user's intent, but never write against a known tombstone.
+        const entry = entriesRef.current.find(entry => entry.id === id) ?? intent.entry
+        if (entry.deleted || actionsRef.current.deleted?.(entry)) {
+          pending.current.delete(id)
+          return []
+        }
+        return [{entry, intent}]
       })
       for (const {entry, intent} of due) {
         if (inFlight.has(entry.id)) continue
@@ -249,7 +255,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   }, [key])
 
   const queueSeen = useCallback((entry: Entry) => {
-    pending.current.set(entry.id, {seenRev: actionsRef.current.state(entry).seen.rev})
+    pending.current.set(entry.id, {entry, seenRev: actionsRef.current.state(entry).seen.rev})
   }, [])
 
   const open = useCallback((entry: Entry, mode?: OpenMode) => {

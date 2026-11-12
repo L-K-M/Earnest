@@ -91,6 +91,32 @@ describe('unread-only list visits', () => {
     expect(onOpen).not.toHaveBeenCalled()
   })
 
+  it('flushes an opened article even when the new filter page omits it', async () => {
+    const {actions} = mount(feed, false)
+    fireEvent.click(await screen.findByText('Article 2'))
+    vi.mocked(request).mockImplementation(async path => path.startsWith('/v1/positions') ? {seq: 0} : {entries: [article(4)], next_cursor: 'older'})
+    fireEvent.click(screen.getByRole('button', {name: 'Show only unread'}))
+    await screen.findByText('Article 4')
+    await waitFor(() => expect(actions.act).toHaveBeenCalledExactlyOnceWith(article(2), 'seen', 'seen', 'passive'), {timeout: 1500})
+    await waitFor(() => expect(vi.mocked(request).mock.calls.some(([path, options]) => path.startsWith('/v1/positions') && options?.method === 'PUT' && JSON.parse(String(options.body)).seq === 2)).toBe(true))
+  })
+
+  it.each(['remote unread', 'deletion'])('cancels a filtered-out pending open after %s', async reason => {
+    const {actions, states, deleted} = mount(feed, false)
+    fireEvent.click(await screen.findByText('Article 2'))
+    if (reason === 'remote unread') {
+      const state = article(2).state
+      states.set(2, {...state, seen: {...state.seen, value: 'unseen', rev: state.seen.rev + 1}})
+    } else {
+      deleted.add(2)
+    }
+    vi.mocked(request).mockImplementation(async path => path.startsWith('/v1/positions') ? {seq: 0} : {entries: [article(4)], next_cursor: 'older'})
+    fireEvent.click(screen.getByRole('button', {name: 'Show only unread'}))
+    await screen.findByText('Article 4')
+    await new Promise(resolve => window.setTimeout(resolve, 700))
+    expect(actions.act).not.toHaveBeenCalled()
+  })
+
   it('can leave a failed unread filter for the all-articles view', async () => {
     mount(feed, false)
     await screen.findByText('Article 1')
