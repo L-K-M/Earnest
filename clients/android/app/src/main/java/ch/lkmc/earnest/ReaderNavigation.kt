@@ -26,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -158,7 +159,7 @@ internal fun ReaderDrawer(
     onSettings: () -> Unit,
     onClose: () -> Unit = {},
 ) {
-    val groups = navigationFeedGroups(objects)
+    val groups = remember(objects) { navigationFeedGroups(objects) }
     var expanded by rememberSaveable { mutableStateOf(emptyList<String>()) }
     ModalDrawerSheet(modifier = Modifier.widthIn(max = 320.dp)) {
         LazyColumn(modifier = Modifier.testTag("reader-drawer"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -174,9 +175,9 @@ internal fun ReaderDrawer(
             items(listOf(View.ALL), key = { "view-${it.name}" }) { destination ->
                 NavigationDrawerItem(
                     label = { Text(destination.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    selected = view == destination && (destination != View.ALL || selection == FeedSelection.All),
+                    selected = view == destination && selection == FeedSelection.All,
                     icon = { Icon(destination.icon, contentDescription = null) },
-                    onClick = { onView(destination) },
+                    onClick = { onFeed(FeedSelection.All) },
                     modifier = Modifier.padding(horizontal = 12.dp),
                 )
             }

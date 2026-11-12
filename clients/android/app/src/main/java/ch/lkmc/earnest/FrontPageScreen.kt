@@ -127,7 +127,7 @@ internal fun FrontPageScreen(
                         TextButton(onClick = onRefresh, modifier = Modifier.testTag("front-try-again")) { Text("Try again") }
                     }
                 }
-                else -> FrontPageEmpty(Modifier.fillMaxSize(), state.period)
+                else -> FrontPageEmpty(Modifier.fillMaxSize().padding(horizontal = 24.dp), state.period)
             }
         }
     } else {

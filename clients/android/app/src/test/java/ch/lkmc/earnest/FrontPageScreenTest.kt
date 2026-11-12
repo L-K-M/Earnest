@@ -3,7 +3,10 @@ package ch.lkmc.earnest
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -137,26 +140,31 @@ class FrontPageScreenTest {
             if (path != null) Text("image:$path", modifier)
         },
         agentChanges: List<Activity> = emptyList(),
+        fontScale: Float? = null,
     ) {
         compose.setContent {
-            EarnestTheme(ThemeSetting.LIGHT) {
-                FrontPageScreen(
-                    state = state,
-                    states = emptyMap(),
-                    principalId = 1,
-                    briefs = emptyList(),
-                    principalNames = emptyMap(),
-                    entryTitles = emptyMap(),
-                    agentChanges = agentChanges,
-                    sessionChanges = emptyList(),
-                    agentChangesError = null,
-                    onRevert = {},
-                    onOpen = { opened += it },
-                    onOpenAgentSelected = {},
-                    onPeriodChange = { periods += it },
-                    onRefresh = { refreshes += Unit },
-                    image = image,
-                )
+            CompositionLocalProvider(
+                LocalDensity provides Density(LocalDensity.current.density, fontScale ?: LocalDensity.current.fontScale),
+            ) {
+                EarnestTheme(ThemeSetting.LIGHT) {
+                    FrontPageScreen(
+                        state = state,
+                        states = emptyMap(),
+                        principalId = 1,
+                        briefs = emptyList(),
+                        principalNames = emptyMap(),
+                        entryTitles = emptyMap(),
+                        agentChanges = agentChanges,
+                        sessionChanges = emptyList(),
+                        agentChangesError = null,
+                        onRevert = {},
+                        onOpen = { opened += it },
+                        onOpenAgentSelected = {},
+                        onPeriodChange = { periods += it },
+                        onRefresh = { refreshes += Unit },
+                        image = image,
+                    )
+                }
             }
         }
     }
@@ -307,6 +315,13 @@ class FrontPageScreenTest {
         compose.onNodeWithText("Headline 2").assertExists()
         compose.onNodeWithText("Updated 2h ago").assertExists()
         compose.onNodeWithText("Offline. Showing the last updated page.").assertExists()
+    }
+
+    @Test fun theStaticEmptyStateKeepsHorizontalInsetsWithLargeText() {
+        setContent(FrontPageUi(), fontScale = 2f)
+        val title = compose.onNodeWithText("No stories in this window", useUnmergedTree = true).fetchSemanticsNode()
+        val minimum = with(compose.density) { 24.dp.toPx() }
+        assertTrue("empty state must retain 24dp horizontal insets, got ${title.boundsInRoot}", title.boundsInRoot.left >= minimum - 1f)
     }
 
     @Test fun theMastheadDoesNotRepeatTheAppBarTitle() {

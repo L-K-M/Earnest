@@ -181,10 +181,17 @@ class ArticleLayoutTest {
         assertEquals(1, zooms)
     }
 
+    @Test fun inlineAllocationHasTheSamePixelBudgetOnDenseScreens() {
+        listOf(1f, 2f, 3f, 4f).forEach { density ->
+            assertEquals(4096, inlineHeightPx(Int.MAX_VALUE, density))
+            assertEquals((120 * density).toInt(), inlineHeightPx(0, density))
+        }
+    }
+
     @Test fun inlineSizeIsBoundedWithoutChangingTheDeviceZoom() {
-        assertEquals(120, inlineHeightDp(0, 3f))
-        assertEquals(401, inlineHeightDp(1201, 3f))
-        assertEquals(MAX_INLINE_HEIGHT_DP, inlineHeightDp(Int.MAX_VALUE, 1f))
+        assertEquals(360, inlineHeightPx(0, 3f))
+        assertEquals(1201, inlineHeightPx(1201, 3f))
+        assertEquals(MAX_INLINE_HEIGHT_PX, inlineHeightPx(Int.MAX_VALUE, 1f))
         context.setReaderZoom(150)
         context.setArticleLayout(ArticleLayout.HEADLINES)
         assertEquals(150, context.readerZoom())

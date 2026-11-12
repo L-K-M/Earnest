@@ -68,12 +68,15 @@ internal fun ArticleLayoutControl(layout: ArticleLayout, onLayout: (ArticleLayou
     }
 }
 
-// Bound the native view's allocation for very long documents. The dedicated
-// reader remains available and owns scrolling beyond this inline preview.
-internal const val MAX_INLINE_HEIGHT_DP = 8000
+// Cap native pixels, not dp, so dense displays cannot multiply the inline
+// allocation. Longer documents continue in the dedicated reader.
+internal const val MAX_INLINE_HEIGHT_PX = 4096
+private const val MIN_INLINE_HEIGHT_DP = 120
 
-internal fun inlineHeightDp(pixels: Int, density: Float): Int =
-    kotlin.math.ceil(pixels / density.toDouble()).toInt().coerceIn(120, MAX_INLINE_HEIGHT_DP)
+internal fun inlineHeightPx(pixels: Int, density: Float): Int {
+    val minimum = kotlin.math.ceil(MIN_INLINE_HEIGHT_DP * density.toDouble()).toInt().coerceAtMost(MAX_INLINE_HEIGHT_PX)
+    return pixels.coerceIn(minimum, MAX_INLINE_HEIGHT_PX)
+}
 
 /** A single, explicitly opened article. Merely showing headlines never fetches content. */
 @Composable
@@ -82,7 +85,7 @@ internal fun InlineArticleContent(content: ContentUrlResult, typography: ReaderT
     val density = LocalDensity.current
     var pixels by remember(content) { mutableIntStateOf(0) }
     var offline by remember(content) { mutableStateOf(false) }
-    val height = inlineHeightDp(pixels, density.density)
+    val height = with(density) { inlineHeightPx(pixels, density.density).toDp() }
     Column {
         if (offline) {
             Text(
@@ -97,11 +100,11 @@ internal fun InlineArticleContent(content: ContentUrlResult, typography: ReaderT
             cachedHtml = content.cachedHtml,
             typography = typography,
             textZoom = context.readerZoom(),
-            modifier = Modifier.fillMaxWidth().height(height.dp).testTag("inline-article-content"),
+            modifier = Modifier.fillMaxWidth().height(height).testTag("inline-article-content"),
             onFallback = { offline = true },
             onContentHeight = { pixels = it },
         )
-        if (pixels / density.density > MAX_INLINE_HEIGHT_DP) {
+        if (pixels > MAX_INLINE_HEIGHT_PX) {
             Text(
                 "Long article. Open the reader to continue.",
                 style = MaterialTheme.typography.bodySmall,

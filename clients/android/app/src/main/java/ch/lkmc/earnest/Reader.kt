@@ -130,7 +130,7 @@ internal fun Reader(
             factory = { context ->
                 createReaderWebView(
                     context, displayUrl, fallbackHtml,
-                    onContentHeight = if (onContentHeight == null) null else { height -> heightCallback.value?.invoke(height) },
+                    onContentHeight = { height -> heightCallback.value?.invoke(height) },
                     onFallback = { fallbackCallback.value() },
                 )
             },
