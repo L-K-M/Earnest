@@ -59,3 +59,17 @@ Each layer talks only to the layer below it. HTTP handlers, the Google Reader ad
 - **Agent text** is plain text everywhere.
 - **Logs** use `log/slog`. Tokens, passwords and feed credentials never reach a log.
 - **Tests** that need Postgres read `EARNEST_TEST_DATABASE_URL` and skip without it. CI provides one.
+
+## Front page
+
+`GET /v1/front-page?period=daily|weekly` selects across the complete eligible
+publication-time window before loading article details. It counts distinct feeds
+per existing story cluster and selects separate shared and single-source sections.
+Reading state accompanies the articles but does not influence selection.
+
+The response includes a revision independent of reading state and request time.
+Clients hold their displayed selection until refresh and cache each period per
+account. Summary jobs use the governed Edition provider and exact source-version
+fingerprints; cached claims are returned only while those sources remain eligible
+and consented. Feature images are stored, uncropped derivatives served by the
+same authorization boundary as thumbnails.

@@ -7,6 +7,7 @@ import androidx.test.core.app.ApplicationProvider
 import ch.lkmc.earnest.core.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.withLock
@@ -38,6 +39,9 @@ class AppViewModelTest {
     private val calls = CopyOnWriteArrayList<String>()
     private val payloads = CopyOnWriteArrayList<String>()
     private val contentUrlQueries = CopyOnWriteArrayList<String?>()
+    @Volatile private var frontPageOverride: String? = null
+    @Volatile private var frontPageStatus: Int = 200
+    @Volatile private var frontPageGate: (() -> Unit)? = null
     private class Sessions(initial: AuthenticatedSession?) : SessionStore {
         private val stored = java.util.concurrent.atomic.AtomicReference(initial)
         var value: AuthenticatedSession?
@@ -78,6 +82,7 @@ class AppViewModelTest {
         }
         if (path.endsWith("/content-url")) contentUrlQueries += chain.request().url.query
         val body = when (path) {
+            "/v1/front-page" -> frontPageOverride ?: frontPageJson("rev-1", "daily")
             "/v1/entries/2/content-url" -> """{"url":"https://content.test/signed","expires_at":"2026-11-03T01:00:00Z"}"""
             "/v1/settings" -> """{"today_decay_days":2,"rev":0}"""
             "/v1/changes" -> """{"changes":[],"next":{"generation":"g1","rev":0},"next_cursor":"g1:0"}"""
@@ -87,9 +92,11 @@ class AppViewModelTest {
             "/v1/opml:import" -> """[{"path":[],"deferred":true,"subscription":{"id":3,"feed_id":5,"title":"Feed","url":"https://feed.test/rss","site_url":"https://feed.test","folder_id":0,"cadence":"today","extract":"none","rev":1,"deleted":false,"private":false,"muted":false,"initial_through_seq":0,"initial_fetch_pending":false,"health":{"next_fetch_at":"2026-11-10T00:00:00Z","consecutive_failures":0,"http_status":200,"posts_per_day":1.0,"firehose":false}}}]"""
             else -> "[]"
         }
+        if (path == "/v1/front-page") frontPageGate?.invoke()
         val status = when (path) {
             unauthorizedPath -> 401
             "/v1/activity/agent-changes" -> agentChangesStatus
+            "/v1/front-page" -> frontPageStatus
             else -> 200
         }
         val responseBody = if (path == cancelledPath) object : okhttp3.ResponseBody() {
@@ -100,6 +107,11 @@ class AppViewModelTest {
         Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(status).message("test")
             .body(responseBody).build()
     }.build())
+
+    private fun frontPageJson(revision: String, period: String): String {
+        val entry = """{"id":2,"subscription_id":3,"feed_id":5,"seq":4,"first_seen_at":"2026-11-03T00:00:00Z","published_at":"2026-11-02T12:00:00Z","title":"Front headline","url":"https://news.test/article","author":"Author","rev":2,"deleted":false,"state":{"principal":1,"entry_id":2,"seen":{"value":"unseen","rev":1,"occurred_at":"2026-11-03T00:00:00Z","actor":1,"source":"passive"},"shelf":{"value":"none","rev":1,"occurred_at":"2026-11-03T00:00:00Z","actor":1,"source":"passive"},"kept":{"value":false,"rev":1,"occurred_at":"2026-11-03T00:00:00Z","actor":1,"source":"passive"},"state_rev":1}}"""
+        return """{"period":"$period","window_start":"2026-11-02T10:00:00Z","window_end":"2026-11-03T10:00:00Z","selected_at":"2026-11-03T10:00:00Z","revision":"$revision","sections":[{"name":"Across your feeds","stories":[{"id":"story-1","entry":$entry,"source_title":"Source A","published_at":"2026-11-02T12:00:00Z","feed_count":1,"excerpt":"Excerpt","coverage":[{"entry":$entry,"source_title":"Source A"}]}]}]}"""
+    }
 
     private suspend fun model(): AppViewModel {
         SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
@@ -914,6 +926,136 @@ class AppViewModelTest {
         }
 
         withTimeout(15000) { model.state.first { !it.loading } }
+        Unit
+    }
+
+    @Test fun frontPageLoadsAndCachesWithoutWritingReadState() = runBlocking(Dispatchers.IO) {
+        frontPageOverride = frontPageJson("rev-1", "daily")
+        val model = model()
+        await("front page") { model.state.value.frontPage.page?.revision == "rev-1" }
+        assertEquals("rev-1", SessionCache(app, identity).cachedFrontPage(FrontPagePeriod.DAILY)?.revision)
+        assertNotNull(SessionCache(app, identity).cachedFrontPageAt(FrontPagePeriod.DAILY))
+        assertTrue(SessionCache(app, identity).withEngine { it.snapshot().outbox }.isEmpty())
+        assertTrue(calls.none { it == "/v1/state:batch" })
+        Unit
+    }
+
+    @Test fun backgroundRefreshOffersNewCoverageWithoutReplacingTheVisit() = runBlocking(Dispatchers.IO) {
+        frontPageOverride = frontPageJson("rev-1", "daily")
+        val model = model()
+        await("front page") { model.state.value.frontPage.page?.revision == "rev-1" }
+        val orderBefore = model.state.value.frontPage.page?.sections?.map { section -> section.stories.map { it.id } }
+
+        frontPageOverride = frontPageJson("rev-2", "daily")
+        model.refresh()
+        await("pending revision") { model.state.value.frontPage.pendingRevision == "rev-2" }
+        assertEquals("rev-1", model.state.value.frontPage.page?.revision)
+        assertEquals(orderBefore, model.state.value.frontPage.page?.sections?.map { section -> section.stories.map { it.id } })
+
+        model.refreshFrontPage()
+        await("explicit refresh") { model.state.value.frontPage.page?.revision == "rev-2" }
+        assertNull(model.state.value.frontPage.pendingRevision)
+        Unit
+    }
+
+    @Test fun pendingCoverageCanBeAppliedAfterTheNetworkDrops() = runBlocking(Dispatchers.IO) {
+        frontPageOverride = frontPageJson("rev-1", "daily")
+        val model = model()
+        await("front page") { model.state.value.frontPage.page?.revision == "rev-1" }
+        frontPageOverride = frontPageJson("rev-2", "daily")
+        model.refresh()
+        await("pending coverage") { model.state.value.frontPage.pendingRevision == "rev-2" }
+        val requests = calls.count { it == "/v1/front-page" }
+        frontPageStatus = 503
+        model.refreshFrontPage()
+        await("applied coverage") { !model.state.value.frontPage.loading && model.state.value.frontPage.pendingRevision == null }
+        assertEquals("rev-2", model.state.value.frontPage.page?.revision)
+        assertEquals(requests, calls.count { it == "/v1/front-page" })
+        assertTrue(SessionCache(app, identity).withEngine { it.snapshot().outbox }.isEmpty())
+        Unit
+    }
+
+    @Test fun applyingAnOfferPreservesCoverageAlreadyInFlight() = runBlocking(Dispatchers.IO) {
+        frontPageOverride = frontPageJson("rev-1", "daily")
+        val model = model()
+        await("front page") { model.state.value.frontPage.page?.revision == "rev-1" }
+        frontPageOverride = frontPageJson("rev-2", "daily")
+        model.refresh()
+        await("first offer") { model.state.value.frontPage.pendingRevision == "rev-2" }
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        frontPageOverride = frontPageJson("rev-3", "daily")
+        frontPageGate = { entered.countDown(); check(release.await(10, java.util.concurrent.TimeUnit.SECONDS)) }
+        try {
+            model.refresh()
+            assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            model.refreshFrontPage()
+            assertEquals("rev-2", model.state.value.frontPage.page?.revision)
+        } finally { release.countDown(); frontPageGate = null }
+        await("newer offer") { model.state.value.frontPage.pendingRevision == "rev-3" }
+        assertEquals("rev-2", model.state.value.frontPage.page?.revision)
+        Unit
+    }
+
+    @Test fun unchangedCoverageRefreshesItsReadIndicator() = runBlocking(Dispatchers.IO) {
+        frontPageOverride = frontPageJson("rev-1", "daily")
+        val model = model()
+        await("front page") { model.state.value.frontPage.page?.revision == "rev-1" }
+        frontPageOverride = frontPageJson("rev-1", "daily").replace("\"unseen\"", "\"seen\"")
+        model.refresh()
+        val cache = SessionCache(app, identity)
+        await("updated read indicator") {
+            model.state.value.frontPage.page?.sections?.first()?.stories?.first()
+                ?.coverage?.first()?.entry?.state?.seen?.value == JsonPrimitive("seen")
+        }
+        assertEquals(JsonPrimitive("seen"), model.state.value.frontPage.page?.sections?.first()?.stories?.first()
+            ?.coverage?.first()?.entry?.state?.seen?.value)
+        assertNull(model.state.value.frontPage.pendingRevision)
+        assertTrue(cache.withEngine { it.snapshot().outbox }.isEmpty())
+        Unit
+    }
+
+    @Test fun frontPageOfflineKeepsTheCachedPageAndTime() = runBlocking(Dispatchers.IO) {
+        frontPageOverride = frontPageJson("rev-1", "daily")
+        val model = model()
+        await("front page") { model.state.value.frontPage.page?.revision == "rev-1" }
+        val updatedAt = model.state.value.frontPage.updatedAt
+        assertNotNull(updatedAt)
+
+        frontPageStatus = 500
+        model.refreshFrontPage()
+        await("offline notice") { model.state.value.frontPage.error == "Offline. Showing the last updated page." }
+        assertEquals("rev-1", model.state.value.frontPage.page?.revision)
+        assertEquals(updatedAt, model.state.value.frontPage.updatedAt)
+
+        frontPageStatus = 200
+        model.refreshFrontPage()
+        await("online again") { model.state.value.frontPage.error == null }
+        assertEquals("rev-1", model.state.value.frontPage.page?.revision)
+        Unit
+    }
+
+    @Test fun logoutClearsTheFrontPageCache() = runBlocking(Dispatchers.IO) {
+        frontPageOverride = frontPageJson("rev-1", "daily")
+        val model = model()
+        await("front page") { model.state.value.frontPage.page?.revision == "rev-1" }
+        model.logout()
+        assertNull(SessionCache(app, identity).cachedFrontPage(FrontPagePeriod.DAILY))
+        assertNull(model.state.value.frontPage.page)
+        Unit
+    }
+
+    @Test fun switchingFrontPagePeriodsLoadsTheOtherWindow() = runBlocking(Dispatchers.IO) {
+        frontPageOverride = frontPageJson("rev-1", "daily")
+        val model = model()
+        await("daily front page") { model.state.value.frontPage.page?.revision == "rev-1" }
+
+        frontPageOverride = frontPageJson("rev-week", "weekly")
+        model.openFrontPage(FrontPagePeriod.WEEKLY)
+        await("weekly front page") { model.state.value.frontPage.page?.revision == "rev-week" }
+        assertEquals(FrontPagePeriod.WEEKLY, model.state.value.frontPage.period)
+        assertEquals("rev-week", SessionCache(app, identity).cachedFrontPage(FrontPagePeriod.WEEKLY)?.revision)
+        assertTrue(SessionCache(app, identity).withEngine { it.snapshot().outbox }.isEmpty())
         Unit
     }
 }

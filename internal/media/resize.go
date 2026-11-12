@@ -101,3 +101,30 @@ func Icon(img image.Image) (Encoded, error) {
 	}
 	return Encoded{Body: buf.Bytes(), ContentType: "image/png", Width: scaledLong, Height: scaledLong}, nil
 }
+
+// Feature preserves the publisher image's composition for newspaper layouts.
+// It shares thumbnail suitability checks but never crops or upscales.
+func Feature(img image.Image) (Encoded, error) {
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	short, long := min(w, h), max(w, h)
+	if short < MinThumbnailSide || long > MaxThumbnailAspect*short {
+		return Encoded{}, ErrUnsuitable
+	}
+	size := min(long, 1200)
+	tw, th := max(1, w*size/long), max(1, h*size/long)
+	dst := image.NewNRGBA(image.Rect(0, 0, tw, th))
+	xdraw.CatmullRom.Scale(dst, dst.Bounds(), img, b, xdraw.Src, nil)
+	var buf bytes.Buffer
+	if dst.Opaque() {
+		if err := jpeg.Encode(&buf, dst, &jpeg.Options{Quality: jpegQuality}); err != nil {
+			return Encoded{}, err
+		}
+		return Encoded{Body: buf.Bytes(), ContentType: "image/jpeg", Width: tw, Height: th}, nil
+	}
+	enc := png.Encoder{CompressionLevel: png.BestSpeed}
+	if err := enc.Encode(&buf, dst); err != nil {
+		return Encoded{}, err
+	}
+	return Encoded{Body: buf.Bytes(), ContentType: "image/png", Width: tw, Height: th}, nil
+}

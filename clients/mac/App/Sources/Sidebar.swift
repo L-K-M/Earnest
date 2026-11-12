@@ -33,8 +33,8 @@ import EarnestKit
     var body: some View {
         List(selection: selection) {
             SwiftUI.Section("Reading") {
-                place(.today, count: counts?.total)
-                place(.edition)
+                place(.frontPage)
+                place(.allArticles)
             }
             SwiftUI.Section("Shelves") {
                 place(.later, count: counts?.later)

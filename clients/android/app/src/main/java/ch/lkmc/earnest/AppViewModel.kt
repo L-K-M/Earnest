@@ -9,6 +9,8 @@ import ch.lkmc.earnest.core.Activity
 import ch.lkmc.earnest.core.Annotation
 import ch.lkmc.earnest.core.ApiException
 import ch.lkmc.earnest.core.EarnestApi
+import ch.lkmc.earnest.core.FrontPage
+import ch.lkmc.earnest.core.FrontPagePeriod
 import ch.lkmc.earnest.core.KeptImportReport
 import ch.lkmc.earnest.core.LlmDiscoveredModel
 import ch.lkmc.earnest.core.LlmModelsInput
@@ -78,6 +80,25 @@ data class UiState(
     val unreadCounts: UnreadCounts? = null,
     val unreadCountsSyncedAt: Long? = null,
     val unreadCountsError: String? = null,
+    val frontPage: FrontPageUi = FrontPageUi(),
+)
+
+/**
+ * The front page for the selected window. [page] is the visit's stable copy:
+ * a background fetch that finds a newer revision records it in
+ * [pendingRevision] and waits for an explicit refresh instead of reordering
+ * the stories under the reader. [request] fences publications to the load
+ * that owns them, like the reader-settings requests.
+ */
+data class FrontPageUi(
+    val period: FrontPagePeriod = FrontPagePeriod.DAILY,
+    val page: FrontPage? = null,
+    val updatedAt: Long? = null,
+    val loading: Boolean = false,
+    val error: String? = null,
+    val pendingRevision: String? = null,
+    val pendingPage: FrontPage? = null,
+    val request: Long = 0,
 )
 
 /**
@@ -232,6 +253,12 @@ class AppViewModel internal constructor(
     private val llmSaveId = AtomicLong()
     private val llmDiscoveryId = AtomicLong()
 
+    // Front-page requests bind to the account and an ownership epoch stamped
+    // by a login, logout or session expiry, so a response cannot publish into
+    // a replacement account's state.
+    private val frontPageEpoch = AtomicLong()
+    private val frontPageRequest = AtomicLong()
+
     internal val search = SearchModel(viewModelScope) {
         activeAccount("Still signing in; search did not run.")?.let { (cache, session) ->
             val generation = _state.value.snapshot.cursor.generation
@@ -272,6 +299,8 @@ class AppViewModel internal constructor(
     fun onLoggedIn() {
         val epoch = readerEpoch.incrementAndGet()
         val llmEpochValue = llmEpoch.incrementAndGet()
+        frontPageEpoch.incrementAndGet()
+        if (activeSession?.identity != sessions.current()?.identity) clearFrontPageCache()
         search.reset()
         account = null
         activeSession = null
@@ -317,6 +346,7 @@ class AppViewModel internal constructor(
                         llmSettingsUi = LlmSettingsUi(epoch = llmEpochValue),
                         unreadCounts = cache.cachedUnreadCounts(restored.snapshot.cursor.generation),
                         unreadCountsSyncedAt = cache.cachedUnreadCountsAt(restored.snapshot.cursor.generation),
+                        frontPage = restoredFrontPage(cache, FrontPagePeriod.DAILY),
                     )
                     _loggedIn.value = true
                 }
@@ -371,6 +401,11 @@ class AppViewModel internal constructor(
                     unreadCounts = cache.cachedUnreadCounts(restored.snapshot.cursor.generation),
                     unreadCountsSyncedAt = cache.cachedUnreadCountsAt(restored.snapshot.cursor.generation),
                     unreadCountsError = if (readerRestore) null else previous.unreadCountsError,
+                    frontPage = if (previous.frontPage.page == null) {
+                        restoredFrontPage(cache, previous.frontPage.period)
+                    } else {
+                        previous.frontPage
+                    },
                 ).withProjectedReader(restored, readerRestore, restoreEpoch) }
             }
         }
@@ -378,6 +413,8 @@ class AppViewModel internal constructor(
 
     fun logout() {
         search.reset()
+        frontPageEpoch.incrementAndGet()
+        clearFrontPageCache()
         sessions.clearToken()
         activeSession = null
         mediaClient = null
@@ -463,6 +500,7 @@ class AppViewModel internal constructor(
                 }
                 refreshUnreadCounts(cache, session)
                 refreshWidgets(getApplication())
+                backgroundFrontPage()
             } catch (error: ApiException) {
                 if (!currentOrExpired(session, cache)) return@launch
                 if (error.isUnauthorized && sessions.current() == session) {
@@ -1337,6 +1375,203 @@ class AppViewModel internal constructor(
         }
     }
 
+    /**
+     * Opens the front page for [period]. The cached page is published first so
+     * an offline or slow launch still shows the last successful paper; the
+     * fetch then refreshes it. Returning to an already loaded period does
+     * nothing, which keeps the visit's order and scroll stable.
+     */
+    fun openFrontPage(period: FrontPagePeriod) {
+        loadFrontPage(period, explicit = false, fromCache = true)
+    }
+
+    /** Applies the newest revision the background fetch found. */
+    fun refreshFrontPage() {
+        val pending = _state.value.frontPage.pendingPage
+        if (pending != null) {
+            val expected = frontPageEpoch.get()
+            val (cache, session) = activeAccount("Still signing in; the front page did not refresh.") ?: return
+            val request = frontPageRequest.get()
+            publishFrontPage(expected, session, cache, request) {
+                // Identical coverage revisions can belong to different accounts.
+                if (it.frontPage.period != pending.period || it.frontPage.pendingPage !== pending) it
+                else it.copy(frontPage = it.frontPage.copy(
+                    page = pending,
+                    updatedAt = System.currentTimeMillis(),
+                    loading = false,
+                    error = null,
+                    pendingRevision = null,
+                    pendingPage = null,
+                    request = request,
+                ))
+            }
+            return
+        }
+        loadFrontPage(_state.value.frontPage.period, explicit = true, fromCache = false)
+    }
+
+    /**
+     * Fetches the current window without disturbing the visit. A successful
+     * response with a new revision is cached and offered as
+     * [FrontPageUi.pendingRevision]; the displayed page stays put until the
+     * reader asks for it.
+     */
+    private fun backgroundFrontPage() {
+        val current = _state.value.frontPage
+        if (current.loading) return
+        val period = current.period
+        val expected = frontPageEpoch.get()
+        val (cache, session) = activeAccount("Still signing in; the front page did not refresh.") ?: return
+        val request = frontPageRequest.incrementAndGet()
+        viewModelScope.launch(Dispatchers.IO) {
+            if (current.page == null) {
+                val cached = cache.cachedFrontPage(period)
+                if (cached != null && frontPageOwner(session, cache, expected, request)) {
+                    publishFrontPage(expected, session, cache, request) {
+                        if (it.frontPage.page == null) it.copy(frontPage = it.frontPage.copy(
+                            page = cached,
+                            updatedAt = cache.cachedFrontPageAt(period),
+                            request = request,
+                        )) else it
+                    }
+                }
+            }
+            try {
+                val page = apiFactory(session).frontPage(period)
+                if (!frontPageOwner(session, cache, expected, request)) return@launch
+                cache.cacheFrontPage(period, page)
+                publishFrontPage(expected, session, cache, request) {
+                    if (it.frontPage.period != period) it
+                    else {
+                        val previous = it.frontPage.page
+                        val changed = previous != null && previous.revision != page.revision
+                        it.copy(frontPage = it.frontPage.copy(
+                            page = if (previous == null || !changed) page else previous,
+                            updatedAt = if (previous == null || !changed) System.currentTimeMillis() else it.frontPage.updatedAt,
+                            pendingRevision = if (changed) page.revision else null,
+                            pendingPage = if (changed) page else null,
+                            error = null,
+                            request = request,
+                        ))
+                    }
+                }
+            } catch (error: ApiException) {
+                if (!frontPageOwner(session, cache, expected, request)) return@launch
+                if (error.isUnauthorized) {
+                    expireSessionIfCurrent(session)
+                    return@launch
+                }
+                publishFrontPage(expected, session, cache, request) { it.frontPageFailure(period, error) }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (frontPageOwner(session, cache, expected, request)) {
+                    publishFrontPage(expected, session, cache, request) { it.frontPageFailure(period, error) }
+                }
+            }
+        }
+    }
+
+    /** Loads [period], optionally seeding the cache first. Explicit loads replace the visit's page. */
+    private fun loadFrontPage(period: FrontPagePeriod, explicit: Boolean, fromCache: Boolean) {
+        val current = _state.value.frontPage
+        if (current.loading && current.period == period) return
+        if (!explicit && current.period == period && current.page != null) return
+        val expected = frontPageEpoch.get()
+        val (cache, session) = activeAccount("Still signing in; the front page did not load.") ?: return
+        val request = frontPageRequest.incrementAndGet()
+        publishFrontPage(expected, session, cache, request) {
+            it.copy(frontPage = it.frontPage.copy(
+                period = period,
+                page = if (it.frontPage.period == period) it.frontPage.page else null,
+                loading = true,
+                error = null,
+                pendingRevision = null,
+                pendingPage = null,
+                request = request,
+            ))
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            if (fromCache) {
+                val cached = cache.cachedFrontPage(period)
+                if (cached != null && frontPageOwner(session, cache, expected, request)) {
+                    publishFrontPage(expected, session, cache, request) {
+                        if (it.frontPage.page == null) it.copy(frontPage = it.frontPage.copy(
+                            page = cached,
+                            updatedAt = cache.cachedFrontPageAt(period),
+                        )) else it
+                    }
+                }
+            }
+            try {
+                val page = apiFactory(session).frontPage(period)
+                if (!frontPageOwner(session, cache, expected, request)) return@launch
+                cache.cacheFrontPage(period, page)
+                publishFrontPage(expected, session, cache, request) {
+                    if (it.frontPage.period != period) it
+                    else it.copy(frontPage = it.frontPage.copy(
+                        page = page,
+                        updatedAt = System.currentTimeMillis(),
+                        loading = false,
+                        error = null,
+                        pendingRevision = null,
+                        pendingPage = null,
+                        request = request,
+                    ))
+                }
+            } catch (error: ApiException) {
+                if (!frontPageOwner(session, cache, expected, request)) return@launch
+                if (error.isUnauthorized) {
+                    expireSessionIfCurrent(session)
+                    return@launch
+                }
+                publishFrontPage(expected, session, cache, request) { it.frontPageFailure(period, error) }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (frontPageOwner(session, cache, expected, request)) {
+                    publishFrontPage(expected, session, cache, request) { it.frontPageFailure(period, error) }
+                }
+            }
+        }
+    }
+
+    private fun frontPageOwner(session: AuthenticatedSession, cache: SessionCache, expected: Long, request: Long): Boolean =
+        frontPageEpoch.get() == expected && isCurrent(session, cache) && frontPageRequest.get() == request
+
+    /** Applies [transform] only while the captured account and request still own the state. */
+    private fun publishFrontPage(
+        expected: Long,
+        session: AuthenticatedSession,
+        cache: SessionCache,
+        request: Long,
+        transform: (UiState) -> UiState,
+    ) {
+        _state.update { current ->
+            if (frontPageEpoch.get() == expected && frontPageRequest.get() == request && isCurrent(session, cache)) {
+                transform(current)
+            } else {
+                current
+            }
+        }
+    }
+
+    /** A failed load keeps any displayed page and reports the stale/offline time. */
+    private fun UiState.frontPageFailure(period: FrontPagePeriod, error: Exception): UiState {
+        if (frontPage.period != period) return this
+        val message = failureText("Could not refresh the front page", error)
+        return copy(frontPage = frontPage.copy(
+            loading = false,
+            error = if (frontPage.page == null) message else "Offline. Showing the last updated page.",
+        ))
+    }
+
+    /** The stored page for [period], or an empty state when none has synced. */
+    private fun restoredFrontPage(cache: SessionCache, period: FrontPagePeriod): FrontPageUi {
+        val page = cache.cachedFrontPage(period) ?: return FrontPageUi(period = period)
+        return FrontPageUi(period = period, page = page, updatedAt = cache.cachedFrontPageAt(period))
+    }
+
     /** Marks the entry read, as opening an article does, and releases the mark-unread guard. */
     fun markSeen(entryId: Long) {
         markedUnread -= entryId
@@ -1827,6 +2062,8 @@ class AppViewModel internal constructor(
     /** The stored session is gone: drop the account state and show sign-in. */
     private fun sessionExpired() {
         search.reset()
+        frontPageEpoch.incrementAndGet()
+        clearFrontPageCache()
         account = null
         activeSession = null
         mediaClient = null
@@ -1854,7 +2091,15 @@ class AppViewModel internal constructor(
         val session = activeSession ?: return null
         if (!isCurrent(session, cache)) return null
         val api = mediaApi(session)
-        return mediaCache.load(session.identity.cacheKey, path) { api.media(it) }
+        val image = mediaCache.load(session.identity.cacheKey, path) { api.media(it) }
+        return image.takeIf { isCurrent(session, cache) }
+    }
+
+    private fun clearFrontPageCache() {
+        account?.let { cache ->
+            cache.clearFrontPages()
+            mediaCache.clearAccount(cache.identity.cacheKey)
+        }
     }
 
     /**

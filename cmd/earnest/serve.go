@@ -168,6 +168,7 @@ func serve() error {
 		{"webhook delivery", deliveryInterval, svc.RunWebhookJobs},
 		{"rule jobs", deliveryInterval, modelJob(svc, svc.RunRuleJobs)},
 		{"edition jobs", deliveryInterval, modelJob(svc, svc.RunEditionJobs)},
+		{"front page summaries", deliveryInterval, modelJob(svc, svc.RunFrontPageJobs)},
 		{"media", mediaIdleMax, svc.RunMedia},
 		{"internal pipeline", pipelineIdleMax, modelJob(svc, svc.RunPipeline)},
 	} {

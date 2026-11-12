@@ -87,7 +87,7 @@ struct KeyboardShortcutsView: View {
             Shortcut(keys: "⌘Z", action: "Undo the last reading action"),
         ]),
         ("Going Places", [
-            Shortcut(keys: "⌘1 – ⌘7", action: "Today, Edition, Later, Kept, Done, Feeds, Activity"),
+            Shortcut(keys: "⌘1 – ⌘7", action: "Front page, All articles, Later, Kept, Done, Feeds, Activity"),
             Shortcut(keys: "⌥⌘F", action: "Search articles"),
             Shortcut(keys: "⌘K", action: "Command palette"),
             Shortcut(keys: "⌃⌘S", action: "Show or hide the sidebar"),

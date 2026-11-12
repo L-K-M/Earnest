@@ -48,6 +48,16 @@ Taken by you on 2026-11-07, while triaging the review PRs.
 
 - **Automatic read marks happen only when you open an article** (2026-11-12, at your request). Background fetching, rendering, refreshes and automated processing do not count as a user opening an article. Scrolling a list, changing its selection without opening, and leaving an article do not mark it read. Marking an open article unread survives `j`/`k` navigation and scrolling until it is explicitly reopened or marked read. This replaces the scroll-past behavior in [ux.md](ux.md#information-model) and [api.md](api.md).
 
+## Front page
+
+Taken on 2026-11-12, at your request.
+
+- **Front page replaces Today and Edition in the clients.** Today covers the past 24 hours; This week covers the past seven days. Both consider every active, unmuted subscription regardless of cadence. Publication time defines the window, falling back to first-seen time. Imported history and future-dated items do not fill the paper.
+- **Coverage leads; variety follows.** Up to eight shared stories are ranked by distinct eligible feeds, then newest coverage. Up to eight single-source stories follow in rounds across feeds. Existing story clustering remains approximate; a coverage count describes feeds, not independent reporting or wider popularity.
+- **The paper remains an overview after reading.** Opening an original marks only that article read. Browsing headlines, summaries or coverage lists does not. Ordering stays stable during a visit; refresh accepts newly available coverage. All articles provides the complete chronological list.
+- **Publisher headlines and pictures, optional generated summaries.** Story summaries combine up to five feeds under the existing Edition provider settings, consent and budgets. Excerpts remain available while generation is disabled, pending or unavailable. Larger publisher pictures are stored by the background media worker and never fetched because someone opened the page.
+- **One selection across clients.** Web, Mac and Android render the same server response and retain account-scoped offline copies. Legacy Today and Edition destinations map to the daily and weekly tabs. Existing cadence preferences and API endpoints remain available for older clients.
+
 ## Fetching
 
 Taken on 2026-11-09, at your request, while fixing a feed that stopped the server.

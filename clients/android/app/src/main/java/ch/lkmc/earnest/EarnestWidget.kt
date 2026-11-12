@@ -54,7 +54,7 @@ class EarnestWidget : GlanceAppWidget() {
                 .padding(16.dp),
         ) {
             Text(
-                "Today",
+                "Front page",
                 style = TextStyle(
                     fontWeight = FontWeight.Bold,
                     color = ColorProvider(Color(0xFF101418)),

@@ -2,8 +2,11 @@
 // or return to with Back has a path here. This module is pure: it parses a
 // location into a Route and formats a Route back into a path, nothing else.
 //
-//   /                          Today (alias of /today)
-//   /today /edition /later /kept /done
+//   /                          Front page, past 24 hours
+//   /front?period=daily|weekly /front/articles/:entry
+//   /articles /articles/:entry                  every article, newest first
+//   /today /edition                             legacy aliases of the front page
+//   /later /kept /done
 //   /feeds/:id  /folders/:id  /labels/:id        one subscription, folder, label
 //   <any of the above>/articles/:entry          the same list with an article open
 //   /search?q=&mode=hybrid&feed=&folder=&limit=  /search/saved/:id
@@ -16,11 +19,14 @@ import type {View} from './reader'
 
 export type ViewKind = View['kind']
 export type ViewRef = {kind: ViewKind; id?: number}
+export type FrontPeriod = 'daily' | 'weekly'
+export type FrontTarget = {kind: 'front'; period: FrontPeriod}
 export type SearchRoute = {q: string; mode?: 'hybrid'; feed?: number; folder?: number; limit?: number}
 export type ActivityFilters = {agent?: string; action?: string; since?: string}
 
 export type Route =
   | {name: 'river'; view: ViewRef; entry?: number}
+  | {name: 'front'; period: FrontPeriod; entry?: number}
   | {name: 'search'; search: SearchRoute; saved?: number}
   | {name: 'ask'}
   | {name: 'rules'; rule?: number | 'new'}
@@ -36,7 +42,11 @@ const RESOURCE_SEGMENTS = {feeds: 'feed', folders: 'folder', labels: 'label'} as
 type ResourceSegment = keyof typeof RESOURCE_SEGMENTS
 const SEGMENT_FOR_KIND = {feed: 'feeds', folder: 'folders', label: 'labels'} as const
 
+// Legacy names retained for deep links and the handful of callers that still
+// describe a destination rather than a screen: Today is the daily front page,
+// Edition is the weekly one.
 export const TODAY: ViewRef = {kind: 'today'}
+export const WEEK: ViewRef = {kind: 'edition'}
 
 // IDs are positive safe integers. Anything else in an ID position makes the
 // whole path unknown rather than silently addressing a different item.
@@ -67,6 +77,16 @@ function river(view: ViewRef, rest: string[]): Route {
   if (rest.length === 0) return {name: 'river', view}
   const entry = positiveID(rest[1])
   if (rest.length === 2 && rest[0] === 'articles' && entry !== undefined) return {name: 'river', view, entry}
+  return {name: 'not-found'}
+}
+
+// The front page is one screen with two windows. Old Today/Edition links keep
+// their old destination meaning, including a deep link to an open article.
+function front(params: URLSearchParams, rest: string[], legacy?: FrontPeriod): Route {
+  const period: FrontPeriod = legacy ?? (params.get('period') === 'weekly' ? 'weekly' : 'daily')
+  if (rest.length === 0) return {name: 'front', period}
+  const entry = positiveID(rest[1])
+  if (rest.length === 2 && rest[0] === 'articles' && entry !== undefined) return {name: 'front', period, entry}
   return {name: 'not-found'}
 }
 
@@ -106,7 +126,15 @@ export function parseRoute(pathname: string, search = ''): Route {
   if (parts === null) return {name: 'not-found'}
   const params = new URLSearchParams(search)
   const [head, ...rest] = parts
-  if (head === undefined) return {name: 'river', view: TODAY}
+  if (head === undefined) return {name: 'front', period: 'daily'}
+  if (head === 'front') return front(params, rest)
+  if (head === 'today') return front(params, rest, 'daily')
+  if (head === 'edition') return front(params, rest, 'weekly')
+  if (head === 'articles') {
+    if (rest.length === 0) return {name: 'river', view: {kind: 'all'}}
+    const entry = positiveID(rest[0])
+    return rest.length === 1 && entry !== undefined ? {name: 'river', view: {kind: 'all'}, entry} : {name: 'not-found'}
+  }
   if (isListView(head)) return river({kind: head}, rest)
   if (head === 'feeds' && rest.length === 0) return {name: 'feeds'}
   if (isResourceSegment(head)) {
@@ -137,7 +165,24 @@ export function parseRoute(pathname: string, search = ''): Route {
   return {name: 'not-found'}
 }
 
+export function frontHref(period: FrontPeriod, entry?: number): string {
+  const query = period === 'weekly' ? '?period=weekly' : ''
+  return entry === undefined ? `/front${query}` : `/front/articles/${entry}${query}`
+}
+
+// A destination is either a river view or the front page. Keeping both here
+// means opening an article never has to know which screen asked for it.
+export function targetHref(target: ViewRef | FrontTarget, entry?: number): string {
+  if (target.kind === 'front') return frontHref(target.period, entry)
+  return viewHref(target, entry)
+}
+
 export function viewHref(view: ViewRef, entry?: number): string {
+  // Today and Edition remain valid targets for old saved links and for
+  // callers that only know the old destination names.
+  if (view.kind === 'today') return frontHref('daily', entry)
+  if (view.kind === 'edition') return frontHref('weekly', entry)
+  if (view.kind === 'all') return entry === undefined ? '/articles' : `/articles/${entry}`
   const base = view.kind === 'feed' || view.kind === 'folder' || view.kind === 'label'
     ? `/${SEGMENT_FOR_KIND[view.kind]}/${view.id}`
     : `/${view.kind}`
@@ -167,6 +212,7 @@ export function activityHref(filters: ActivityFilters): string {
 export function routeHref(route: Route): string {
   switch (route.name) {
   case 'river': return viewHref(route.view, route.entry)
+  case 'front': return frontHref(route.period, route.entry)
   case 'search': return searchHref(route.search, route.saved)
   case 'ask': return '/ask'
   case 'rules': return route.rule === undefined ? '/rules' : `/rules/${route.rule}`
@@ -187,6 +233,7 @@ export function sameView(a: ViewRef, b: ViewRef): boolean {
 export function routeSection(route: Route): string {
   switch (route.name) {
   case 'river': return `river:${route.view.kind}:${route.view.id ?? ''}`
+  case 'front': return 'river:front'
   case 'search': return route.saved === undefined ? 'search' : `saved:${route.saved}`
   default: return route.name
   }

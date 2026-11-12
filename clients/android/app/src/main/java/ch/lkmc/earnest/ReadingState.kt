@@ -7,19 +7,15 @@ import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.core.SyncSnapshot
 import ch.lkmc.earnest.core.State
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonPrimitive
 import java.time.Instant
 
-/** Unread-only visits retain admitted rows until intentional parent-list loading. */
-internal fun todayEntries(state: UiState): List<CachedEntry> = sessionEntries(state).filter { state.cadences[it.subscriptionId] != "week" }
-
-internal fun editionEntries(state: UiState): List<CachedEntry> = sessionEntries(state).filter { state.cadences[it.subscriptionId] == "week" }
-
-private fun sessionEntries(state: UiState): List<CachedEntry> = state.snapshot.entries.filter {
-    !it.deleted && it.id in state.riverEntryIds &&
-        (state.readerSettings.showOnlyUnread ||
-            (state.states[it.id] ?: SyncEngine.initialState(state.principalId, it.id)).shelf.value == JsonPrimitive(SyncEngine.VALUE_NONE))
-}.sortedBy { it.seq }
+/**
+ * Every article, newest first. The All articles screen uses the same slice
+ * as the API's `view=all&direction=backward`; the reader actions are shared
+ * with the other lists.
+ */
+internal fun allArticles(entries: List<CachedEntry>): List<CachedEntry> =
+    entries.filterNot { it.deleted }.sortedByDescending { it.seq }
 
 // A background cache/sync reload must not turn a seen change into removal.
 // An intentional reload is fenced to the visit that requested it; a late

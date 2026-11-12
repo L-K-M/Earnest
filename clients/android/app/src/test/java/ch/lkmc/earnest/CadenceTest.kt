@@ -11,6 +11,11 @@ class CadenceTest {
         assertEquals("This week", Cadence.WEEK.label)
     }
 
+    @Test fun hintsExplainThatCadenceDoesNotFilterTheFrontPage() {
+        Cadence.entries.forEach { assertTrue(it.hint.isNotBlank()) }
+        assertTrue(Cadence.WEEK.hint.contains("front page", ignoreCase = true))
+    }
+
     @Test fun onlyTheCurrentCadenceIsSelected() {
         val selection = cadenceSelection("week")
         assertEquals(setOf(Cadence.WEEK), selection.filterValues { it }.keys)

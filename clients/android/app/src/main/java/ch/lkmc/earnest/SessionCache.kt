@@ -5,6 +5,8 @@ import androidx.core.content.edit
 import ch.lkmc.earnest.core.Activity
 import ch.lkmc.earnest.core.EarnestApi
 import ch.lkmc.earnest.core.EngineSession
+import ch.lkmc.earnest.core.FrontPage
+import ch.lkmc.earnest.core.FrontPagePeriod
 import ch.lkmc.earnest.core.ReaderSettings
 import ch.lkmc.earnest.core.ReadingMode
 import ch.lkmc.earnest.core.River
@@ -74,6 +76,8 @@ internal object SyncAccess {
 
 /** Reload, mutate and flush form one critical section for every snapshot writer. */
 internal class SessionCache(context: Context, val identity: AccountIdentity) {
+    private val frontPageLock = Any()
+    private var frontPagesWritable = true
     val db = AppDatabase.get(context, identity.cacheKey)
     val preferences = context.getSharedPreferences("session-${identity.cacheKey}", Context.MODE_PRIVATE)
     val legacyCacheRetained = context.getDatabasePath("earnest.db").exists()
@@ -166,6 +170,48 @@ internal class SessionCache(context: Context, val identity: AccountIdentity) {
                 readerSettings(engine)
             }
         }
+
+    /**
+     * The last successful front page for [period], or null when none has been
+     * stored. The page is the offline/stale fallback; [cachedFrontPageAt] is
+     * the wall-clock time it was fetched.
+     */
+    fun cachedFrontPage(period: FrontPagePeriod): FrontPage? {
+        val raw = preferences.getString(frontPageKey(period), null) ?: return null
+        return runCatching { json.decodeFromString(FrontPage.serializer(), raw) }.getOrNull()
+    }
+
+    /** Wall-clock millis of the stored front page, or null when none is stored. */
+    fun cachedFrontPageAt(period: FrontPagePeriod): Long? =
+        preferences.getLong(frontPageAtKey(period), 0L).takeIf { it > 0L }
+
+    /** Stores a successful page and its fetch time. A failed commit leaves the previous page. */
+    fun cacheFrontPage(period: FrontPagePeriod, page: FrontPage): Boolean = synchronized(frontPageLock) {
+        if (!frontPagesWritable) return@synchronized false
+        try {
+            preferences.edit()
+                .putString(frontPageKey(period), json.encodeToString(FrontPage.serializer(), page))
+                .putLong(frontPageAtKey(period), System.currentTimeMillis())
+                .commit()
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** Logout retires this cache instance before deleting pages, including for late responses. */
+    fun clearFrontPages() = synchronized(frontPageLock) {
+        frontPagesWritable = false
+        preferences.edit(commit = true) {
+            FrontPagePeriod.entries.forEach { period ->
+                remove(frontPageKey(period))
+                remove(frontPageAtKey(period))
+            }
+        }
+    }
+
+    private fun frontPageKey(period: FrontPagePeriod) = "front_page_${period.wireName}"
+
+    private fun frontPageAtKey(period: FrontPagePeriod) = "front_page_${period.wireName}_at"
 
     /** The last exact unread counts, or null when none has synced. */
     fun cachedUnreadCounts(generation: String): UnreadCounts? {

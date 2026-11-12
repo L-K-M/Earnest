@@ -2,20 +2,20 @@ import Foundation
 import EarnestKit
 
 enum Section: String, CaseIterable, Identifiable {
-    case today = "Today", edition = "Edition", later = "Later", kept = "Kept", done = "Done", feeds = "Feeds", activity = "Activity", search = "Search"
+    case frontPage = "Front page", allArticles = "All articles", later = "Later", kept = "Kept", done = "Done", feeds = "Feeds", activity = "Activity", search = "Search"
 
     var id: String { rawValue }
 
     /// The places a window can navigate to from the sidebar, the Go menu and
     /// the palette. Search is entered from the toolbar search field instead.
-    static let places: [Section] = [.today, .edition, .later, .kept, .done, .feeds, .activity]
+    static let places: [Section] = [.frontPage, .allArticles, .later, .kept, .done, .feeds, .activity]
 
     var title: String { rawValue }
 
     var keyEquivalent: String? {
         switch self {
-        case .today: return "1"
-        case .edition: return "2"
+        case .frontPage: return "1"
+        case .allArticles: return "2"
         case .later: return "3"
         case .kept: return "4"
         case .done: return "5"
@@ -27,8 +27,8 @@ enum Section: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
-        case .today: return "sun.max"
-        case .edition: return "newspaper"
+        case .frontPage: return "sun.max"
+        case .allArticles: return "square.stack"
         case .later: return "clock"
         case .kept: return "bookmark"
         case .done: return "checkmark.circle"
@@ -43,8 +43,8 @@ enum Section: String, CaseIterable, Identifiable {
     /// search field, not a place.
     var tone: Tone? {
         switch self {
-        case .today: return .orange
-        case .edition: return .blue
+        case .frontPage: return .orange
+        case .allArticles: return .blue
         case .later: return .amber
         case .kept: return .plum
         case .done: return .green
@@ -54,11 +54,12 @@ enum Section: String, CaseIterable, Identifiable {
         }
     }
 
-    /// The server-side entries view backing entry sections. Today and the
-    /// Edition share the river and split it by subscription cadence.
+    /// The server-side entries view backing entry sections. The front page is
+    /// selected by the server and has no entries view.
     var entryView: String? {
         switch self {
-        case .today, .edition: return "river"
+        case .frontPage: return nil
+        case .allArticles: return "all"
         case .later: return "later"
         case .kept: return "kept"
         case .done: return "done"
@@ -66,8 +67,39 @@ enum Section: String, CaseIterable, Identifiable {
         }
     }
 
+    /// The paging direction for the entries view. All articles reads newest
+    /// first; the shelves keep the server's chronological order.
+    var entryViewDirection: String? {
+        switch self {
+        case .allArticles: return "backward"
+        default: return nil
+        }
+    }
+
+    /// Whether the reader's unread preference filters this list. The front
+    /// page is server-selected, so a client-side filter would contradict it.
+    var supportsUnreadFilter: Bool { self == .allArticles }
+
     /// Sections whose detail column is the article reader.
     var showsReader: Bool { self != .feeds }
+
+    /// Legacy destinations retained for old saved state and deep links: Today
+    /// was the daily front page, Edition the weekly one.
+    static func legacy(_ rawValue: String) -> Section? {
+        switch rawValue {
+        case "Today", "Edition": return .frontPage
+        default: return Section(rawValue: rawValue)
+        }
+    }
+
+    /// The front-page window a legacy destination named, if it named one.
+    static func legacyPeriod(_ rawValue: String) -> FrontPagePeriod? {
+        switch rawValue {
+        case "Today": return .daily
+        case "Edition": return .weekly
+        default: return nil
+        }
+    }
 }
 
 enum EntryCommand {

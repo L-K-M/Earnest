@@ -23,10 +23,19 @@ describe('reader rules', () => {
   it.each([['feed','subscription_id'], ['folder','folder_id'], ['label','label_id']] as const)('filters %s by ID', (kind, parameter) => {
     expect(entryQuery({kind, id: 12, title: 'A'}).get(parameter)).toBe('12')
   })
-  it.each(['today', 'edition', 'feed', 'folder', 'label', 'later', 'kept', 'done'] as const)('requests the newest %s entries first', kind => {
+  it.each(['today', 'edition', 'all', 'feed', 'folder', 'label', 'later', 'kept', 'done'] as const)('requests the newest %s entries first', kind => {
     const query = entryQuery({kind, id: 12, title: 'A'})
     expect(query.get('direction')).toBe('backward')
     expect(query.has('after_seq')).toBe(false)
+  })
+  it('requests All articles with the existing view=all newest-first query', () => {
+    const query = entryQuery({kind: 'all', title: 'All articles'})
+    expect(query.get('view')).toBe('all')
+    expect(query.get('limit')).toBe('100')
+    expect(query.get('direction')).toBe('backward')
+    expect(query.has('subscription_id')).toBe(false)
+    expect(query.has('folder_id')).toBe(false)
+    expect(query.has('label_id')).toBe(false)
   })
   it('orders articles newest first by ingest sequence, not publisher time', () => {
     const entries = [{id: 1, seq: 1, published_at: '2030-01-01'}, {id: 3, seq: 3, published_at: '2020-01-01'}, {id: 2, seq: 2}] as Entry[]

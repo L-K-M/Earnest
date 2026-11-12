@@ -41,10 +41,11 @@ function shelfLabel(state: EntryState): string {
 // Each list explains its own emptiness. Wit is reserved for the river.
 function emptyLine(view: View): string {
   switch (view.kind) {
+  case 'all': return 'No articles yet. Everything your feeds publish collects here, newest first.'
   case 'later': return 'Nothing waiting for later. Press s on an article to put it here.'
   case 'kept': return 'Nothing kept yet. Press f on an article to keep it for good.'
   case 'done': return 'Nothing marked Done yet.'
-  case 'edition': return 'This week’s edition is empty. Feeds with the This week cadence collect here.'
+  case 'edition': return 'This week’s river is empty. Feeds with the This week cadence collect here.'
   case 'label': return 'No articles carry this label yet.'
   case 'feed': return 'Nothing new from this feed.'
   case 'folder': return 'Nothing new in this folder.'

@@ -3,7 +3,7 @@ import {afterEach, expect, it, vi} from 'vitest'
 import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {QueryClient, QueryClientProvider} from '@tanstack/react-query'
 import {River} from './River'
-import type {Entry} from './reader'
+import type {Entry, View} from './reader'
 import {request} from './request'
 
 vi.mock('./request', () => ({request: vi.fn()}))
@@ -31,10 +31,10 @@ function serve(page: (query: URLSearchParams) => Page, position: () => Promise<{
   })
 }
 
-function mount() {
+function mount(view: View = {kind: 'folder', id: 7, title: 'Folder'}) {
   const write = vi.fn().mockResolvedValue(undefined)
   render(<QueryClientProvider client={new QueryClient({defaultOptions: {queries: {retry: false}}})}>
-    <River view={{kind: 'folder', id: 7, title: 'Folder'}} subscriptions={[]} actions={{act: write, state: entry => entry.state}} selected={null} onSelect={vi.fn()} onOpen={vi.fn()} shortcuts={false} counts summary={{seen: 0, done: 0, later: 0, kept: 0}} />
+    <River view={view} subscriptions={[]} actions={{act: write, state: entry => entry.state}} selected={null} onSelect={vi.fn()} onOpen={vi.fn()} shortcuts={false} counts summary={{seen: 0, done: 0, later: 0, kept: 0}} />
   </QueryClientProvider>)
   return write
 }
@@ -60,6 +60,15 @@ it.each(['ahead', 'pending', 'failed'] as const)('loads newest articles independ
   expect(screen.getByLabelText('Article list').getAttribute('aria-busy')).toBeNull()
   expect(queries()).toHaveLength(1)
   expect(Object.fromEntries(queries()[0])).toEqual({view: 'all', limit: '100', direction: 'backward', folder_id: '7'})
+  expect(write).not.toHaveBeenCalled()
+})
+
+it('loads All articles newest-first through the existing reader actions', async () => {
+  serve(() => ({entries: [entry(202), entry(201), entry(200)]}))
+  const write = mount({kind: 'all', title: 'All articles'})
+  await screen.findByText('Article 202')
+  expect(listed()).toEqual([202, 201, 200])
+  expect(Object.fromEntries(queries()[0])).toEqual({view: 'all', limit: '100', direction: 'backward'})
   expect(write).not.toHaveBeenCalled()
 })
 

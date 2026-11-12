@@ -6,7 +6,7 @@ import {feedSwatch} from './EntryMedia'
 import type {Subscription} from './reader'
 import type {Route} from './routes'
 
-const route: Route = {name: 'river', view: {kind: 'today'}}
+const route: Route = {name: 'front', period: 'daily'}
 
 function mount(subscriptions: Subscription[] = []) {
   return render(<Sidebar route={route} subscriptions={subscriptions} folders={[]} labels={[]} savedSearches={[]} askEnabled={false} sync={{text: 'Synced', tone: 'quiet'}} onPalette={vi.fn()} onHelp={vi.fn()} onSignOut={vi.fn()} prefetch={vi.fn()} />)
@@ -28,7 +28,8 @@ it('hashes feed titles to the shared swatch index', () => {
 
 it('tones the reading destinations and leaves settings neutral', () => {
   mount()
-  expect(screen.getByRole('link', {name: 'Today'}).getAttribute('data-tone')).toBe('orange')
+  expect(screen.getByRole('link', {name: 'Front page'}).getAttribute('data-tone')).toBe('orange')
+  expect(screen.getByRole('link', {name: 'All articles'}).getAttribute('data-tone')).toBe('blue')
   expect(screen.getByRole('link', {name: 'Settings'}).hasAttribute('data-tone')).toBe(false)
 })
 

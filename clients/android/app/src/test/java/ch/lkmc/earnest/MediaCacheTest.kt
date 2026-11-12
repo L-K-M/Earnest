@@ -3,6 +3,7 @@ package ch.lkmc.earnest
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -145,5 +146,60 @@ class MediaCacheTest {
         val bitmap = android.graphics.Bitmap.createBitmap(2000, 10, android.graphics.Bitmap.Config.ARGB_8888)
         val bytes = java.io.ByteArrayOutputStream().also { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
         assertNull(cache().load(account, path) { bytes })
+    }
+
+    @Test
+    fun frontPageImagesAllowTheStored1200PixelDerivative() = runBlocking {
+        val path = "/v1/entries/5/image?v=feature"
+        val bitmap = android.graphics.Bitmap.createBitmap(1200, 800, android.graphics.Bitmap.Config.ARGB_8888)
+        val bytes = java.io.ByteArrayOutputStream().also { bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 82, it) }.toByteArray()
+        assertNotNull(cache().load(account, path) { bytes })
+    }
+
+    @Test
+    fun frontPageImagesStillRejectDimensionsBeyondTheDerivative() = runBlocking {
+        val path = "/v1/entries/5/image?v=huge"
+        val bitmap = android.graphics.Bitmap.createBitmap(1201, 800, android.graphics.Bitmap.Config.ARGB_8888)
+        val bytes = java.io.ByteArrayOutputStream().also { bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 82, it) }.toByteArray()
+        assertNull(cache().load(account, path) { bytes })
+    }
+
+    @Test
+    fun thumbnailsStillRejectTheLargerFrontPageDerivative() = runBlocking {
+        val path = "/v1/entries/5/thumbnail?v=feature"
+        val bitmap = android.graphics.Bitmap.createBitmap(1200, 800, android.graphics.Bitmap.Config.ARGB_8888)
+        val bytes = java.io.ByteArrayOutputStream().also { bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 82, it) }.toByteArray()
+        assertNull(cache().load(account, path) { bytes })
+    }
+
+    @Test
+    fun frontPageImagesStillRejectOversizedBodies() = runBlocking {
+        val path = "/v1/entries/5/image?v=huge"
+        assertNull(cache().load(account, path) { ByteArray(8 * 1024 * 1024 + 1) })
+    }
+
+    @Test
+    fun signOutDropsImagesAndFencesALateDownload() = runBlocking {
+        val cache = cache()
+        val path = "/v1/entries/5/image?v=one"
+        assertNotNull(cache.load(account, path) { png })
+        assertNotNull(cache.load(other, path) { png })
+        cache.clearAccount(account)
+        assertFalse(cache.fileFor(account, path).exists())
+        assertTrue(cache.fileFor(other, path).exists())
+        assertNull(cache.load(account, path) { null })
+
+        val started = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val latePath = "/v1/entries/6/image?v=late"
+        val job = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).async {
+            runCatching { cache.load(account, latePath) { started.complete(Unit); release.await(); png } }
+        }
+        started.await()
+        cache.clearAccount(account)
+        release.complete(Unit)
+        job.await()
+        assertFalse(cache.fileFor(account, latePath).exists())
+        cache.close()
     }
 }

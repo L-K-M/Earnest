@@ -9,8 +9,9 @@ import EarnestKit
 @MainActor struct WindowRootView: View {
     let model: AppModel
     @StateObject private var window: WindowModel
-    @SceneStorage("section") private var storedSection = Section.today.rawValue
+    @SceneStorage("section") private var storedSection = Section.frontPage.rawValue
     @SceneStorage("article") private var storedArticle = 0
+    @SceneStorage("frontPeriod") private var storedFrontPeriod = FrontPagePeriod.daily.rawValue
 
     init(model: AppModel) {
         self.model = model
@@ -24,15 +25,24 @@ import EarnestKit
             .focusedSceneObject(window)
             .onAppear {
                 // Restore this window's place; Search is not restored because
-                // its query is not kept.
-                if let section = Section(rawValue: storedSection), section != .search, section != window.section {
+                // its query is not kept. Today and Edition were the two
+                // front-page windows, so old saved state keeps its meaning.
+                if let section = Section.legacy(storedSection), section != .search, section != window.section {
                     window.section = section
+                }
+                if window.section == .frontPage {
+                    if let legacy = Section.legacyPeriod(storedSection) {
+                        window.frontPagePeriod = legacy
+                    } else if let period = FrontPagePeriod(rawValue: storedFrontPeriod) {
+                        window.frontPagePeriod = period
+                    }
                 }
                 if storedArticle > 0 { window.pendingRestoredSelection = Int64(storedArticle) }
             }
             .onChange(of: window.section) {
                 if window.section != .search { storedSection = window.section.rawValue }
             }
+            .onChange(of: window.frontPagePeriod) { storedFrontPeriod = window.frontPagePeriod.rawValue }
             .onChange(of: window.selected) { storedArticle = Int(window.selected ?? 0) }
     }
 }
@@ -383,15 +393,7 @@ struct WindowAccessor: NSViewRepresentable {
     @SwiftUI.State private var searchFocused = false
 
     var body: some View {
-        NavigationSplitView {
-            SidebarView()
-                .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 300)
-        } content: {
-            contentColumn
-                .navigationSplitViewColumnWidth(min: 300, ideal: 360, max: 520)
-        } detail: {
-            detailColumn
-        }
+        navigation
         .navigationTitle(title)
         .navigationSubtitle(subtitle)
         .searchable(text: searchText, isPresented: $searchFocused, placement: .toolbar, prompt: "Search Articles")
@@ -401,6 +403,47 @@ struct WindowAccessor: NSViewRepresentable {
         // Not customizable: AppKit can fail to restore a saved layout that
         // includes the split view's separators, which crashes at launch.
         .toolbar { toolbar }
+    }
+
+    @ViewBuilder private var navigation: some View {
+        if window.section == .frontPage {
+            NavigationSplitView {
+                SidebarView()
+                    .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 300)
+            } detail: {
+                ZStack {
+                    // Keep the paper mounted under the reader so Back restores
+                    // its scroll position and expanded coverage.
+                    FrontPageView()
+                        .opacity(window.selected == nil ? 1 : 0)
+                        .allowsHitTesting(window.selected == nil)
+                        .accessibilityHidden(window.selected != nil)
+                    if window.selected != nil {
+                        VStack(spacing: 0) {
+                            HStack {
+                                Button { window.selectFromList(nil) } label: {
+                                    Label("Front page", systemImage: "chevron.left")
+                                }
+                                .keyboardShortcut(.escape, modifiers: [])
+                                Spacer()
+                            }.padding(12)
+                            Divider()
+                            ReaderPane(reader: window.reader)
+                        }
+                    }
+                }
+            }
+        } else {
+            NavigationSplitView {
+                SidebarView()
+                    .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 300)
+            } content: {
+                contentColumn
+                    .navigationSplitViewColumnWidth(min: 300, ideal: 360, max: 520)
+            } detail: {
+                detailColumn
+            }
+        }
     }
 
     private var searchText: Binding<String> {
@@ -420,11 +463,12 @@ struct WindowAccessor: NSViewRepresentable {
 
     private var subtitle: String {
         switch window.section {
-        case .today, .later, .kept, .done:
+        case .frontPage:
+            guard let page = window.frontPage else { return "" }
+            let count = page.sections.flatMap(\.stories).count
+            return count == 0 ? "" : "\(count) stor\(count == 1 ? "y" : "ies")"
+        case .allArticles, .later, .kept, .done:
             let count = window.rows.count
-            return count == 0 ? "" : "\(count) article\(count == 1 ? "" : "s")"
-        case .edition:
-            let count = window.editionGroups.reduce(0) { $0 + $1.rows.count }
             return count == 0 ? "" : "\(count) article\(count == 1 ? "" : "s")"
         case .feeds:
             let count = model.feeds.count
@@ -444,21 +488,22 @@ struct WindowAccessor: NSViewRepresentable {
 
     @ViewBuilder private var contentColumn: some View {
         switch window.section {
-        case .today:
-            TodayColumn(selection: entrySelection)
-        case .edition:
-            if window.editionGroups.isEmpty {
+        case .frontPage:
+            FrontPageView()
+        case .allArticles:
+            if window.rows.isEmpty {
                 ContentUnavailableView {
                     Label {
-                        Text("Nothing in This Week’s Edition")
+                        Text("No Articles")
                     } icon: {
-                        Image(systemName: "newspaper").foregroundStyle(Tone.blue.color)
+                        Image(systemName: Section.allArticles.icon)
+                            .foregroundStyle(Section.allArticles.tone?.color ?? Color.primary)
                     }
                 } description: {
-                    Text("Feeds set to This Week collect here.")
+                    Text("Every article from your feeds, newest first.")
                 }
             } else {
-                EntryTable(groups: window.editionGroups, selection: entrySelection, actions: window.tableActions, takeFocusRequest: window.takeListFocusRequest, media: model.media)
+                EntryTable(entries: window.rows, selection: entrySelection, actions: window.tableActions, takeFocusRequest: window.takeListFocusRequest, media: model.media)
             }
         case .later, .kept, .done:
             if window.rows.isEmpty {
@@ -585,61 +630,5 @@ struct WindowAccessor: NSViewRepresentable {
                     .disabled(true)
             }
         }
-    }
-}
-
-/// Today: agent briefs, the river, and its written end.
-@MainActor private struct TodayColumn: View {
-    @EnvironmentObject private var model: AppModel
-    @EnvironmentObject private var window: WindowModel
-    @Binding var selection: Int64?
-
-    var body: some View {
-        VStack(spacing: 0) {
-            if !model.briefs.isEmpty {
-                BriefsView(briefs: model.briefs, names: model.principalNames)
-                Divider()
-            }
-            if window.rows.isEmpty {
-                ContentUnavailableView {
-                    Label {
-                        Text(verbatim: window.endTitle.isEmpty ? "Nothing New" : window.endTitle)
-                    } icon: {
-                        Image(systemName: "sun.max").foregroundStyle(Tone.orange.color)
-                    }
-                } description: {
-                    if !window.endDetail.isEmpty { Text(window.endDetail) }
-                }
-            } else {
-                EntryTable(entries: window.rows, selection: $selection, actions: window.tableActions, takeFocusRequest: window.takeListFocusRequest, media: model.media)
-                if !window.endTitle.isEmpty {
-                    EndStatement(title: window.endTitle, detail: window.endDetail)
-                }
-            }
-        }
-    }
-}
-
-/// "That is everything since Tuesday." The river's written end.
-private struct EndStatement: View {
-    let title: String
-    let detail: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.callout)
-            if !detail.isEmpty {
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.bar)
-        .overlay(alignment: .top) { Divider() }
-        .accessibilityElement(children: .combine)
     }
 }

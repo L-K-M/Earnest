@@ -32,8 +32,12 @@ func TestMediaRoutes(t *testing.T) {
  ON CONFLICT(feed_id) DO UPDATE SET status=EXCLUDED.status,content_type=EXCLUDED.content_type,body=EXCLUDED.body,etag=EXCLUDED.etag`, f.subID, body.Bytes()); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := f.db.Pool().Exec(ctx, `UPDATE entry_images SET feature_body=body,feature_content_type=content_type,feature_etag=etag WHERE entry_id=$1`, f.entryID); err != nil {
+		t.Fatal(err)
+	}
 	cookieOnly := requestCredentials{cookie: f.cookie}
 	thumbnail := "/v1/entries/" + strconv.FormatInt(f.entryID, 10) + "/thumbnail"
+	feature := "/v1/entries/" + strconv.FormatInt(f.entryID, 10) + "/image"
 	icon := "/v1/subscriptions/" + strconv.FormatInt(f.subID, 10) + "/icon"
 
 	t.Run("lists carry versioned paths", func(t *testing.T) {
@@ -64,7 +68,7 @@ func TestMediaRoutes(t *testing.T) {
 	})
 
 	t.Run("serves stored bytes with cache headers", func(t *testing.T) {
-		for _, tc := range []struct{ path, etag string }{{thumbnail, "0123456789abcdef"}, {icon, "fedcba9876543210"}} {
+		for _, tc := range []struct{ path, etag string }{{thumbnail, "0123456789abcdef"}, {feature, "0123456789abcdef"}, {icon, "fedcba9876543210"}} {
 			rec := f.do(t, http.MethodGet, tc.path+"?v="+tc.etag, nil, cookieOnly)
 			requireStatus(t, rec, http.StatusOK)
 			if !bytes.Equal(rec.Body.Bytes(), body.Bytes()) {
@@ -102,6 +106,7 @@ func TestMediaRoutes(t *testing.T) {
 
 	t.Run("requires authentication and visibility", func(t *testing.T) {
 		requireStatus(t, f.do(t, http.MethodGet, thumbnail, nil, requestCredentials{}), http.StatusUnauthorized)
+		requireStatus(t, f.do(t, http.MethodGet, feature, nil, requestCredentials{}), http.StatusUnauthorized)
 		requireStatus(t, f.do(t, http.MethodGet, icon, nil, requestCredentials{}), http.StatusUnauthorized)
 		requireStatus(t, f.do(t, http.MethodGet, "/v1/entries/999999/thumbnail", nil, cookieOnly), http.StatusNotFound)
 		requireStatus(t, f.do(t, http.MethodGet, "/v1/subscriptions/999999/icon", nil, cookieOnly), http.StatusNotFound)
@@ -111,6 +116,9 @@ func TestMediaRoutes(t *testing.T) {
 		}
 		if _, err := f.svc.EntryThumbnail(ctx, other, f.entryID); err == nil {
 			t.Fatal("another user read the thumbnail")
+		}
+		if _, err := f.svc.EntryImage(ctx, other, f.entryID); err == nil {
+			t.Fatal("another user read the feature image")
 		}
 		if _, err := f.svc.SubscriptionIcon(ctx, other, f.subID); err == nil {
 			t.Fatal("another user read the icon")

@@ -115,7 +115,7 @@ import EarnestKit
             } header: {
                 Text("New Subscription").font(.headline)
             } footer: {
-                Text("Now and Today feeds join your river. This Week feeds collect in the Edition.")
+                Text("The front page selects from every cadence. Cadence decides how long articles stay in the river.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

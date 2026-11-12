@@ -4,6 +4,7 @@ import type {components} from './api.generated'
 import {request, RequestError, setCSRF} from './request'
 import {readUnreadCounts} from './counts'
 import {River, type SessionSummary} from './River'
+import {FrontPage} from './FrontPage'
 import {Reader} from './ArticleReader'
 import {ArticleFrame} from './ArticleFrame'
 import {defaultSettings, type ReadingSettings} from './Settings'
@@ -27,7 +28,8 @@ import {READING_VIEWS, Sidebar} from './Sidebar'
 import {ResizeHandle} from './ResizeHandle'
 import {usePaneWidths} from './paneWidths'
 import {currentHref, initializeHistory, Link, navigate, openedFrom, resetLocation, returnTo, useLocation, useScrollRestoration, whenPresent} from './router'
-import {activityHref, parseRoute, routeSection, searchHref, TODAY, viewHref, type Route, type ViewRef} from './routes'
+import {activityHref, frontHref, parseRoute, routeSection, searchHref, targetHref, TODAY, viewHref, type FrontPeriod, type FrontTarget, type Route, type ViewRef} from './routes'
+import {clearFrontCache, loadFrontPage} from './front-store'
 
 type Identity = {user_id: number; principal_id: number}
 type Toast = {id: number; message: string; undo?: () => Promise<void>}
@@ -42,7 +44,8 @@ const SYNC_REFRESH_DEBOUNCE_MS = 1500
 const TOAST_MS = 8000
 // A "g" waits this long for the second key of a go-to shortcut.
 const SEQUENCE_MS = 1500
-const GO_TO: Record<string, string> = {t:'/today', e:'/edition', l:'/later', k:'/kept', d:'/done', f:'/feeds', s:'/settings', a:'/activity', n:'/notifications', r:'/rules'}
+const GO_TO: Record<string, string> = {t:'/front', e:'/front?period=weekly', l:'/later', k:'/kept', d:'/done', f:'/feeds', s:'/settings', a:'/articles', A:'/activity', n:'/notifications', r:'/rules'}
+const DAILY: FrontTarget = {kind: 'front', period: 'daily'}
 const THEME_COLORS: Record<string, string> = {light:'#f8f6ef', dark:'#1d1d1b', black:'#000000', eink:'#ffffff'}
 
 // Rarely visited screens load on demand. A failed chunk download is retried
@@ -153,6 +156,17 @@ function Session({onLogout}: {onLogout: () => void}) {
       const found = data?.pages?.flatMap(page => page.entries ?? []).find(entry => entry.id === id)
       if (found) return found
     }
+    // The front page response carries complete entries too, so an article can
+    // open offline from the page the reader was already looking at.
+    for (const [, data] of queryClient.getQueriesData<{sections?: {stories?: {entry?: Entry; coverage?: {entry?: Entry}[]}[]}[]}>({queryKey: ['front']})) {
+      const found = data?.sections?.flatMap(section => section.stories ?? []).flatMap(story => [story.entry, ...(story.coverage ?? []).map(item => item.entry)]).find(entry => entry?.id === id)
+      if (found) return found
+    }
+    for (const period of ['daily', 'weekly'] as const) {
+      const stored = loadFrontPage(userID, period)
+      const found = stored?.page.sections.flatMap(section => section.stories).flatMap(story => [story.entry, ...story.coverage.map(item => item.entry)]).find(entry => entry.id === id)
+      if (found) return found
+    }
     return undefined
   }
   const online = useOnline()
@@ -178,7 +192,7 @@ function Session({onLogout}: {onLogout: () => void}) {
       const entry = await request<Entry>(`/v1/entries/${entryID}`)
       if (!active || currentHref() !== landed) return
       remember(entry); setSelected(entry)
-      go(`${viewHref(TODAY, entry.id)}${rest}`, {replace: true})
+      go(`${frontHref('daily', entry.id)}${rest}`, {replace: true})
     }).catch(e => {if (active && currentHref() === landed) {setError(e instanceof Error ? e.message : 'Could not open notification.'); go(`/notifications${rest}`, {replace: true})}})
     return () => {active = false}
   }, [identity, go, remember])
@@ -217,6 +231,7 @@ function Session({onLogout}: {onLogout: () => void}) {
   // Resolve the route's view against the loaded resources. A feed, folder or
   // label that no longer exists is reported, not shown as an empty list.
   const riverRoute = route.name === 'river' ? route : null
+  const frontRoute = route.name === 'front' ? route : null
   const viewRef: ViewRef = riverRoute?.view ?? TODAY
   const resolved = (() => {
     const standard = READING_VIEWS.find(item => item.kind === viewRef.kind)
@@ -230,7 +245,7 @@ function Session({onLogout}: {onLogout: () => void}) {
     return {view: {kind: viewRef.kind, id: viewRef.id, title: item?.name ?? (viewRef.kind === 'folder' ? 'Folder' : 'Label')} as View, missing: list.isSuccess && !item}
   })()
   const view = resolved.view
-  const openID = riverRoute?.entry
+  const openID = route.name === 'river' || route.name === 'front' ? route.entry : undefined
   // Choosing a parent list from the sidebar/palette is a new visit even when
   // it is already behind the reader. Opening articles and Back/close are not.
   const [listVisit, setListVisit] = useState({locationKey: location.key, number: 0})
@@ -266,6 +281,7 @@ function Session({onLogout}: {onLogout: () => void}) {
       // Back to the list the article was opened from, as closing it would.
       if (open.name === 'river' && open.entry !== undefined) returnTo(viewHref(open.view))
       // Old revision numbers must not re-enter sync from an offline response.
+      clearFrontCache()
       void clearOffline().then(async () => {
         await request<Identity>('/v1/me')
         await queryClient.resetQueries({queryKey:['position']})
@@ -345,20 +361,39 @@ function Session({onLogout}: {onLogout: () => void}) {
     },
   }
 
-  const openArticle = useCallback((entry: Entry, options: {view?: ViewRef; mode?: OpenMode} = {}) => {
+  const openArticle = useCallback((entry: Entry, options: {view?: ViewRef | FrontTarget; mode?: OpenMode} = {}) => {
     if (!alive.current) return
     remember(entry)
     setSelected(entry)
     const replace = options.mode === 'replace'
     const now: Route = routeRef.current
-    const target = options.view ?? (now.name === 'river' ? now.view : TODAY)
-    go(viewHref(target, entry.id), {replace, from: replace ? openedFrom() : currentHref()})
+    const target = options.view ?? (now.name === 'river' ? now.view : now.name === 'front' ? {kind: 'front', period: now.period} : DAILY)
+    go(targetHref(target, entry.id), {replace, from: replace ? openedFrom() : currentHref()})
   }, [go, remember])
   // From a list: the first article pushes an entry so Back returns to the
   // list; moving between articles replaces it so Back still does.
   const openFromList = useCallback((entry: Entry, mode?: OpenMode) => openArticle(entry, {mode: mode ?? (routeRef.current.name === 'river' && routeRef.current.entry !== undefined ? 'replace' : 'push')}), [openArticle])
-  const openElsewhere = useCallback((entry: Entry) => openArticle(entry, {view: routeRef.current.name === 'river' ? routeRef.current.view : TODAY, mode: 'push'}), [openArticle])
-  const listHref = viewHref(viewRef)
+  // Opening a front-page story is an explicit read: the representative is
+  // marked seen passively once, exactly like opening a river row. Rendering,
+  // switching windows and expanding coverage never write.
+  const frontScroll = useRef(0)
+  const openFront = (entry: Entry, mode?: OpenMode) => {
+    if (routeRef.current.name !== 'front' || routeRef.current.entry === undefined) {
+      frontScroll.current = document.querySelector('.front')?.scrollTop ?? 0
+    }
+    const state = actions.state(entry)
+    if (!actions.deleted?.(entry) && state.seen.value === 'unseen' && state.shelf.value !== 'done') {
+      void actions.act(entry, 'seen', 'seen', 'passive').catch(error => setError(error instanceof Error ? error.message : 'Could not save reading progress.'))
+    }
+    const period: FrontPeriod = routeRef.current.name === 'front' ? routeRef.current.period : 'daily'
+    openArticle(entry, {view: {kind: 'front', period}, mode: mode ?? (routeRef.current.name === 'front' && routeRef.current.entry !== undefined ? 'replace' : 'push')})
+  }
+  const openElsewhere = useCallback((entry: Entry) => {
+    const now = routeRef.current
+    const target = now.name === 'river' ? now.view : now.name === 'front' ? {kind: 'front' as const, period: now.period} : DAILY
+    return openArticle(entry, {view: target, mode: 'push'})
+  }, [openArticle])
+  const listHref = frontRoute ? frontHref(frontRoute.period) : viewHref(viewRef)
   const closeReader = useCallback(() => {
     if (!alive.current) return
     if (openedFrom() !== undefined) history.back()
@@ -371,7 +406,11 @@ function Session({onLogout}: {onLogout: () => void}) {
     const was = previousOpen.current
     previousOpen.current = openID
     if (was === undefined || openID !== undefined) return
-    return whenPresent(() => document.querySelector<HTMLElement>(`.river [data-entry="${was}"] .entry`) ?? document.querySelector<HTMLElement>('.river h2'), target => target.focus({preventScroll: false}), 10)
+    return whenPresent(() => document.querySelector<HTMLElement>(`.river [data-entry="${was}"] .entry`) ?? document.querySelector<HTMLElement>(`.front [data-entry="${was}"] .front-headline a`) ?? document.querySelector<HTMLElement>('.river h2') ?? document.querySelector<HTMLElement>('.front .front-title'), target => {
+      const front = document.querySelector('.front')
+      if (front) front.scrollTop = frontScroll.current
+      target.focus({preventScroll: front !== null})
+    }, 10)
   }, [openID])
 
   // Screens other than the river put focus on their heading when the route
@@ -379,7 +418,7 @@ function Session({onLogout}: {onLogout: () => void}) {
   const firstRunShown = route.name === 'river' && route.entry === undefined && !onboarded && subscriptions.isSuccess && subscriptions.data.length === 0 && preferences.isSuccess && preferences.data.rev === 0
   const section = firstRunShown ? 'welcome' : routeSection(route)
   useEffect(() => {
-    if (route.name === 'river' && section !== 'welcome') return
+    if ((route.name === 'river' || route.name === 'front') && section !== 'welcome') return
     return whenPresent(() => page.current?.querySelector<HTMLElement>('h2'), heading => {
       if (page.current?.contains(document.activeElement) && document.activeElement !== page.current) return
       if (!heading.hasAttribute('tabindex')) heading.setAttribute('tabindex', '-1')
@@ -401,6 +440,7 @@ function Session({onLogout}: {onLogout: () => void}) {
   const pageTitle = (() => {
     switch (route.name) {
     case 'river': return openEntry ? `${openEntry.title || 'Untitled'} · ${view.title}` : openID !== undefined && openQuery.isError ? `Article unavailable · ${view.title}` : view.title
+    case 'front': return openEntry ? `${openEntry.title || 'Untitled'} · Front page` : openID !== undefined && openQuery.isError ? 'Article unavailable · Front page' : 'Front page'
     case 'search': return route.saved !== undefined ? savedSearches.data?.find(saved => saved.id === route.saved)?.name ?? 'Saved search' : route.search.q ? `${route.search.q} · Search` : 'Search'
     case 'ask': return 'Ask my feeds'
     case 'rules': return route.rule === 'new' ? 'New rule' : 'Rules'
@@ -432,7 +472,7 @@ function Session({onLogout}: {onLogout: () => void}) {
     // single-key handler as "e" (Done).
     function keyboard(event: KeyboardEvent) {
       if (!alive.current || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return
-      const reading = routeRef.current.name === 'river' && routeRef.current.entry !== undefined
+      const reading = (routeRef.current.name === 'river' || routeRef.current.name === 'front') && routeRef.current.entry !== undefined
       if (event.key === 'Escape') {
         if (reading && !inField(event.target) && !document.querySelector(':popover-open')) { event.preventDefault(); closeReaderRef.current() }
         return
@@ -502,7 +542,8 @@ function Session({onLogout}: {onLogout: () => void}) {
   }
   const articleCommand = (id: string, title: string, key: string, run: (entry: Entry) => Promise<void> | void): Command => ({id, title, key, group:'Article', disabled:!current, run:async () => {if (current) await run(current)}})
   const commands: Command[] = [
-    ...READING_VIEWS.map(item => ({id:`view-${item.kind}`, title:item.title, group:'Go to', key:item.shortcut, run:() => {go(viewHref({kind:item.kind}))}})),
+    ...READING_VIEWS.map(item => ({id:`view-${item.id}`, title:item.title, group:'Go to', key:item.shortcut, run:() => {go(item.to)}})),
+    {id:'view-front-week', title:'This week', group:'Go to', key:'g e', run:() => {go('/front?period=weekly')}},
     ...subs.map(sub => ({id:`feed-${sub.id}`, title:`Feed: ${sub.title || sub.url}`, group:'Feed', run:() => {go(viewHref({kind:'feed', id:sub.id}))}})),
     ...(folders.data ?? []).filter(folder => !folder.deleted).map(folder => ({id:`folder-${folder.id}`, title:`Folder: ${folder.name}`, group:'Folder', run:() => {go(viewHref({kind:'folder', id:folder.id}))}})),
     ...(labels.data ?? []).filter(label => !label.deleted).map(label => ({id:`label-${label.id}`, title:`Label: ${label.name}`, group:'Label', run:() => {go(viewHref({kind:'label', id:label.id}))}})),
@@ -515,16 +556,18 @@ function Session({onLogout}: {onLogout: () => void}) {
     articleCommand('copy-link', 'Copy Earnest link to the article', '', async entry => {
       // The clipboard API exists only in secure contexts (HTTPS or localhost).
       if (!navigator.clipboard) throw new Error('Copying needs Earnest on HTTPS or localhost. Copy the address bar instead.')
-      await navigator.clipboard.writeText(new URL(viewHref(viewRef, entry.id), window.location.origin).href)
+      const now = routeRef.current
+      const target = now.name === 'river' ? now.view : now.name === 'front' ? {kind: 'front' as const, period: now.period} : DAILY
+      await navigator.clipboard.writeText(new URL(targetHref(target, entry.id), window.location.origin).href)
       notify('Link copied.')
     }),
     {id:'undo', title:'Undo the last action', key:'z', group:'Article', disabled:!toast?.undo, run:async () => {await toast?.undo?.()}},
-    {...markRestCommand(view, subs, newestLoaded.key === viewKey(view) ? newestLoaded.seq : 0, (scope, throughSeq) => sync.actRange(scope, throughSeq)), group:'Article', key:undefined},
+    ...(route.name === 'river' ? [{...markRestCommand(view, subs, newestLoaded.key === viewKey(view) ? newestLoaded.seq : 0, (scope, throughSeq) => sync.actRange(scope, throughSeq)), group:'Article' as const, key:undefined}] : []),
     {id:'subscribe', title:'Subscribe to a feed', group:'Feeds', run:() => {go('/feeds#subscribe')}},
     {id:'search', title:'Search', key:'/', group:'Go to', run:() => {go('/search')}},
     ...(pipeline.data?.ask === 'enabled' ? [{id:'ask', title:'Ask my feeds', group:'Go to', run:() => {go('/ask')}}] : []),
     {id:'rules', title:'Rules', key:'g r', group:'Go to', run:() => {go('/rules')}},
-    {id:'activity', title:'Activity', key:'g a', group:'Go to', run:() => {go('/activity')}},
+    {id:'activity', title:'Activity', key:'g A', group:'Go to', run:() => {go('/activity')}},
     {id:'notifications', title:'Notifications', key:'g n', group:'Go to', run:() => {go('/notifications')}},
     {id:'manage-feeds', title:'Manage feeds', key:'g f', group:'Go to', run:() => {go('/feeds')}},
     {id:'settings', title:'Settings', key:'g s', group:'Go to', run:() => {go('/settings')}},
@@ -562,11 +605,12 @@ function Session({onLogout}: {onLogout: () => void}) {
         sessionRevoked.current = true
       }
       await clearOffline()
+      clearFrontCache()
       await queryClient.cancelQueries()
       queryClient.clear()
       localStorage.removeItem('earnest.csrf'); sessionStorage.removeItem('earnest.csrf')
       localStorage.removeItem('earnest.lastVisit')
-      // The next account starts on Today, not on this account's feed or article.
+      // The next account starts on the front page, not on this account's article.
       resetLocation('/')
       // Remount every session-owned hook, including callbacks still awaiting I/O.
       onLogout()
@@ -578,7 +622,7 @@ function Session({onLogout}: {onLogout: () => void}) {
   if (resettingGeneration) return <main className="login"><Brand /><p role="status" className="muted center">Refreshing reading copies…</p>{error && <p role="alert">{error} <button onClick={() => refreshResources('generation')}>Retry</button></p>}</main>
   if (!identity) return <Login onSignIn={login} />
 
-  const firstRun = route.name === 'river' && openID === undefined && !onboarded && (onboardingStarted || (subscriptions.isSuccess && subscriptions.data.length === 0 && preferences.isSuccess && preferences.data.rev === 0))
+  const firstRun = (route.name === 'river' || route.name === 'front') && openID === undefined && !onboarded && (onboardingStarted || (subscriptions.isSuccess && subscriptions.data.length === 0 && preferences.isSuccess && preferences.data.rev === 0))
   const reading = openID !== undefined
   // Offline, failed requests are expected; the offline notice says so once
   // instead of a banner per failed request.
@@ -591,22 +635,31 @@ function Session({onLogout}: {onLogout: () => void}) {
   }
   const sidebar = <Sidebar route={route} subscriptions={subs} folders={folders.data ?? []} labels={labels.data ?? []} savedSearches={savedSearches.data ?? []} counts={settings.reading_mode === 'unread_counts' ? unreadCounts.data : undefined} askEnabled={pipeline.data?.ask === 'enabled'} sync={{text: syncText, tone: syncTone}} onNavigate={() => drawer.current?.close()} onPalette={() => {drawer.current?.close(); palette.current?.openPalette()}} onHelp={() => {drawer.current?.close(); palette.current?.openHelp()}} onSignOut={() => {void logout()}} prefetch={prefetch} onMenu={showListMenu} onMove={moveSidebarItem} />
 
+  function readerPane(): ReactNode {
+    if (!reading) return <ReaderPlaceholder shortcuts={shortcuts} />
+    if (openEntry) return <Reader key={openEntry.id} onOpen={entry => openArticle(entry, {mode: 'push'})} entry={openEntry} subscription={subs.find(sub => sub.id === openEntry.subscription_id)} settings={settings} actions={actions} onSettings={savedSettings} onNotify={notify} renderBody={url => <ArticleFrame src={url} />} onClose={closeReader} />
+    if (openQuery.isError) return <ReaderProblem error={openQuery.error} onBack={closeReader} onRetry={() => {void openQuery.refetch()}} />
+    return <ReaderSkeleton />
+  }
+
   function screen(): ReactNode {
-    if (firstRun) return <div className="page" ref={page}><div className="page-inner onboarding" onChangeCapture={() => setOnboardingStarted(true)} onClickCapture={() => setOnboardingStarted(true)}><Suspense fallback={<PageSkeleton />}><OnboardingScreen onComplete={() => {setOnboarded(true);refreshResources();void queryClient.invalidateQueries({queryKey:['position']});go('/today', {replace: true})}} /></Suspense></div></div>
+    if (firstRun) return <div className="page" ref={page}><div className="page-inner onboarding" onChangeCapture={() => setOnboardingStarted(true)} onClickCapture={() => setOnboardingStarted(true)}><Suspense fallback={<PageSkeleton />}><OnboardingScreen onComplete={() => {setOnboarded(true);refreshResources();void queryClient.invalidateQueries({queryKey:['position']});go('/front', {replace: true})}} /></Suspense></div></div>
     switch (route.name) {
     case 'river': return <div className={`panes${reading ? ' reading' : ''}`}>
       <div id="article-list" className="list-pane" inert={compact && reading}>
         {resolved.missing
-          ? <section className="river"><div className="empty-state"><h2 tabIndex={-1}>This {viewRef.kind} is gone</h2><p>It may have been deleted or unsubscribed on another device.</p><p><Link to="/today">Go to Today</Link></p></div></section>
+          ? <section className="river"><div className="empty-state"><h2 tabIndex={-1}>This {viewRef.kind} is gone</h2><p>It may have been deleted or unsubscribed on another device.</p><p><Link to="/front">Go to Front page</Link></p></div></section>
           : <River since={since} sessionStart={sessionStart} key={`${viewKey(view)}:${listVisit.number}`} onNewestLoaded={seq => setNewestLoaded({key: viewKey(view), seq})} view={view} subscriptions={subs} actions={actions} selected={current} onSelect={setSelected} onOpen={openFromList} onMenu={showArticleMenu} reading={reading} shortcuts={shortcuts} counts={settings.reading_mode === 'unread_counts'} unreadOnly={unreadOnly} onUnreadOnlyChange={setUnreadOnlyOverride} summary={summary} />}
       </div>
       {!compact && <ResizeHandle label="Article list width" controls="article-list" {...paneWidths.list} />}
-      <div className="reader-pane">
-        {!reading ? <ReaderPlaceholder shortcuts={shortcuts} />
-          : openEntry ? <Reader key={openEntry.id} onOpen={entry => openArticle(entry, {mode: 'push'})} entry={openEntry} subscription={subs.find(sub => sub.id === openEntry.subscription_id)} settings={settings} actions={actions} onSettings={savedSettings} onNotify={notify} renderBody={url => <ArticleFrame src={url} />} onClose={closeReader} />
-          : openQuery.isError ? <ReaderProblem error={openQuery.error} onBack={closeReader} onRetry={() => {void openQuery.refetch()}} />
-          : <ReaderSkeleton />}
+      <div className="reader-pane">{readerPane()}</div>
+    </div>
+    case 'front': return <div className={`panes${reading ? ' reading' : ''}`}>
+      <div id="article-list" className="list-pane" inert={compact && reading}>
+        <FrontPage key={`${userID}:${route.period}`} period={route.period} userID={userID} actions={actions} selected={current} onSelect={setSelected} onOpen={openFront} since={since} sessionStart={sessionStart} />
       </div>
+      {!compact && <ResizeHandle label="Article list width" controls="article-list" {...paneWidths.list} />}
+      <div className="reader-pane">{readerPane()}</div>
     </div>
     case 'search': {
       const saved = route.saved === undefined ? undefined : savedSearches.data?.find(item => item.id === route.saved)
@@ -622,7 +675,7 @@ function Session({onLogout}: {onLogout: () => void}) {
     case 'notifications': return <div className="page" ref={page}><div className="page-inner"><Notifications selectedID={route.id} onSelect={id => {go(`/notifications/${id}`, {replace: route.id !== undefined})}} onOpen={openElsewhere} onOpenSettings={() => {go('/settings#push')}} /></div></div>
     case 'feeds': return <div className="page" ref={page}><div className="page-inner"><Suspense fallback={<PageSkeleton />}><div className="page-header"><h2>Manage feeds</h2></div><FeedsScreen onChanged={refreshResources} prefill={subscribePrefill} onPrefillApplied={consumeSubscribePrefill} /></Suspense></div></div>
     case 'settings': return <div className="page" ref={page}><div className="page-inner wide"><Suspense fallback={<PageSkeleton />}><SettingsScreen device={route.device} settings={settings} onSaved={savedSettings} /></Suspense></div></div>
-    case 'not-found': return <div className="page" ref={page}><div className="page-inner"><div className="empty-state"><h2 tabIndex={-1}>There is nothing at this address</h2><p>The link may be mistyped, or the page moved.</p><p><Link to="/today">Go to Today</Link></p></div></div></div>
+    case 'not-found': return <div className="page" ref={page}><div className="page-inner"><div className="empty-state"><h2 tabIndex={-1}>There is nothing at this address</h2><p>The link may be mistyped, or the page moved.</p><p><Link to="/front">Go to Front page</Link></p></div></div></div>
     }
   }
 
@@ -630,7 +683,7 @@ function Session({onLogout}: {onLogout: () => void}) {
     <a className="skip-link" href="#main" onClick={event => {event.preventDefault();document.getElementById('main')?.focus()}}>Skip to content</a>
     {narrow && <header className="topbar">
       <button type="button" className="icon-button" aria-haspopup="dialog" aria-expanded={drawerOpen} onClick={() => drawer.current?.showModal()}><Icon name="menu" /><span className="sr-only">Menu</span></button>
-      <p className="topbar-title">{route.name === 'river' ? (reading ? view.title : '') : pageTitle}</p>
+      <p className="topbar-title">{route.name === 'river' ? (reading ? view.title : '') : route.name === 'front' && reading && openEntry ? openEntry.title : pageTitle}</p>
       {syncTone !== 'quiet' && <span className={`sync-dot ${syncTone}`} title={syncText}><Icon name={syncTone === 'problem' ? 'warning' : 'sync'} size={16} /><span className="sr-only">{syncText}</span></span>}
       <Link to="/search" className="icon-button"><Icon name="search" /><span className="sr-only">Search</span></Link>
       <button type="button" className="icon-button" onClick={() => palette.current?.openPalette()}><Icon name="command" /><span className="sr-only">Command palette</span></button>
@@ -646,7 +699,7 @@ function Session({onLogout}: {onLogout: () => void}) {
         {online && sync.error && <p role="alert" className="banner problem">{sync.error} <button type="button" onClick={sync.retry}>Retry sync</button></p>}
         <OfflineStatus/>
       </div>
-      <main id="main" tabIndex={-1} className={`main ${route.name === 'river' && !firstRun ? 'is-river' : 'is-page'}`}>
+      <main id="main" tabIndex={-1} className={`main ${(route.name === 'river' || route.name === 'front') && !firstRun ? 'is-river' : 'is-page'}`}>
         <ScreenBoundary resetKey={section}>{screen()}</ScreenBoundary>
       </main>
     </div>

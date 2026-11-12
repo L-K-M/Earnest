@@ -64,6 +64,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.adaptive.layout.AnimatedPane
+import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
+import androidx.compose.material3.adaptive.layout.calculatePaneScaffoldDirective
 import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldRole
 import androidx.compose.material3.adaptive.navigation.NavigableListDetailPaneScaffold
 import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
@@ -103,6 +105,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import ch.lkmc.earnest.core.CachedEntry
+import ch.lkmc.earnest.core.FrontPagePeriod
 import ch.lkmc.earnest.core.MAX_OPML_IMPORT_BYTES
 import ch.lkmc.earnest.core.OpmlSummary
 import ch.lkmc.earnest.core.River
@@ -136,8 +139,8 @@ import kotlin.math.roundToInt
 private const val FOREGROUND_REFRESH_MS = 3L * 60 * 1000
 
 internal enum class View(val label: String, val icon: ImageVector, val tone: ((Tones) -> Color)?) {
-    TODAY("Today", Icons.Filled.DateRange, { it.orange }),
-    EDITION("Edition", Icons.AutoMirrored.Filled.List, { it.blue }),
+    FRONT("Front page", Icons.Filled.DateRange, { it.orange }),
+    ALL("All articles", Icons.AutoMirrored.Filled.List, { it.blue }),
     LATER("Later", Icons.Filled.Notifications, { it.amber }),
     KEPT("Kept", Icons.Filled.Star, { it.plum }),
     DONE("Done", Icons.Filled.CheckCircle, { it.green }),
@@ -145,6 +148,16 @@ internal enum class View(val label: String, val icon: ImageVector, val tone: ((T
     ACTIVITY("Activity", Icons.Filled.Info, { it.plum }),
     SEARCH("Search", Icons.Filled.Search, null),
 }
+
+/**
+ * The selected destination and, for the front page, its window. Saved as one
+ * value so a restored Edition selection reopens the weekly front page and a
+ * restored Today selection reopens the daily one.
+ */
+internal data class SectionSelection(
+    val view: View = View.FRONT,
+    val period: FrontPagePeriod = FrontPagePeriod.DAILY,
+)
 
 /** The destination's tone for a theme; SEARCH is not in the navigation suite and has none. */
 private fun View.toneColor(tones: Tones): Color? = tone?.invoke(tones)
@@ -207,11 +220,16 @@ private fun MainScaffold(
     notificationsDenied: Boolean,
     onRequestNotifications: () -> Unit,
 ) {
-    val navigator = rememberListDetailPaneScaffoldNavigator<Long>()
     // The section and the settings screen survive rotation and process
     // death like the navigator's open article does; without them the reader
     // would reopen into a list the user was not looking at.
-    var view by rememberSection()
+    var section by rememberSection()
+    val directive = calculatePaneScaffoldDirective(currentWindowAdaptiveInfo())
+    // The newspaper owns the reading area; an original opens on the next
+    // pane, with native Back restoring the paper even on a wide display.
+    val navigator = rememberListDetailPaneScaffoldNavigator<Long>(
+        if (section.view == View.FRONT) directive.copy(maxHorizontalPartitions = 1) else directive,
+    )
     var showSettings by rememberSettingsOpen()
     val readerEntry = state.snapshot.entries.firstOrNull { it.id == navigator.currentDestination?.contentKey && !it.deleted }
     val reader = remember { ReaderLoadState() }
@@ -258,12 +276,17 @@ private fun MainScaffold(
             model.openEntry(id, agentSelected = id in agentSelected)
         }
     }
-    LaunchedEffect(view, state.accountKey) {
-        if (view == View.ACTIVITY) {
+    LaunchedEffect(section.view, state.accountKey) {
+        if (section.view == View.ACTIVITY) {
             val since = Instant.now().minusSeconds(7 * 24 * 3600).toString()
             model.activity(since).collect { page ->
                 activityGroups = page?.groups.orEmpty()
             }
+        }
+    }
+    LaunchedEffect(section.view, section.period, state.accountKey) {
+        if (section.view == View.FRONT && state.accountKey != null) {
+            model.openFrontPage(section.period)
         }
     }
 
@@ -279,17 +302,14 @@ private fun MainScaffold(
             .mapNotNull { subscription -> subscription.iconUrl()?.let { subscription.id to it } }
             .toMap()
     }
-    val lists = remember(state.snapshot, state.states, state.cadences, state.riverEntryIds, state.readerSettings.showOnlyUnread) {
+    val lists = remember(state.snapshot, state.states) {
         val visible = entries.filterNot { it.deleted }
         fun stateOf(id: Long) = state.states[id] ?: SyncEngine.initialState(state.principalId, id)
-        val today = todayEntries(state)
-        val edition = editionEntries(state)
         val later = visible.filter { stateOf(it.id).shelf.value == kotlinx.serialization.json.JsonPrimitive(SyncEngine.VALUE_LATER) }
         val kept = visible.filter { stateOf(it.id).kept.value == kotlinx.serialization.json.JsonPrimitive(true) }
         val done = visible.filter { stateOf(it.id).shelf.value == kotlinx.serialization.json.JsonPrimitive(SyncEngine.VALUE_DONE) }
         mapOf(
-            View.TODAY to today.sortedBy { it.seq },
-            View.EDITION to edition.sortedBy { it.seq },
+            View.ALL to allArticles(entries),
             View.LATER to later.sortedBy { it.seq },
             View.KEPT to kept.sortedBy { it.seq },
             View.DONE to done.sortedBy { it.seq },
@@ -346,10 +366,10 @@ private fun MainScaffold(
         navigationSuiteItems = {
             View.entries.filter { it != View.SEARCH }.forEach { destination ->
                 item(
-                    selected = view == destination,
+                    selected = section.view == destination,
                     onClick = {
                         model.beginListVisit()
-                        view = destination
+                        section = section.copy(view = destination)
                         scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.List) }
                     },
                     icon = { Icon(destination.icon, contentDescription = null) },
@@ -362,7 +382,7 @@ private fun MainScaffold(
         Scaffold(
             topBar = {
                 EarnestTopBar(
-                    if (showSettings) "Settings" else view.label,
+                    if (showSettings) "Settings" else section.view.label,
                     state.loading,
                     model,
                     theme,
@@ -370,10 +390,13 @@ private fun MainScaffold(
                     notificationsDenied,
                     onRequestNotifications,
                     onSearch = {
-                        view = View.SEARCH
+                        section = section.copy(view = View.SEARCH)
                         scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.List) }
                     },
                     onSettings = { showSettings = true },
+                    onRefresh = {
+                        if (section.view == View.FRONT) model.refreshFrontPage() else model.reloadList()
+                    },
                 )
             },
             snackbarHost = { SnackbarHost(snackbar) },
@@ -396,7 +419,28 @@ private fun MainScaffold(
                     navigator = navigator,
                     listPane = {
                         AnimatedPane {
-                            when (view) {
+                            when (section.view) {
+                                View.FRONT -> FrontPageScreen(
+                                    state = state.frontPage,
+                                    states = state.states,
+                                    principalId = state.principalId,
+                                    briefs = state.briefs,
+                                    principalNames = state.principals,
+                                    entryTitles = state.snapshot.entries.associate { it.id to it.title },
+                                    agentChanges = state.agentChanges,
+                                    sessionChanges = state.sessionAgentChanges,
+                                    agentChangesError = state.agentChangesError,
+                                    onRevert = model::revert,
+                                    onOpen = { entryId ->
+                                        scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
+                                    },
+                                    onOpenAgentSelected = { entryId ->
+                                        agentSelected = agentSelected + entryId
+                                        scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
+                                    },
+                                    onPeriodChange = { period -> section = section.copy(period = period) },
+                                    onRefresh = { model.refreshFrontPage() },
+                                )
                                 View.SEARCH -> SearchScreen(
                                     search = model.search,
                                     accountKey = state.accountKey,
@@ -434,21 +478,21 @@ private fun MainScaffold(
                                     onRevert = { model.revert(it) },
                                 )
                                 else -> EntryListScreen(
-                                    title = view.label,
-                                    entries = lists[view].orEmpty(),
+                                    title = section.view.label,
+                                    entries = lists[section.view].orEmpty(),
                                     states = state.states,
                                     principalId = state.principalId,
                                     subscriptionTitles = subscriptionTitles,
                                     subscriptionIcons = subscriptionIcons,
-                                    briefs = if (view == View.TODAY) state.briefs else emptyList(),
+                                    briefs = emptyList(),
                                     principalNames = state.principals,
                                     entryTitles = state.snapshot.entries.associate { it.id to it.title },
-                                    agentChanges = if (view == View.TODAY) state.agentChanges else emptyList(),
-                                    sessionChanges = if (view == View.TODAY) state.sessionAgentChanges else emptyList(),
-                                    agentChangesError = if (view == View.TODAY) state.agentChangesError else null,
-                                    unreadCounts = if (view == View.TODAY) state.unreadCounts else null,
-                                    unreadSyncedAt = if (view == View.TODAY) state.unreadCountsSyncedAt else null,
-                                    unreadMode = view == View.TODAY && state.readerSettings.readingMode == ch.lkmc.earnest.core.ReadingMode.UNREAD_COUNTS,
+                                    agentChanges = emptyList(),
+                                    sessionChanges = emptyList(),
+                                    agentChangesError = null,
+                                    unreadCounts = null,
+                                    unreadSyncedAt = null,
+                                    unreadMode = false,
                                     onRevert = model::revert,
                                     onOpen = { entryId ->
                                         scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
@@ -611,6 +655,7 @@ private fun EarnestTopBar(
     onRequestNotifications: () -> Unit,
     onSearch: () -> Unit,
     onSettings: () -> Unit,
+    onRefresh: () -> Unit,
 ) {
     var themeOpen by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
@@ -628,7 +673,7 @@ private fun EarnestTopBar(
                     color = MaterialTheme.colorScheme.onSurface,
                 )
             } else {
-                IconButton(onClick = { model.reloadList() }) {
+                IconButton(onClick = onRefresh) {
                     Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
                 }
             }
@@ -1254,6 +1299,11 @@ private fun FeedRow(
             }
             TextButton(onClick = { onUnsubscribe(subscription.id) }) { Text("Unsubscribe") }
         }
+        Text(
+            cadenceOf(River.cadence(subscription)).hint,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -1332,6 +1382,11 @@ private fun SubscribeDialog(
                         )
                     }
                 }
+                Text(
+                    cadenceOf(selectedCadence).hint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         },
         confirmButton = {
@@ -1351,7 +1406,7 @@ private fun String.dayName(): String = runCatching {
     instant.atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("EEEE"))
 }.getOrDefault("today")
 
-private fun Long.relativeTime(): String {
+internal fun Long.relativeTime(): String {
     val minutes = java.time.Duration.between(Instant.ofEpochMilli(this), Instant.now()).toMinutes()
     return when {
         minutes < 1 -> "just now"
@@ -1361,7 +1416,7 @@ private fun Long.relativeTime(): String {
     }
 }
 
-private fun String.relativeTime(): String = runCatching {
+internal fun String.relativeTime(): String = runCatching {
     val instant = Instant.parse(this)
     val minutes = java.time.Duration.between(instant, Instant.now()).toMinutes()
     when {
@@ -1382,12 +1437,26 @@ internal val AgentSelectedSaver: Saver<MutableState<Set<Long>>, LongArray> = Sav
 )
 
 /**
- * The selected section across the saved-state round trip, falling back to
- * Today for a name a future build no longer knows.
+ * The selected section and front-page window across the saved-state round
+ * trip. The persisted value keeps the enum name so an older build's save
+ * still restores; the legacy names map onto the front page windows.
  */
-internal val ViewSaver: Saver<MutableState<View>, String> = Saver(
-    save = { it.value.name },
-    restore = { name -> mutableStateOf(View.entries.firstOrNull { it.name == name } ?: View.TODAY) },
+internal val SectionSaver: Saver<MutableState<SectionSelection>, String> = Saver(
+    save = { "${it.value.view.name}|${it.value.period.wireName}" },
+    restore = { encoded ->
+        val names = encoded.split('|', limit = 2)
+        val viewName = names.first()
+        val periodName = names.getOrNull(1).orEmpty()
+        val view = when (viewName) {
+            "TODAY", "EDITION" -> View.FRONT
+            else -> View.entries.firstOrNull { it.name == viewName } ?: View.FRONT
+        }
+        val period = when {
+            viewName == "EDITION" -> FrontPagePeriod.WEEKLY
+            else -> FrontPagePeriod.entries.firstOrNull { it.wireName == periodName } ?: FrontPagePeriod.DAILY
+        }
+        mutableStateOf(SectionSelection(view, period))
+    },
 )
 
 /**
@@ -1396,8 +1465,8 @@ internal val ViewSaver: Saver<MutableState<View>, String> = Saver(
  * there.
  */
 @Composable
-internal fun rememberSection(): MutableState<View> =
-    rememberSaveable(saver = ViewSaver) { mutableStateOf(View.TODAY) }
+internal fun rememberSection(): MutableState<SectionSelection> =
+    rememberSaveable(saver = SectionSaver) { mutableStateOf(SectionSelection()) }
 
 /** Whether Settings covers the sections; survives recreation like [rememberSection]. */
 @Composable

@@ -121,6 +121,7 @@ data class Entry(
     @SerialName("published_at") val publishedAt: String? = null,
     @SerialName("updated_at") val updatedAt: String? = null,
     val title: String,
+    val blurb: String? = null,
     val url: String,
     val author: String,
     val rev: Long,
@@ -430,3 +431,68 @@ class Empty {
     override fun equals(other: Any?): Boolean = other is Empty
     override fun hashCode(): Int = 0
 }
+
+/** The front page's two windows. The wire name is the API's `period` value. */
+enum class FrontPagePeriod(val wireName: String) {
+    @SerialName("daily") DAILY("daily"),
+    @SerialName("weekly") WEEKLY("weekly"),
+}
+
+@Serializable
+data class GroundedClaim(
+    val text: String,
+    val citations: List<PassageCitation>? = null,
+    val verified: Boolean,
+)
+
+@Serializable
+data class PassageCitation(
+    @SerialName("entry_id") val entryId: Long,
+    @SerialName("content_hash") val contentHash: String,
+    val passages: List<String>? = null,
+    val verified: Boolean,
+)
+
+@Serializable
+data class FrontPageCoverage(
+    val entry: Entry,
+    @SerialName("source_title") val sourceTitle: String,
+)
+
+@Serializable
+data class FrontPageSummary(
+    val claims: List<GroundedClaim>,
+    val model: String,
+    @SerialName("prompt_version") val promptVersion: String,
+    @SerialName("generated_at") val generatedAt: String,
+    @SerialName("excerpt_notice") val excerptNotice: String? = null,
+)
+
+@Serializable
+data class FrontPageStory(
+    val id: String,
+    val entry: Entry,
+    @SerialName("source_title") val sourceTitle: String,
+    @SerialName("published_at") val publishedAt: String,
+    @SerialName("feed_count") val feedCount: Int,
+    val excerpt: String,
+    @SerialName("image_url") val imageUrl: String? = null,
+    val coverage: List<FrontPageCoverage>,
+    val summary: FrontPageSummary? = null,
+)
+
+@Serializable
+data class FrontPageSection(
+    val name: String,
+    val stories: List<FrontPageStory>,
+)
+
+@Serializable
+data class FrontPage(
+    val period: FrontPagePeriod,
+    @SerialName("window_start") val windowStart: String,
+    @SerialName("window_end") val windowEnd: String,
+    @SerialName("selected_at") val selectedAt: String,
+    val revision: String,
+    val sections: List<FrontPageSection>,
+)

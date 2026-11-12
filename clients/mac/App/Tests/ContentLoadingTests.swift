@@ -97,7 +97,7 @@ import Network
             ] + replies)
             let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
             let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
-            let window = WindowModel(app: model)
+            let window = WindowModel(app: model, section: .allArticles)
             defer { model.signOut(); session.invalidateAndCancel() }
             model.loggedIn = true
             _ = try await model.establishSession()
@@ -141,7 +141,7 @@ import Network
             ])
             let api = try EarnestAPI(baseURL: server.origin, tokenStore: ContentTokens(), session: session)
             let model = AppModel(api: api, serverURL: server.origin, tokens: ContentTokens(), identities: store, cacheDirectory: directory)
-            let window = WindowModel(app: model)
+            let window = WindowModel(app: model, section: .allArticles)
             defer { model.signOut(); session.invalidateAndCancel() }
             window.section = .later
             model.login()
@@ -195,7 +195,7 @@ import Network
         ])
         let api = try EarnestAPI(baseURL: server.origin, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, serverURL: server.origin, tokens: ContentTokens(), identities: store, cacheDirectory: directory)
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         defer { model.signOut(); session.invalidateAndCancel() }
         window.section = .later
         model.login()
@@ -227,7 +227,7 @@ import Network
         ])
         let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         defer { model.signOut(); session.invalidateAndCancel() }
         model.loggedIn = true
         let offline = try await model.establishSession()
@@ -272,7 +272,7 @@ import Network
         ])
         let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         defer { model.signOut(); session.invalidateAndCancel() }
         model.loggedIn = true
         let online = try await model.establishSession()
@@ -293,7 +293,7 @@ import Network
         let session = ContentHTTP.install([.init(path: "/v1/me", body: "", failure: .cannotConnectToHost)])
         let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         defer { model.signOut(); session.invalidateAndCancel() }
         model.loggedIn = true
         let online = try await model.establishSession()
@@ -471,7 +471,7 @@ import Network
         ])
         let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         defer { model.signOut(); session.invalidateAndCancel() }
         model.loggedIn = true
         let online = try await model.establishSession()
@@ -523,7 +523,7 @@ import Network
         ])
         let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         defer { model.signOut(); session.invalidateAndCancel() }
         model.loggedIn = true
         let online = try await model.establishSession()
@@ -552,7 +552,7 @@ import Network
         ContentHTTP.assertFinished()
     }
 
-    func testColdLaunchRejectsImportedBacklogAndRestoresBriefAuthor() async throws {
+    func testColdLaunchListsAllArticlesNewestFirstAndRestoresBriefAuthor() async throws {
         let (directory, defaults, store, identity, cache) = try offlineFixture()
         defer { defaults.removePersistentDomain(forName: defaultsSuite) }
         let engine = SyncEngine(store: cache)
@@ -567,18 +567,18 @@ import Network
         let session = ContentHTTP.install([.init(path: "/v1/me", body: "", failure: .cannotConnectToHost)])
         let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         defer { model.signOut(); session.invalidateAndCancel() }
         model.loggedIn = true
         _ = try await model.establishSession()
-        XCTAssertEqual(window.rows.map(\.id), [42])
+        XCTAssertEqual(window.rows.map(\.id), [43, 42], "All articles reads newest first")
         let brief = try XCTUnwrap(model.briefs.first)
         XCTAssertEqual(model.principalNames[brief.principalID], "Morning Agent")
         ContentHTTP.assertFinished()
     }
 
-    /// The server's river reads oldest first; the offline list must match it.
-    func testColdLaunchListsCachedRiverInSequenceOrder() async throws {
+    /// The offline All articles list reads newest first, like the server.
+    func testColdLaunchListsCachedAllArticlesNewestFirst() async throws {
         let (directory, defaults, store, identity, cache) = try offlineFixture()
         defer { defaults.removePersistentDomain(forName: defaultsSuite) }
         let engine = SyncEngine(store: cache)
@@ -587,15 +587,15 @@ import Network
         let session = ContentHTTP.install([.init(path: "/v1/me", body: "", failure: .cannotConnectToHost)])
         let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         defer { model.signOut(); session.invalidateAndCancel() }
         model.loggedIn = true
         _ = try await model.establishSession()
-        XCTAssertEqual(window.rows.map(\.id), [42, 44])
+        XCTAssertEqual(window.rows.map(\.id), [44, 42])
         ContentHTTP.assertFinished()
     }
 
-    func testOnlineRefreshDoesNotRelaxAnotherWindowsCachedRiver() async throws {
+    func testOnlineRefreshDoesNotRelaxAnotherWindowsCachedList() async throws {
         let (directory, defaults, store, identity, cache) = try offlineFixture()
         defer { defaults.removePersistentDomain(forName: defaultsSuite) }
         let engine = SyncEngine(store: cache)
@@ -611,18 +611,18 @@ import Network
         ])
         let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
-        let today = WindowModel(app: model)
-        let later = WindowModel(app: model)
+        let today = WindowModel(app: model, section: .allArticles)
+        let later = WindowModel(app: model, section: .allArticles)
         later.section = .later
         defer { model.signOut(); session.invalidateAndCancel() }
         model.loggedIn = true
         _ = try await model.establishSession()
-        XCTAssertEqual(today.rows.map(\.id), [42])
+        XCTAssertEqual(today.rows.map(\.id), [43, 42])
 
         await later.refreshEntries()
         model.rebuildPresentation()
 
-        XCTAssertEqual(today.rows.map(\.id), [42], "Another window's online fetch must not admit imported backlog")
+        XCTAssertEqual(today.rows.map(\.id), [43, 42], "Another window's online fetch must not change this list")
         ContentHTTP.assertFinished()
     }
 
@@ -641,7 +641,7 @@ import Network
         ])
         let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         defer { model.signOut(); session.invalidateAndCancel() }
         model.loggedIn = true
         _ = try await model.establishSession()
@@ -727,7 +727,7 @@ import Network
         ])
         let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         defer { model.signOut(); session.invalidateAndCancel() }
         model.loggedIn = true
         _ = try await model.establishSession()
@@ -759,7 +759,7 @@ import Network
             ] + replies)
             let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
             let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
-            let window = WindowModel(app: model)
+            let window = WindowModel(app: model, section: .allArticles)
             defer { model.signOut(); session.invalidateAndCancel() }
             model.loggedIn = true
             _ = try await model.establishSession()
@@ -798,7 +798,7 @@ import Network
         ])
         let api = try EarnestAPI(baseURL: identity.server, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, serverURL: identity.server, identities: store, cacheDirectory: directory)
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         defer { model.signOut(); session.invalidateAndCancel() }
         model.loggedIn = true
         _ = try await model.establishSession()
@@ -898,7 +898,7 @@ import Network
         let session = ContentHTTP.install(replies)
         let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: ContentTokens(), session: session)
         let model = AppModel(api: api, engine: engine, principalID: 7)
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         model.loggedIn = true
         window.entries = [entry]
         return (model, window, session)

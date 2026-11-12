@@ -59,7 +59,7 @@ final class BrandTests: XCTestCase {
     }
 
     func testSectionTones() {
-        XCTAssertEqual(Section.today.tone, .orange)
+        XCTAssertEqual(Section.frontPage.tone, .orange)
         XCTAssertEqual(Section.kept.tone, .plum)
         XCTAssertEqual(Section.done.tone, .green)
         XCTAssertNil(Section.search.tone)

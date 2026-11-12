@@ -1,0 +1,26 @@
+/* A front page uses the reading area until an original is opened. */
+.panes:has(.front):not(.reading) {grid-template-columns: minmax(0, 1fr)}
+.panes:has(.front):not(.reading) > .reader-pane,
+.panes:has(.front):not(.reading) > .resize-handle {display: none}
+.front {container: newspaper / inline-size; background: var(--surface)}
+.front > * {width: 100%; max-width: 76rem; margin-inline: auto; box-sizing: border-box}
+.front-masthead {padding: clamp(1rem, 3cqi, 2.5rem); padding-bottom: 1rem}
+.front-masthead h2 {font-size: clamp(1.8rem, 4cqi, 3rem); letter-spacing: -.025em}
+.front-sections {padding: clamp(1rem, 3cqi, 2.5rem); padding-top: 1rem; gap: 2.5rem}
+.front-section-name {padding-bottom: .7rem; border-bottom: 2px solid var(--ink); color: var(--ink)}
+.front-stories {grid-template-columns: minmax(0, 1fr); gap: 1.5rem}
+.front-story {padding: 1rem 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; gap: .9rem}
+.front-story.lead {border-top: 0}
+.front-image, .front-story.lead .front-image {object-fit: contain; height: auto; max-height: 30rem; border-radius: 0; background: transparent}
+.front-story.lead .front-headline {font-size: clamp(1.7rem, 3.3cqi, 2.7rem); line-height: 1.12; letter-spacing: -.015em}
+.front-headline {overflow-wrap: anywhere}
+.front-claim, .front-excerpt {max-width: 65ch}
+@container newspaper (min-width: 40rem) {
+ .front-stories {grid-template-columns: repeat(2, minmax(0, 1fr))}
+ .front-story.lead {grid-column: 1 / -1}
+}
+@container newspaper (min-width: 62rem) {
+ .front-stories {grid-template-columns: repeat(3, minmax(0, 1fr))}
+ .front-story.lead {grid-column: span 2; grid-row: span 2}
+ .front-story.lead:only-child {grid-column: 1 / -1}
+}

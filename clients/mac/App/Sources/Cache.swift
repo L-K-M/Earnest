@@ -12,6 +12,7 @@ final class Cache: SyncStore, @unchecked Sendable {
     private let db: DatabaseQueue
     private let key: String
     private let decodedSnapshot = Mutex<(data: Data, snapshot: SyncSnapshot)?>(nil)
+    private let mediaWritable = Mutex(true)
 
     /// Location of the SQLite file shared by every identity.
     static func databaseURL(in directory: URL?) throws -> URL {
@@ -85,6 +86,12 @@ final class Cache: SyncStore, @unchecked Sendable {
                     PRIMARY KEY (identity, path)
                 )
                 """)
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS front_pages (
+                    identity TEXT NOT NULL, period TEXT NOT NULL, value BLOB NOT NULL, updated REAL NOT NULL,
+                    PRIMARY KEY (identity, period)
+                )
+                """)
         }
     }
 
@@ -95,8 +102,42 @@ final class Cache: SyncStore, @unchecked Sendable {
             try db.execute(sql: "DELETE FROM cached_resources WHERE identity = ?", arguments: [key])
             try db.execute(sql: "DELETE FROM article_copies WHERE identity = ?", arguments: [key])
             try db.execute(sql: "DELETE FROM media_copies WHERE identity = ?", arguments: [key])
+            try db.execute(sql: "DELETE FROM front_pages WHERE identity = ?", arguments: [key])
         }
     }
+
+    /// The last successful front page for one window, with when it arrived.
+    /// A cold launch shows it while the next fetch runs.
+    func frontPage(_ period: FrontPagePeriod) throws -> (page: FrontPage, updated: Date)? {
+        try db.read { db in
+            guard let value = try Data.fetchOne(db, sql: "SELECT value FROM front_pages WHERE identity = ? AND period = ?", arguments: [key, period.rawValue]) else { return nil }
+            let updated = try Double.fetchOne(db, sql: "SELECT updated FROM front_pages WHERE identity = ? AND period = ?", arguments: [key, period.rawValue]) ?? 0
+            return (try JSONDecoder().decode(FrontPage.self, from: value), Date(timeIntervalSince1970: updated))
+        }
+    }
+
+    func saveFrontPage(_ page: FrontPage, period: FrontPagePeriod, updated: Date = Date()) throws {
+        let data = try JSONEncoder().encode(page)
+        try db.write { db in
+            try db.execute(sql: """
+                INSERT INTO front_pages (identity, period, value, updated) VALUES (?, ?, ?, ?)
+                ON CONFLICT(identity, period) DO UPDATE SET value = excluded.value, updated = excluded.updated
+                """, arguments: [key, period.rawValue, data, updated.timeIntervalSince1970])
+        }
+    }
+
+    /// Drop the private front page for this identity, as an explicit sign-out
+    /// or account change requires. Other cached reading data is untouched.
+    func clearFrontPages() throws {
+        try mediaWritable.withLock { writable in
+            writable = false
+            try db.write { db in
+                try db.execute(sql: "DELETE FROM front_pages WHERE identity = ?", arguments: [key])
+                try db.execute(sql: "DELETE FROM media_copies WHERE identity = ?", arguments: [key])
+            }
+        }
+    }
+
 
     func load() throws -> SyncSnapshot {
         let data = try db.read { db in
@@ -188,7 +229,9 @@ final class Cache: SyncStore, @unchecked Sendable {
     }
 
     func saveMedia(path: String, data: Data) throws {
-        try db.write { db in
+        try mediaWritable.withLock { writable in
+            guard writable else { return }
+            try db.write { db in
             try db.execute(sql: """
                 INSERT INTO media_copies (identity, path, data, recency) VALUES (?, ?, ?, 0)
                 ON CONFLICT(identity, path) DO UPDATE SET data = excluded.data
@@ -199,6 +242,7 @@ final class Cache: SyncStore, @unchecked Sendable {
                     SELECT path FROM media_copies WHERE identity = ? ORDER BY recency DESC LIMIT ?
                 )
                 """, arguments: [key, key, Self.mediaLimit])
+            }
         }
     }
 

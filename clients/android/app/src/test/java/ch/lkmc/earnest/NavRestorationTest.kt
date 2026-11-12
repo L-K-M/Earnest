@@ -3,6 +3,7 @@ package ch.lkmc.earnest
 import androidx.compose.runtime.MutableState
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createComposeRule
+import ch.lkmc.earnest.core.FrontPagePeriod
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -25,20 +26,31 @@ class NavRestorationTest {
 
     @Test fun sectionAndSettingsSurviveRecreation() {
         val restoration = StateRestorationTester(compose)
-        var section: MutableState<View>? = null
+        var section: MutableState<SectionSelection>? = null
         var settings: MutableState<Boolean>? = null
         restoration.setContent {
             section = rememberSection()
             settings = rememberSettingsOpen()
         }
         compose.runOnIdle {
-            section?.value = View.SEARCH
+            section?.value = SectionSelection(View.SEARCH, FrontPagePeriod.WEEKLY)
             settings?.value = true
         }
         restoration.emulateSavedInstanceStateRestore()
         compose.runOnIdle {
-            assertEquals(View.SEARCH, section?.value)
+            assertEquals(SectionSelection(View.SEARCH, FrontPagePeriod.WEEKLY), section?.value)
             assertEquals(true, settings?.value)
+        }
+    }
+
+    @Test fun aRestoredWeeklyFrontPageKeepsItsWindow() {
+        val restoration = StateRestorationTester(compose)
+        var section: MutableState<SectionSelection>? = null
+        restoration.setContent { section = rememberSection() }
+        compose.runOnIdle { section?.value = SectionSelection(View.FRONT, FrontPagePeriod.WEEKLY) }
+        restoration.emulateSavedInstanceStateRestore()
+        compose.runOnIdle {
+            assertEquals(SectionSelection(View.FRONT, FrontPagePeriod.WEEKLY), section?.value)
         }
     }
 }

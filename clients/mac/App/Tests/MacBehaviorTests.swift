@@ -36,36 +36,36 @@ import EarnestKit
         model.rebuildPresentation()
     }
 
-    func testOpenArticleStaysInTheRiverUntilSelectionMoves() throws {
+    func testOpeningAnArticleMarksItSeenAndKeepsItInAllArticles() throws {
         let model = try makeModel()
         defer { model.signOut() }
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         window.selected = 42
         try markSeen(42, in: model)
-        XCTAssertEqual(window.rows.map(\.id), [41, 42, 43], "The open article keeps its place")
+        XCTAssertEqual(window.rows.map(\.id), [43, 42, 41], "All articles keeps a read article")
         XCTAssertEqual(window.rows.first { $0.id == 42 }?.unread, false)
 
         window.move(1)
-        XCTAssertEqual(window.selected, 43)
-        XCTAssertEqual(window.rows.map(\.id), [41, 43], "A seen article leaves once you move on")
+        XCTAssertEqual(window.selected, 41)
+        XCTAssertEqual(window.rows.map(\.id), [43, 42, 41], "Moving on does not remove the list")
     }
 
     func testRefreshKeepsTheOpenArticleSoItsCommandsStayAvailable() throws {
         let model = try makeModel()
         defer { model.signOut() }
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         window.selected = 42
         try markSeen(42, in: model)
         XCTAssertTrue(window.canActOnEntry)
-        // The server's river no longer lists a seen article.
+        // A refresh that no longer lists the open article must not drop it.
         window.restoreCachedEntries([try entry(41), try entry(43)])
         model.rebuildPresentation()
-        XCTAssertEqual(window.entries.map(\.id), [41, 42, 43])
-        XCTAssertEqual(window.rows.map(\.id), [41, 42, 43])
+        XCTAssertEqual(window.entries.map(\.id), [43, 42, 41])
+        XCTAssertEqual(window.rows.map(\.id), [43, 42, 41])
         XCTAssertTrue(window.canActOnEntry, "Done, Later and Keep still act on the article being read")
-        window.command(.done)
-        XCTAssertEqual(window.selected, 43)
-        XCTAssertEqual(window.rows.map(\.id), [41, 43])
+        window.command(.keep)
+        XCTAssertEqual(try model.engine?.state(principal: 7, entryID: 42).kept.value, .flag(true))
+        XCTAssertEqual(window.selected, 42)
     }
 
     func testAFailedArticleSaysSoInsteadOfLoadingForever() async throws {
@@ -79,7 +79,7 @@ import EarnestKit
         let api = try EarnestAPI(baseURL: URL(string: "https://api.test")!, tokenStore: ContentTokens(), session: session)
         let model = try makeModel(api: api)
         defer { model.signOut() }
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         window.selectFromList(42)
         let deadline = Date().addingTimeInterval(5)
         while window.readerFailure == nil && Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
@@ -92,12 +92,12 @@ import EarnestKit
     func testADeferredLinkOpensWithImagesBlocked() throws {
         let model = try makeModel()
         defer { model.signOut() }
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         window.go(to: .kept)
         // A link that waited for sign-in, as a reconnect hands it back.
         window.deferDeepLink(43)
         model.rebuildPresentation()
-        XCTAssertEqual(window.section, .today)
+        XCTAssertEqual(window.section, .frontPage)
         XCTAssertEqual(window.selected, 43)
         XCTAssertEqual(window.imageMode, .click, "External links never load images automatically")
         XCTAssertNil(window.pendingDeepLink)
@@ -107,7 +107,7 @@ import EarnestKit
         let model = try makeModel()
         defer { model.signOut() }
         let engine = try XCTUnwrap(model.engine)
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         let undo = UndoManager()
         undo.groupsByEvent = false
         window.undoManager = undo
@@ -127,7 +127,7 @@ import EarnestKit
     func testActivityArticlesKeepImagesBlockedWhenMovedTo() throws {
         let model = try makeModel()
         defer { model.signOut() }
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         window.go(to: .activity)
         window.selectFromList(42)
         XCTAssertEqual(window.imageMode, .click, "Agent-surfaced articles never load images automatically")
@@ -142,7 +142,7 @@ import EarnestKit
 
     func testSignOutForgetsTheSubscriptionDraft() throws {
         let model = try makeModel()
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         window.subscribeURL = "https://private.example/feed"
         window.subscribeCadence = "week"
         model.signOut()
@@ -150,10 +150,10 @@ import EarnestKit
         XCTAssertEqual(window.subscribeCadence, "today")
     }
 
-    func testDoneOnTheOpenArticleSelectsTheNextAndUndoBringsItBack() throws {
+    func testDoneOnAllArticlesKeepsTheRowAndUndoReversesIt() throws {
         let model = try makeModel()
         defer { model.signOut() }
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         let undo = UndoManager()
         undo.groupsByEvent = false
         window.undoManager = undo
@@ -163,28 +163,27 @@ import EarnestKit
         undo.beginUndoGrouping()
         window.command(.done)
         undo.endUndoGrouping()
-        XCTAssertEqual(window.rows.map(\.id), [41, 43])
-        XCTAssertEqual(window.selected, 43, "Done moves on to the next article")
+        XCTAssertEqual(window.rows.map(\.id), [43, 42, 41], "All articles keeps a Done article")
+        XCTAssertEqual(window.selected, 42, "Done does not move on in All articles")
         XCTAssertEqual(undo.undoActionName, "Move to Done")
         XCTAssertEqual(model.sessionActions.done, 1)
 
         undo.undo()
         XCTAssertEqual(try model.engine?.state(principal: 7, entryID: 42).shelf.value, .text("none"))
         XCTAssertTrue(window.rows.map(\.id).contains(42))
-        XCTAssertEqual(window.selected, 42, "Undo reselects the article it brought back")
+        XCTAssertEqual(window.selected, 42)
         XCTAssertEqual(model.sessionActions.done, 0)
         XCTAssertEqual(undo.redoActionName, "Move to Done")
 
         undo.redo()
         XCTAssertEqual(try model.engine?.state(principal: 7, entryID: 42).shelf.value, .text("done"))
-        XCTAssertFalse(window.rows.map(\.id).contains(42))
         XCTAssertEqual(model.sessionActions.done, 1)
     }
 
-    func testUndoAfterARefreshDroppedTheArticleStillBringsItBack() throws {
+    func testUndoAfterARefreshStillReversesTheAction() throws {
         let model = try makeModel()
         defer { model.signOut() }
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         let undo = UndoManager()
         undo.groupsByEvent = false
         window.undoManager = undo
@@ -193,14 +192,13 @@ import EarnestKit
         undo.beginUndoGrouping()
         window.command(.done)
         undo.endUndoGrouping()
-        XCTAssertEqual(window.selected, 43)
-        // A sync refreshed the river without the done article.
+        // A sync refreshed the list without the done article.
         window.restoreCachedEntries([try entry(41), try entry(43)])
         model.rebuildPresentation()
 
         undo.undo()
-        XCTAssertEqual(window.selected, 42, "Undo reselects the article even after a refresh dropped it")
-        XCTAssertEqual(window.rows.map(\.id), [41, 42, 43])
+        XCTAssertEqual(window.selected, 42, "Undo reselects the article even after a refresh")
+        XCTAssertEqual(window.rows.map(\.id), [43, 42, 41])
         XCTAssertTrue(window.canActOnEntry)
     }
 
@@ -212,7 +210,7 @@ import EarnestKit
         done.seen = Stamp(value: .text("seen"), rev: 2)
         done.shelf = Stamp(value: .text("done"), rev: 2)
         try engine.mergeBootstrap([done])
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         window.section = .done
         let undo = UndoManager()
         undo.groupsByEvent = false
@@ -235,7 +233,7 @@ import EarnestKit
     func testLaterTogglesLikeTheWebKey() throws {
         let model = try makeModel()
         defer { model.signOut() }
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         window.section = .later
         window.entries = [try entry(42)]
         window.selected = 42
@@ -252,7 +250,7 @@ import EarnestKit
     func testContextMenuActsOnItsRowWithoutMovingTheSelection() throws {
         let model = try makeModel()
         defer { model.signOut() }
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         window.selected = 41
         window.command(.keep, entryID: 43)
         XCTAssertEqual(try model.engine?.state(principal: 7, entryID: 43).kept.value, .flag(true))
@@ -263,7 +261,7 @@ import EarnestKit
     func testGoClosesTheReaderAndSearchReturnsWhereItStarted() throws {
         let model = try makeModel()
         defer { model.signOut() }
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         window.go(to: .later)
         window.selected = 42
         window.search.query = "garden"
@@ -282,7 +280,7 @@ import EarnestKit
     func testPaletteListsEveryPlaceAndAccountCommand() throws {
         let model = try makeModel()
         defer { model.signOut() }
-        let titles = Set(WindowModel(app: model).paletteCommands().map(\.title))
+        let titles = Set(WindowModel(app: model, section: .allArticles).paletteCommands().map(\.title))
         for place in Section.places { XCTAssertTrue(titles.contains("Go to \(place.title)"), place.title) }
         for title in ["Search Articles", "Settings…", "Sign Out…", "New Subscription…", "Open in Browser", "Move to Done"] {
             XCTAssertTrue(titles.contains(title), title)
@@ -363,7 +361,7 @@ import EarnestKit
     func testAStaleListFocusRequestDoesNotStealTheNextSearch() throws {
         let model = try makeModel()
         defer { model.signOut() }
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         window.go(to: .later)
         window.search.query = "garden"
         window.submitSearch()
@@ -377,7 +375,7 @@ import EarnestKit
     func testArticleRowsCarryMarkersAndLinks() throws {
         let model = try makeModel()
         defer { model.signOut() }
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         window.command(.keep, entryID: 41)
         let row = try XCTUnwrap(window.rows.first { $0.id == 41 })
         XCTAssertTrue(row.kept)

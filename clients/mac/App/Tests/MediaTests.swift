@@ -40,7 +40,7 @@ import GRDB
         defer { model.signOut() }
         await model.refreshFeeds()
         XCTAssertEqual(model.feedMap[1]?.iconURL, "/v1/subscriptions/1/icon?v=ffeeddcc")
-        let window = WindowModel(app: model)
+        let window = WindowModel(app: model, section: .allArticles)
         window.entries = [try entry(41, thumbnail: "/v1/entries/41/thumbnail?v=a1b2c3"), try entry(42)]
         model.rebuildPresentation()
 

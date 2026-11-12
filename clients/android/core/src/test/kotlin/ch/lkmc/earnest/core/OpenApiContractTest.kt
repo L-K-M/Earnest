@@ -351,20 +351,21 @@ class OpenApiContractTest {
     )
 
     private fun entry() = Entry(
-        1,
-        2,
-        3,
-        4,
-        "2026-11-02T12:00:00Z",
-        "2026-11-01T12:00:00Z",
-        "2026-11-02T13:00:00Z",
-        "Title",
-        "https://example.test/article",
-        "Author",
-        5,
-        false,
-        state(),
-        "/v1/entries/1/thumbnail?v=0123abcd",
+        id = 1,
+        subscriptionId = 2,
+        feedId = 3,
+        seq = 4,
+        firstSeenAt = "2026-11-02T12:00:00Z",
+        publishedAt = "2026-11-01T12:00:00Z",
+        updatedAt = "2026-11-02T13:00:00Z",
+        title = "Title",
+        blurb = "Blurb",
+        url = "https://example.test/article",
+        author = "Author",
+        rev = 5,
+        deleted = false,
+        state = state(),
+        thumbnailUrl = "/v1/entries/1/thumbnail?v=0123abcd",
     )
 
     private fun subscription() = Subscription(

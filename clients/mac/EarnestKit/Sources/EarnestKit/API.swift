@@ -199,6 +199,10 @@ let keptImportLimit = 64 * 1024 * 1024
 /// The largest icon or thumbnail body accepted.
 private let mediaBodyLimit = 2 * 1024 * 1024
 
+/// The larger front-page feature image is still bounded so a corrupt or
+/// hostile body cannot exhaust memory.
+private let imageBodyLimit = 8 * 1024 * 1024
+
 private final class RejectRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
         completionHandler(nil)
@@ -275,10 +279,28 @@ public final class EarnestAPI: Sendable {
         try tokenStore.save(token.accessToken)
         return token
     }
-    public func entries(view: String? = nil, cursor: String? = nil, cadence: String? = nil) async throws -> EntriesPage {
-        let query = Operations.ListEntries.Input.Query(view: view.flatMap { .init(rawValue: $0) }, cadence: cadence.flatMap { .init(rawValue: $0) }, cursor: cursor)
-        if view != nil && query.view == nil || cadence != nil && query.cadence == nil { throw APIError.invalidResponse }
+    public func entries(view: String? = nil, cursor: String? = nil, cadence: String? = nil, direction: String? = nil,
+                        unreadOnly: Bool? = nil) async throws -> EntriesPage {
+        let query = Operations.ListEntries.Input.Query(
+            view: view.flatMap { .init(rawValue: $0) },
+            cadence: cadence.flatMap { .init(rawValue: $0) },
+            unreadOnly: unreadOnly,
+            direction: direction.flatMap { .init(rawValue: $0) },
+            cursor: cursor)
+        if view != nil && query.view == nil || cadence != nil && query.cadence == nil
+            || direction != nil && query.direction == nil { throw APIError.invalidResponse }
         return try await generated { try adapt(try await client.listEntries(.init(query: query)).ok.body.json) }
+    }
+    /// The server-selected front page for one window. The GET never awaits a
+    /// model: a story's summary is present only when the server cached one.
+    public func frontPage(period: FrontPagePeriod) async throws -> FrontPage {
+        guard let payload = Operations.FrontPage.Input.Query.PeriodPayload(rawValue: period.rawValue) else {
+            throw APIError.invalidResponse
+        }
+        let page: Components.Schemas.FrontPage = try await generated {
+            try await client.frontPage(.init(query: .init(period: payload))).ok.body.json
+        }
+        return try adapt(page)
     }
     public func entry(id: Int64) async throws -> APIEntry {
         guard id > 0 else { throw APIError.invalidEntryID }
@@ -319,8 +341,18 @@ public final class EarnestAPI: Sendable {
     public func media(path: String) async throws -> Data? {
         // Media fetches send the bearer token, so only the path shapes the
         // server generates for thumbnails and icons may be requested at all.
-        let mediaPath = #/^/v1/(entries|subscriptions)/[1-9][0-9]{0,18}/(thumbnail|icon)(\?v=[A-Za-z0-9_-]{1,64})?$/#
-        guard path.wholeMatch(of: mediaPath) != nil else { throw APIError.invalidResponse }
+        // Only the shapes the server generates for entry thumbnails and
+        // feature images, and subscription icons, may be requested at all.
+        let entryMediaPath = #/^/v1/entries/[1-9][0-9]{0,18}/(thumbnail|image)(\?v=[A-Za-z0-9_-]{1,64})?$/#
+        let subscriptionMediaPath = #/^/v1/subscriptions/[1-9][0-9]{0,18}/icon(\?v=[A-Za-z0-9_-]{1,64})?$/#
+        let bodyLimit: Int
+        if let match = path.wholeMatch(of: entryMediaPath) {
+            bodyLimit = match.output.1 == "image" ? imageBodyLimit : mediaBodyLimit
+        } else if path.wholeMatch(of: subscriptionMediaPath) != nil {
+            bodyLimit = mediaBodyLimit
+        } else {
+            throw APIError.invalidResponse
+        }
         guard let url = URL(string: baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + path) else {
             throw APIError.invalidBaseURL
         }
@@ -336,7 +368,7 @@ public final class EarnestAPI: Sendable {
         let type = response.value(forHTTPHeaderField: "Content-Type")?.split(separator: ";").first?
             .trimmingCharacters(in: .whitespaces).lowercased()
         guard type == "image/png" || type == "image/jpeg",
-              !data.isEmpty, data.count <= mediaBodyLimit else { throw APIError.invalidResponse }
+              !data.isEmpty, data.count <= bodyLimit else { throw APIError.invalidResponse }
         return data
     }
     public func mutes() async throws -> [APIValue] {

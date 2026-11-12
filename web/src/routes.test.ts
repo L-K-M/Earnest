@@ -1,12 +1,19 @@
 import {describe, expect, it} from 'vitest'
-import {activityHref, parseRoute, routeHref, routeSection, searchHref, viewHref, type Route} from './routes'
+import {activityHref, frontHref, parseRoute, routeHref, routeSection, searchHref, viewHref, type Route} from './routes'
 
 describe('route contract', () => {
   it.each<[string, string, Route]>([
-    ['/', '', {name: 'river', view: {kind: 'today'}}],
-    ['/today', '', {name: 'river', view: {kind: 'today'}}],
+    ['/', '', {name: 'front', period: 'daily'}],
+    ['/front', '', {name: 'front', period: 'daily'}],
+    ['/front', '?period=weekly', {name: 'front', period: 'weekly'}],
+    ['/front/articles/42', '?period=weekly', {name: 'front', period: 'weekly', entry: 42}],
+    ['/today', '', {name: 'front', period: 'daily'}],
+    ['/today/articles/4', '', {name: 'front', period: 'daily', entry: 4}],
+    ['/edition', '', {name: 'front', period: 'weekly'}],
+    ['/edition/articles/42', '', {name: 'front', period: 'weekly', entry: 42}],
+    ['/articles', '', {name: 'river', view: {kind: 'all'}}],
+    ['/articles/9', '', {name: 'river', view: {kind: 'all'}, entry: 9}],
     ['/later/', '', {name: 'river', view: {kind: 'later'}}],
-    ['/edition/articles/42', '', {name: 'river', view: {kind: 'edition'}, entry: 42}],
     ['/feeds/7', '', {name: 'river', view: {kind: 'feed', id: 7}}],
     ['/folders/3/articles/9', '', {name: 'river', view: {kind: 'folder', id: 3}, entry: 9}],
     ['/labels/5', '', {name: 'river', view: {kind: 'label', id: 5}}],
@@ -25,7 +32,7 @@ describe('route contract', () => {
     expect(parseRoute(path, search)).toEqual(route)
   })
 
-  it.each(['/feeds/0', '/feeds/abc', '/feeds/7/extra', '/today/articles/x', '/today/articles/1/2', '/rules/new/1', '/nowhere', '/search/saved/', '/feeds/99999999999999999', '/%E0%A4%A'])('reports %s as not found', path => {
+  it.each(['/feeds/0', '/feeds/abc', '/feeds/7/extra', '/today/articles/x', '/today/articles/1/2', '/front/articles/x', '/front/extra', '/articles/1/2', '/rules/new/1', '/nowhere', '/search/saved/', '/feeds/99999999999999999', '/%E0%A4%A'])('reports %s as not found', path => {
     expect(parseRoute(path).name).toBe('not-found')
   })
 
@@ -39,7 +46,9 @@ describe('route contract', () => {
 
   it('formats every route back to a path that parses to the same route', () => {
     const routes: Route[] = [
-      {name: 'river', view: {kind: 'today'}},
+      {name: 'front', period: 'daily'},
+      {name: 'front', period: 'weekly', entry: 6},
+      {name: 'river', view: {kind: 'all'}},
       {name: 'river', view: {kind: 'kept'}, entry: 3},
       {name: 'river', view: {kind: 'feed', id: 7}, entry: 11},
       {name: 'search', search: {q: 'a b&c', mode: 'hybrid', feed: 2}},
@@ -57,13 +66,20 @@ describe('route contract', () => {
 
   it('builds the links the sidebar and lists use', () => {
     expect(viewHref({kind: 'folder', id: 2})).toBe('/folders/2')
+    expect(viewHref({kind: 'all'})).toBe('/articles')
+    expect(viewHref({kind: 'all'}, 5)).toBe('/articles/5')
     expect(viewHref({kind: 'done'}, 5)).toBe('/done/articles/5')
+    expect(viewHref({kind: 'today'}, 5)).toBe('/front/articles/5')
+    expect(viewHref({kind: 'edition'})).toBe('/front?period=weekly')
+    expect(frontHref('weekly', 7)).toBe('/front/articles/7?period=weekly')
     expect(searchHref({q: ''})).toBe('/search')
     expect(activityHref({})).toBe('/activity')
   })
 
   it('keeps a list section current while one of its articles is open', () => {
     expect(routeSection(parseRoute('/feeds/7/articles/2'))).toBe(routeSection(parseRoute('/feeds/7')))
+    expect(routeSection(parseRoute('/front/articles/2?period=weekly'))).toBe(routeSection(parseRoute('/front?period=weekly')))
+    expect(routeSection(parseRoute('/articles/2'))).toBe(routeSection(parseRoute('/articles')))
     expect(routeSection(parseRoute('/search/saved/3'))).not.toBe(routeSection(parseRoute('/search')))
   })
 })

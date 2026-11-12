@@ -36,9 +36,9 @@ export type ListMenuServices = {
   addFeed: (folder: FolderMenuTarget) => void
 }
 
-// Actions for Today, a feed or a folder in the sidebar. "Mark all as read"
-// covers what the list held when you chose it; articles that arrive later
-// stay unread, as with the palette's "Mark the rest read".
+// Actions for All articles, a feed or a folder in the sidebar. "Mark all as
+// read" covers what the list held when you chose it; articles that arrive
+// later stay unread, as with the palette's "Mark the rest read".
 export function listMenu(view: View, subscriptions: Subscription[], services: ListMenuServices): MenuItem[] {
   const scope = viewScope(view, subscriptions)
   const feedID = view.kind === 'feed' ? view.id : undefined

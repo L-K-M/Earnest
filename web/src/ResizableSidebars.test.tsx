@@ -12,6 +12,7 @@ vi.mock('./request', async original => ({...await original<typeof import('./requ
 vi.mock('./syncBridge', () => ({useReaderSync: () => ({state: (entry: Entry) => entry.state, retry: vi.fn(), status: 'Synced', error: ''})}))
 vi.mock('./offline/Offline', () => ({OfflineStatus: () => null, useOnline: () => true, clearOffline: vi.fn()}))
 vi.mock('./River', () => ({River: ({view}: {view: View}) => <h2>{view.title} articles</h2>}))
+vi.mock('./FrontPage', () => ({FrontPage: () => <h2>Front page articles</h2>}))
 
 const media = new Map<string, EventTarget>()
 function resize(width: number) {
@@ -30,7 +31,7 @@ beforeEach(() => {
   })
   resize(1600)
   localStorage.setItem('earnest.csrf', 'token')
-  resetLocation('/today')
+  resetLocation('/front')
   vi.mocked(request).mockImplementation(async path => {
     if (path === '/v1/me') return {user_id: 1, principal_id: 1}
     if (path === '/v1/settings') return {...defaultSettings, rev: 1}
@@ -44,7 +45,7 @@ afterEach(() => {cleanup(); localStorage.clear(); vi.restoreAllMocks(); vi.unstu
 async function start() {
   const client = new QueryClient({defaultOptions: {queries: {retry: false}}})
   const view = render(<QueryClientProvider client={client}><App /></QueryClientProvider>)
-  await screen.findByRole('heading', {name: 'Today articles'})
+  await screen.findByRole('heading', {name: 'Front page articles'})
   return view
 }
 

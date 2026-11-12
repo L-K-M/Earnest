@@ -63,10 +63,12 @@ import EarnestKit
                 .pickerStyle(.radioGroup)
                 Toggle(isOn: $settings.draft.showOnlyUnread) {
                     Text("Show only unread")
-                    Text("Read articles stay until you reopen or refresh the list. Saved shelves and search are not filtered.")
+                    Text("Read articles stay until you reopen or refresh the list. Front page, saved shelves and search include read articles.")
                 }
-                IntegerField("Keep Today articles for", value: $settings.draft.todayDecayDays, in: 1...365,
+                IntegerField("River retention", value: $settings.draft.todayDecayDays, in: 1...365,
                              unit: settings.draft.todayDecayDays == 1 ? "day" : "days")
+                Text("Cadence and retention apply to river lists. Front page always covers the past 24 hours or 7 days across your unmuted feeds.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Toggle(isOn: $settings.draft.singleKeyShortcuts) {
                     Text("Single-key shortcuts")
                     Text("J, K, E, S, F, M and O act on articles when you are not typing.")

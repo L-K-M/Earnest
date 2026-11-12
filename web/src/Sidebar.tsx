@@ -18,12 +18,14 @@ type Label = components['schemas']['Label']
 type Tone = 'orange' | 'amber' | 'plum' | 'purple' | 'blue' | 'green' | 'brand'
 
 const COLLAPSED_KEY = 'earnest.sidebar.collapsed'
-export const READING_VIEWS: {kind: ViewRef['kind']; title: string; icon: IconName; shortcut: string; tone: Tone}[] = [
-  {kind:'today', title:'Today', icon:'today', shortcut:'g t', tone:'orange'},
-  {kind:'edition', title:'Edition', icon:'edition', shortcut:'g e', tone:'blue'},
-  {kind:'later', title:'Later', icon:'later', shortcut:'g l', tone:'amber'},
-  {kind:'kept', title:'Kept', icon:'keep', shortcut:'g k', tone:'plum'},
-  {kind:'done', title:'Done', icon:'done', shortcut:'g d', tone:'green'},
+// Reading destinations. Today and Edition are gone as screens: their old
+// meanings live on as the two front-page windows and as legacy URL aliases.
+export const READING_VIEWS: {id: string; kind: ViewRef['kind']; title: string; to: string; section: string; icon: IconName; shortcut: string; tone: Tone}[] = [
+  {id:'front', kind:'today', title:'Front page', to:'/front', section:'river:front', icon:'today', shortcut:'g t', tone:'orange'},
+  {id:'all', kind:'all', title:'All articles', to:'/articles', section:'river:all:', icon:'stack', shortcut:'g a', tone:'blue'},
+  {id:'later', kind:'later', title:'Later', to:'/later', section:'river:later:', icon:'later', shortcut:'g l', tone:'amber'},
+  {id:'kept', kind:'kept', title:'Kept', to:'/kept', section:'river:kept:', icon:'keep', shortcut:'g k', tone:'plum'},
+  {id:'done', kind:'done', title:'Done', to:'/done', section:'river:done:', icon:'done', shortcut:'g d', tone:'green'},
 ]
 
 function readCollapsed(): Set<number> {
@@ -168,7 +170,7 @@ export function Sidebar({route, subscriptions, folders, labels, savedSearches, c
     <div className="sidebar-body">
       <div role="group" aria-labelledby="nav-reading">
         <h2 id="nav-reading" className="nav-heading sr-only">Reading</h2>
-        <ul className="nav-list">{READING_VIEWS.map(item => <li key={item.kind}>{nav({to:viewHref({kind:item.kind}), icon:item.icon, label:item.title, current:current(`river:${item.kind}:`), count:item.kind === 'later' ? counts?.later : item.kind === 'kept' ? counts?.kept : undefined, tone:item.tone, menu:item.kind === 'today' ? {kind:'today', title:item.title} : undefined})}</li>)}</ul>
+        <ul className="nav-list">{READING_VIEWS.map(item => <li key={item.id}>{nav({to:item.to, icon:item.icon, label:item.title, current:current(item.section), count:item.kind === 'later' ? counts?.later : item.kind === 'kept' ? counts?.kept : undefined, tone:item.tone, menu:item.kind === 'all' ? {kind:'all', title:item.title} : undefined})}</li>)}</ul>
       </div>
       {(subscriptions.some(sub => !sub.deleted) || filed.length > 0) && <div role="group" aria-labelledby="nav-feeds">
         <h2 id="nav-feeds" className="nav-heading" {...target(0)} title="Drop here to move to the top level">Feeds</h2>
