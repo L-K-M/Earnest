@@ -24,7 +24,7 @@ struct APITransport: ClientTransport {
         // default 8 MiB bound, which the server also enforces.
         let bodyLimit = operationID == "import-kept" ? 64 * 1024 * 1024 : 8 * 1024 * 1024
         if let body { outgoing.httpBody = try await Data(collecting: body, upTo: bodyLimit) }
-        let (data, response) = try await session.data(for: outgoing)
+        let (data, response) = try await session.apiData(for: outgoing)
         guard let response = response as? HTTPURLResponse else { throw APIError.invalidResponse }
         try validateHTTP(response, data: data)
         var headers = HTTPFields()
@@ -32,6 +32,15 @@ struct APITransport: ClientTransport {
             if let name = HTTPField.Name(String(describing: key)) { headers[name] = String(describing: value) }
         }
         return (HTTPResponse(status: .init(code: response.statusCode), headerFields: headers), HTTPBody(data))
+    }
+}
+
+extension URLSession {
+    /// Foundation reports a cancelled request as a URL error. Normalize it
+    /// so callers can handle it alongside other Swift task cancellations.
+    func apiData(for request: URLRequest) async throws -> (Data, URLResponse) {
+        do { return try await data(for: request) }
+        catch let error as URLError where error.code == .cancelled { throw CancellationError() }
     }
 }
 

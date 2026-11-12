@@ -6,6 +6,22 @@ import Network
 @testable import Earnest
 
 @MainActor final class ContentLoadingTests: XCTestCase {
+    func testCancelledFeedRefreshDoesNotPresentAnAlert() async throws {
+        let (model, _, session) = try makeModel([
+            .init(path: "/v1/subscriptions", body: "", failure: .cancelled),
+            .init(path: "/v1/subscriptions", status: 403, body: "{}"),
+        ])
+        defer { session.invalidateAndCancel() }
+
+        await model.refreshFeeds()
+        XCTAssertNil(model.error)
+        XCTAssertNil(model.connectionNote)
+
+        await model.refreshFeeds()
+        XCTAssertEqual(model.error, "You don't have permission to do that.")
+        ContentHTTP.assertFinished()
+    }
+
     func testFailedLoginPreservesIdentityForOfflineRelaunch() async throws {
         let (directory, defaults, store, identity, _) = try offlineFixture()
         defer { defaults.removePersistentDomain(forName: defaultsSuite) }
