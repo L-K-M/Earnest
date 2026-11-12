@@ -1,9 +1,11 @@
 package ch.lkmc.earnest
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,6 +21,8 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -95,45 +99,56 @@ internal fun FrontPageScreen(
     visible: (Entry) -> Boolean = { !it.deleted },
     image: @Composable (String?, Modifier) -> Unit = { path, modifier -> FrontImage(path, modifier) },
 ) {
-    Column(Modifier.fillMaxSize()) {
-        FrontPageMasthead(state, onPeriodChange, onRefresh)
-        val page = state.page
-        when {
-            page == null && state.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    CircularProgressIndicator()
-                    Text("Loading the front page…", style = MaterialTheme.typography.bodyMedium)
-                }
-            }
-            page == null && state.error != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(
-                    Modifier.padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text("Front page did not load", style = MaterialTheme.typography.titleMedium)
-                    Text(state.error.orEmpty(), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
-                    TextButton(onClick = onRefresh, modifier = Modifier.testTag("front-try-again")) { Text("Try again") }
-                }
-            }
-            page == null -> FrontPageEmpty(Modifier.fillMaxSize(), state.period)
-            else -> FrontPageGrid(
+    val page = state.page
+    if (page == null) {
+        // Without a page there is nothing to scroll, so the masthead stays put.
+        Column(Modifier.fillMaxSize()) {
+            FrontPageMasthead(
                 state = state,
-                states = states,
-                principalId = principalId,
-                briefs = briefs,
-                principalNames = principalNames,
-                entryTitles = entryTitles,
-                agentChanges = agentChanges,
-                sessionChanges = sessionChanges,
-                agentChangesError = agentChangesError,
-                onRevert = onRevert,
-                onOpen = onOpen,
-                onOpenAgentSelected = onOpenAgentSelected,
-                visible = visible,
-                image = image,
+                onPeriodChange = onPeriodChange,
+                onRefresh = onRefresh,
+                modifier = Modifier.padding(horizontal = 16.dp),
             )
+            when {
+                state.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        CircularProgressIndicator()
+                        Text("Loading the front page…", style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                state.error != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(
+                        Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text("Front page did not load", style = MaterialTheme.typography.titleMedium)
+                        Text(state.error.orEmpty(), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+                        TextButton(onClick = onRefresh, modifier = Modifier.testTag("front-try-again")) { Text("Try again") }
+                    }
+                }
+                else -> FrontPageEmpty(Modifier.fillMaxSize(), state.period)
+            }
         }
+    } else {
+        FrontPageGrid(
+            state = state,
+            states = states,
+            principalId = principalId,
+            briefs = briefs,
+            principalNames = principalNames,
+            entryTitles = entryTitles,
+            agentChanges = agentChanges,
+            sessionChanges = sessionChanges,
+            agentChangesError = agentChangesError,
+            onRevert = onRevert,
+            onOpen = onOpen,
+            onOpenAgentSelected = onOpenAgentSelected,
+            onPeriodChange = onPeriodChange,
+            onRefresh = onRefresh,
+            visible = visible,
+            image = image,
+        )
     }
 }
 
@@ -142,20 +157,21 @@ private fun FrontPageMasthead(
     state: FrontPageUi,
     onPeriodChange: (FrontPagePeriod) -> Unit,
     onRefresh: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val page = state.page
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+    Column(modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("Front page", style = MaterialTheme.typography.headlineSmall)
-                page?.let { Text(frontPageDate(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            }
-            Column(horizontalAlignment = Alignment.End) {
+                page?.let {
+                    val date = frontPageDate(it)
+                    if (date.isNotBlank()) Text(date, style = MaterialTheme.typography.titleMedium)
+                }
                 state.updatedAt?.let {
                     Text("Updated ${it.relativeTime()}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                TextButton(onClick = onRefresh, enabled = !state.loading, modifier = Modifier.testTag("front-refresh")) { Text("Refresh") }
             }
+            TextButton(onClick = onRefresh, enabled = !state.loading, modifier = Modifier.testTag("front-refresh")) { Text("Refresh") }
         }
         PrimaryTabRow(selectedTabIndex = state.period.ordinal) {
             FrontPagePeriod.entries.forEach { period ->
@@ -218,6 +234,8 @@ private fun FrontPageGrid(
     onRevert: (Long) -> Unit,
     onOpen: (Long) -> Unit,
     onOpenAgentSelected: (Long) -> Unit,
+    onPeriodChange: (FrontPagePeriod) -> Unit,
+    onRefresh: () -> Unit,
     visible: (Entry) -> Boolean,
     image: @Composable (String?, Modifier) -> Unit,
 ) {
@@ -234,11 +252,19 @@ private fun FrontPageGrid(
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 280.dp),
         state = gridState,
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().testTag("front-grid"),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        // The masthead scrolls away with the stories instead of trapping them
+        // beneath fixed phone chrome.
+        item(span = { GridItemSpan(maxLineSpan) }, key = "front-masthead") {
+            FrontPageMasthead(state, onPeriodChange, onRefresh)
+        }
         if (daily && briefs.isNotEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }, key = "briefs") {
-                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     briefs.forEach { brief ->
                         Text(
                             briefLabel(principalNames[brief.principalId], brief.principalId, brief.value),
@@ -262,7 +288,7 @@ private fun FrontPageGrid(
         }
         if (sections.isEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }, key = "empty") {
-                FrontPageEmpty(Modifier.fillMaxWidth().padding(24.dp), state.period)
+                FrontPageEmpty(Modifier.fillMaxWidth(), state.period)
             }
         }
         sections.forEach { section ->
@@ -270,7 +296,7 @@ private fun FrontPageGrid(
                 Text(
                     section.name,
                     style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp)
+                    modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp)
                         .testTag("section-${section.name}"),
                 )
             }
@@ -313,7 +339,7 @@ private fun FrontPageGrid(
 @Composable
 private fun FrontPageEmpty(modifier: Modifier = Modifier, period: FrontPagePeriod) {
     Column(
-        modifier.padding(24.dp),
+        modifier.padding(vertical = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -345,70 +371,93 @@ private fun FrontStory(
     val entry = representative.entry
     val title = entry.title.ifBlank { "Untitled" }
     val read = story.isRead(states, principalId)
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .testTag(story.id)
-            .clickable { onOpen(entry.id) }
-            .padding(if (lead) 16.dp else 12.dp),
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag(story.id),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
-        image(
-            story.imageUrl,
-            if (lead) {
-                Modifier.fillMaxWidth().height(200.dp).clip(RoundedCornerShape(12.dp))
-            } else {
-                Modifier.fillMaxWidth().height(120.dp).clip(RoundedCornerShape(8.dp))
-            },
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            title,
-            style = if (lead) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleMedium,
-            maxLines = if (lead) 4 else 3,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
-            Text(
-                listOfNotNull(
-                    representative.sourceTitle.takeIf { it.isNotBlank() },
-                    story.publishedAt.relativeTime().takeIf { it.isNotBlank() },
-                    "Covered by ${story.feedCount} feeds".takeIf { story.feedCount > 1 },
-                ).joinToString(" · "),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
-            )
-            if (read) {
-                Icon(
-                    Icons.Filled.CheckCircle,
-                    contentDescription = null,
-                    tint = LocalTones.current.green,
-                    modifier = Modifier.size(16.dp),
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clickable { onOpen(entry.id) }
+                .padding(16.dp),
+        ) {
+            val imageUrl = story.imageUrl
+            if (imageUrl != null) {
+                image(
+                    imageUrl,
+                    Modifier.fillMaxWidth()
+                        .height(if (lead) 200.dp else 120.dp)
+                        .clip(RoundedCornerShape(if (lead) 12.dp else 8.dp)),
                 )
-                Spacer(Modifier.width(4.dp))
-                Text("Read", style = MaterialTheme.typography.labelMedium, color = LocalTones.current.green)
+                Spacer(Modifier.height(8.dp))
+            } else {
+                // Still ask for the absent picture, but never reserve its height.
+                image(null, Modifier)
             }
-        }
-        Spacer(Modifier.height(8.dp))
-        StoryText(
-            story = story,
-            coverage = coverage,
-            expandedCitations = expandedCitations,
-            onToggleCitations = onToggleCitations,
-            onOpen = onOpen,
-        )
-        if (others.isNotEmpty()) {
-            TextButton(onClick = onToggleCoverage) {
-                Text(if (expandedCoverage) "Hide other sources" else "Other sources (${others.size})")
-            }
-            if (expandedCoverage) {
-                others.forEach { item ->
-                    TextButton(onClick = { onOpen(item.entry.id) }) {
-                        Text(
-                            "${item.sourceTitle} · ${item.entry.title.ifBlank { "Untitled" }}",
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+            Text(
+                title,
+                style = if (lead) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium,
+                maxLines = if (lead) 4 else 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Column(Modifier.padding(top = 4.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        listOfNotNull(
+                            representative.sourceTitle.takeIf { it.isNotBlank() },
+                            story.publishedAt.relativeTime().takeIf { it.isNotBlank() },
+                        ).joinToString(" · "),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (read) {
+                        Icon(
+                            Icons.Filled.CheckCircle,
+                            contentDescription = null,
+                            tint = LocalTones.current.green,
+                            modifier = Modifier.size(16.dp),
                         )
+                        Spacer(Modifier.width(4.dp))
+                        Text("Read", style = MaterialTheme.typography.labelMedium, color = LocalTones.current.green)
+                    }
+                }
+                if (story.feedCount > 1) {
+                    Text(
+                        "Covered by ${story.feedCount} feeds",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            StoryText(
+                story = story,
+                coverage = coverage,
+                expandedCitations = expandedCitations,
+                onToggleCitations = onToggleCitations,
+                onOpen = onOpen,
+            )
+            if (others.isNotEmpty()) {
+                TextButton(onClick = onToggleCoverage) {
+                    Text(if (expandedCoverage) "Hide other sources" else "Other sources (${others.size})")
+                }
+                if (expandedCoverage) {
+                    others.forEach { item ->
+                        TextButton(onClick = { onOpen(item.entry.id) }) {
+                            Text(
+                                "${item.sourceTitle} · ${item.entry.title.ifBlank { "Untitled" }}",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
                 }
             }

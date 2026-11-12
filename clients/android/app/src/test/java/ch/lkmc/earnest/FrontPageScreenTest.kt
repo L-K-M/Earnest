@@ -1,12 +1,21 @@
 package ch.lkmc.earnest
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotDisplayed
+import androidx.compose.ui.unit.dp
+import ch.lkmc.earnest.core.Activity
 import ch.lkmc.earnest.core.Entry
 import ch.lkmc.earnest.core.FrontPage
 import ch.lkmc.earnest.core.FrontPageCoverage
@@ -18,6 +27,7 @@ import ch.lkmc.earnest.core.GroundedClaim
 import ch.lkmc.earnest.core.PassageCitation
 import ch.lkmc.earnest.core.Register
 import ch.lkmc.earnest.core.State
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -120,7 +130,14 @@ class FrontPageScreenTest {
         verified = true,
     )
 
-    private fun setContent(state: FrontPageUi) {
+    private fun setContent(
+        state: FrontPageUi,
+        image: @Composable (String?, Modifier) -> Unit = { path, modifier ->
+            images += path
+            if (path != null) Text("image:$path", modifier)
+        },
+        agentChanges: List<Activity> = emptyList(),
+    ) {
         compose.setContent {
             EarnestTheme(ThemeSetting.LIGHT) {
                 FrontPageScreen(
@@ -130,7 +147,7 @@ class FrontPageScreenTest {
                     briefs = emptyList(),
                     principalNames = emptyMap(),
                     entryTitles = emptyMap(),
-                    agentChanges = emptyList(),
+                    agentChanges = agentChanges,
                     sessionChanges = emptyList(),
                     agentChangesError = null,
                     onRevert = {},
@@ -138,10 +155,7 @@ class FrontPageScreenTest {
                     onOpenAgentSelected = {},
                     onPeriodChange = { periods += it },
                     onRefresh = { refreshes += Unit },
-                    image = { path, modifier ->
-                        images += path
-                        if (path != null) Text("image:$path", modifier)
-                    },
+                    image = image,
                 )
             }
         }
@@ -293,5 +307,135 @@ class FrontPageScreenTest {
         compose.onNodeWithText("Headline 2").assertExists()
         compose.onNodeWithText("Updated 2h ago").assertExists()
         compose.onNodeWithText("Offline. Showing the last updated page.").assertExists()
+    }
+
+    @Test fun theMastheadDoesNotRepeatTheAppBarTitle() {
+        setContent(FrontPageUi(page = page(listOf(story("story-lead", 2, imageUrl = null)))))
+        // The outer app bar already reads "Front page"; the masthead must not
+        // render a second one.
+        compose.onAllNodesWithText("Front page").assertCountEquals(0)
+    }
+
+    @Test fun theMastheadKeepsTheWindowDateAndPeriodControls() {
+        setContent(FrontPageUi(page = page(listOf(story("story-lead", 2, imageUrl = null)))))
+        val expectedDate = java.time.Instant.parse("2026-11-03T10:00:00Z")
+            .atZone(java.time.ZoneId.systemDefault())
+            .format(java.time.format.DateTimeFormatter.ofPattern("MMMM d, yyyy"))
+        compose.onNodeWithText(expectedDate).assertExists()
+        compose.onNodeWithText("Past 24 hours").assertExists()
+        compose.onNodeWithText("Past 7 days").assertExists()
+        compose.onNodeWithTag("front-refresh").assertExists()
+    }
+
+    @Test fun longCoverageKeepsItsOwnCompactMetadataLine() {
+        val manyFeeds = (2L..13L).toList()
+        setContent(
+            FrontPageUi(
+                page = page(
+                    listOf(
+                        story(
+                            "story-lead",
+                            2,
+                            coverageIds = manyFeeds,
+                            imageUrl = null,
+                        ).copy(sourceTitle = "An unusually long source name that used to share a row with the read state"),
+                    ),
+                ),
+            ),
+        )
+        compose.onNodeWithText("Covered by 12 feeds").assertExists()
+        compose.onNodeWithText(
+            "An unusually long source name that used to share a row with the read state",
+            substring = true,
+        ).assertExists()
+    }
+
+    @Test fun readStateAndLongCoverageEachKeepTheirOwnLine() {
+        val manyFeeds = (2L..13L).toList()
+        val readStory = story("story-read", 2, coverageIds = manyFeeds, imageUrl = null)
+            .withCoverageEntries { id -> entry(id, seen = "seen") }
+        setContent(FrontPageUi(page = page(listOf(readStory))))
+        compose.onNodeWithText("Read").assertExists()
+        compose.onNodeWithText("Covered by 12 feeds").assertExists()
+    }
+
+    @Test fun storyCardsSitOnTheSixteenDpGutter() {
+        setContent(FrontPageUi(page = page(listOf(story("story-lead", 2, imageUrl = null)))))
+        val card = compose.onNodeWithTag("story-lead").fetchSemanticsNode()
+        val gutter = with(compose.density) { 16.dp.toPx() }
+        assertEquals("story cards must sit on the 16dp content gutter", gutter, card.positionInRoot.x, 1f)
+    }
+
+    @Test fun storyCardsAreChunkedByATwelveDpGap() {
+        setContent(
+            FrontPageUi(
+                page = page(
+                    listOf(
+                        story("story-lead", 2, imageUrl = null),
+                        story("story-secondary", 4, imageUrl = null),
+                    ),
+                ),
+            ),
+        )
+        val lead = compose.onNodeWithTag("story-lead").fetchSemanticsNode()
+        val secondary = compose.onNodeWithTag("story-secondary").fetchSemanticsNode()
+        val gap = secondary.positionInRoot.y - (lead.positionInRoot.y + lead.size.height)
+        val expected = with(compose.density) { 12.dp.toPx() }
+        assertEquals("stories must be chunked with a 12dp gap", expected, gap, 1f)
+    }
+
+    @Test fun aMissingPictureDoesNotReserveAPictureHeight() {
+        var missingSlotHeight = -1
+        setContent(
+            FrontPageUi(page = page(listOf(story("story-lead", 2, imageUrl = null)))),
+            image = { path, modifier ->
+                if (path == null) {
+                    Box(modifier.onGloballyPositioned { missingSlotHeight = it.size.height })
+                } else {
+                    Box(modifier)
+                }
+            },
+        )
+        compose.waitForIdle()
+        val pictureHeight = with(compose.density) { 200.dp.toPx() }.toInt()
+        assertTrue(
+            "a missing picture must not reserve a picture-height gap (measured $missingSlotHeight px)",
+            missingSlotHeight in 0 until pictureHeight,
+        )
+    }
+
+    @Test fun agentChangeNoticesAlignWithStoryContent() {
+        val change = Activity(
+            id = 9,
+            principalId = 1,
+            principalName = "Agent",
+            action = "annotation.updated",
+            target = null,
+            before = null,
+            after = JsonObject(mapOf("kind" to JsonPrimitive("note"))),
+            generation = "g1",
+            createdAt = "2026-11-03T09:00:00Z",
+            nextAction = "revert",
+        )
+        setContent(
+            FrontPageUi(page = page(listOf(story("story-lead", 2, imageUrl = null)))),
+            agentChanges = listOf(change),
+        )
+        compose.onNodeWithText("While you were out").assertExists()
+        val title = compose.onNodeWithText("While you were out").fetchSemanticsNode()
+        val gutter = with(compose.density) { 32.dp.toPx() }
+        assertEquals("notices must align with the content inside story cards", gutter, title.positionInRoot.x, 1f)
+    }
+
+    @Test fun theMastheadScrollsWithTheFrontPage() {
+        setContent(
+            FrontPageUi(
+                page = page((2L..12L).map { story("story-$it", it, imageUrl = null) }),
+            ),
+        )
+        compose.onNodeWithTag("front-grid").performScrollToIndex(8)
+        compose.onNodeWithTag("front-refresh").assertIsNotDisplayed()
+        compose.onNodeWithTag("front-grid").performScrollToIndex(0)
+        compose.onNodeWithTag("front-refresh").assertIsDisplayed()
     }
 }
