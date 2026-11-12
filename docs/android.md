@@ -64,7 +64,7 @@ pending actions. Signing in again clears the displayed state before attaching
 the verified account.
 
 Notification permission is requested only after a successful sign-in, when
-push registration starts, or from the top-bar Notifications action. The
+push registration starts, or from Enable notifications in the top-bar menu. The
 connect screen never asks for it. Queued actions are sent a few seconds after
 the last one; offline, the durable queue waits for the periodic sync.
 
@@ -86,6 +86,31 @@ install your CA certificate in the emulator under Settings > Security >
 Encryption & credentials > Install a certificate > CA certificate. Cleartext
 HTTP stays disabled in every build.
 
+## Navigation and reading layouts
+
+The bottom bar has four destinations: Front page, Articles, Kept and Feeds.
+Open **Folders and feeds** at the top left to browse your folders. Tap a
+folder to read its articles, or expand its arrow to choose a single feed.
+Empty folders stay visible. **No folder** includes feeds whose folder was removed.
+The drawer also contains Later, Done and Activity. Your folder selection
+survives recreation and resets when you switch accounts. Feeds remains the
+subscription-management screen; its folder headings and feed names also open
+article lists.
+
+On a narrow screen, Articles and the saved shelves offer **Headlines** and
+**Read in feed**. Read in feed is the default: tap a headline to expand its
+article in the same scrolling list. Only the article you expand loads reader
+content and reader images, and only one article is expanded at a time. Collapse it to return
+to headlines, or choose Open reader for the dedicated reading tools. Very long
+articles have a bounded inline preview with a notice to continue in the reader.
+The layout choice is remembered on your device. Wide screens keep the existing
+side-by-side list and reader.
+
+Article cards share consistent gutters and keep their source, time, headline
+and read indicator together. Use the article's overflow menu for Keep, Unkeep,
+Later, Done and Mark unread. The front page has one heading, separate story
+cards and a date/window header that scrolls away with the stories.
+
 ## Reading offline
 
 The app caches the sync snapshot (entries, subscriptions and state) in Room
@@ -98,8 +123,8 @@ Lists work without a connection; the reader falls back to the cached content
 when the signed content URL cannot be fetched. Swipe a row left a short distance for Later, or a long distance
 for Done; the label appears during the gesture and an undo action is offered
 in a snackbar that names the action and auto-dismisses. The swipe background
-is hidden until the row moves. Rows also offer Keep, Unkeep and, once read,
-Mark unread. Mark unread returns the article to unread and clears Done with
+is hidden until the row moves. Each article's overflow menu also offers
+Keep, Unkeep and, once read, Mark unread. Mark unread returns the article to unread and clears Done with
 it, as the server does; its undo restores both registers. Undo writes back
 the registers an action changed and leaves alone one another writer has
 changed since. A row marks itself seen once it has been on
@@ -148,11 +173,12 @@ failed refresh leaves a visible warning on the next offline launch.
 
 The reader shows the feed title and the published date (falling back to
 first seen) under the article title, with Open original, Copy link and Share
-actions for the entry URL; a read article's header also offers Mark unread.
-Open original opens the URL in the browser, Copy link places it on the
-clipboard and Share opens the system share sheet. The header also offers
-Find in article, with match counts and next/previous steps, and Smaller and
-Larger text, a device-local zoom from 80% to 200% that persists. When the
+actions for the entry URL. Open original opens the URL in the browser.
+Reader options contains Copy link, Share, Mark unread for a read article,
+and Smaller and Larger text, a device-local zoom from 80% to 200% that
+persists. Copy link places the URL on the clipboard; Share opens the system
+share sheet. The header's search icon opens Find in article, with match counts
+and next/previous steps. When the
 cached copy is shown instead of the live article, the header says so.
 It loads the signed content URL in a WebView with JavaScript, file access
 and content access disabled, and allows only
@@ -202,8 +228,8 @@ that the action can still be undone.
 
 ## Themes and the widget
 
-The top bar offers System, Light, Dark, True black and E-ink; the choice is
-remembered. The home-screen widget shows the newest five headlines and no
+Theme in the top-bar overflow menu offers System, Light, Dark, True black
+and E-ink; the choice is remembered. The home-screen widget shows the newest five headlines and no
 unread count, and opens the entry when tapped.
 
 ## Notifications and UnifiedPush
@@ -219,8 +245,8 @@ use it, and select it in Earnest. On registration the app sends the endpoint
 and its `p256dh` and auth keys to `/v1/devices`. The server requires an HTTPS
 endpoint it can reach; private IP literals are rejected. Notification
 permission must be granted on Android 13+; the app asks after sign-in, when
-push registration starts, or from the top-bar action, and the top bar shows
-that action only while permission is missing.
+push registration starts, or from Enable notifications in the top-bar menu.
+That menu item appears only while permission is missing.
 
 ## Verification
 
@@ -236,8 +262,10 @@ thresholds and action messages, undo restoration and its changed-since
 guard, mark unread clearing Done and surviving passive marking, share
 and clipboard intents, activity descriptions, reader date and original
 URL, outbox flush debounce, state restoration of the section and settings,
-and the find listener's per-article re-registration. The last two run as
-Compose UI tests on Robolectric. The LLM services tests cover the load/save
+and the find listener's per-article re-registration. Compose UI tests on
+Robolectric also cover aligned read/unread headlines, article actions,
+inline reading versus reader navigation, layout persistence, account-scoped
+folder restoration, folder/feed selection and the compact reader tools. The LLM services tests cover the load/save
 lifecycle, 409 conflict preservation, frozen retry bodies, typed-key draft
 clearing on success, reload, sign-out and identity change, the key-move
 safeguard and the ban on persisting keys in the snapshot or preferences.

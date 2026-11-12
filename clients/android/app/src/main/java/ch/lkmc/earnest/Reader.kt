@@ -6,6 +6,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Canvas
 import android.os.Build
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceError
@@ -112,12 +113,14 @@ internal fun Reader(
     modifier: Modifier = Modifier,
     onFallback: () -> Unit = {},
     onWebView: (WebView?) -> Unit = {},
+    onContentHeight: ((Int) -> Unit)? = null,
 ) {
     val systemDark = isSystemInDarkTheme()
     val displayUrl = url?.let { readerUrl(it, typography, systemDark) }
     val fallbackHtml = cachedHtml?.let { offlineReaderHtml(it, typography, systemDark) }
     val fallbackCallback = rememberUpdatedState(onFallback)
     val webViewCallback = rememberUpdatedState(onWebView)
+    val heightCallback = rememberUpdatedState(onContentHeight)
     // The last WebView handed out; a release may run after a replacement has
     // published itself and must not null the newer instance.
     val published = remember { arrayOfNulls<WebView>(1) }
@@ -125,7 +128,11 @@ internal fun Reader(
         AndroidView(
             modifier = modifier,
             factory = { context ->
-                createReaderWebView(context, displayUrl, fallbackHtml) { fallbackCallback.value() }
+                createReaderWebView(
+                    context, displayUrl, fallbackHtml,
+                    onContentHeight = { height -> heightCallback.value?.invoke(height) },
+                    onFallback = { fallbackCallback.value() },
+                )
             },
             update = { webView ->
                 published[0] = webView
@@ -242,7 +249,13 @@ internal class ReaderLoadState {
     }
 }
 
-internal fun createReaderWebView(context: Context, url: String?, cachedHtml: String?, onFallback: () -> Unit = {}): WebView {
+internal fun createReaderWebView(
+    context: Context,
+    url: String?,
+    cachedHtml: String?,
+    onContentHeight: ((Int) -> Unit)? = null,
+    onFallback: () -> Unit = {},
+): WebView {
     val allowedOrigin = url?.toUri()
     fun allowed(uri: android.net.Uri): Boolean = allowedOrigin != null &&
         uri.scheme == "https" && uri.host.equals(allowedOrigin.host, ignoreCase = true) &&
@@ -250,7 +263,22 @@ internal fun createReaderWebView(context: Context, url: String?, cachedHtml: Str
     // Only the article path itself may drive the main frame: click-to-load
     // /img/ links share the origin and would otherwise replace the article.
     fun article(uri: android.net.Uri): Boolean = allowed(uri) && uri.encodedPath == allowedOrigin?.encodedPath
-    return WebView(context).apply {
+    return object : WebView(context) {
+        private var reportedHeight = 0
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            if (onContentHeight == null) return
+            // Native layout reports changes after images and fonts settle.
+            // No JavaScript bridge or script execution is needed for inline reading.
+            @Suppress("DEPRECATION")
+            val pixels = kotlin.math.ceil(contentHeight * scale.toDouble()).toInt()
+            if (pixels > 0 && pixels != reportedHeight) {
+                reportedHeight = pixels
+                post { onContentHeight(pixels) }
+            }
+        }
+    }.apply {
         settings.javaScriptEnabled = false
         settings.allowFileAccess = false
         settings.allowContentAccess = false
