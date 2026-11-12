@@ -21,6 +21,7 @@ import AppKit
     @Published var frontPagePeriod: FrontPagePeriod = .daily {
         didSet {
             guard oldValue != frontPagePeriod else { return }
+            pendingRestoredSelection = nil
             beginListVisit()
             frontPage = nil
             frontPageUpdated = nil
@@ -153,7 +154,13 @@ import AppKit
     }
 
     func restoreCachedEntries(_ entries: [APIEntry]) {
-        self.entries = keepingVisitedArticles(entries)
+        var restored = entries
+        if section == .frontPage, let frontPage {
+            let coverageIDs = Set(frontPage.sections.flatMap(\.stories).flatMap { $0.coverage.map(\.entry.id) })
+            let restoredIDs = Set(restored.map(\.id))
+            restored += self.entries.filter { coverageIDs.contains($0.id) && !restoredIDs.contains($0.id) }
+        }
+        self.entries = keepingVisitedArticles(restored)
         cachedPresentation = true
     }
 
@@ -413,6 +420,7 @@ import AppKit
             }
         }
         self.entries = merged
+        restorePendingSelection()
     }
 
     func refreshEntries() async {
@@ -502,6 +510,13 @@ import AppKit
     func representative(_ story: FrontPageStory) -> FrontPageCoverage? {
         let coverage = visibleCoverage(story)
         return coverage.first(where: { $0.entry.id == story.entry.id }) ?? coverage.first
+    }
+
+    func visibleFrontPageSections(_ page: FrontPage) -> [(name: String, stories: [FrontPageStory])] {
+        page.sections.compactMap { section in
+            let stories = section.stories.filter { representative($0) != nil }
+            return stories.isEmpty ? nil : (name: section.name, stories: stories)
+        }
     }
 
     /// Whether the engine's snapshot has deleted the article or a sync has
@@ -604,17 +619,24 @@ import AppKit
             // External links never load images automatically.
             imageMode = .click
             if selected == link { open(link) } else { selected = link }
-        } else if let pending = pendingRestoredSelection, app.engine != nil, app.loggedIn {
-            pendingRestoredSelection = nil
-            // A restored article that is no longer cached is not worth an error at launch.
-            if entries.contains(where: { $0.id == pending }), selected == nil { selected = pending }
+        } else {
+            restorePendingSelection()
         }
+    }
+
+    private func restorePendingSelection() {
+        guard let pending = pendingRestoredSelection, app.engine != nil, app.loggedIn else { return }
+        let entry = entries.first { $0.id == pending }
+        // The sync cache may arrive before the front page's cached coverage.
+        if section == .frontPage, frontPage == nil, entry == nil { return }
+        pendingRestoredSelection = nil
+        if let entry, !isGone(entry), selected == nil { selected = pending }
     }
 
     func visibleEntryIDs() -> [Int64] {
         switch section {
         case .frontPage:
-            if let frontPage { return frontPage.sections.flatMap(\.stories).map(\.entry.id) }
+            if let frontPage { return frontPage.sections.flatMap(\.stories).compactMap { representative($0)?.entry.id } }
             return []
         case .search:
             var seen = Set<Int64>()
@@ -872,6 +894,7 @@ import AppKit
     /// the current section, remembering where to return.
     func submitSearch() {
         guard search.canSearch else { return }
+        pendingRestoredSelection = nil
         // A new search keeps the keyboard in the search field.
         listFocusPending = false
         if section != .search {
@@ -942,6 +965,7 @@ import AppKit
     }
 
     func selectFromList(_ id: Int64?) {
+        pendingRestoredSelection = nil
         // Articles reached from Activity were surfaced by an agent and never
         // load images automatically, however they were selected.
         imageMode = section == .activity ? .click : .proxied
@@ -954,6 +978,7 @@ import AppKit
     }
 
     func selectSearchMatch(_ match: APISearchMatch) {
+        pendingRestoredSelection = nil
         selectedMatchID = match.id
         imageMode = match.kind == "agent_note" || match.untrusted ? .click : .proxied
         if selected == match.entryID { open(match.entryID) }

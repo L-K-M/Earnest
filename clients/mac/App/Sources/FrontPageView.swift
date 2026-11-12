@@ -139,7 +139,7 @@ import EarnestKit
     // MARK: - Sections and stories
 
     private func sections(_ page: FrontPage) -> some View {
-        let sections = page.sections.filter { !$0.stories.isEmpty }
+        let sections = window.visibleFrontPageSections(page)
         let leadID = sections.first?.stories.first?.id
         return VStack(alignment: .leading, spacing: 24) {
             if sections.isEmpty {

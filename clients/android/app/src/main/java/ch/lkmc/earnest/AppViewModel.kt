@@ -95,6 +95,7 @@ data class FrontPageUi(
     val loading: Boolean = false,
     val error: String? = null,
     val pendingRevision: String? = null,
+    val pendingPage: FrontPage? = null,
     val request: Long = 0,
 )
 
@@ -1240,6 +1241,26 @@ class AppViewModel internal constructor(
 
     /** Applies the newest revision the background fetch found. */
     fun refreshFrontPage() {
+        val pending = _state.value.frontPage.pendingPage
+        if (pending != null) {
+            val expected = frontPageEpoch.get()
+            val (cache, session) = activeAccount("Still signing in; the front page did not refresh.") ?: return
+            val request = frontPageRequest.incrementAndGet()
+            publishFrontPage(expected, session, cache, request) {
+                // Identical coverage revisions can belong to different accounts.
+                if (it.frontPage.period != pending.period || it.frontPage.pendingPage !== pending) it
+                else it.copy(frontPage = it.frontPage.copy(
+                    page = pending,
+                    updatedAt = System.currentTimeMillis(),
+                    loading = false,
+                    error = null,
+                    pendingRevision = null,
+                    pendingPage = null,
+                    request = request,
+                ))
+            }
+            return
+        }
         loadFrontPage(_state.value.frontPage.period, explicit = true, fromCache = false)
     }
 
@@ -1282,6 +1303,7 @@ class AppViewModel internal constructor(
                             page = if (previous == null || !changed) page else previous,
                             updatedAt = if (previous == null || !changed) System.currentTimeMillis() else it.frontPage.updatedAt,
                             pendingRevision = if (changed) page.revision else null,
+                            pendingPage = if (changed) page else null,
                             error = null,
                             request = request,
                         ))
@@ -1319,6 +1341,7 @@ class AppViewModel internal constructor(
                 loading = true,
                 error = null,
                 pendingRevision = null,
+                pendingPage = null,
                 request = request,
             ))
         }
@@ -1346,6 +1369,7 @@ class AppViewModel internal constructor(
                         loading = false,
                         error = null,
                         pendingRevision = null,
+                        pendingPage = null,
                         request = request,
                     ))
                 }

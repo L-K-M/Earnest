@@ -956,6 +956,23 @@ class AppViewModelTest {
         Unit
     }
 
+    @Test fun pendingCoverageCanBeAppliedAfterTheNetworkDrops() = runBlocking(Dispatchers.IO) {
+        frontPageOverride = frontPageJson("rev-1", "daily")
+        val model = model()
+        await("front page") { model.state.value.frontPage.page?.revision == "rev-1" }
+        frontPageOverride = frontPageJson("rev-2", "daily")
+        model.refresh()
+        await("pending coverage") { model.state.value.frontPage.pendingRevision == "rev-2" }
+        val requests = calls.count { it == "/v1/front-page" }
+        frontPageStatus = 503
+        model.refreshFrontPage()
+        await("applied coverage") { !model.state.value.frontPage.loading && model.state.value.frontPage.pendingRevision == null }
+        assertEquals("rev-2", model.state.value.frontPage.page?.revision)
+        assertEquals(requests, calls.count { it == "/v1/front-page" })
+        assertTrue(SessionCache(app, identity).withEngine { it.snapshot().outbox }.isEmpty())
+        Unit
+    }
+
     @Test fun unchangedCoverageRefreshesItsReadIndicator() = runBlocking(Dispatchers.IO) {
         frontPageOverride = frontPageJson("rev-1", "daily")
         val model = model()

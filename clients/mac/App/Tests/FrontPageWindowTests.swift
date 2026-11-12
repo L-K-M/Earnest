@@ -212,6 +212,55 @@ import EarnestKit
 
     // MARK: - Cache
 
+    func testNavigationReplacesGoneRepresentativesAndDropsEmptyStories() async throws {
+        let (model, window, session) = try makeModel([
+            .init(path: "/v1/front-page", body: pageJSON(period: "daily", revision: "r1")),
+        ])
+        defer { model.signOut(); session.invalidateAndCancel() }
+        await window.refreshFrontPage()
+        try model.engine?.markGone(entryID: 9)
+        XCTAssertEqual(window.visibleEntryIDs(), [10, 11, 12])
+        for id: Int64 in [10, 11, 12] { try model.engine?.markGone(entryID: id) }
+        XCTAssertTrue(window.visibleEntryIDs().isEmpty)
+        XCTAssertTrue(window.visibleFrontPageSections(try XCTUnwrap(window.frontPage)).isEmpty)
+        XCTAssertEqual(model.pendingOps, 0)
+        ContentHTTP.assertFinished()
+    }
+
+    func testRestoredSelectionWaitsForTheFrontPageEntries() async throws {
+        let (model, window, session) = try makeModel([
+            .init(path: "/v1/front-page", body: pageJSON(period: "daily", revision: "r1")),
+            .init(path: "/v1/entries/9/content-url", body: #"{"url":"https://content.test:8081/article/9?signature=abc","expires_at":"2099-01-01T00:00:00Z"}"#, mode: "proxied"),
+            .init(path: "/article/9", body: "<p>Nine</p>"),
+        ])
+        defer { model.signOut(); session.invalidateAndCancel() }
+        window.pendingRestoredSelection = 9
+        window.restoreCachedEntries([])
+        model.rebuildPresentation()
+        XCTAssertEqual(window.pendingRestoredSelection, 9)
+        guard window.pendingRestoredSelection != nil else { return }
+        await window.refreshFrontPage()
+        model.rebuildPresentation()
+        try await waitUntil { window.html == "<p>Nine</p>" }
+        XCTAssertEqual(window.selected, 9)
+        window.restoreCachedEntries([])
+        XCTAssertTrue(window.entries.contains { $0.id == 10 }, "A sync restore keeps the displayed coverage available")
+        ContentHTTP.assertFinished()
+    }
+
+    func testManualNavigationCancelsDelayedRestoration() throws {
+        let (model, window, session) = try makeModel([])
+        defer { model.signOut(); session.invalidateAndCancel() }
+        window.pendingRestoredSelection = 9
+        model.rebuildPresentation()
+        XCTAssertEqual(window.pendingRestoredSelection, 9)
+        window.go(to: .allArticles)
+        XCTAssertNil(window.pendingRestoredSelection)
+        window.pendingRestoredSelection = 9
+        window.frontPagePeriod = .weekly
+        XCTAssertNil(window.pendingRestoredSelection)
+    }
+
     func testFrontPageCacheIsolatesAccountsAndSurvivesOffline() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         addTeardownBlock { try FileManager.default.removeItem(at: directory) }
