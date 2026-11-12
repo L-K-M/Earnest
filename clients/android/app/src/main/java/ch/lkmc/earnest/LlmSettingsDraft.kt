@@ -85,6 +85,13 @@ fun LlmProviderDraft.toInput(): LlmProviderInput = LlmProviderInput(
     tokenField = tokenField,
 )
 
+/** Points assigned tasks at a renamed provider without claiming disabled routes. */
+internal fun retargetProvider(tasks: List<LlmTaskRoute>, old: String, replacement: String): List<LlmTaskRoute> {
+    // An empty name is a transient edit, not a provider matching disabled tasks.
+    if (old.isEmpty() || replacement.isEmpty()) return tasks
+    return tasks.map { if (it.provider == old) it.copy(provider = replacement) else it }
+}
+
 /** The contract's default base URLs for a newly added provider. */
 fun defaultProviderBaseUrl(kind: LlmProviderKind): String = when (kind) {
     LlmProviderKind.OPENAI -> "https://api.openai.com/v1"

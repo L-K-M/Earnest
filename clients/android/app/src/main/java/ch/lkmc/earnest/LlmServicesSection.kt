@@ -106,8 +106,8 @@ internal fun LlmServicesSection(
                     model.updateLlmSettingsDraft { draftCopy ->
                         draftCopy.copy(
                             providers = draftCopy.providers.mapIndexed { i, item -> if (i == index) transformed else item },
-                            // Renaming an unkeyed provider keeps every task route
-                            // pointing at a configured provider.
+                            // Retarget complete names only. Transient empty names
+                            // must never claim the disabled-task marker.
                             tasks = if (transformed.name != provider.name) {
                                 retargetProvider(draftCopy.tasks, provider.name, transformed.name)
                             } else {
@@ -263,13 +263,7 @@ internal fun LlmServicesSection(
     }
 }
 
-/**
- * Points tasks that reference a renamed provider or model at the new name,
- * so a rename keeps every route valid instead of failing validation.
- */
-private fun retargetProvider(tasks: List<LlmTaskRoute>, old: String, replacement: String): List<LlmTaskRoute> =
-    tasks.map { if (it.provider == old) it.copy(provider = replacement) else it }
-
+/** Points tasks that reference a renamed model at its new name. */
 private fun retargetModel(tasks: List<LlmTaskRoute>, old: String, replacement: String): List<LlmTaskRoute> =
     tasks.map { if (it.model == old) it.copy(model = replacement) else it }
 

@@ -193,6 +193,21 @@ it('adds a provider with the kind default base URL and its key', async () => {
   expect(claude.has_api_key).toBeUndefined()
 })
 
+it('keeps task routes on an unkeyed provider when it is renamed', async () => {
+  mount()
+  await screen.findByText(/http:\/\/ollama:11434\/v1/)
+  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[1])
+  fireEvent.change(screen.getByLabelText('Name'), {target: {value: 'renamed-local'}})
+  fireEvent.click(screen.getByRole('button', {name: 'Apply provider'}))
+
+  expect(valueOf('blurb provider')).toBe('renamed-local')
+  expect(valueOf('blurb model')).toBe('local-chat')
+  expect(valueOf('ask provider')).toBe('')
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText(/LLM services saved/)
+  expect(lastPut().tasks.find(task => task.task === 'blurb')).toEqual({task: 'blurb', provider: 'renamed-local', model: 'local-chat'})
+})
+
 it('requires a new key or an explicit clear when a keyed provider moves', async () => {
   mount()
   await screen.findByText(/https:\/\/api\.openai\.com\/v1/)

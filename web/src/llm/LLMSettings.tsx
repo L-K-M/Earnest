@@ -126,6 +126,7 @@ export function LLMSettings() {
 
   function updateProvider(index: number, values: ProviderFormValues) {
     if (!draft) return
+    const previousName = draft.providers[index].name
     const providers = draft.providers.map((provider, i) => i === index
       ? {...values, has_api_key: provider.has_api_key, original_name: provider.original_name}
       : provider)
@@ -134,7 +135,13 @@ export function LLMSettings() {
     const others = new Set(providers.filter((_, i) => i !== index).map(item => item.name))
     const found = validateProvider(provider, original, others)
     if (found.length) { setProblems(found); return }
-    setDraft({...draft, providers})
+    setDraft({
+      ...draft,
+      providers,
+      tasks: previousName !== provider.name
+        ? draft.tasks.map(task => task.provider === previousName ? {...task, provider: provider.name} : task)
+        : draft.tasks,
+    })
     setProviderForm(null)
     setProblems([])
     setNotice('')
