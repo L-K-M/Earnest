@@ -4,11 +4,33 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.webkit.WebView
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.material3.Button
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffoldDefaults
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.heading
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -32,15 +54,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DateRange
-import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
@@ -49,7 +70,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
+import ch.lkmc.earnest.ReaderFilterChip as FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -97,6 +118,8 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
@@ -105,6 +128,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -113,6 +137,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.window.core.layout.WindowSizeClass
 import androidx.lifecycle.viewmodel.compose.viewModel
 import ch.lkmc.earnest.core.CachedEntry
 import ch.lkmc.earnest.core.FrontPagePeriod
@@ -149,10 +174,10 @@ private const val FOREGROUND_REFRESH_MS = 3L * 60 * 1000
 internal enum class View(val label: String, val icon: ImageVector, val tone: ((Tones) -> Color)?) {
     FRONT("Front page", Icons.Filled.DateRange, { it.orange }),
     ALL("All articles", Icons.AutoMirrored.Filled.List, { it.blue }),
-    LATER("Later", Icons.Filled.Notifications, { it.amber }),
+    LATER("Later", LaterIcon, { it.amber }),
     KEPT("Kept", Icons.Filled.Star, { it.plum }),
     DONE("Done", Icons.Filled.CheckCircle, { it.green }),
-    FEEDS("Feeds", Icons.Filled.Home, { it.blue }),
+    FEEDS("Feeds", FeedIcon, { it.blue }),
     ACTIVITY("Activity", Icons.Filled.Info, { it.plum }),
     SEARCH("Search", Icons.Filled.Search, null),
 }
@@ -216,9 +241,9 @@ internal fun EarnestApp(initialEntry: Long?, notificationId: Long?) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class, androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi::class)
 @Composable
-private fun MainScaffold(
+internal fun MainScaffold(
     model: AppViewModel,
     state: UiState,
     theme: ThemeSetting,
@@ -232,7 +257,10 @@ private fun MainScaffold(
     // death like the navigator's open article does; without them the reader
     // would reopen into a list the user was not looking at.
     var section by rememberSection()
-    val directive = calculatePaneScaffoldDirective(currentWindowAdaptiveInfo())
+    var searchReturn by rememberSection()
+    var searchDetail by rememberSaveable { mutableStateOf(false) }
+    val adaptiveInfo = currentWindowAdaptiveInfo()
+    val directive = calculatePaneScaffoldDirective(adaptiveInfo)
     // The newspaper owns the reading area; an original opens on the next
     // pane, with native Back restoring the paper even on a wide display.
     val navigator = rememberListDetailPaneScaffoldNavigator<Long>(
@@ -241,6 +269,7 @@ private fun MainScaffold(
     var showSettings by rememberSettingsOpen()
     val readerEntry = state.snapshot.entries.firstOrNull { it.id == navigator.currentDestination?.contentKey && !it.deleted }
     val reader = remember { ReaderLoadState() }
+    var readerRetry by remember { androidx.compose.runtime.mutableIntStateOf(0) }
     var activityGroups by remember { mutableStateOf<List<ch.lkmc.earnest.core.ActivityGroup>>(emptyList()) }
     var showSubscribe by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
@@ -249,14 +278,32 @@ private fun MainScaffold(
     val selected = navigator.currentDestination?.contentKey
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     var feedSelection by rememberFeedSelection(state.accountKey)
+    val searchListFocused = section.view == View.SEARCH && !searchDetail
     val detailOnly = navigator.currentDestination?.pane == ListDetailPaneScaffoldRole.Detail &&
-        (section.view == View.FRONT || directive.maxHorizontalPartitions == 1)
+        (section.view == View.FRONT || directive.maxHorizontalPartitions == 1) && !searchListFocused
     // Entries reached through an agent's output (a notification, a deep link
     // of unknown origin, an agent-change notice) open with click-to-load
     // images; see AppViewModel.openEntry. The set is saved with the navigator's
     // destination: after a rotation or process death the reader reopens the
     // same entry, and a plain remember would reload it with automatic images.
     var agentSelected by rememberSaveable(saver = AgentSelectedSaver) { mutableStateOf(emptySet<Long>()) }
+
+    @Composable
+    fun SearchContent() {
+        SearchScreen(
+            search = model.search,
+            accountKey = state.accountKey,
+            snapshot = state.snapshot,
+            onOpen = { match ->
+                searchDetail = true
+                if (match.kind == "agent_note" || match.untrusted) agentSelected = agentSelected + match.entryId
+                scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, match.entryId) }
+            },
+        )
+        // Register in the list pane after the scaffold's own handler. The
+        // detail pane's find handler can still take priority over this one.
+        BackHandler(enabled = !detailOnly) { section = searchReturn }
+    }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(lifecycleOwner) {
@@ -270,6 +317,7 @@ private fun MainScaffold(
     LaunchedEffect(initialEntry) {
         initialEntry?.let {
             agentSelected = agentSelected + it
+            searchDetail = true
             navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, it)
         }
     }
@@ -278,10 +326,11 @@ private fun MainScaffold(
         val id = notificationId ?: return@LaunchedEffect
         model.notificationEntry(id)?.let {
             agentSelected = agentSelected + it
+            searchDetail = true
             navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, it)
         }
     }
-    LaunchedEffect(selected, state.accountKey) {
+    LaunchedEffect(selected, state.accountKey, readerRetry) {
         reader.load(selected, state.accountKey) { id ->
             if (model.loadEntry(id) == null) throw java.io.IOException("This entry is no longer available.")
             model.markSeen(id)
@@ -366,9 +415,8 @@ private fun MainScaffold(
         }
     }
 
-    // Every destination draws its icon in its own tone. Labels stay ink: the
-    // Material default for a selected label is `secondary`, now orange, which
-    // would clash with every destination but Today.
+    // Color identifies the selected destination; the rest stays quiet so
+    // navigation does not compete with article content. Labels remain ink.
     val tones = LocalTones.current
     val scheme = MaterialTheme.colorScheme
     val suiteItemColors = View.entries.mapNotNull { destination ->
@@ -377,20 +425,20 @@ private fun MainScaffold(
         destination to NavigationSuiteDefaults.itemColors(
             navigationBarItemColors = NavigationBarItemDefaults.colors(
                 selectedIconColor = tone,
-                unselectedIconColor = tone,
+                unselectedIconColor = scheme.onSurfaceVariant,
                 selectedTextColor = scheme.onSurface,
                 indicatorColor = indicator,
             ),
             navigationRailItemColors = NavigationRailItemDefaults.colors(
                 selectedIconColor = tone,
-                unselectedIconColor = tone,
+                unselectedIconColor = scheme.onSurfaceVariant,
                 selectedTextColor = scheme.onSurface,
                 indicatorColor = indicator,
             ),
             navigationDrawerItemColors = NavigationDrawerItemDefaults.colors(
                 selectedContainerColor = indicator,
                 selectedIconColor = tone,
-                unselectedIconColor = tone,
+                unselectedIconColor = scheme.onSurfaceVariant,
                 selectedTextColor = scheme.onSurface,
             ),
         )
@@ -416,6 +464,15 @@ private fun MainScaffold(
         },
     ) {
     NavigationSuiteScaffold(
+        layoutType = if (showSettings || detailOnly || section.view == View.SEARCH || WindowInsets.isImeVisible) {
+            NavigationSuiteType.None
+        } else if (
+            adaptiveInfo.windowSizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND) &&
+            !adaptiveInfo.windowSizeClass.isHeightAtLeastBreakpoint(WindowSizeClass.HEIGHT_DP_MEDIUM_LOWER_BOUND)
+        ) {
+            // A phone in landscape needs its scarce height for reading.
+            NavigationSuiteType.NavigationRail
+        } else NavigationSuiteScaffoldDefaults.calculateFromAdaptiveInfo(adaptiveInfo),
         navigationSuiteItems = {
             primaryDestinations.forEach { destination ->
                 item(
@@ -443,17 +500,24 @@ private fun MainScaffold(
                     onThemeChange,
                     notificationsDenied,
                     onRequestNotifications,
-                    onSearch = { selectView(View.SEARCH) },
+                    onSearch = {
+                        searchReturn = section
+                        searchDetail = false
+                        section = section.copy(view = View.SEARCH)
+                    },
                     onSettings = { showSettings = true },
                     onRefresh = {
                         if (section.view == View.FRONT) model.refreshFrontPage() else model.reloadList()
                     },
-                    navigationIcon = if (showSettings || detailOnly) Icons.AutoMirrored.Filled.ArrowBack else Icons.Filled.Menu,
-                    navigationDescription = if (showSettings || detailOnly) "Back" else "Folders and feeds",
+                    focused = showSettings || detailOnly || section.view == View.SEARCH,
+                    showRefresh = section.view != View.FRONT && !showSettings && !detailOnly && section.view != View.SEARCH,
+                    navigationIcon = if (showSettings || detailOnly || section.view == View.SEARCH) Icons.AutoMirrored.Filled.ArrowBack else Icons.Filled.Menu,
+                    navigationDescription = if (showSettings || detailOnly || section.view == View.SEARCH) "Back" else "Folders and feeds",
                     onNavigation = {
                         when {
                             showSettings -> showSettings = false
                             detailOnly -> scope.launch { navigator.navigateBack() }
+                            section.view == View.SEARCH -> section = searchReturn
                             else -> scope.launch { drawerState.open() }
                         }
                     },
@@ -461,24 +525,24 @@ private fun MainScaffold(
             },
             snackbarHost = { SnackbarHost(snackbar) },
         ) { padding ->
-            Column(Modifier.fillMaxSize().padding(padding)) {
-                state.cacheNotice?.let { Text(it, modifier = Modifier.padding(8.dp)) }
+            Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()) {
+                state.cacheNotice?.let { NoticeBanner(it, modifier = Modifier.padding(horizontal = ReaderSpace.md, vertical = ReaderSpace.xxs)) }
                 state.error?.let {
-                    Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(8.dp))
+                    NoticeBanner(it, tone = NoticeTone.ERROR, modifier = Modifier.padding(horizontal = ReaderSpace.md, vertical = ReaderSpace.xxs))
                 }
-                if (showSettings) {
-                    BackHandler { showSettings = false }
-                    SettingsScreen(
-                        model = model,
-                        state = state,
-                        onBack = { showSettings = false },
-                        modifier = Modifier.weight(1f),
-                    )
-                } else {
+                val compactSearch = searchListFocused && directive.maxHorizontalPartitions == 1
+                val panesCovered = showSettings || compactSearch
+                Box(Modifier.weight(1f)) {
+                // Keep the adaptive transition bound while focused screens
+                // cover its panes. Disposing it can leave history pointing at
+                // an article while the scaffold still shows the list.
                 NavigableListDetailPaneScaffold(
                     navigator = navigator,
+                    modifier = if (panesCovered) Modifier.clearAndSetSemantics {} else Modifier,
                     listPane = {
-                        AnimatedPane {
+                        if (!panesCovered) AnimatedPane {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+                            Box(Modifier.widthIn(max = if (section.view == View.FRONT) 1100.dp else ReaderSpace.contentWidth).fillMaxSize()) {
                             when (section.view) {
                                 View.FRONT -> FrontPageScreen(
                                     state = state.frontPage,
@@ -501,15 +565,7 @@ private fun MainScaffold(
                                     onPeriodChange = { period -> section = section.copy(period = period) },
                                     onRefresh = { model.refreshFrontPage() },
                                 )
-                                View.SEARCH -> SearchScreen(
-                                    search = model.search,
-                                    accountKey = state.accountKey,
-                                    snapshot = state.snapshot,
-                                    onOpen = { match ->
-                                        if (match.kind == "agent_note" || match.untrusted) agentSelected = agentSelected + match.entryId
-                                        scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, match.entryId) }
-                                    },
-                                )
+                                View.SEARCH -> SearchContent()
                                 View.FEEDS -> FeedsScreen(
                                     model = model,
                                     state = state,
@@ -579,21 +635,25 @@ private fun MainScaffold(
                                     },
                                 ) }
                             }
+                            }
+                            }
                         }
                     },
                     detailPane = {
-                        AnimatedPane {
+                        if (!panesCovered) AnimatedPane {
                             val entry = readerEntry
                             if (entry == null) {
                                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                     when {
-                                        selected == null -> Text("Select an entry")
-                                        reader.loading -> CircularProgressIndicator()
-                                        else -> Text(reader.error ?: "Couldn't load this entry. Check your connection and try again.")
+                                        selected == null -> QuietState("Ready when you are", "Choose an article to settle into a good read.")
+                                        reader.loading -> LoadingState("Opening article…")
+                                        else -> QuietState("This article did not load", reader.error ?: "Check your connection and try again.", actionLabel = "Try again", onAction = { readerRetry++ })
                                     }
                                 }
                             } else {
-                                Column(Modifier.fillMaxSize()) {
+                                BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+                                val headerMaxHeight = maxHeight * 0.48f
+                                Column(Modifier.widthIn(max = ReaderSpace.contentWidth).fillMaxSize()) {
                                     val original = originalUrl(entry)
                                     val entryState = state.states[entry.id]
                                         ?: SyncEngine.initialState(state.principalId, entry.id)
@@ -623,7 +683,8 @@ private fun MainScaffold(
                                         }
                                     }
                                     BackHandler(enabled = findOpen, onBack = closeFind)
-                                    ReaderHeader(
+                                    if (!findOpen) ReaderHeader(
+                                        modifier = Modifier.heightIn(max = headerMaxHeight).verticalScroll(rememberScrollState()),
                                         entry = entry,
                                         source = subscriptionTitles[entry.subscriptionId].orEmpty(),
                                         isRead = canMarkUnread(entryState),
@@ -676,12 +737,8 @@ private fun MainScaffold(
                                     }
                                     val content = reader.content
                                     when {
-                                        reader.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                            CircularProgressIndicator()
-                                        }
-                                        content == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                            Text(reader.error ?: "Couldn't load this entry. Check your connection and try again.")
-                                        }
+                                        reader.loading -> LoadingState("Opening article…")
+                                        content == null -> QuietState("This article did not load", reader.error ?: "Check your connection and try again.", actionLabel = "Try again", onAction = { readerRetry++ })
                                         else -> Reader(
                                             url = content.url,
                                             cachedHtml = content.cachedHtml,
@@ -693,10 +750,22 @@ private fun MainScaffold(
                                         )
                                     }
                                 }
+                                }
                             }
                         }
                     },
                 )
+                if (showSettings) {
+                    BackHandler { showSettings = false }
+                    SettingsScreen(
+                        model = model,
+                        state = state,
+                        onBack = { showSettings = false },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else if (compactSearch) {
+                    SearchContent()
+                }
                 }
             }
         }
@@ -728,6 +797,8 @@ private fun EarnestTopBar(
     onSearch: () -> Unit,
     onSettings: () -> Unit,
     onRefresh: () -> Unit,
+    focused: Boolean,
+    showRefresh: Boolean,
     navigationIcon: ImageVector,
     navigationDescription: String,
     onNavigation: () -> Unit,
@@ -735,13 +806,14 @@ private fun EarnestTopBar(
     var themeOpen by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     TopAppBar(
-        title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleLarge) },
+        title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() }) },
+        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
         navigationIcon = {
             IconButton(onClick = onNavigation) { Icon(navigationIcon, contentDescription = navigationDescription) }
         },
         actions = {
-            IconButton(onClick = onSearch) { Icon(Icons.Filled.Search, contentDescription = "Search") }
-            if (loading) {
+            if (!focused) IconButton(onClick = onSearch) { Icon(Icons.Filled.Search, contentDescription = "Search") }
+            if (loading && showRefresh) {
                 Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(
                         Modifier.size(20.dp),
@@ -749,7 +821,7 @@ private fun EarnestTopBar(
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                 }
-            } else {
+            } else if (showRefresh) {
                 IconButton(onClick = onRefresh) {
                     Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
                 }
@@ -802,7 +874,7 @@ private fun EarnestTopBar(
 }
 
 @Composable
-private fun ThemeDialog(
+internal fun ThemeDialog(
     current: ThemeSetting,
     onDismiss: () -> Unit,
     onSelect: (ThemeSetting) -> Unit,
@@ -811,7 +883,7 @@ private fun ThemeDialog(
         onDismissRequest = onDismiss,
         title = { Text("Theme") },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 ThemeSetting.entries.forEach { setting ->
                     Row(
                         Modifier.fillMaxWidth().clickable { onSelect(setting) },
@@ -827,6 +899,7 @@ private fun ThemeDialog(
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun ReaderHeader(
     entry: CachedEntry,
@@ -840,13 +913,15 @@ internal fun ReaderHeader(
     onFind: () -> Unit,
     onSmallerText: () -> Unit,
     onLargerText: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp)) {
+    Column(modifier.fillMaxWidth().padding(start = ReaderSpace.gutter, end = ReaderSpace.gutter, top = ReaderSpace.sm)) {
         Text(
-            entry.title,
-            style = MaterialTheme.typography.titleMedium,
-            maxLines = 3,
+            entry.title.ifBlank { "Untitled" },
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.semantics { heading() },
+            maxLines = 4,
             overflow = TextOverflow.Ellipsis,
         )
         val date = entryDateLabel(entry)
@@ -864,11 +939,11 @@ internal fun ReaderHeader(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        FlowRow(Modifier.fillMaxWidth().padding(top = ReaderSpace.xs), horizontalArrangement = Arrangement.SpaceBetween) {
             if (originalUrl(entry) != null) {
-                TextButton(onClick = onOpenOriginal) { Text("Open original") }
+                FilledTonalButton(onClick = onOpenOriginal) { Text("Open original") }
             }
-            Spacer(Modifier.weight(1f))
+            Row {
             IconButton(onClick = onFind) { Icon(Icons.Filled.Search, contentDescription = "Find in article") }
             Box {
                 IconButton(onClick = { menuOpen = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "Reader options") }
@@ -884,6 +959,7 @@ internal fun ReaderHeader(
                     }
                 }
             }
+            }
         }
     }
 }
@@ -897,26 +973,28 @@ private fun FindBar(
     onNext: () -> Unit,
     onClose: () -> Unit,
 ) {
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
         OutlinedTextField(
             value = query,
             onValueChange = onQuery,
             label = { Text("Find in article") },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().focusRequester(focus),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { onNext() }),
         )
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-            TextButton(onClick = onPrevious) { Text("Previous") }
-            TextButton(onClick = onNext) { Text("Next") }
-            TextButton(onClick = onClose) { Text("Close") }
+            IconButton(onClick = onPrevious) { Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "Previous match") }
+            IconButton(onClick = onNext) { Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Next match") }
+            IconButton(onClick = onClose) { Icon(Icons.Filled.Close, contentDescription = "Close find") }
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun EntryListScreen(
     title: String,
@@ -1016,10 +1094,8 @@ internal fun EntryListScreen(
         items(entries, key = { it.id }) { entry ->
             val effective = states[entry.id] ?: SyncEngine.initialState(principalId, entry.id)
             Surface(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerLow,
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.surface,
             ) {
                 Column {
                     SwipeActionRow(onLater = { onLater(entry.id) }, onDone = { onDone(entry.id) }) {
@@ -1058,25 +1134,27 @@ internal fun EntryListScreen(
                                 TextButton(onClick = { retry++ }) { Text("Try again") }
                             }
                         }
-                        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                            TextButton(onClick = { onOpen(entry.id) }) { Text("Open reader") }
+                        FlowRow(Modifier.fillMaxWidth().padding(horizontal = ReaderSpace.md, vertical = ReaderSpace.xs), horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs)) {
+                            FilledTonalButton(onClick = { onOpen(entry.id) }) { Text("Open reader") }
                             TextButton(onClick = { expandedId = null }) { Text("Collapse") }
                         }
                     }
+                    HorizontalDivider(Modifier.padding(horizontal = ReaderSpace.gutter), color = MaterialTheme.colorScheme.outlineVariant)
                 }
             }
         }
         item(key = "end") {
-            val statement = if (entries.isEmpty()) {
-                "No cached articles for $title."
+            if (entries.isEmpty()) {
+                val message = when (title) {
+                    "Kept" -> "Keep an article from its menu to find it here. Your favorites stay close at hand."
+                    "Later" -> "Save an article for Later from its menu, or give it a short swipe to the left."
+                    "Done" -> "Articles you mark Done will appear here. You can always mark them unread again."
+                    else -> "No cached articles for $title. Refresh to check for new articles, or add a source in Feeds."
+                }
+                QuietState(if (title == "Kept") "Your favorites belong here" else "Nothing here yet", message, icon = if (title == "Kept") Icons.Filled.Star else Icons.AutoMirrored.Filled.List)
             } else {
-                "End of cached articles."
+                Text("End of cached articles.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.fillMaxWidth().padding(ReaderSpace.lg))
             }
-            Text(
-                statement,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.fillMaxWidth().padding(24.dp),
-            )
             if (sessionChanges.isNotEmpty() || agentChangesError != null) {
                 AgentChangesNotice("Agent changes this session", sessionChanges, entryTitles, agentChangesError, onOpenAgentSelected, onRevert)
             }
@@ -1139,7 +1217,7 @@ internal fun EntryRow(
             onClick = onClick,
         )
             .semantics { stateDescription = if (unread) "Unread" else "Read" }
-            .padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 16.dp),
+            .padding(start = ReaderSpace.gutter, end = ReaderSpace.xs, top = ReaderSpace.xs, bottom = ReaderSpace.gutter),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(6.dp).background(if (unread) LocalTones.current.orange else Color.Transparent, RoundedCornerShape(3.dp)))
@@ -1157,7 +1235,7 @@ internal fun EntryRow(
                 modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(8.dp))
-            Text(entry.firstSeenAt.relativeTime(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(entry.firstSeenAt.relativeTime(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
             if (kept) Icon(Icons.Filled.Star, contentDescription = "Kept", tint = LocalTones.current.plum, modifier = Modifier.padding(start = 6.dp).size(16.dp))
             Box {
                 IconButton(onClick = { menuOpen = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "Article actions") }
@@ -1177,16 +1255,16 @@ internal fun EntryRow(
                 entry.title.ifBlank { "Untitled" },
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal,
-                maxLines = if (readingInFeed) 4 else 2,
+                maxLines = 4,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f).testTag("headline-${entry.id}"),
             )
             entry.thumbnailUrl?.let { thumbnail ->
                 Spacer(Modifier.width(12.dp))
-                MediaImage(thumbnail, Modifier.size(56.dp), RoundedCornerShape(8.dp))
+                MediaImage(thumbnail, Modifier.size(72.dp), RoundedCornerShape(16.dp))
             }
         }
-        if (readingInFeed) {
+        if (readingInFeed && expanded) {
             Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(if (expanded) "Reading in feed" else "Read in feed", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                 Icon(
@@ -1209,7 +1287,15 @@ private fun SwipeActionRow(
     val laterThreshold = with(density) { 96.dp.toPx() }
     val doneThreshold = with(density) { 240.dp.toPx() }
     var offset by remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
+    var settling by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val scope = rememberCoroutineScope()
+    val haptics = LocalHapticFeedback.current
+    fun settle() {
+        settling?.cancel()
+        settling = scope.launch {
+            animate(offset, 0f, animationSpec = spring(dampingRatio = 0.85f, stiffness = 500f)) { value, _ -> offset = value }
+        }
+    }
     Box(Modifier.fillMaxWidth()) {
         val target = swipeTargetFor(-offset, laterThreshold, doneThreshold)
         // Below the Later threshold the reveal already promises Later, so it
@@ -1238,20 +1324,22 @@ private fun SwipeActionRow(
                 .background(MaterialTheme.colorScheme.surface)
                 .pointerInput(Unit) {
                     detectHorizontalDragGestures(
+                        onDragStart = { settling?.cancel() },
                         onHorizontalDrag = { change, dragAmount ->
                             change.consume()
+                            val previous = swipeTargetFor(-offset, laterThreshold, doneThreshold)
                             offset = (offset + dragAmount).coerceIn(-doneThreshold * 1.2f, 0f)
+                            val next = swipeTargetFor(-offset, laterThreshold, doneThreshold)
+                            if (next != null && next != previous) haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
                         },
+                        onDragCancel = { settle() },
                         onDragEnd = {
-                            val target = swipeTargetFor(-offset, laterThreshold, doneThreshold)
-                            scope.launch {
-                                offset = 0f
-                                when (target) {
-                                    SwipeTarget.DONE -> onDone()
-                                    SwipeTarget.LATER -> onLater()
-                                    null -> Unit
-                                }
+                            when (swipeTargetFor(-offset, laterThreshold, doneThreshold)) {
+                                SwipeTarget.DONE -> onDone()
+                                SwipeTarget.LATER -> onLater()
+                                null -> Unit
                             }
+                            settle()
                         },
                     )
                 },
@@ -1324,7 +1412,17 @@ private fun FeedsScreen(
         }
     }
     val subscriptions = state.snapshot.objects.filter { it.kind == SyncEngine.OBJECT_SUBSCRIPTION && !it.deleted }
-    LazyColumn(Modifier.fillMaxSize()) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = ReaderSpace.xl)) {
+        item(key = "feeds-intro") {
+            Column(Modifier.padding(horizontal = ReaderSpace.gutter)) {
+                ScreenIntro("Your sources", "Follow your interests, at your pace.")
+                Button(onClick = onSubscribe, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
+                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(ReaderSpace.xs))
+                    Text("Subscribe by URL")
+                }
+            }
+        }
         if (unreadMode) {
             item(key = "unread-synced") {
                 val text = when {
@@ -1341,11 +1439,7 @@ private fun FeedsScreen(
             }
         }
         item {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onSubscribe) {
-                    Icon(Icons.Filled.Add, contentDescription = null)
-                    Text("Subscribe by URL")
-                }
+            FlowRow(Modifier.padding(horizontal = ReaderSpace.md, vertical = ReaderSpace.xs), horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs)) {
                 TextButton(
                     onClick = { importPicker.launch(arrayOf("text/x-opml", "application/xml", "text/xml", "*/*")) },
                     enabled = !opml.busy && !readingOpml,
@@ -1358,21 +1452,17 @@ private fun FeedsScreen(
         }
         if (opml.busy || readingOpml) {
             item {
-                Text(
-                    "Working on OPML…",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                )
+                LoadingState("Working on OPML…")
             }
         }
         opml.error?.let { message ->
             item {
-                Text(
-                    message,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                )
+                NoticeBanner(message, tone = NoticeTone.ERROR, modifier = Modifier.padding(ReaderSpace.md))
+            }
+        }
+        if (subscriptions.isEmpty()) {
+            item(key = "no-feeds") {
+                QuietState("A home for your interests", "Subscribe to a favorite site, or import an OPML file from another reader. Your articles will appear here after syncing.", icon = FeedIcon)
             }
         }
         val folders = state.snapshot.objects.filter { it.kind == SyncEngine.OBJECT_FOLDER && !it.deleted }
@@ -1381,7 +1471,7 @@ private fun FeedsScreen(
                 item(key = group.key) {
                     TextButton(
                         onClick = { onFolder(group.key.removePrefix("folder-").toLongOrNull() ?: 0L) },
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                     ) {
                         Icon(FolderIcon, contentDescription = null, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(8.dp))
@@ -1433,8 +1523,9 @@ private fun OpmlReportDialog(summary: OpmlSummary, onDismiss: () -> Unit) {
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun FeedRow(
+internal fun FeedRow(
     subscription: SyncObject,
     unreadMode: Boolean,
     unreadCount: Long?,
@@ -1446,20 +1537,29 @@ private fun FeedRow(
     // Parse them once per revision, not on every redraw of the list.
     val iconUrl = remember(subscription.raw) { subscription.iconUrl() }
     val health = remember(subscription.raw) { subscription.health() }
-    Column(Modifier.fillMaxWidth().padding(16.dp)) {
-        Row(Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            iconUrl?.let {
-                MediaImage(it, Modifier.size(24.dp), RoundedCornerShape(4.dp))
-                Spacer(Modifier.width(8.dp))
+    var menuOpen by remember { mutableStateOf(false) }
+    var confirmUnsubscribe by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().padding(horizontal = ReaderSpace.gutter, vertical = ReaderSpace.md)) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClickLabel = "Read feed", onClick = onOpen), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ReaderSpace.sm)) {
+            Surface(modifier = Modifier.testTag("feed-icon-${subscription.id}"), shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+                if (iconUrl != null) {
+                    MediaImage(iconUrl, Modifier.padding(10.dp).size(24.dp), RoundedCornerShape(4.dp))
+                } else {
+                    Icon(FeedIcon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(10.dp).size(24.dp))
+                }
             }
-            Text(subscription.name, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-            Text("Read", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            Column(Modifier.weight(1f).padding(vertical = ReaderSpace.xs)) {
+                Text(subscription.name.ifBlank { "Untitled feed" }, style = MaterialTheme.typography.titleMedium)
+                Text(subscription.raw.url(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Box {
+                IconButton(onClick = { menuOpen = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "Feed options for ${subscription.name}") }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(text = { Text("Read") }, onClick = { menuOpen = false; onOpen() })
+                    DropdownMenuItem(text = { Text("Unsubscribe", color = MaterialTheme.colorScheme.error) }, onClick = { menuOpen = false; confirmUnsubscribe = true })
+                }
+            }
         }
-        Text(
-            subscription.raw.url(),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
         feedProblem(health)?.let { problem ->
             Text(
                 "Fetch failing: ${problem.detail}",
@@ -1481,9 +1581,8 @@ private fun FeedRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
         ) {
             val selection = cadenceSelection(River.cadence(subscription))
             Cadence.entries.forEach { cadence ->
@@ -1493,12 +1592,21 @@ private fun FeedRow(
                     onSelect = { onCadence(subscription.id, cadence.value) },
                 )
             }
-            TextButton(onClick = { onUnsubscribe(subscription.id) }) { Text("Unsubscribe") }
         }
         Text(
             cadenceOf(River.cadence(subscription)).hint,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    HorizontalDivider(Modifier.padding(horizontal = ReaderSpace.gutter), color = MaterialTheme.colorScheme.outlineVariant)
+    if (confirmUnsubscribe) {
+        AlertDialog(
+            onDismissRequest = { confirmUnsubscribe = false },
+            title = { Text("Unsubscribe from ${subscription.name}?") },
+            text = { Text("You will stop receiving new articles from this feed.") },
+            confirmButton = { TextButton(onClick = { confirmUnsubscribe = false; onUnsubscribe(subscription.id) }) { Text("Unsubscribe", color = MaterialTheme.colorScheme.error) } },
+            dismissButton = { TextButton(onClick = { confirmUnsubscribe = false }) { Text("Cancel") } },
         )
     }
 }
@@ -1522,18 +1630,22 @@ private fun ActivityScreen(
     entryTitles: Map<Long, String>,
     onRevert: (Long) -> Unit,
 ) {
-    LazyColumn(Modifier.fillMaxSize()) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = ReaderSpace.gutter, vertical = ReaderSpace.md), verticalArrangement = Arrangement.spacedBy(ReaderSpace.sm)) {
+        if (groups.isEmpty()) {
+            item { QuietState("No activity loaded", "Agent changes from the past seven days appear here. Refresh to check for updates.", icon = Icons.Filled.Info) }
+        }
         groups.forEach { group ->
             item(key = "group-${group.principalId}") {
                 Text(
                     group.principalName,
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(16.dp),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = ReaderSpace.md, bottom = ReaderSpace.xs).semantics { heading() },
                 )
             }
             val activities = group.activities.orEmpty()
             items(activities, key = { it.id }) { activity ->
-                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                Column(Modifier.fillMaxWidth().padding(vertical = ReaderSpace.xs), verticalArrangement = Arrangement.spacedBy(ReaderSpace.xs)) {
                     Text(activityDescription(activity, entryTitles), style = MaterialTheme.typography.bodyLarge)
                     Text(
                         activity.createdAt.relativeTime(),
@@ -1550,12 +1662,14 @@ private fun ActivityScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 }
             }
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SubscribeDialog(
     onDismiss: () -> Unit,
@@ -1567,9 +1681,11 @@ private fun SubscribeDialog(
         onDismissRequest = onDismiss,
         title = { Text("Subscribe by URL") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(url, { url = it }, label = { Text("Feed URL") }, singleLine = true)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(ReaderSpace.sm)) {
+                Text("Paste the address of a site or its RSS feed.", style = MaterialTheme.typography.bodyMedium)
+                OutlinedTextField(url, { url = it }, label = { Text("Feed URL") }, singleLine = true, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done))
+                Text("Delivery pace", style = MaterialTheme.typography.titleSmall)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Cadence.entries.forEach { cadence ->
                         CadenceChip(
                             cadence = cadence,
@@ -1586,7 +1702,7 @@ private fun SubscribeDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onSubscribe(url, selectedCadence) }, enabled = url.isNotBlank()) { Text("Subscribe") }
+            Button(onClick = { onSubscribe(url.trim(), selectedCadence) }, enabled = url.isNotBlank()) { Text("Subscribe") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )

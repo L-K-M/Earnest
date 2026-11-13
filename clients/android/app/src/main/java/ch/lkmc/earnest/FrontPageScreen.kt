@@ -1,7 +1,9 @@
 package ch.lkmc.earnest
 
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,13 +23,22 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.PrimaryTabRow
-import androidx.compose.material3.Tab
+import androidx.compose.material3.Surface
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -101,8 +112,8 @@ internal fun FrontPageScreen(
 ) {
     val page = state.page
     if (page == null) {
-        // Without a page there is nothing to scroll, so the masthead stays put.
-        Column(Modifier.fillMaxSize()) {
+        // Keep long errors and large text reachable even in a short window.
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
             FrontPageMasthead(
                 state = state,
                 onPeriodChange = onPeriodChange,
@@ -110,20 +121,14 @@ internal fun FrontPageScreen(
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
             when {
-                state.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        CircularProgressIndicator()
-                        Text("Loading the front page…", style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
+                state.loading -> LoadingState("Loading the front page…")
                 state.error != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(
                         Modifier.padding(24.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Text("Front page did not load", style = MaterialTheme.typography.titleMedium)
-                        Text(state.error.orEmpty(), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+                        QuietState("Front page did not load", state.error.orEmpty(), icon = Icons.Filled.Info)
                         TextButton(onClick = onRefresh, modifier = Modifier.testTag("front-try-again")) { Text("Try again") }
                     }
                 }
@@ -160,12 +165,12 @@ private fun FrontPageMasthead(
     modifier: Modifier = Modifier,
 ) {
     val page = state.page
-    Column(modifier.fillMaxWidth()) {
+    Column(modifier.fillMaxWidth().padding(top = ReaderSpace.xs, bottom = ReaderSpace.sm), verticalArrangement = Arrangement.spacedBy(ReaderSpace.md)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 page?.let {
                     val date = frontPageDate(it)
-                    if (date.isNotBlank()) Text(date, style = MaterialTheme.typography.titleMedium)
+                    if (date.isNotBlank()) Text(date, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() })
                 }
                 state.updatedAt?.let {
                     Text("Updated ${it.relativeTime()}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -173,22 +178,22 @@ private fun FrontPageMasthead(
             }
             TextButton(onClick = onRefresh, enabled = !state.loading, modifier = Modifier.testTag("front-refresh")) { Text("Refresh") }
         }
-        PrimaryTabRow(selectedTabIndex = state.period.ordinal) {
-            FrontPagePeriod.entries.forEach { period ->
-                Tab(
-                    selected = state.period == period,
-                    onClick = { onPeriodChange(period) },
-                    text = {
-                        Column {
+        Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
+            Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(ReaderSpace.xxs).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xxs)) {
+                FrontPagePeriod.entries.forEach { period ->
+                    val selected = state.period == period
+                    Surface(
+                        modifier = Modifier.weight(1f).fillMaxHeight().selectable(selected = selected, role = Role.Tab, onClick = { onPeriodChange(period) }),
+                        shape = RoundedCornerShape(20.dp),
+                        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+                        contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                    ) {
+                        Column(Modifier.heightIn(min = 60.dp).padding(horizontal = ReaderSpace.sm, vertical = ReaderSpace.sm), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(frontPageWindowName(period), style = MaterialTheme.typography.labelLarge)
-                            Text(
-                                frontPageWindowLabel(period),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                            Text(frontPageWindowLabel(period), style = MaterialTheme.typography.labelSmall)
                         }
-                    },
-                )
+                    }
+                }
             }
         }
         if (state.loading && page != null) {
@@ -253,9 +258,9 @@ private fun FrontPageGrid(
         columns = GridCells.Adaptive(minSize = 280.dp),
         state = gridState,
         modifier = Modifier.fillMaxSize().testTag("front-grid"),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(start = ReaderSpace.gutter, end = ReaderSpace.gutter, top = ReaderSpace.xs, bottom = ReaderSpace.xl),
+        horizontalArrangement = Arrangement.spacedBy(24.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         // The masthead scrolls away with the stories instead of trapping them
         // beneath fixed phone chrome.
@@ -295,9 +300,10 @@ private fun FrontPageGrid(
             item(span = { GridItemSpan(maxLineSpan) }, key = "section-${section.name}") {
                 Text(
                     section.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp)
-                        .testTag("section-${section.name}"),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp)
+                        .semantics { heading() }.testTag("section-${section.name}"),
                 )
             }
             section.stories.forEach { story ->
@@ -338,18 +344,12 @@ private fun FrontPageGrid(
 
 @Composable
 private fun FrontPageEmpty(modifier: Modifier = Modifier, period: FrontPagePeriod) {
-    Column(
-        modifier.padding(vertical = 24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text("No stories in this window", style = MaterialTheme.typography.titleMedium)
-        Text(
-            "Nothing matched the ${frontPageWindowLabel(period).lowercase()}.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
+    QuietState(
+        title = "No stories in this window",
+        message = "Nothing matched the ${frontPageWindowLabel(period).lowercase()}.",
+        icon = Icons.Filled.DateRange,
+        modifier = modifier,
+    )
 }
 
 @Composable
@@ -371,39 +371,38 @@ private fun FrontStory(
     val entry = representative.entry
     val title = entry.title.ifBlank { "Untitled" }
     val read = story.isRead(states, principalId)
-    Card(
+    Surface(
         modifier = Modifier.fillMaxWidth().testTag(story.id),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shape = RoundedCornerShape(if (lead) 24.dp else 0.dp),
+        color = if (lead) MaterialTheme.colorScheme.surfaceContainerLowest else MaterialTheme.colorScheme.surface,
     ) {
         Column(
             Modifier
                 .fillMaxWidth()
                 .clickable { onOpen(entry.id) }
-                .padding(16.dp),
+                .padding(if (lead) ReaderSpace.gutter else 0.dp),
         ) {
             val imageUrl = story.imageUrl
             if (imageUrl != null) {
                 image(
                     imageUrl,
                     Modifier.fillMaxWidth()
-                        .height(if (lead) 200.dp else 120.dp)
-                        .clip(RoundedCornerShape(if (lead) 12.dp else 8.dp)),
+                        .height(if (lead) 200.dp else 156.dp)
+                        .clip(RoundedCornerShape(16.dp)),
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(16.dp))
             } else {
                 // Still ask for the absent picture, but never reserve its height.
                 image(null, Modifier)
             }
             Text(
                 title,
-                style = if (lead) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium,
-                maxLines = if (lead) 4 else 3,
+                style = if (lead) MaterialTheme.typography.headlineMedium.copy(fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold) else MaterialTheme.typography.titleLarge,
+                modifier = Modifier.semantics { heading() },
+                maxLines = if (lead) 5 else 4,
                 overflow = TextOverflow.Ellipsis,
             )
-            Column(Modifier.padding(top = 4.dp)) {
+            Column(Modifier.padding(top = 8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         listOfNotNull(
@@ -420,11 +419,11 @@ private fun FrontStory(
                         Icon(
                             Icons.Filled.CheckCircle,
                             contentDescription = null,
-                            tint = LocalTones.current.green,
+                            tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(16.dp),
                         )
                         Spacer(Modifier.width(4.dp))
-                        Text("Read", style = MaterialTheme.typography.labelMedium, color = LocalTones.current.green)
+                        Text("Read", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                     }
                 }
                 if (story.feedCount > 1) {
@@ -437,7 +436,7 @@ private fun FrontStory(
                     )
                 }
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
             StoryText(
                 story = story,
                 coverage = coverage,
@@ -449,18 +448,17 @@ private fun FrontStory(
                 TextButton(onClick = onToggleCoverage) {
                     Text(if (expandedCoverage) "Hide other sources" else "Other sources (${others.size})")
                 }
-                if (expandedCoverage) {
-                    others.forEach { item ->
-                        TextButton(onClick = { onOpen(item.entry.id) }) {
-                            Text(
-                                "${item.sourceTitle} · ${item.entry.title.ifBlank { "Untitled" }}",
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                AnimatedVisibility(visible = expandedCoverage) {
+                    Column {
+                        others.forEach { item ->
+                            TextButton(onClick = { onOpen(item.entry.id) }) {
+                                Text("${item.sourceTitle} · ${item.entry.title.ifBlank { "Untitled" }}")
+                            }
                         }
                     }
                 }
             }
+            if (!lead) HorizontalDivider(Modifier.padding(top = ReaderSpace.lg), color = MaterialTheme.colorScheme.outlineVariant)
         }
     }
 }
@@ -549,7 +547,7 @@ internal fun FrontImage(path: String?, modifier: Modifier = Modifier, model: App
         bitmap = image,
         contentDescription = null,
         modifier = modifier,
-        contentScale = ContentScale.Fit,
+        contentScale = ContentScale.Crop,
     )
 }
 

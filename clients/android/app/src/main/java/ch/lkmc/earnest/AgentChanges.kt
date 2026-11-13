@@ -2,6 +2,12 @@ package ch.lkmc.earnest
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
@@ -105,6 +111,7 @@ private fun annotationKind(vararg values: JsonElement?): String =
 private fun withIndefiniteArticle(kind: String): String =
     if (kind.first().lowercaseChar() in "aeiou") "an $kind" else "a $kind"
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun AgentChangesNotice(
     title: String,
@@ -114,18 +121,25 @@ internal fun AgentChangesNotice(
     onOpen: (Long) -> Unit,
     onRevert: (Long) -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(title, style = MaterialTheme.typography.titleSmall)
-        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        changes.forEach { change ->
-            Text(agentChangeText(change, entryTitles))
-            agentChangedEntryId(change)?.let { id ->
-                TextButton(onClick = { onOpen(id) }) { Text("Open article") }
-            }
-            if (change.nextAction == "revert") {
-                TextButton(onClick = { onRevert(change.id) }) { Text("Revert") }
-            } else {
-                Text(change.reason?.takeIf { it.isNotBlank() }?.let { "Cannot revert: $it" } ?: "Cannot revert this change.")
+    Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
+        Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(ReaderSpace.sm)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.semantics { heading() })
+            error?.let { NoticeBanner(it, tone = NoticeTone.ERROR) }
+            changes.forEach { change ->
+                Column(verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs)) {
+                    Text(agentChangeText(change, entryTitles), style = MaterialTheme.typography.bodyMedium)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs)) {
+                        agentChangedEntryId(change)?.let { id ->
+                            TextButton(onClick = { onOpen(id) }) { Text("Open article") }
+                        }
+                        if (change.nextAction == "revert") {
+                            TextButton(onClick = { onRevert(change.id) }) { Text("Revert") }
+                        }
+                    }
+                    if (change.nextAction != "revert") {
+                        Text(change.reason?.takeIf { it.isNotBlank() }?.let { "Cannot revert: $it" } ?: "Cannot revert this change.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
             }
         }
     }
