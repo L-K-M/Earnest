@@ -1052,8 +1052,19 @@ internal fun EntryListScreen(
     val density = LocalDensity.current
     val expandedTypography = entries.firstOrNull { it.id == expanded }?.let(typography)
     val textZoom = context.readerZoom()
+    val measuredListWidth = listWidth
     SideEffect {
-        expandedTypography?.let { inlineViewport.configure(listWidth, it, textZoom, density.density, density.fontScale) }
+        expandedTypography?.let { typography ->
+            val previousHeight = inlineViewport.pixels
+            inlineViewport.configure(measuredListWidth, typography, textZoom, density.density, density.fontScale)
+            if (previousHeight > 0 && inlineViewport.pixels == 0) {
+                // Reflow temporarily returns to the measuring height. A deep
+                // body offset must stay on this article, not jump to later rows.
+                listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == expanded && it.offset < 0 }?.let {
+                    listState.requestScrollToItem(it.index)
+                }
+            }
+        }
     }
     LaunchedEffect(expanded, accountKey, retry) {
         inlineReader.load(expanded, accountKey, onLoadContent)

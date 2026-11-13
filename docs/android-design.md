@@ -82,7 +82,9 @@ cannot leave navigation history and the visible pane out of step.
 
 The list owns the opened article's measured height and cached-copy status, so
 recycling its lazy item does not shrink the body and expand it again. Width,
-typography, zoom and density changes invalidate the height measurement. Expansion
+typography, zoom and density changes invalidate the height measurement. A reflow
+inside a measured body returns to its headline while the new height is learned,
+instead of applying the old deep offset to a temporary measuring viewport. Expansion
 queues a one-shot headline anchor against the new composition: an offset inside
 a tall, collapsed body must not be reinterpreted as many later article rows.
 Collapsing from inside the body anchors its own headline instead.
@@ -106,8 +108,9 @@ load/save exclusion, explicit draft discard, incoming articles during focused
 screens and theme selection in short windows. The cancelled-swipe,
 large-label chip-height and interaction regressions were observed failing
 before their fixes. Inline-reading coverage adds switching below a tall body,
-footer/Back collapse, anchoring near the start of the list, lazy-item disposal,
-measurement invalidation, native canvas colors and clipping. The scroll and
+footer/Back collapse, off-screen Back without a viewport jump, anchoring near
+the start of the list, lazy-item disposal, width-only measurement invalidation,
+native canvas colors and clipping. The scroll and
 canvas regressions were reproduced before the fixes. An API 34 emulator replay
 confirmed an unchanged tapped-headline position, retained item height after
 recreation, and no white flash during dark article switches. Light and narrow

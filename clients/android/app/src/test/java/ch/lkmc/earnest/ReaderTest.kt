@@ -310,6 +310,7 @@ class ReaderTest {
         client.onPageCommitVisible(view, url)
         client.onPageCommitVisible(view, "https://appassets.androidplatform.net/article/index.html")
         assertEquals("cached and stale live commits must not claim live content", 1, live)
+        assertEquals("later commits must not repeat the fallback notification", 1, cached)
         view.destroy()
     }
 

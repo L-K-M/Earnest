@@ -7,7 +7,9 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.activity.OnBackPressedDispatcher
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -33,30 +35,41 @@ class InlineReadingScrollTest {
     @get:Rule val compose = createComposeRule()
     private val listState = LazyListState()
     private var back: OnBackPressedDispatcher? = null
+    private val viewportWidth = mutableIntStateOf(400)
 
     private fun openTallArticle(selected: Long = 7, onViewport: (InlineArticleState) -> Unit = {}) {
         compose.setContent {
             back = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
             EarnestTheme(ThemeSetting.DARK) {
-                EntryListScreen(
-                    title = "Articles", entries = (1L..30L).map { CachedEntry(it, title = "Headline $it") },
-                    states = emptyMap(), principalId = 1, subscriptionTitles = emptyMap(), subscriptionIcons = emptyMap(),
-                    briefs = emptyList(), principalNames = emptyMap(), entryTitles = emptyMap(), agentChanges = emptyList(),
-                    sessionChanges = emptyList(), agentChangesError = null, onRevert = {}, onOpenAgentSelected = {},
-                    onOpen = {}, onLater = {}, onDone = {}, onSeen = {}, onKeep = {}, onUnkeep = {}, onMarkUnread = {},
-                    accountKey = "inline-scroll", layoutOverride = ArticleLayout.READING, listState = listState,
-                    onLoadContent = { ContentUrlResult(null, null, "Body $it") },
-                    inlineContent = { _, _, viewport ->
-                        SideEffect { onViewport(viewport) }
-                        Box(Modifier.fillMaxWidth().height(1400.dp).testTag("fixture-body"))
-                    },
-                )
+                // Read the width only during measurement: resizing must not
+                // recompose the screen through this test's parent scope.
+                Box(Modifier.layout { measurable, constraints ->
+                    val width = viewportWidth.intValue.dp.roundToPx()
+                    val child = measurable.measure(constraints.copy(minWidth = width, maxWidth = width))
+                    layout(constraints.maxWidth, child.height) { child.place(0, 0) }
+                }) {
+                    EntryListScreen(
+                        title = "Articles", entries = (1L..30L).map { CachedEntry(it, title = "Headline $it") },
+                        states = emptyMap(), principalId = 1, subscriptionTitles = emptyMap(), subscriptionIcons = emptyMap(),
+                        briefs = emptyList(), principalNames = emptyMap(), entryTitles = emptyMap(), agentChanges = emptyList(),
+                        sessionChanges = emptyList(), agentChangesError = null, onRevert = {}, onOpenAgentSelected = {},
+                        onOpen = {}, onLater = {}, onDone = {}, onSeen = {}, onKeep = {}, onUnkeep = {}, onMarkUnread = {},
+                        accountKey = "inline-scroll", layoutOverride = ArticleLayout.READING, listState = listState,
+                        onLoadContent = { ContentUrlResult(null, null, "Body $it") },
+                        inlineContent = { _, _, viewport ->
+                            SideEffect { onViewport(viewport) }
+                            Box(Modifier.fillMaxWidth().height(1400.dp).testTag("fixture-body"))
+                        },
+                    )
+                }
             }
         }
         compose.runOnIdle { listState.requestScrollToItem(selected.toInt() - 1) }
         compose.onNodeWithText("Headline $selected").performClick()
         compose.waitForIdle()
         compose.runOnIdle {
+            // Keep the tall body as the first visible item while its footer
+            // and the next headline fit inside the 800dp test viewport.
             listState.requestScrollToItem(selected.toInt() - 1, with(compose.density) { 1000.dp.roundToPx() })
         }
         compose.waitForIdle()
@@ -87,6 +100,29 @@ class InlineReadingScrollTest {
         compose.runOnIdle { checkNotNull(back).onBackPressed() }
         compose.onNodeWithText("Headline 7").assertIsDisplayed()
         compose.onNodeWithTag("fixture-body").assertDoesNotExist()
+    }
+
+    @Test fun backAfterScrollingPastTheArticlePreservesTheCurrentRowAndOffset() {
+        openTallArticle()
+        compose.runOnIdle { listState.requestScrollToItem(20, 33) }
+        compose.onNodeWithTag("fixture-body").assertDoesNotExist()
+        val before = compose.runOnIdle { listState.layoutInfo.visibleItemsInfo.first() }
+        assertEquals(21L, before.key)
+        compose.runOnIdle { checkNotNull(back).onBackPressed() }
+        compose.runOnIdle {
+            val after = listState.layoutInfo.visibleItemsInfo.first()
+            assertEquals(before.key, after.key)
+            assertEquals(before.offset, after.offset)
+        }
+    }
+
+    @Test fun widthOnlyResizesInvalidateTheRetainedMeasurement() {
+        var viewport: InlineArticleState? = null
+        openTallArticle { viewport = it }
+        compose.runOnIdle { checkNotNull(viewport).reportHeight(2400) }
+        compose.runOnIdle { viewportWidth.intValue = 360 }
+        compose.runOnIdle { assertEquals("width changes must be observed without an unrelated recomposition", 0, checkNotNull(viewport).pixels) }
+        compose.onNodeWithText("Headline 7").assertIsDisplayed()
     }
 
     @Test fun lazyItemDisposalDoesNotForgetTheOpenedArticlesMeasurement() {

@@ -49,7 +49,7 @@ class ReaderSurfaceTest {
                 val expected = when (theme) {
                     ReaderTheme.SYSTEM, ReaderTheme.DARK -> Color.rgb(36, 36, 36)
                     ReaderTheme.BLACK -> Color.BLACK
-                    else -> Color.WHITE
+                    ReaderTheme.LIGHT, ReaderTheme.EINK -> Color.WHITE
                 }
                 assertEquals("$theme must not start with the default white WebView canvas", expected, shadowOf(views.getValue(theme)).backgroundColor)
             }
