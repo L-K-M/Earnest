@@ -1,9 +1,12 @@
 package ch.lkmc.earnest
 
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -29,11 +32,14 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -62,10 +68,18 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 
+/** The settings categories. Each owns one existing settings surface. */
+internal enum class SettingsCategory(val label: String) {
+    READING("Reading & appearance"),
+    AI("AI"),
+    IMPORT_EXPORT("Import & export"),
+}
+
 /**
- * The account reader preferences. Every field edits a local draft; only the
- * explicit Save button publishes it. The chrome theme is deliberately absent:
- * it stays a device-local preference.
+ * The account settings, split into dedicated categories instead of one long
+ * page. Opening a category loads its settings automatically; each category
+ * owns its contextual Save, Discard and Retry actions; leaving a category or
+ * Settings with an unsaved draft asks first.
  */
 @Composable
 internal fun SettingsScreen(
@@ -74,6 +88,118 @@ internal fun SettingsScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var category by rememberSaveable { mutableStateOf(SettingsCategory.READING) }
+    val categoryScroll = key(category) { rememberScrollState() }
+    var pendingCategory by remember { mutableStateOf<SettingsCategory?>(null) }
+    var leaving by remember { mutableStateOf(false) }
+    val readerUi = state.readerSettingsUi
+    val llmUi = state.llmSettingsUi
+    val dirty = readerUi.draft != null || llmUi.draft != null
+
+    // Opening a category loads its settings once, unless a draft protects
+    // unsaved edits. A failed load leaves the baseline absent, so reopening
+    // tries again.
+    LaunchedEffect(category, state.accountKey, readerUi.epoch, llmUi.epoch) {
+        when (category) {
+            SettingsCategory.READING -> if (readerUi.draft == null && readerUi.loaded == null) model.loadReaderSettings()
+            SettingsCategory.AI -> if (llmUi.draft == null && llmUi.loaded == null) model.loadLlmSettings()
+            SettingsCategory.IMPORT_EXPORT -> Unit
+        }
+    }
+
+    fun discardCurrent() {
+        when (category) {
+            SettingsCategory.READING -> model.discardReaderSettingsDraft()
+            SettingsCategory.AI -> model.discardLlmSettingsDraft()
+            SettingsCategory.IMPORT_EXPORT -> Unit
+        }
+    }
+
+    val guardOpen = pendingCategory != null || leaving
+    if (!guardOpen) {
+        BackHandler {
+            if (dirty) leaving = true else onBack()
+        }
+    }
+
+    Column(modifier.fillMaxSize().padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = { if (dirty) leaving = true else onBack() }) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+            }
+            Text("Settings", style = MaterialTheme.typography.titleLarge)
+        }
+        @OptIn(ExperimentalLayoutApi::class)
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            SettingsCategory.entries.forEach { option ->
+                FilterChip(
+                    selected = category == option,
+                    onClick = {
+                        if (option == category) return@FilterChip
+                        if (dirty) pendingCategory = option else category = option
+                    },
+                    label = { Text(option.label) },
+                )
+            }
+        }
+        Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(categoryScroll)) {
+            when (category) {
+                SettingsCategory.READING -> ReadingSettingsCategory(model, state)
+                SettingsCategory.AI -> LlmServicesSection(
+                    model = model,
+                    state = state,
+                    modifier = Modifier.padding(vertical = 8.dp),
+                )
+                SettingsCategory.IMPORT_EXPORT -> ImportExportCategory(model, state)
+            }
+        }
+    }
+
+    val pending = pendingCategory
+    if (pending != null) {
+        AlertDialog(
+            onDismissRequest = { pendingCategory = null },
+            title = { Text("Discard unsaved changes?") },
+            text = {
+                Text(
+                    "The ${category.label} settings have edits that are not saved. " +
+                        "Discard them to switch to ${pending.label}?",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    discardCurrent()
+                    pendingCategory = null
+                    category = pending
+                }) { Text("Discard") }
+            },
+            dismissButton = { TextButton(onClick = { pendingCategory = null }) { Text("Keep editing") } },
+        )
+    }
+
+    if (leaving) {
+        AlertDialog(
+            onDismissRequest = { leaving = false },
+            title = { Text("Discard unsaved changes?") },
+            text = { Text("The ${category.label} settings have edits that are not saved. Discard them and leave Settings?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    discardCurrent()
+                    leaving = false
+                    onBack()
+                }) { Text("Discard") }
+            },
+            dismissButton = { TextButton(onClick = { leaving = false }) { Text("Keep editing") } },
+        )
+    }
+}
+
+/** The reader preferences, with contextual Save, Discard and Retry. */
+@Composable
+private fun ReadingSettingsCategory(model: AppViewModel, state: UiState) {
     val ui = state.readerSettingsUi
     val settings = ui.draft ?: ui.loaded ?: state.readerSettings
     val feeds = state.snapshot.objects
@@ -85,81 +211,26 @@ internal fun SettingsScreen(
     var overrideMeasureInput by remember(state.accountKey, ui.epoch) { mutableStateOf(OverrideMeasureInput.fromValue(null)) }
     var overrideFont by remember(state.accountKey, ui.epoch) { mutableStateOf<ReaderFont?>(null) }
 
-    val keptImport = state.keptImport
-    var subscribeMissing by remember(state.accountKey) { mutableStateOf(false) }
-    var readingImport by remember(state.accountKey) { mutableStateOf(false) }
-    val importScope = rememberCoroutineScope()
-    val context = LocalContext.current
-    val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        readingImport = true
-        importScope.launch {
-            // Reading counts as working, so a second tap cannot start a second
-            // read while the first file is still on its way.
-            // Read at most one byte past the limit, so a huge file picked by
-            // mistake is refused without loading it all into memory.
-            val document = withContext(Dispatchers.IO) {
-                runCatching {
-                    context.contentResolver.openInputStream(uri)?.use { readAtMost(it, MAX_KEPT_IMPORT_BYTES) }
-                }.getOrNull()
-            }
-            readingImport = false
-            when {
-                document == null -> model.keptImportReadFailed("Could not read that file.")
-                document.size > MAX_KEPT_IMPORT_BYTES -> model.keptImportReadFailed("The export is larger than 64 MiB.")
-                else -> model.importKept(document, subscribeMissing)
-            }
-        }
-    }
-
-    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-            }
-            Text("Settings", style = MaterialTheme.typography.titleLarge)
-            Spacer(Modifier.width(8.dp))
-            if (ui.loading) CircularProgressIndicator(Modifier.width(20.dp))
-            if (ui.saving) CircularProgressIndicator(Modifier.width(20.dp))
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = model::loadReaderSettings, enabled = !ui.loading) { Text("Load") }
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             val dirty = ui.draft != null
-            TextButton(onClick = model::saveReaderSettings, enabled = ui.loaded != null && state.snapshot.cursor.generation.isNotEmpty() && dirty && !ui.saving) { Text("Save") }
-            TextButton(onClick = model::retryReaderSettingsSave, enabled = ui.frozen != null && !ui.saving) { Text("Retry") }
-            TextButton(onClick = model::reloadReaderSettings, enabled = !ui.loading) { Text("Reload") }
+            TextButton(
+                onClick = model::saveReaderSettings,
+                enabled = ui.loaded != null && state.snapshot.cursor.generation.isNotEmpty() && dirty && !ui.saving,
+            ) { Text("Save") }
+            TextButton(onClick = model::discardReaderSettingsDraft, enabled = dirty && !ui.saving) { Text("Discard") }
+            if (ui.frozen != null) TextButton(onClick = model::retryReaderSettingsSave, enabled = !ui.saving) { Text("Retry save") }
+            if (ui.loading || ui.saving) CircularProgressIndicator(Modifier.width(20.dp))
         }
         ui.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (ui.success) Text("Saved", color = MaterialTheme.colorScheme.primary)
 
-        Section("Starred articles") {
-            Text(
-                "Bring starred articles from another reader into Kept. Export them as Google Reader JSON, for example from FreshRSS or Inoreader.",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(
-                    checked = subscribeMissing,
-                    onCheckedChange = { subscribeMissing = it },
-                    enabled = !keptImport.busy && !readingImport,
-                )
-                Text("Also subscribe to feeds you don't follow")
-            }
-            Button(
-                onClick = { importPicker.launch(arrayOf("application/json", "*/*")) },
-                enabled = !keptImport.busy && !readingImport,
-            ) { Text("Import starred articles") }
-            if (keptImport.busy || readingImport) Text("Importing starred articles…")
-            keptImport.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            keptImport.report?.let { report ->
-                KeptImportReportView(report = report, busy = keptImport.busy, onRetry = model::importKeptAgain)
-            }
-        }
-
-        LlmServicesSection(model = model, state = state, modifier = Modifier.padding(vertical = 8.dp))
-
         if (ui.loaded == null || state.snapshot.cursor.generation.isEmpty()) {
-            Text("Sync or load your account settings before editing.")
+            Text(if (ui.loading) "Loading reading settings…" else "Sync your account before editing these settings.")
+            if (!ui.loading && ui.error != null) TextButton(onClick = model::loadReaderSettings) { Text("Retry loading") }
             return@Column
         }
 
@@ -366,6 +437,69 @@ internal fun SettingsScreen(
                 TextButton(onClick = model::dismissReaderSettingsConflict) { Text("Keep editing") }
             },
         )
+    }
+}
+
+/** The starred-article import, owned by the Import & export category. */
+@Composable
+private fun ImportExportCategory(model: AppViewModel, state: UiState) {
+    val keptImport = state.keptImport
+    var subscribeMissing by remember(state.accountKey) { mutableStateOf(false) }
+    var readingImport by remember(state.accountKey) { mutableStateOf(false) }
+    val importScope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        readingImport = true
+        importScope.launch {
+            // Reading counts as working, so a second tap cannot start a second
+            // read while the first file is still on its way.
+            // Read at most one byte past the limit, so a huge file picked by
+            // mistake is refused without loading it all into memory.
+            val document = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { readAtMost(it, MAX_KEPT_IMPORT_BYTES) }
+                }.getOrNull()
+            }
+            readingImport = false
+            when {
+                document == null -> model.keptImportReadFailed("Could not read that file.")
+                document.size > MAX_KEPT_IMPORT_BYTES -> model.keptImportReadFailed("The export is larger than 64 MiB.")
+                else -> model.importKept(document, subscribeMissing)
+            }
+        }
+    }
+
+    Column(Modifier.fillMaxWidth()) {
+        Section("Starred articles") {
+            Text(
+                "Bring starred articles from another reader into Kept. Export them as Google Reader JSON, for example from FreshRSS or Inoreader.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(
+                    checked = subscribeMissing,
+                    onCheckedChange = { subscribeMissing = it },
+                    enabled = !keptImport.busy && !readingImport,
+                )
+                Text("Also subscribe to feeds you don't follow")
+            }
+            Button(
+                onClick = { importPicker.launch(arrayOf("application/json", "*/*")) },
+                enabled = !keptImport.busy && !readingImport,
+            ) { Text("Import starred articles") }
+            if (keptImport.busy || readingImport) Text("Importing starred articles…")
+            keptImport.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            keptImport.report?.let { report ->
+                KeptImportReportView(report = report, busy = keptImport.busy, onRetry = model::importKeptAgain)
+            }
+        }
+        Section("Subscriptions") {
+            Text(
+                "OPML import and export stay on the Feeds screen, next to the subscription list.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
     }
 }
 

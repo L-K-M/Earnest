@@ -218,7 +218,7 @@ internal fun EarnestApp(initialEntry: Long?, notificationId: Long?) {
 
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi::class)
 @Composable
-private fun MainScaffold(
+internal fun MainScaffold(
     model: AppViewModel,
     state: UiState,
     theme: ThemeSetting,
@@ -366,6 +366,26 @@ private fun MainScaffold(
         }
     }
 
+    // Settings owns its Back action and unsaved-change guard. Reader toolbar
+    // and shelf navigation would otherwise offer exits that bypass that guard.
+    if (showSettings) {
+        Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
+            Column(Modifier.fillMaxSize().padding(padding)) {
+                state.cacheNotice?.let { Text(it, modifier = Modifier.padding(8.dp)) }
+                state.error?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(8.dp))
+                }
+                SettingsScreen(
+                    model = model,
+                    state = state,
+                    onBack = { showSettings = false },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+        return
+    }
+
     // Every destination draws its icon in its own tone. Labels stay ink: the
     // Material default for a selected label is `secondary`, now orange, which
     // would clash with every destination but Today.
@@ -432,7 +452,6 @@ private fun MainScaffold(
             topBar = {
                 EarnestTopBar(
                     when {
-                        showSettings -> "Settings"
                         detailOnly -> "Article"
                         section.view == View.ALL -> feedSelection.title(state.snapshot.objects)
                         else -> section.view.label
@@ -448,11 +467,10 @@ private fun MainScaffold(
                     onRefresh = {
                         if (section.view == View.FRONT) model.refreshFrontPage() else model.reloadList()
                     },
-                    navigationIcon = if (showSettings || detailOnly) Icons.AutoMirrored.Filled.ArrowBack else Icons.Filled.Menu,
-                    navigationDescription = if (showSettings || detailOnly) "Back" else "Folders and feeds",
+                    navigationIcon = if (detailOnly) Icons.AutoMirrored.Filled.ArrowBack else Icons.Filled.Menu,
+                    navigationDescription = if (detailOnly) "Back" else "Folders and feeds",
                     onNavigation = {
                         when {
-                            showSettings -> showSettings = false
                             detailOnly -> scope.launch { navigator.navigateBack() }
                             else -> scope.launch { drawerState.open() }
                         }
@@ -466,15 +484,6 @@ private fun MainScaffold(
                 state.error?.let {
                     Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(8.dp))
                 }
-                if (showSettings) {
-                    BackHandler { showSettings = false }
-                    SettingsScreen(
-                        model = model,
-                        state = state,
-                        onBack = { showSettings = false },
-                        modifier = Modifier.weight(1f),
-                    )
-                } else {
                 NavigableListDetailPaneScaffold(
                     navigator = navigator,
                     listPane = {
@@ -697,7 +706,6 @@ private fun MainScaffold(
                         }
                     },
                 )
-                }
             }
         }
     }
