@@ -743,13 +743,38 @@ class LlmSettingsTest {
     }
 
     @Test
+    fun checkCanDiscoverResizingForAKnownWideModel() = runBlocking {
+        val (api, requests) = client {
+            response(it, body = """{"compatible":true,"dimensions":4096,"supports_custom_dimensions":true}""")
+        }
+        val draft = LlmModel("text-embedding-qwen3-8b", provider = "venice", dimensions = 4096)
+        val result = api.checkLlmModel(
+            LlmModelCheckInput(
+                revision = 0,
+                provider = LlmProviderInput("venice", LlmProviderKind.OPENAI, "https://api.venice.ai/api/v1"),
+                model = draft,
+                capability = LlmModelCapability.EMBEDDING,
+            ),
+            settings(),
+        )
+        assertTrue(result.compatible)
+        assertEquals(true, result.supportsCustomDimensions)
+        assertEquals("4096", requests.single().bodyObject().getValue("model").jsonObject.getValue("dimensions").jsonPrimitive.content)
+        assertFalse(draft.supportsCustomDimensions)
+        assertFalse(draft.truncatable)
+    }
+
+    @Test
     fun checkValidationFailsBeforeAnyRequest() = runBlocking {
         val provider = LlmProviderInput("openai", LlmProviderKind.OPENAI, "https://api.openai.com/v1")
         val invalid = listOf(
             LlmModelCheckInput(-1, provider, LlmModel("m"), LlmModelCapability.CHAT),
             LlmModelCheckInput(0, provider, LlmModel(""), LlmModelCapability.CHAT),
             LlmModelCheckInput(0, provider, LlmModel("m", inputPer1m = ""), LlmModelCapability.CHAT),
-            LlmModelCheckInput(0, provider, LlmModel("m", dimensions = 3072), LlmModelCapability.EMBEDDING),
+            LlmModelCheckInput(0, provider, LlmModel("m", dimensions = -1), LlmModelCapability.EMBEDDING),
+            LlmModelCheckInput(0, provider, LlmModel("m", dimensions = 65537), LlmModelCapability.EMBEDDING),
+            LlmModelCheckInput(0, provider, LlmModel("m", provider = "different"), LlmModelCapability.CHAT),
+            LlmModelCheckInput(0, provider.copy(kind = LlmProviderKind.ANTHROPIC), LlmModel("m"), LlmModelCapability.EMBEDDING),
             LlmModelCheckInput(0, LlmProviderInput("Bad", LlmProviderKind.OPENAI, "https://api.openai.com/v1"), LlmModel("m"), LlmModelCapability.CHAT),
         )
         for ((index, document) in invalid.withIndex()) {

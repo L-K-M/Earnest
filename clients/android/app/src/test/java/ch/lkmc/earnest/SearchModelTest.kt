@@ -249,7 +249,7 @@ class SearchModelTest {
 
         model.setQuery("overlap")
         model.submit()
-        val first = awaitState(model) { it.matches.size == 3 && it.nextCursor == "c1" }
+        val first = awaitState(model) { it.matches.size == 3 && it.nextCursor == "c1" && !it.loading }
         assertEquals(
             listOf("entry:10:0", "agent_note:10:84", "entry:11:0"),
             first.matches.map { it.key },

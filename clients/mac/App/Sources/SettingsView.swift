@@ -2,26 +2,27 @@ import Foundation
 import SwiftUI
 import EarnestKit
 
-/// Earnest > Settings. Account and reading preferences apply as you change
-/// them, as Mac settings do; the account's synced settings are the source of
-/// truth, and a change made elsewhere is flagged instead of overwritten.
+/// Earnest > Settings. Account, reading and AI preferences. Reading
+/// preferences apply as you change them, as Mac settings do; the account's
+/// synced settings are the source of truth, and a change made elsewhere is
+/// flagged instead of overwritten.
 @MainActor struct SettingsWindow: View {
     @ObservedObject var settings: ReaderSettingsModel
     @ObservedObject var llmSettings: LLMSettingsModel
     @EnvironmentObject private var model: AppModel
 
-    private enum Pane: String { case general, reading, llm }
-    @AppStorage("settingsTab") private var tab = Pane.general
+    private enum Pane: String { case account, reading, ai }
+    @AppStorage("settingsTab") private var tab = Pane.account
 
     var body: some View {
         TabView(selection: $tab) {
-            Tab("General", systemImage: "gearshape", value: Pane.general) {
-                GeneralSettings(settings: settings)
+            Tab("Account", systemImage: "person.crop.circle", value: Pane.account) {
+                AccountSettings()
             }
-            Tab("Reading", systemImage: "textformat.size", value: Pane.reading) {
+            Tab("Reading & appearance", systemImage: "textformat.size", value: Pane.reading) {
                 ReadingSettings(settings: settings)
             }
-            Tab("LLM Services", systemImage: "sparkles", value: Pane.llm) {
+            Tab("AI", systemImage: "sparkles", value: Pane.ai) {
                 LLMSettingsView(settings: llmSettings)
             }
         }
@@ -31,8 +32,7 @@ import EarnestKit
     }
 }
 
-@MainActor private struct GeneralSettings: View {
-    @ObservedObject var settings: ReaderSettingsModel
+@MainActor private struct AccountSettings: View {
     @EnvironmentObject private var model: AppModel
     @SwiftUI.State private var confirmingSignOut = false
 
@@ -55,6 +55,29 @@ import EarnestKit
                     }
                 }
             }
+        }
+        .formStyle(.grouped)
+        .alert("Sign Out of Earnest?", isPresented: $confirmingSignOut) {
+            Button("Sign Out", role: .destructive) { model.signOut() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(model.llmSettingsModels.contains(where: { $0.isDirty })
+                 ? "Unsaved AI settings will be discarded. You will need to approve this Mac again to sign in."
+                 : "You will need to approve this Mac again to sign in.")
+        }
+    }
+}
+
+@MainActor private struct ReadingSettings: View {
+    @ObservedObject var settings: ReaderSettingsModel
+    @EnvironmentObject private var model: AppModel
+
+    private var overriddenFeeds: [FeedInfo] {
+        model.feeds.filter { $0.feedID > 0 && settings.draft.feedOverrides[String($0.feedID)] != nil }
+    }
+
+    var body: some View {
+        Form {
             SwiftUI.Section {
                 Picker("Reading mode", selection: $settings.draft.readingMode) {
                     Text("A river that ends").tag(APIReadingMode.river)
@@ -75,31 +98,7 @@ import EarnestKit
                 }
             } header: {
                 Text("Reading")
-            } footer: {
-                SettingsStatus(settings: settings)
             }
-            .disabled(!settings.ready)
-        }
-        .formStyle(.grouped)
-        .alert("Sign Out of Earnest?", isPresented: $confirmingSignOut) {
-            Button("Sign Out", role: .destructive) { model.signOut() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("You will need to approve this Mac again to sign in.")
-        }
-    }
-}
-
-@MainActor private struct ReadingSettings: View {
-    @ObservedObject var settings: ReaderSettingsModel
-    @EnvironmentObject private var model: AppModel
-
-    private var overriddenFeeds: [FeedInfo] {
-        model.feeds.filter { $0.feedID > 0 && settings.draft.feedOverrides[String($0.feedID)] != nil }
-    }
-
-    var body: some View {
-        Form {
             SwiftUI.Section {
                 Picker("Theme", selection: $settings.draft.theme) {
                     ForEach(APIReaderTheme.allCases, id: \.self) { Text($0.title).tag($0) }

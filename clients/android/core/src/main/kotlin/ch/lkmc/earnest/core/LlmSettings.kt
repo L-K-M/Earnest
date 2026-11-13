@@ -434,8 +434,10 @@ internal fun validateLlmModelsInput(input: LlmModelsInput, baseline: LlmSettings
 
 /**
  * Validates an explicit model check before any request. The model is the
- * draft record, so the same price and geometry rules a save would enforce
- * apply; the provider rules match the catalogue preview.
+ * draft record, so prices and provider identity must be valid. Wide native
+ * dimensions are allowed while resizing support is still unknown: the check
+ * verifies that support without changing the draft or relaxing save rules.
+ * The provider rules match the catalogue preview.
  */
 internal fun validateLlmModelCheckInput(input: LlmModelCheckInput, baseline: LlmSettings?) {
     require(input.revision >= 0) { "revision out of range" }
@@ -443,13 +445,15 @@ internal fun validateLlmModelCheckInput(input: LlmModelCheckInput, baseline: Llm
     require(input.model.name.isNotEmpty() && input.model.name.length <= LlmSettingsLimits.MAX_MODEL_NAME_CHARS) {
         "model names are 1 to ${LlmSettingsLimits.MAX_MODEL_NAME_CHARS} characters"
     }
+    require(input.model.provider.isEmpty() || input.model.provider == input.provider.name) {
+        "model belongs to a different provider"
+    }
+    require(input.capability != LlmModelCapability.EMBEDDING || input.provider.kind != LlmProviderKind.ANTHROPIC) {
+        "Anthropic cannot embed"
+    }
     require(validMoney(input.model.inputPer1m)) { "input_per_1m must be a decimal with at most six fractional digits" }
     require(validMoney(input.model.outputPer1m)) { "output_per_1m must be a decimal with at most six fractional digits" }
     require(validMoney(input.model.embeddingPer1m)) { "embedding_per_1m must be a decimal with at most six fractional digits" }
-    val maxDimensions = if (input.model.truncatable || input.model.supportsCustomDimensions) {
-        LlmSettingsLimits.MAX_TRUNCATABLE_DIMENSIONS
-    } else {
-        LlmSettingsLimits.MAX_DIMENSIONS
-    }
+    val maxDimensions = LlmSettingsLimits.MAX_TRUNCATABLE_DIMENSIONS
     require(input.model.dimensions in 0..maxDimensions) { "dimensions must be between 0 and $maxDimensions" }
 }
