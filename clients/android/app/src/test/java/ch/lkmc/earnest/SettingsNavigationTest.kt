@@ -12,8 +12,12 @@ import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
 import ch.lkmc.earnest.core.ReaderSettings
+import ch.lkmc.earnest.core.LlmSettings
+import ch.lkmc.earnest.core.Revision
+import ch.lkmc.earnest.core.SyncSnapshot
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -37,7 +41,10 @@ class SettingsNavigationTest {
             error("This navigation fixture must not make network requests")
         }
         val loaded = ReaderSettings()
-        val state = UiState(readerSettingsUi = ReaderSettingsUi(
+        val state = UiState(
+            snapshot = SyncSnapshot(Revision("navigation-test", 1)),
+            llmSettingsUi = LlmSettingsUi(loaded = LlmSettings()),
+            readerSettingsUi = ReaderSettingsUi(
             loaded = loaded,
             draft = if (dirty) loaded.copy(todayDecayDays = 3) else null,
         ))
@@ -61,6 +68,14 @@ class SettingsNavigationTest {
         compose.onAllNodesWithContentDescription("Back").onLast().performClick()
         compose.onNode(hasText("Discard") and hasAnyAncestor(isDialog())).performClick()
         compose.onNodeWithContentDescription("Folders and feeds").assertIsDisplayed()
+    }
+
+    @Test fun changingSectionsBringsTheNewSectionsFirstControlsIntoView() {
+        openSettings(dirty = false)
+        compose.onNodeWithText("AI", substring = false).performClick()
+        compose.onNodeWithText("Model pricing").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Reading & appearance").performClick()
+        compose.onNodeWithText("Reading mode").assertIsDisplayed()
     }
 
     @Test fun settingsHasOneBackAndNoUnguardedReaderNavigation() {

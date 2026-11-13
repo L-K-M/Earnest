@@ -32,6 +32,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -88,6 +89,7 @@ internal fun SettingsScreen(
     modifier: Modifier = Modifier,
 ) {
     var category by rememberSaveable { mutableStateOf(SettingsCategory.READING) }
+    val categoryScroll = key(category) { rememberScrollState() }
     var pendingCategory by remember { mutableStateOf<SettingsCategory?>(null) }
     var leaving by remember { mutableStateOf(false) }
     val readerUi = state.readerSettingsUi
@@ -143,7 +145,7 @@ internal fun SettingsScreen(
                 )
             }
         }
-        Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState())) {
+        Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(categoryScroll)) {
             when (category) {
                 SettingsCategory.READING -> ReadingSettingsCategory(model, state)
                 SettingsCategory.AI -> LlmServicesSection(
