@@ -264,9 +264,8 @@ import EarnestKit
         settings.load()
         try await waitUntil { settings.loaded && !settings.busy }
         settings.draft.providers[0].name = "renamed"
-        for index in settings.draft.tasks.indices {
-            settings.draft.tasks[index].provider = ""
-            settings.draft.tasks[index].model = ""
+        for task in settings.draft.tasks where task.mode == .custom {
+            settings.setTaskEnabled(task.task, false)
         }
         settings.save()
         try await waitUntil { !settings.busy }
@@ -678,42 +677,70 @@ import EarnestKit
         XCTAssertTrue(llmModelSuits(unknown, task: .embed))
     }
 
-    func testPriceReviewDefaultsOnlyKnownInapplicableCapabilities() {
-        // A known chat-only model may default embedding price and geometry.
-        let chat = LLMModelReview(discovered: APIDiscoveredModel(id: "c", name: "C", chat: true, embedding: false))
+    func testReviewZeroesOnlyFieldsTheSelectionDoesNotUse() {
+        // A chat selection ignores embedding geometry and rate.
+        let chat = LLMModelReview(discovered: APIDiscoveredModel(id: "c", name: "C", chat: true, embedding: false),
+                                  provider: "openai", usage: .chat)
         XCTAssertEqual(chat.embeddingPer1M, "0")
         XCTAssertEqual(chat.dimensions, "0")
         XCTAssertEqual(chat.inputPer1M, "", "a missing applicable price needs explicit input")
         XCTAssertEqual(chat.outputPer1M, "")
         XCTAssertFalse(chat.isReady)
 
-        // A known embedding-only model may default chat prices; geometry is required.
-        let embed = LLMModelReview(discovered: APIDiscoveredModel(id: "e", name: "E", chat: false, embedding: true))
+        // An embedding selection ignores chat rates; geometry is required.
+        let embed = LLMModelReview(discovered: APIDiscoveredModel(id: "e", name: "E", chat: false, embedding: true),
+                                   provider: "openai", usage: .embedding)
         XCTAssertEqual(embed.inputPer1M, "0")
         XCTAssertEqual(embed.outputPer1M, "0")
         XCTAssertEqual(embed.embeddingPer1M, "")
         XCTAssertEqual(embed.dimensions, "")
         XCTAssertFalse(embed.isReady)
 
-        // Unknown capability defaults nothing.
-        let unknown = LLMModelReview(discovered: APIDiscoveredModel(id: "u", name: "U"))
-        XCTAssertEqual(unknown.inputPer1M, "")
-        XCTAssertEqual(unknown.embeddingPer1M, "")
-        XCTAssertFalse(unknown.isReady)
-
         // Catalogue values prefill; user edits decide readiness.
         var priced = LLMModelReview(discovered: APIDiscoveredModel(
             id: "p", name: "P", chat: true, inputPer1M: "1.5", outputPer1M: "8",
-            embeddingPer1M: "0.1", dimensions: 512, truncatable: true))
+            embeddingPer1M: "0.1", dimensions: 512, truncatable: true),
+                                    provider: "openai", usage: .chat)
         XCTAssertTrue(priced.isReady)
         priced.inputPer1M = "abc"
-        XCTAssertFalse(priced.isReady, "invalid money blocks the import")
+        XCTAssertFalse(priced.isReady, "invalid money blocks the selection")
         priced.inputPer1M = "1.5"
         let configured = priced.configured()
         XCTAssertEqual(configured.name, "p")
+        XCTAssertEqual(configured.provider, "openai")
         XCTAssertEqual(configured.inputPer1M, "1.5")
-        XCTAssertEqual(configured.dimensions, 512)
-        XCTAssertTrue(configured.truncatable)
+        XCTAssertEqual(configured.dimensions, 0, "a chat selection zeroes embedding geometry")
+        XCTAssertFalse(configured.truncatable)
+
+        // The explicit free toggle is the only way a missing price becomes
+        // zero; it never changes geometry.
+        var free = LLMModelReview(discovered: APIDiscoveredModel(id: "f", name: "F"),
+                                  provider: "openai", usage: .chat)
+        XCTAssertFalse(free.isReady)
+        free.markFree()
+        XCTAssertTrue(free.isReady)
+        XCTAssertEqual(free.inputPer1M, "0")
+        XCTAssertEqual(free.outputPer1M, "0")
+    }
+
+    func testMissingDimensionsAreReportedAsMissingMetadata() {
+        var review = LLMModelReview(discovered: APIDiscoveredModel(id: "e", name: "E", embedding: true,
+                                                               embeddingPer1M: "0.1"),
+                                    provider: "openai", usage: .embedding)
+        XCTAssertEqual(review.dimensionsMessage, "Dimensions missing")
+        review.dimensions = "abc"
+        XCTAssertEqual(review.dimensionsMessage, "Invalid dimensions")
+        review.dimensions = "4096"
+        XCTAssertEqual(review.dimensionsMessage,
+                       "Above \(llmStorageDimensions) needs truncatable or custom dimensions")
+        review.supportsCustomDimensions = true
+        XCTAssertNil(review.dimensionsMessage, "provider-side resizing is not truncation")
+        XCTAssertTrue(review.isReady)
+
+        review.supportsCustomDimensions = false
+        review.truncatable = true
+        XCTAssertNil(review.dimensionsMessage)
+        XCTAssertTrue(review.isReady)
     }
 
     func testEditingTheProviderDiscardsItsCatalogue() async throws {
@@ -907,10 +934,11 @@ import EarnestKit
     func testEmbeddingReviewRequiresSupportedPositiveGeometry() {
         var review = LLMModelReview(discovered: APIDiscoveredModel(
             id: "embedding", name: "Embedding", chat: false, embedding: true,
-            embeddingPer1M: "0.1", dimensions: 0))
+            embeddingPer1M: "0.1", dimensions: 0), provider: "openai", usage: .embedding)
         XCTAssertFalse(review.isReady, "zero is not embedding geometry")
+        XCTAssertEqual(review.dimensionsMessage, "Embeddings need a positive width")
         review.dimensions = "1536"
-        XCTAssertFalse(review.isReady, "wide embeddings need explicit truncation")
+        XCTAssertFalse(review.isReady, "wide embeddings need explicit truncation or resizing")
         review.truncatable = true
         XCTAssertTrue(review.isReady)
     }
@@ -951,15 +979,388 @@ import EarnestKit
         }
         let discovery = try XCTUnwrap(settings.discoveries[providerID])
         guard case .loaded(let models) = discovery.phase else { return XCTFail("missing catalogue") }
-        let review = LLMModelReview(discovered: try XCTUnwrap(models.first { $0.id == "gpt-5" }))
-        XCTAssertTrue(settings.applyCatalogueSelection([review], providerID: providerID,
-                                                      fetchID: discovery.fetchID, task: .blurb))
+        let review = LLMModelReview(discovered: try XCTUnwrap(models.first { $0.id == "gpt-5" }),
+                                    provider: "openai", usage: .chat)
+        XCTAssertTrue(settings.selectCatalogueModel(review, providerID: providerID,
+                                                    fetchID: discovery.fetchID,
+                                                    selection: .task(.blurb)))
         XCTAssertTrue(settings.draft.models.contains { $0.name == "gpt-5" })
         XCTAssertEqual(settings.draft.tasks.first { $0.task == .blurb }?.model, "gpt-5")
+        XCTAssertEqual(settings.draft.tasks.first { $0.task == .blurb }?.mode, .custom)
         settings.draft.providers[0].apiKey = "another-key"
-        XCTAssertFalse(settings.applyCatalogueSelection([review], providerID: providerID,
-                                                       fetchID: discovery.fetchID, task: .ask))
+        XCTAssertFalse(settings.selectCatalogueModel(review, providerID: providerID,
+                                                     fetchID: discovery.fetchID,
+                                                     selection: .task(.ask)))
         XCTAssertEqual(settings.draft.tasks.first { $0.task == .ask }?.model, "")
+        LLMHTTP.assertFinished()
+    }
+
+    // MARK: - Defaults, scoped models and checks
+
+    private func encoded(_ settings: APILLMSettings) -> String {
+        let data = try! JSONEncoder().encode(settings)
+        return String(data: data, encoding: .utf8)!
+    }
+
+    private func allTasks(mode: APILLMTaskMode?) -> [APILLMTaskSettings] {
+        APILLMTask.allCases.map { APILLMTaskSettings(task: $0, mode: mode, provider: "", model: "") }
+    }
+
+    func testDefaultTasksResolveAndSaveEffectiveRoutes() async throws {
+        var tasks = allTasks(mode: nil)
+        tasks[0] = APILLMTaskSettings(task: .embed, mode: .default,
+                                      provider: "openai", model: "text-embedding-3-small")
+        tasks[1] = APILLMTaskSettings(task: .classify, mode: .default,
+                                      provider: "local", model: "local-chat")
+        tasks[2] = APILLMTaskSettings(task: .blurb, mode: .off, provider: "", model: "")
+        let settings = APILLMSettings(
+            revision: 2,
+            providers: [
+                APILLMProviderSettings(name: "openai", kind: .openai, baseURL: "https://api.openai.com/v1",
+                                       hasAPIKey: true, monthlyLimitUSD: "20", timeoutSeconds: 60,
+                                       tokenField: .maxCompletionTokens),
+                APILLMProviderSettings(name: "local", kind: .openai, baseURL: "http://nas.local:11434/v1",
+                                       hasAPIKey: true, monthlyLimitUSD: "0", timeoutSeconds: 30,
+                                       tokenField: .maxTokens),
+            ],
+            tasks: tasks,
+            models: [
+                APILLMModelSettings(name: "text-embedding-3-small", provider: "openai",
+                                    inputPer1M: "0", outputPer1M: "0", embeddingPer1M: "0.02",
+                                    dimensions: 1536, truncatable: true),
+                APILLMModelSettings(name: "local-chat", provider: "local",
+                                    inputPer1M: "0", outputPer1M: "0", embeddingPer1M: "0",
+                                    dimensions: 0, truncatable: false),
+            ],
+            defaults: APILLMDefaults(text: APILLMDefaultRoute(provider: "local", model: "local-chat"),
+                                    embedding: APILLMDefaultRoute(provider: "openai", model: "text-embedding-3-small")))
+        let (api, session) = try makeAPI([
+            .init(path: "/v1/settings/llm", body: encoded(settings)),
+            .init(method: "PUT", path: "/v1/settings/llm", body: encoded(settings)),
+        ])
+        defer { session.invalidateAndCancel() }
+        let model = makeModel(api: api)
+        model.loggedIn = true
+        let draft = LLMSettingsModel(app: model)
+        draft.load()
+        try await waitUntil { draft.loaded && !draft.busy }
+
+        XCTAssertEqual(draft.draft.tasks[0].mode, .default)
+        XCTAssertEqual(draft.draft.tasks[1].mode, .default)
+        XCTAssertEqual(draft.draft.tasks[2].mode, .off)
+        XCTAssertEqual(draft.effectiveTaskRoute(draft.draft.tasks[0]).model, "text-embedding-3-small")
+        XCTAssertEqual(draft.effectiveTaskRoute(draft.draft.tasks[1]).model, "local-chat")
+        XCTAssertEqual(draft.effectiveTaskRoute(draft.draft.tasks[2]).provider, "")
+
+        draft.save()
+        try await waitUntil { draft.saved && !draft.busy }
+        let sent = try fields(of: XCTUnwrap(LLMHTTP.body(at: 0)))
+        let sentTasks = try XCTUnwrap(sent["tasks"]?.arrayValue)
+        XCTAssertEqual(sentTasks[0]["mode"]?.stringValue, "default")
+        XCTAssertEqual(sentTasks[0]["provider"]?.stringValue, "openai")
+        XCTAssertEqual(sentTasks[0]["model"]?.stringValue, "text-embedding-3-small",
+                       "a default task also carries its effective route for old readers")
+        XCTAssertEqual(sentTasks[1]["provider"]?.stringValue, "local")
+        let defaults = try XCTUnwrap(sent["defaults"])
+        XCTAssertEqual(defaults["text"]?["model"]?.stringValue, "local-chat")
+        LLMHTTP.assertFinished()
+    }
+
+    func testDefaultPickerKeepsTheProviderWhileChoosingAModel() {
+        let model = makeModel()
+        model.loggedIn = true
+        let settings = LLMSettingsModel(app: model)
+        settings.setDefaultRoute(provider: "venice", model: "", usage: .embedding)
+        XCTAssertEqual(settings.defaultRoute(for: .embed).provider, "venice")
+        XCTAssertTrue(settings.defaultRoute(for: .embed).model.isEmpty)
+        XCTAssertTrue(settings.draft.tasks.allSatisfy { $0.mode == .off })
+    }
+
+    func testRemovingAProviderDisablesItsDefaultFeature() {
+        let model = makeModel()
+        model.loggedIn = true
+        let settings = LLMSettingsModel(app: model)
+        let providerID = settings.addProvider(preset: .venice)
+        settings.setDefaultRoute(provider: "venice", model: "qwen3", usage: .embedding)
+        settings.setTaskEnabled(.embed, true)
+        XCTAssertEqual(settings.draft.tasks.first { $0.task == .embed }?.mode, .default)
+        settings.removeProvider(id: providerID)
+        XCTAssertEqual(settings.draft.tasks.first { $0.task == .embed }?.mode, .off)
+        XCTAssertTrue(settings.defaultRoute(for: .embed).provider.isEmpty)
+    }
+
+    func testCustomRouteSurvivesDisablingAndEnablingAFeature() {
+        let model = makeModel()
+        model.loggedIn = true
+        let settings = LLMSettingsModel(app: model)
+        settings.setDefaultRoute(provider: "default-provider", model: "default-model", usage: .chat)
+        let index = settings.draft.tasks.firstIndex { $0.task == .blurb }!
+        settings.draft.tasks[index].provider = "custom-provider"
+        settings.draft.tasks[index].model = "custom-model"
+        settings.draft.tasks[index].mode = .custom
+        settings.setTaskEnabled(.blurb, false)
+        settings.setTaskEnabled(.blurb, true)
+        XCTAssertEqual(settings.draft.tasks[index].mode, .custom)
+        XCTAssertEqual(settings.effectiveTaskRoute(settings.draft.tasks[index]).provider, "custom-provider")
+    }
+
+    func testSelectingADefaultDoesNotEnableADisabledFeature() {
+        let model = makeModel()
+        model.loggedIn = true
+        let settings = LLMSettingsModel(app: model)
+        settings.draft.providers = [
+            LLMProviderDraft(settings: APILLMProviderSettings(name: "openai", kind: .openai,
+                                                              baseURL: "https://api.openai.com/v1", hasAPIKey: true,
+                                                              monthlyLimitUSD: "0", timeoutSeconds: 60,
+                                                              tokenField: .maxCompletionTokens)),
+        ]
+        var chat = LLMModelDraft()
+        chat.name = "gpt-5"
+        chat.provider = "openai"
+        chat.inputPer1M = "1"
+        chat.outputPer1M = "2"
+        settings.importModels([chat])
+
+        settings.setDefaultRoute(provider: "openai", model: "gpt-5", usage: .chat)
+        XCTAssertEqual(settings.draft.defaults?.text.model, "gpt-5")
+        XCTAssertTrue(settings.draft.tasks.allSatisfy { !$0.isEnabled },
+                      "choosing a default never turns a feature on")
+    }
+
+    func testProviderScopedModelWinsOverTheGlobalEntry() {
+        let model = makeModel()
+        model.loggedIn = true
+        let settings = LLMSettingsModel(app: model)
+        var global = LLMModelDraft()
+        global.name = "shared"
+        global.inputPer1M = "1"
+        var scoped = LLMModelDraft()
+        scoped.name = "shared"
+        scoped.provider = "openai"
+        scoped.inputPer1M = "2"
+        settings.importModels([global, scoped])
+
+        XCTAssertEqual(settings.draft.model(provider: "openai", name: "shared")?.inputPer1M, "2")
+        XCTAssertEqual(settings.draft.model(provider: "local", name: "shared")?.inputPer1M, "1",
+                       "a global entry remains the fallback for other providers")
+        XCTAssertEqual(settings.configuredModels(for: "openai").count, 1,
+                       "the scoped entry hides the global one for its provider")
+    }
+
+    func testVenicePresetHasAUniqueNameAndEditableURL() {
+        let model = makeModel()
+        model.loggedIn = true
+        let settings = LLMSettingsModel(app: model)
+        let first = settings.addProvider(preset: .venice)
+        let second = settings.addProvider(preset: .venice)
+        let providers = settings.draft.providers
+        XCTAssertEqual(providers.first { $0.id == first }?.name, "venice")
+        XCTAssertEqual(providers.first { $0.id == first }?.kind, .openai)
+        XCTAssertEqual(providers.first { $0.id == first }?.baseURL, "https://api.venice.ai/api/v1")
+        XCTAssertEqual(providers.first { $0.id == second }?.name, "venice-2")
+    }
+
+    func testVeniceResizeAllowsAWideModel() throws {
+        let model = makeModel()
+        model.loggedIn = true
+        let settings = LLMSettingsModel(app: model)
+        let providerID = settings.addProvider(preset: .venice)
+        let provider = try XCTUnwrap(settings.draft.providers.first { $0.id == providerID })
+        var wide = LLMModelDraft()
+        wide.name = "venice-embed"
+        wide.provider = provider.name
+        wide.dimensions = 4096
+        wide.supportsCustomDimensions = true
+        wide.embeddingPer1M = "0.02"
+        settings.importModels([wide])
+        try validateLLMSettings(settings.draft.input(revision: 0, opID: "check"))
+
+        var truncated = LLMModelDraft()
+        truncated.name = "venice-embed-2"
+        truncated.provider = provider.name
+        truncated.dimensions = 4096
+        truncated.truncatable = true
+        truncated.embeddingPer1M = "0.02"
+        settings.importModels([truncated])
+        try validateLLMSettings(settings.draft.input(revision: 0, opID: "check"))
+    }
+
+    func testCheckModelAppliesOnlyObservedGeometry() async throws {
+        let (api, session) = try makeAPI([
+            .init(path: "/v1/settings/llm", body: settingsJSON(revision: 2)),
+            .init(method: "POST", path: "/v1/settings/llm/models/check",
+                  body: #"{"compatible":true,"dimensions":4096,"supports_custom_dimensions":true,"message":"Embedding model checked successfully."}"#),
+        ])
+        defer { session.invalidateAndCancel() }
+        let model = makeModel(api: api)
+        model.loggedIn = true
+        let settings = LLMSettingsModel(app: model)
+        settings.load()
+        try await waitUntil { settings.loaded && !settings.busy }
+        let providerID = settings.draft.providers[0].id
+        var checked = settings.draft.models[0]
+        checked.dimensions = 1536
+        checked.supportsCustomDimensions = false
+        settings.checkModel(providerID: providerID, model: checked, capability: .embedding)
+        try await waitUntil {
+            if case .result = settings.checks[providerID]?.phase { return true }
+            return false
+        }
+        let stored = try XCTUnwrap(settings.draft.models.first)
+        XCTAssertEqual(stored.dimensions, 4096)
+        XCTAssertTrue(stored.supportsCustomDimensions)
+        XCTAssertEqual(stored.embeddingPer1M, "0.020000", "a check never changes rates")
+        LLMHTTP.assertFinished()
+    }
+
+    func testCheckCanObserveAnUnknownEmbeddingWidth() async throws {
+        let (api, session) = try makeAPI([
+            .init(path: "/v1/settings/llm", body: settingsJSON(revision: 2)),
+            .init(method: "POST", path: "/v1/settings/llm/models/check",
+                  body: #"{"compatible":true,"dimensions":4096,"supports_custom_dimensions":true,"message":"Embedding model checked successfully."}"#),
+        ])
+        defer { session.invalidateAndCancel() }
+        let model = makeModel(api: api)
+        model.loggedIn = true
+        let settings = LLMSettingsModel(app: model)
+        settings.load()
+        try await waitUntil { settings.loaded && !settings.busy }
+        let providerID = settings.draft.providers[0].id
+        var checked = settings.draft.models[0]
+        checked.dimensions = 0
+        settings.checkModel(providerID: providerID, model: checked, capability: .embedding)
+        try await waitUntil {
+            if case .result = settings.checks[providerID]?.phase { return true }
+            return false
+        }
+        XCTAssertEqual(settings.draft.models[0].dimensions, 4096,
+                       "the observed width is applied to the draft")
+        XCTAssertTrue(settings.draft.models[0].supportsCustomDimensions)
+        LLMHTTP.assertFinished()
+    }
+
+    func testManualIDFallbackSelectsAndRoutes() {
+        let model = makeModel()
+        model.loggedIn = true
+        let settings = LLMSettingsModel(app: model)
+        settings.draft.providers = [
+            LLMProviderDraft(settings: APILLMProviderSettings(name: "openai", kind: .openai,
+                                                              baseURL: "https://api.openai.com/v1", hasAPIKey: true,
+                                                              monthlyLimitUSD: "0", timeoutSeconds: 60,
+                                                              tokenField: .maxCompletionTokens)),
+        ]
+        var review = LLMModelReview(discovered: APIDiscoveredModel(id: "manual-chat", name: "Manual Chat"),
+                                    provider: "openai", usage: .chat, isManual: true)
+        review.markFree()
+        let providerID = settings.draft.providers[0].id
+        XCTAssertTrue(settings.selectManualModel(review, providerID: providerID, selection: .task(.blurb)))
+        XCTAssertTrue(settings.draft.models.contains {
+            $0.name == "manual-chat" && $0.provider == "openai" && $0.inputPer1M == "0"
+        })
+        XCTAssertEqual(settings.draft.tasks.first { $0.task == .blurb }?.mode, .custom)
+        XCTAssertEqual(settings.draft.tasks.first { $0.task == .blurb }?.model, "manual-chat")
+    }
+
+    func testDiscardRestoresTheLoadedBaseline() async throws {
+        let (api, session) = try makeAPI([
+            .init(path: "/v1/settings/llm", body: settingsJSON(revision: 2)),
+        ])
+        defer { session.invalidateAndCancel() }
+        let model = makeModel(api: api)
+        model.loggedIn = true
+        let settings = LLMSettingsModel(app: model)
+        settings.load()
+        try await waitUntil { settings.loaded && !settings.busy }
+        settings.draft.providers[0].monthlyLimitUSD = "99"
+        settings.draft.providers[0].apiKey = "sk-typed"
+        XCTAssertTrue(settings.isDirty)
+        settings.discard()
+        XCTAssertEqual(settings.draft, settings.baseline)
+        XCTAssertEqual(settings.revision, 2)
+        XCTAssertEqual(settings.draft.providers[0].apiKey, "", "discard drops a typed key")
+        XCTAssertFalse(settings.isDirty)
+        LLMHTTP.assertFinished()
+    }
+
+    func testCatalogueSelectionKeepsConfiguredPricing() async throws {
+        let (api, session) = try makeAPI([
+            .init(path: "/v1/settings/llm", body: settingsJSON(revision: 2)),
+            .init(method: "POST", path: "/v1/settings/llm/models", body: catalogueJSON()),
+        ])
+        defer { session.invalidateAndCancel() }
+        let model = makeModel(api: api)
+        model.loggedIn = true
+        let settings = LLMSettingsModel(app: model)
+        settings.load()
+        try await waitUntil { settings.loaded && !settings.busy }
+        var configured = LLMModelDraft()
+        configured.name = "gpt-5"
+        configured.provider = "openai"
+        configured.inputPer1M = "9"
+        configured.outputPer1M = "9"
+        settings.importModels([configured])
+        let providerID = settings.draft.providers[0].id
+        settings.fetchModels(providerID: providerID)
+        try await waitUntil {
+            if case .loaded = settings.discoveries[providerID]?.phase { return true }
+            return false
+        }
+        let discovery = try XCTUnwrap(settings.discoveries[providerID])
+        guard case .loaded(let models) = discovery.phase else { return XCTFail("missing catalogue") }
+        let review = LLMModelReview(discovered: try XCTUnwrap(models.first { $0.id == "gpt-5" }),
+                                    provider: "openai", usage: .chat)
+        XCTAssertTrue(settings.selectCatalogueModel(review, providerID: providerID,
+                                                    fetchID: discovery.fetchID, selection: .add))
+        let stored = try XCTUnwrap(settings.draft.models.first { $0.name == "gpt-5" })
+        XCTAssertEqual(stored.inputPer1M, "9", "a saved custom price is never overwritten")
+        LLMHTTP.assertFinished()
+    }
+
+    func testReopeningCatalogueReusesTheCurrentProviderResults() async throws {
+        let (api, session) = try makeAPI([
+            .init(path: "/v1/settings/llm", body: settingsJSON(revision: 2)),
+            .init(method: "POST", path: "/v1/settings/llm/models", body: catalogueJSON()),
+        ])
+        defer { session.invalidateAndCancel() }
+        let model = makeModel(api: api)
+        model.loggedIn = true
+        let settings = LLMSettingsModel(app: model)
+        settings.load()
+        try await waitUntil { settings.loaded && !settings.busy }
+        let providerID = settings.draft.providers[0].id
+        settings.fetchModels(providerID: providerID)
+        try await waitUntil {
+            if case .loaded = settings.discoveries[providerID]?.phase { return true }
+            return false
+        }
+        let firstID = settings.discoveries[providerID]?.fetchID
+        settings.fetchModels(providerID: providerID)
+        XCTAssertEqual(settings.discoveries[providerID]?.fetchID, firstID)
+        LLMHTTP.assertFinished()
+    }
+
+    func testDiscardAfterConflictLoadsTheCurrentSavedRevision() async throws {
+        let (api, session) = try makeAPI([
+            .init(path: "/v1/settings/llm", body: settingsJSON(revision: 2)),
+            .init(method: "PUT", path: "/v1/settings/llm", status: 409,
+                  body: #"{"title":"Conflict","status":409}"#),
+            .init(path: "/v1/settings/llm", body: settingsJSON(revision: 3)),
+        ])
+        defer { session.invalidateAndCancel() }
+        let model = makeModel(api: api)
+        model.loggedIn = true
+        let settings = LLMSettingsModel(app: model)
+        settings.loadIfNeeded()
+        try await waitUntil { settings.loaded && !settings.busy }
+        settings.draft.providers[0].monthlyLimitUSD = "99"
+        settings.loadIfNeeded()
+        XCTAssertEqual(settings.draft.providers[0].monthlyLimitUSD, "99")
+        settings.save()
+        try await waitUntil { settings.conflict && !settings.busy }
+        settings.discard()
+        try await waitUntil { settings.revision == 3 && !settings.busy }
+        XCTAssertFalse(settings.isDirty)
+        XCTAssertFalse(settings.conflict)
         LLMHTTP.assertFinished()
     }
 

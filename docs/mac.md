@@ -275,40 +275,44 @@ require connectivity; they do not pretend an offline request succeeded. Search
 state is window-local, cleared on sign-out and invalidated after a server
 restore. A failed AI availability check still leaves full-text search usable.
 
-## LLM service settings
+## AI settings
 
-Earnest > Settings… > LLM Services edits the server-wide LLM configuration:
-providers, task routing, and model pricing. These are human admin settings shared
-by every account; changing them affects the whole server, and API keys are
-encrypted on the server and never returned to any client. The pane makes no
-request until you choose Reload, and nothing is saved until you choose Save;
-busy, saved, failed and conflicting states are shown. A revision conflict keeps
-the draft and requires Reload before another save.
+Earnest > Settings has Account, Reading & appearance, and AI panes. Reading
+preferences retain their existing autosave. AI settings load when the pane
+opens and remain an unsaved draft until Save. Discard restores the saved
+configuration; a revision conflict requires the current server version.
+The draft survives switching panes or closing the settings window, while
+sign-out and account changes clear it, including typed API keys.
 
-Providers add, edit and remove by name, kind (OpenAI, Anthropic or Gemini) and
-base URL, with a monthly USD limit, request timeout and completion token field.
-The API key control is a write-only replacement: the pane shows only whether a
-key is stored, and a typed replacement or an explicit remove is sent on the next
-save. An absent key keeps the stored one; changing a keyed provider's URL or kind
-requires a replacement key or an explicit remove, so a stored secret is never
-forwarded to a different destination. Renaming a keyed provider also requires
-replacement or removal, since names identify stored keys. A failed Reload
-keeps a revision conflict active until a newer configuration is loaded.
-Typed keys are cleared after a successful
-save, a reload, and on sign-out or an account change, and are never written to
-preferences, caches or logs.
+AI configuration is shared by every account. Add a Venice, OpenAI, Anthropic,
+Gemini, or custom OpenAI-compatible provider, enter its key and monthly budget,
+then choose default Text and Embedding models. Enable the desired features
+with their switches. Advanced contains per-feature custom model overrides.
+Existing explicit routes remain custom, and selecting a default never turns
+on an off feature. Provider timeout and token compatibility are advanced
+controls.
 
-Tasks route each of the seven purposes (embed, classify, blurb, summary,
-edition, compile_rule, ask) to a provider and a configured model, or are disabled
-by leaving both empty; disabled tasks make no outbound calls. The advanced model
-editor adds and removes named models with their three USD-per-million-token
-prices, embedding dimensions (up to 65536 with truncatable) and the truncatable
-toggle. Prices are decimal text end to end, so exact configured prices never
-drift through floating point. Local models need explicit zero prices; Earnest
-does not invent price entries. Anthropic providers cannot embed.
+Model pickers fetch automatically and reuse results while the provider,
+settings revision, and account stay unchanged. Search narrows the catalogue;
+known incompatible models are excluded and unknown capabilities are labelled.
+Manual model IDs remain available when discovery fails. Published prices and
+embedding metadata are prefilled; missing applicable prices require an entry
+or the explicit free-model choice. Saved custom prices stay unchanged.
+Prices and metadata are scoped to each provider, with legacy global entries
+retained as fallbacks.
 
-The pane notes that local servers need the server's outbound allowlist
-(`EARNEST_OUTBOUND_ALLOW_PRIVATE`); the client adds no bypass.
+Venice models that publish native dimensions and provider resizing support
+can request Earnest's 1024-dimension output without permitting local
+truncation. Check model is optional: it sends fixed sample text, may incur a
+charge, and reports compatibility or missing geometry. Saving never runs
+inference. See [AI provider configuration](llm-providers.md) for the API and
+budget behavior.
+
+API keys remain encrypted on the server and are never returned. A blank
+replacement keeps the saved key. Changing a keyed provider's name, URL, or
+protocol requires a replacement key or explicit removal. Keys are never
+written to preferences, persistent caches, or logs. Local model servers still
+require the server's outbound allowlist; the client adds no bypass.
 
 ## Regression checks
 
