@@ -78,6 +78,25 @@ The adaptive transition stays bound beneath focused settings/search screens,
 with inactive panes empty and hidden from accessibility, so incoming articles
 cannot leave navigation history and the visible pane out of step.
 
+## Inline reading stability
+
+The list owns the opened article's measured height and cached-copy status, so
+recycling its lazy item does not shrink the body and expand it again. Width,
+typography, zoom and density changes invalidate the height measurement. A reflow
+inside a measured body returns to its headline while the new height is learned,
+instead of applying the old deep offset to a temporary measuring viewport. Expansion
+queues a one-shot headline anchor against the new composition: an offset inside
+a tall, collapsed body must not be reinterpreted as many later article rows.
+Collapsing from inside the body anchors its own headline instead.
+
+The native WebView canvas is themed before loading, and its draw layer is clipped
+to the resizing viewport. Cached HTML themes the document canvas as well as the
+body. Blank navigation frames cannot overwrite the retained height; native height
+reports start after the current document is visibly committed. A recreated
+reader clears its cached-copy indicator when live content commits successfully.
+The 4096-native-pixel preview
+budget, full-reader continuation and content-origin security policy are unchanged.
+
 ## Verification
 
 Automated coverage includes the existing core and app suites, Compose layout
@@ -88,7 +107,15 @@ Back, result/button semantics, expanded filter state, full-row 48dp toggles,
 load/save exclusion, explicit draft discard, incoming articles during focused
 screens and theme selection in short windows. The cancelled-swipe,
 large-label chip-height and interaction regressions were observed failing
-before their fixes.
+before their fixes. Inline-reading coverage adds switching below a tall body,
+footer/Back collapse, off-screen Back without a viewport jump, anchoring near
+the start of the list, lazy-item disposal, width-only measurement invalidation,
+native canvas colors and clipping. The scroll and
+canvas regressions were reproduced before the fixes. An API 34 emulator replay
+confirmed an unchanged tapped-headline position, retained item height after
+recreation, and no white flash during dark article switches. Light and narrow
+320dp/200% text presentations were also inspected. This does not establish behavior
+on the Huawei Android 12 device in the supplied recording.
 
 For visual acceptance, inspect a populated front page, article list, inline
 article, reader, feeds, search/results, settings and connect screen. Repeat on

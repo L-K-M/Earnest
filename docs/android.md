@@ -102,8 +102,10 @@ article lists.
 On a narrow screen, Articles and the saved shelves offer **Headlines** and
 **Read in feed**. Read in feed is the default: tap a headline to expand its
 article in the same scrolling list. Only the article you expand loads reader
-content and reader images, and only one article is expanded at a time. Collapse it to return
-to headlines, or choose Open reader for the dedicated reading tools. Very long
+content and reader images, and only one article is expanded at a time. Opening
+another article keeps its headline in place instead of carrying over the previous
+article's scroll offset. Collapse or Back returns you to the expanded headline
+when you are inside its body. Choose Open reader for the dedicated reading tools. Very long
 articles have a bounded inline preview with a notice to continue in the reader.
 The layout choice is remembered on your device. Wide screens keep the existing
 side-by-side list and reader.

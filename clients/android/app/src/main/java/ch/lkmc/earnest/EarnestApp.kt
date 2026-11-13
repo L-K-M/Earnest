@@ -102,6 +102,7 @@ import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffo
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
@@ -125,6 +126,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -746,6 +748,7 @@ internal fun MainScaffold(
                                             textZoom = textZoom,
                                             modifier = Modifier.fillMaxSize(),
                                             onFallback = { offlineCopy = true },
+                                            onLiveContent = { offlineCopy = false },
                                             onWebView = { readerWebView = it },
                                         )
                                     }
@@ -994,6 +997,8 @@ private fun FindBar(
     }
 }
 
+private data class InlineScrollAnchor(val index: Int, val offset: Int)
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun EntryListScreen(
@@ -1025,9 +1030,10 @@ internal fun EntryListScreen(
     layoutOverride: ArticleLayout? = null,
     typography: (CachedEntry) -> ch.lkmc.earnest.core.ReaderTypography = { ch.lkmc.earnest.core.ReaderSettings().typographyFor(it.feedId) },
     onLoadContent: suspend (Long) -> ContentUrlResult? = { null },
-    inlineContent: @Composable (ContentUrlResult, CachedEntry) -> Unit = { content, entry ->
-        InlineArticleContent(content, typography(entry))
+    inlineContent: @Composable (ContentUrlResult, CachedEntry, InlineArticleState) -> Unit = { content, entry, viewport ->
+        InlineArticleContent(content, typography(entry), viewport)
     },
+    listState: androidx.compose.foundation.lazy.LazyListState = rememberLazyListState(),
 ) {
     val context = LocalContext.current
     var preferredLayout by remember { mutableStateOf(context.articleLayout()) }
@@ -1041,11 +1047,47 @@ internal fun EntryListScreen(
     var retry by remember { mutableStateOf(0) }
     val expanded = expandedId?.takeIf { id -> entries.any { it.id == id } && layout == ArticleLayout.READING }
     val inlineReader = remember(expanded, accountKey) { ReaderLoadState() }
+    val inlineViewport = remember(expanded, accountKey) { InlineArticleState() }
+    var listWidth by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    val density = LocalDensity.current
+    val expandedTypography = entries.firstOrNull { it.id == expanded }?.let(typography)
+    val textZoom = context.readerZoom()
+    val measuredListWidth = listWidth
+    SideEffect {
+        expandedTypography?.let { typography ->
+            val previousHeight = inlineViewport.pixels
+            inlineViewport.configure(measuredListWidth, typography, textZoom, density.density, density.fontScale)
+            if (previousHeight > 0 && inlineViewport.pixels == 0) {
+                // Reflow temporarily returns to the measuring height. A deep
+                // body offset must stay on this article, not jump to later rows.
+                listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == expanded && it.offset < 0 }?.let {
+                    listState.requestScrollToItem(it.index)
+                }
+            }
+        }
+    }
     LaunchedEffect(expanded, accountKey, retry) {
         inlineReader.load(expanded, accountKey, onLoadContent)
     }
-    BackHandler(enabled = expanded != null) { expandedId = null }
-    val listState = rememberLazyListState()
+    var scrollAnchor by remember { mutableStateOf<InlineScrollAnchor?>(null) }
+    fun changeExpansion(id: Long?) {
+        val anchor = id ?: expanded
+        scrollAnchor = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == anchor }?.let { item ->
+            // Keep a tapped headline in place; collapsing inside a body
+            // returns to its header rather than reusing a deep body offset.
+            InlineScrollAnchor(item.index, -item.offset.coerceAtLeast(0))
+        }
+        expandedId = id
+    }
+    LaunchedEffect(expanded, scrollAnchor) {
+        scrollAnchor?.let { anchor ->
+            // Request against the new composition. An earlier request can
+            // be consumed by the old tall row before it has collapsed.
+            listState.requestScrollToItem(anchor.index, anchor.offset)
+            scrollAnchor = null
+        }
+    }
+    BackHandler(enabled = expanded != null) { changeExpansion(null) }
     MarkSeenOnScroll(entries, principalId, listState, onSeen)
     val headerCount = (if (briefs.isNotEmpty()) 1 else 0) +
         (if (agentChanges.isNotEmpty() || agentChangesError != null) 1 else 0)
@@ -1054,12 +1096,12 @@ internal fun EntryListScreen(
             listState.scrollToItem(0)
         }
     }
-    LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+    LazyColumn(state = listState, modifier = Modifier.fillMaxSize().onSizeChanged { listWidth = it.width }, contentPadding = PaddingValues(bottom = 16.dp)) {
         if (layoutOverride == null) {
             item(key = "reading-layout") {
                 ArticleLayoutControl(layout, onLayout = {
+                    changeExpansion(null)
                     preferredLayout = it
-                    expandedId = null
                     context.setArticleLayout(it)
                 })
             }
@@ -1108,7 +1150,7 @@ internal fun EntryListScreen(
                             expanded = expanded == entry.id,
                             onClick = {
                                 if (layout == ArticleLayout.READING) {
-                                    expandedId = if (expanded == entry.id) null else entry.id
+                                    changeExpansion(if (expanded == entry.id) null else entry.id)
                                 } else onOpen(entry.id)
                             },
                             onOpenReader = { onOpen(entry.id) },
@@ -1124,7 +1166,7 @@ internal fun EntryListScreen(
                             inlineReader.loading -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
                                 CircularProgressIndicator(Modifier.size(24.dp))
                             }
-                            inlineReader.content != null -> inlineContent(inlineReader.content!!, entry)
+                            inlineReader.content != null -> inlineContent(inlineReader.content!!, entry, inlineViewport)
                             else -> Column(Modifier.padding(horizontal = 16.dp)) {
                                 Text(
                                     inlineReader.error ?: "Could not load this article. Connect and try again, or open a cached article.",
@@ -1136,7 +1178,7 @@ internal fun EntryListScreen(
                         }
                         FlowRow(Modifier.fillMaxWidth().padding(horizontal = ReaderSpace.md, vertical = ReaderSpace.xs), horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs)) {
                             FilledTonalButton(onClick = { onOpen(entry.id) }) { Text("Open reader") }
-                            TextButton(onClick = { expandedId = null }) { Text("Collapse") }
+                            TextButton(onClick = { changeExpansion(null) }) { Text("Collapse") }
                         }
                     }
                     HorizontalDivider(Modifier.padding(horizontal = ReaderSpace.gutter), color = MaterialTheme.colorScheme.outlineVariant)
