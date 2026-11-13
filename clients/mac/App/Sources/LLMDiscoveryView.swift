@@ -3,34 +3,12 @@ import SwiftUI
 import EarnestKit
 
 /// What the catalogue sheet browses: one provider draft as currently edited,
-/// and what a selection does. The provider is the destination whose catalogue
-/// is fetched; the selection decides whether a pick only adds a model, routes
-/// a task, or sets a default.
+/// optionally narrowed to the models a task can use.
 struct LLMDiscoveryTarget: Identifiable {
     let providerID: UUID
     let providerName: String
-    let selection: LLMSettingsModel.LLMModelSelection
+    let task: APILLMTask?
     var id: UUID { providerID }
-
-    /// The capability a selection needs. Provider browsing lets the user
-    /// choose; every other selection fixes it.
-    var fixedUsage: LLMModelUsage? {
-        switch selection {
-        case .add: return nil
-        case .task(let task): return task == .embed ? .embedding : .chat
-        case .defaultText: return .chat
-        case .defaultEmbedding: return .embedding
-        }
-    }
-
-    var title: String {
-        switch selection {
-        case .add: return "Models on \(providerName)"
-        case .task(let task): return "Models for \(task.title.lowercased()) on \(providerName)"
-        case .defaultText: return "Text default on \(providerName)"
-        case .defaultEmbedding: return "Embedding default on \(providerName)"
-        }
-    }
 }
 
 /// A capability badge for a catalogue row: only what the provider reported,
@@ -49,38 +27,37 @@ func llmCapabilitySummary(_ model: APIDiscoveredModel) -> String {
     }
 }
 
-/// The searchable catalogue for one provider. It fetches automatically when
-/// opened, keeps results in memory only, and applies a ready selection to the
-/// draft immediately. Missing applicable metadata is completed inline; the
-/// catalogue never invents a price or a width.
+/// The catalogue browser for one provider. Results are memory-only: they are
+/// fetched for the provider exactly as edited and vanish the moment the
+/// provider, the account or the server changes. Browsing for a task filters
+/// out models the task cannot use and routes only on an explicit choice;
+/// unconfigured picks always pass a price review before entering the draft.
 @MainActor struct LLMDiscoveryView: View {
     @ObservedObject var settings: LLMSettingsModel
     let target: LLMDiscoveryTarget
     @Environment(\.dismiss) private var dismiss
     @State private var search = ""
-    @State private var review: LLMModelReview?
-    @State private var usage: LLMModelUsage = .chat
-    @State private var manualID = ""
+    @State private var selection: Set<String> = []
+    @State private var reviewing = false
+    @State private var reviewFetchID: Int?
+    @State private var reviews: [LLMModelReview] = []
 
     private var session: LLMDiscoverySession? { settings.discoveries[target.providerID] }
-    private var providerName: String { target.providerName }
-    private var configuredIdentities: Set<String> {
-        Set(settings.draft.models.map(\.identity))
-    }
+    private var configuredNames: Set<String> { Set(settings.draft.models.map(\.name)) }
+    private var slotsLeft: Int { max(0, llmModelLimit - settings.draft.models.count) }
 
-    /// The loaded catalogue before search, with the capability filter applied
-    /// and duplicate catalogue IDs collapsed; the first entry wins.
+    /// The loaded catalogue before search, with the task filter applied and
+    /// any duplicate catalogue IDs collapsed; the first entry wins, matching
+    /// the import's keep-existing rule.
     private var candidates: [APIDiscoveredModel] {
         guard case .loaded(let models) = session?.phase else { return [] }
-        let task: APILLMTask = usage == .embedding ? .embed : .blurb
         var seen = Set<String>()
-        let applicable = models.filter { model in
-            seen.insert(model.id).inserted && llmModelSuits(model, task: task)
+        return models.filter { model in
+            seen.insert(model.id).inserted && (target.task.map { llmModelSuits(model, task: $0) } ?? true)
         }
-        return applicable.filter { (usage == .embedding ? $0.embedding : $0.chat) == true }
-            + applicable.filter { (usage == .embedding ? $0.embedding : $0.chat) != true }
     }
 
+    /// The catalogue rows the search text leaves visible.
     private var visible: [APIDiscoveredModel] {
         let query = search.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty else { return candidates }
@@ -89,15 +66,12 @@ func llmCapabilitySummary(_ model: APIDiscoveredModel) -> String {
         }
     }
 
-    private var isFetching: Bool {
-        if case .fetching = session?.phase { return true }
-        return false
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(target.title).font(.headline)
-            Text("Choose a model for this provider. Save in AI settings to keep your selection.")
+            Text(target.task.map { "Models for \($0.title.lowercased()) on \(target.providerName)" }
+                 ?? "Models on \(target.providerName)")
+                .font(.headline)
+            Text("Fetching previews the provider as currently edited; nothing is persisted. Applying a choice updates the draft; Save persists the whole configuration.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             HStack {
@@ -105,28 +79,19 @@ func llmCapabilitySummary(_ model: APIDiscoveredModel) -> String {
                 Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
             }
             if let error = settings.error { Text(error).foregroundStyle(.red) }
-            if let review {
-                LLMModelReviewEditor(
-                    review: Binding(get: { review }, set: { self.review = $0 }),
-                    check: settings.checks[target.providerID],
-                    target: target,
-                    onBack: { self.review = nil },
-                    onCheck: { check(review) },
-                    onUse: { commit(review) }
-                )
+            if reviewing {
+                reviewContent
             } else {
                 browseContent
-                manualFallback
             }
         }
         .padding(16)
-        .frame(width: 560, height: 520)
-        .onAppear {
-            if let fixed = target.fixedUsage { usage = fixed }
-            settings.fetchModels(providerID: target.providerID)
-        }
+        .frame(width: 520, height: 470)
         .onChange(of: session?.fetchID) { _, _ in
-            review = nil
+            selection = []
+            reviews = []
+            reviewing = false
+            reviewFetchID = nil
         }
         .onChange(of: settings.draft.providers.map(\.id)) { _, ids in
             if !ids.contains(target.providerID) { dismiss() }
@@ -139,17 +104,9 @@ func llmCapabilitySummary(_ model: APIDiscoveredModel) -> String {
         HStack(spacing: 8) {
             TextField("Search models", text: $search)
                 .textFieldStyle(.roundedBorder)
-            Button("Refresh") { settings.refreshModels(providerID: target.providerID) }
+                .disabled(candidates.isEmpty)
+            Button("Fetch again") { settings.fetchModels(providerID: target.providerID) }
                 .disabled(isFetching)
-        }
-        if target.fixedUsage == nil {
-            Picker("Add for", selection: $usage) {
-                ForEach(LLMModelUsage.allCases) { usage in
-                    Text(usage.title).tag(usage)
-                }
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 220)
         }
         Group {
             switch session?.phase {
@@ -162,7 +119,7 @@ func llmCapabilitySummary(_ model: APIDiscoveredModel) -> String {
             case .loaded(let models):
                 if visible.isEmpty {
                     Text(models.isEmpty
-                         ? "The provider's catalogue is empty. Add a model by ID below."
+                         ? "The provider's catalogue is empty. Add models manually below."
                          : "No models match.")
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -187,200 +144,139 @@ func llmCapabilitySummary(_ model: APIDiscoveredModel) -> String {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-        Text("Results are held only in memory and are discarded when the provider, revision or account changes.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-    }
-
-    private var manualFallback: some View {
-        HStack(spacing: 8) {
-            TextField("Model ID", text: $manualID)
-                .textFieldStyle(.roundedBorder)
-            Button("Add by ID") {
-                let id = manualID.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !id.isEmpty else { return }
-                review = LLMModelReview(discovered: APIDiscoveredModel(id: id, name: id),
-                                        provider: providerName, usage: usage, isManual: true)
+        HStack {
+            Text("Results are held only in memory and are discarded when the provider changes.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            if target.task == nil {
+                Button("Import selected") { importSelection() }
+                    .disabled(selection.isEmpty || selection.count > slotsLeft)
             }
         }
+        if target.task == nil && selection.count > slotsLeft {
+            Text("The \(llmModelLimit)-model limit leaves room for \(slotsLeft); deselect \(selection.count - slotsLeft) before importing.")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        }
+    }
+
+    private var isFetching: Bool {
+        if case .fetching = session?.phase { return true }
+        return false
     }
 
     @ViewBuilder
     private func row(_ model: APIDiscoveredModel) -> some View {
-        let identity = llmModelIdentity(providerName, model.id)
-        let configured = configuredIdentities.contains(identity)
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.name).lineLimit(1)
                 Text(model.id).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                Text(llmCapabilitySummary(model) + (configured ? " · configured" : ""))
+                Text(llmCapabilitySummary(model)
+                     + (configuredNames.contains(model.id) ? " · configured" : ""))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if configured {
-                if target.selection == .add {
-                    Text("Configured").font(.caption).foregroundStyle(.secondary)
-                } else if let existing = settings.draft.models.first(where: { $0.identity == identity }) {
-                    Button(target.selection == .defaultEmbedding ? "Use for embeddings" : "Use") {
-                        useConfigured(existing)
-                    }
-                }
+            if let task = target.task {
+                Button(task == .embed ? "Use for embeddings" : "Use") { pick(model) }
+            } else if configuredNames.contains(model.id) {
+                Text("Configured").font(.caption).foregroundStyle(.secondary)
             } else {
-                let draftReview = LLMModelReview(discovered: model, provider: providerName, usage: usage)
-                Button("Details") { review = draftReview }
-                if draftReview.isReady {
-                    Button(target.selection == .add ? "Add" : "Use") { use(model) }
-                } else {
-                    Button("Missing: \(draftReview.missingMetadata.joined(separator: ", "))") {
-                        review = draftReview
+                Toggle("Select", isOn: Binding(
+                    get: { selection.contains(model.id) },
+                    set: { checked in
+                        if checked { selection.insert(model.id) } else { selection.remove(model.id) }
                     }
-                }
+                ))
+                .labelsHidden()
             }
         }
     }
 
-    private func use(_ model: APIDiscoveredModel) {
-        let draftReview = LLMModelReview(discovered: model, provider: providerName, usage: usage)
-        guard draftReview.isReady else {
-            review = draftReview
-            return
-        }
-        commit(draftReview)
-    }
-
-    private func useConfigured(_ model: LLMModelDraft) {
-        guard settings.selectConfiguredModel(model, providerID: target.providerID,
-                                             selection: target.selection) else { return }
-        if target.selection != .add { dismiss() }
-    }
-
-    private func commit(_ review: LLMModelReview) {
-        let accepted: Bool
-        if review.isManual {
-            accepted = settings.selectManualModel(review, providerID: target.providerID,
-                                                  selection: target.selection)
+    /// A task-mode choice. An unconfigured pick needs a price review before it
+    /// becomes a configured model; an already-configured one routes directly,
+    /// keeping the prices it shares by ID.
+    private func pick(_ model: APIDiscoveredModel) {
+        guard let task = target.task, let fetchID = session?.fetchID else { return }
+        if configuredNames.contains(model.id) {
+            if settings.applyCatalogueSelection([LLMModelReview(discovered: model)], providerID: target.providerID,
+                                                fetchID: fetchID, task: task) { dismiss() }
         } else {
-            accepted = settings.selectCatalogueModel(review, providerID: target.providerID,
-                                                     fetchID: session?.fetchID ?? -1,
-                                                     selection: target.selection)
+            reviewFetchID = fetchID
+            reviews = [LLMModelReview(discovered: model)]
+            reviewing = true
         }
-        guard accepted else { return }
-        self.review = nil
-        if target.selection != .add { dismiss() }
     }
 
-    private func check(_ review: LLMModelReview) {
-        settings.checkModel(providerID: target.providerID, model: review.configured(),
-                            capability: review.usage == .embedding ? .embedding : .chat)
+    /// Provider-mode import: the selected catalogue IDs that are not yet
+    /// configured enter a price review; configured IDs are already present.
+    private func importSelection() {
+        reviewFetchID = session?.fetchID
+        reviews = candidates
+            .filter { selection.contains($0.id) && !configuredNames.contains($0.id) }
+            .map(LLMModelReview.init(discovered:))
+        guard !reviews.isEmpty else { return }
+        reviewing = true
     }
-}
 
-/// Inline metadata completion for one catalogue pick. Fields the selection
-/// does not use are shown as explicitly zero; a missing applicable value is
-/// reported next to its field, never as a bare invalid number.
-private struct LLMModelReviewEditor: View {
-    @Binding var review: LLMModelReview
-    let check: LLMModelCheckSession?
-    let target: LLMDiscoveryTarget
-    let onBack: () -> Void
-    let onCheck: () -> Void
-    let onUse: () -> Void
+    // MARK: - Price review
 
-    private var dimensionsMessage: String? { review.dimensionsMessage }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(review.discovered.name).font(.headline).lineLimit(1)
-                    Text("\(review.id) · \(target.providerName) · \(llmCapabilitySummary(review.discovered))")
-                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
-                Spacer()
-                Button("Back", action: onBack)
-            }
-
-            if review.usage == .chat {
-                priceField("Input per 1M (USD)", text: $review.inputPer1M, valid: review.inputValid)
-                priceField("Output per 1M (USD)", text: $review.outputPer1M, valid: review.outputValid)
-                Text("Embedding geometry and rate are not used for chat and stay zero.")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else {
-                priceField("Embedding per 1M (USD)", text: $review.embeddingPer1M,
-                           valid: review.embeddingPriceValid)
-                LabeledContent("Dimensions") {
-                    VStack(alignment: .trailing, spacing: 2) {
-                        TextField("0", text: $review.dimensions)
-                            .frame(width: 90)
-                            .multilineTextAlignment(.trailing)
-                        if let message = dimensionsMessage {
-                            Text(message)
-                                .font(.caption2)
-                                .foregroundStyle(.red)
+    @ViewBuilder private var reviewContent: some View {
+        Text("Review prices and geometry before importing. The catalogue pre-fills what it publishes; enter explicit values; zero included; for whatever it leaves out.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        Form {
+            ForEach(reviews.indices, id: \.self) { index in
+                SwiftUI.Section {
+                    priceField("Input per 1M (USD)", text: $reviews[index].inputPer1M,
+                               valid: reviews[index].inputValid)
+                    priceField("Output per 1M (USD)", text: $reviews[index].outputPer1M,
+                               valid: reviews[index].outputValid)
+                    priceField("Embedding per 1M (USD)", text: $reviews[index].embeddingPer1M,
+                               valid: reviews[index].embeddingPriceValid)
+                    LabeledContent("Dimensions") {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            TextField("0", text: $reviews[index].dimensions)
+                                .frame(width: 90)
+                                .multilineTextAlignment(.trailing)
+                            if !reviews[index].dimensionsValid {
+                                Text(reviews[index].dimensions.trimmingCharacters(in: .whitespaces).isEmpty
+                                     ? "Required" : "Invalid")
+                                    .font(.caption2)
+                                    .foregroundStyle(.red)
+                            }
                         }
                     }
-                }
-                Toggle("Truncatable", isOn: $review.truncatable)
-                Toggle("Supports custom dimensions", isOn: $review.supportsCustomDimensions)
-            }
-
-            Toggle("This model is free", isOn: Binding(
-                get: { review.isFree },
-                set: { enabled in
-                    if enabled { review.markFree() } else { review.isFree = false }
-                }
-            ))
-
-            if !review.isReady {
-                Text("Missing: \(review.missingMetadata.joined(separator: ", "))")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
-
-            checkSection
-
-            HStack {
-                Spacer()
-                Button(target.selection == .add ? "Add Model" : "Use Model", action: onUse)
-                    .disabled(!review.isReady)
-            }
-        }
-        .padding(8)
-        .background(.quaternary.opacity(0.3))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .onChange(of: check?.phase) { _, phase in
-            guard case .result(let result) = phase, result.compatible else { return }
-            if let dimensions = result.dimensions { review.dimensions = String(dimensions) }
-            if let supports = result.supportsCustomDimensions {
-                review.supportsCustomDimensions = supports
-            }
-        }
-    }
-
-    @ViewBuilder private var checkSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Button("Check Model") { onCheck() }
-                .disabled(!review.isCheckable)
-            Text("A fixed sample is sent to the provider and may cost. Checking an embedding can observe its width and resizing support.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            if let check {
-                switch check.phase {
-                case .checking:
-                    HStack(spacing: 4) {
-                        ProgressView().controlSize(.mini)
-                        Text("Checking…").font(.caption)
+                    Toggle("Truncatable", isOn: $reviews[index].truncatable)
+                } header: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(reviews[index].discovered.name)
+                        Text("\(reviews[index].id) · \(llmCapabilitySummary(reviews[index].discovered))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
-                case .result(let result):
-                    Text((result.compatible ? "Compatible. " : "Not compatible. ") + result.message)
-                        .font(.caption)
-                        .foregroundStyle(result.compatible ? Color.secondary : Color.orange)
-                case .failed(let message):
-                    Text(message).font(.caption).foregroundStyle(.red)
                 }
             }
         }
+        .formStyle(.grouped)
+        .frame(maxHeight: .infinity)
+
+        HStack {
+            Button("Back") { reviewing = false }
+            Spacer()
+            Button(target.task == nil ? "Import \(reviews.count) model\(reviews.count == 1 ? "" : "s")"
+                                      : "Import and use") { importReviewed() }
+                .disabled(!reviews.allSatisfy(\.isReady) || reviews.count > slotsLeft || settings.busy || session?.fetchID != reviewFetchID)
+        }
+        if slotsLeft < reviews.count {
+            Text("The \(llmModelLimit)-model limit leaves room for \(slotsLeft); deselect models before importing.")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        }
+        Text("Prices are shared by model ID across providers: importing an ID that is already configured keeps its existing prices.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
     }
 
     @ViewBuilder
@@ -397,6 +293,15 @@ private struct LLMModelReviewEditor: View {
                         .foregroundStyle(.red)
                 }
             }
+        }
+    }
+
+    /// Import the reviewed models into the draft. Task mode routes only when
+    /// the picked model actually became (or already was) configured.
+    private func importReviewed() {
+        guard let fetchID = reviewFetchID else { return }
+        if settings.applyCatalogueSelection(reviews, providerID: target.providerID, fetchID: fetchID, task: target.task) {
+            dismiss()
         }
     }
 }

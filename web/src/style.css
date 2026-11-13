@@ -393,9 +393,7 @@ dd {margin: 0}
 .section-nav {position: sticky; top: 0}
 .section-nav ul {display: grid; gap: 2px; margin: 0; padding: 0; list-style: none}
 .section-nav a {display: block; padding: .4rem .6rem; border-radius: var(--r2); color: var(--ink-muted); text-decoration: none}
-.section-nav a:hover, .section-nav a[aria-current="page"] {background: var(--hover); color: var(--ink)}
-.section-nav a[aria-current="page"] {font-weight: 600}
-.field-error {color: var(--danger); font-size: .875rem}
+.section-nav a:hover {background: var(--hover); color: var(--ink)}
 @container page (max-width: 52rem) {
   .settings-layout {grid-template-columns: minmax(0, 1fr)}
   .section-nav {position: static; margin-bottom: var(--s3)}
@@ -510,29 +508,6 @@ dialog::backdrop {background: rgb(10 10 8 / .42)}
 .label-name {font-weight: 600}
 .llm-provider-form, .llm-model-form {margin: var(--s2) 0; padding: var(--s2) var(--s3); border: 1px solid var(--line); border-radius: var(--r2); background: var(--surface-2)}
 .secret {display: block; margin: var(--s2) 0; padding: var(--s3); border: 1px solid var(--line); border-radius: var(--r2); background: var(--surface-2); overflow-wrap: anywhere; white-space: pre-wrap}
-
-/* AI settings: route selectors and the provider-scoped model picker. */
-.llm-route-field {display: flex; flex-direction: column; gap: var(--s1)}
-.llm-route {display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2)}
-.llm-route > select {flex: 1 1 12rem; min-width: 0}
-.llm-route > button {flex: none}
-.llm-advanced {margin-top: var(--s2)}
-.llm-advanced summary {font-size: var(--step--1); font-weight: 500; color: var(--ink-muted)}
-.llm-advanced label {margin-top: var(--s2)}
-.llm-picker {margin: var(--s2) 0; padding: var(--s2) var(--s3); border: 1px solid var(--line); border-radius: var(--r2); background: var(--surface-2)}
-.llm-picker-list {list-style: none; margin: var(--s2) 0; padding: 0; max-height: min(24rem, 55vh); overflow: auto; border: 1px solid var(--line); border-radius: var(--r2); background: var(--surface)}
-.llm-picker-row {border-top: 1px solid var(--line)}
-.llm-picker-row:first-child {border-top: 0}
-.llm-picker-select {display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); width: 100%; min-height: 0; padding: var(--s2) var(--s3); border: 0; border-radius: 0; background: transparent; text-align: left; font-weight: 400}
-.llm-picker-select:hover:not(:disabled) {background: var(--hover)}
-.llm-picker-name {flex: 1 1 12rem; min-width: 0; overflow-wrap: anywhere}
-.llm-picker-chips {display: flex; flex-wrap: wrap; gap: var(--s1)}
-.llm-picker-detail {flex: 1 1 100%; margin: 0; font-size: var(--step--1); color: var(--ink-muted); overflow-wrap: anywhere}
-.llm-manual {margin-top: var(--s2)}
-@media (max-width: 34rem) {
-  .llm-route {flex-direction: column; align-items: stretch}
-  .llm-route > select, .llm-route > button {width: 100%; flex: none}
-}
 
 /* Manage feeds */
 .feed-title {font-weight: 600; overflow-wrap: anywhere}

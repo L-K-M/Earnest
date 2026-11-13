@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useRef, useState} from 'react'
-import {Link, useBlocker} from './router'
+import {Link} from './router'
 import {
   CADENCES, EXTRACT_MODES, groupByFolder, healthPending, isFirehose, newOp, normalizeFeedURLInput, parseCredentialHeaders, summarizeImport,
   createFolder, createMute, deleteFolder, deleteMute, explainHealth, exportOPML, importKept, importOPML, readFileText, summarizeKeptImport,
@@ -224,12 +224,11 @@ function SubscribeForm({folders, busy, act, prefill, onPrefillApplied}: {folders
   </section>
 }
 
-export function OPMLTools({busy, act}: {busy: boolean; act: Act}) {
+function OPMLTools({busy, act}: {busy: boolean; act: Act}) {
   const [file, setFile] = useState<File | null>(null)
   const [report, setReport] = useState<OPMLResult[] | null>(null)
   const [error, setError] = useState('')
   const [working, setWorking] = useState(false)
-  useBlocker(working || (file !== null && report === null), 'Leave before importing this subscription file?')
 
   async function upload() {
     if (!file) return
@@ -267,7 +266,7 @@ export function OPMLTools({busy, act}: {busy: boolean; act: Act}) {
 
   const summary = report && summarizeImport(report)
   return <section className="card" aria-labelledby="opml-heading"><h3 id="opml-heading">OPML</h3>
-    <label>Import a subscription file<input type="file" accept=".opml,.xml,text/x-opml,application/xml,text/xml" disabled={working} onChange={e => { setFile(e.target.files?.[0] ?? null); setReport(null); setError('') }} /></label>
+    <label>Import a subscription file<input type="file" accept=".opml,.xml,text/x-opml,application/xml,text/xml" onChange={e => setFile(e.target.files?.[0] ?? null)} /></label>
     <button disabled={busy || working || !file} onClick={() => { void upload() }}>Import</button>
     <button disabled={busy || working} onClick={() => { void download() }}>Export subscriptions</button>
     {error && <p role="alert">{error}</p>}
@@ -278,14 +277,13 @@ export function OPMLTools({busy, act}: {busy: boolean; act: Act}) {
   </section>
 }
 
-export function KeptImportTools({busy, act}: {busy: boolean; act: Act}) {
+function KeptImportTools({busy, act}: {busy: boolean; act: Act}) {
   const [file, setFile] = useState<File | null>(null)
   const [text, setText] = useState('')
   const [subscribe, setSubscribe] = useState(false)
   const [report, setReport] = useState<KeptImportReport | null>(null)
   const [error, setError] = useState('')
   const [working, setWorking] = useState(false)
-  useBlocker(working || (file !== null && report === null), 'Leave before importing these starred articles?')
 
   // Reading the file counts as working, so a second click cannot start a
   // second import while the first file is still being read.

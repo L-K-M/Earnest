@@ -6,66 +6,66 @@ import {
   LLM_DEFAULT_BASE_URLS,
   LLM_KEY_STATUS_LABELS,
   LLM_PROVIDER_KINDS,
-  LLM_PROVIDER_PRESETS,
   LLM_TOKEN_FIELDS,
   MAX_MODELS,
   apiKeyStatus,
-  defaultRouteFor,
   draftFromSettings,
-  effectiveTaskRoute,
   inputFromDraft,
-  modelKey,
-  sameModel,
   taskCapability,
-  taskLabel,
-  uniqueProviderName,
   validateDraft,
-  validateMoney,
-  validateTimeout,
-  type DiscoveredModel,
-  type LLMCapability,
-  type LLMDefaults,
+  validateModel,
+  validateProvider,
   type LLMProviderKind,
-  type LLMProviderPreset,
   type LLMSettings as LLMSettingsData,
   type LLMSettingsDraft,
   type LLMTokenField,
-  type LLMTaskDraft,
+  type LLMTask,
   type ModelDraft,
   type ProviderDraft,
 } from './model'
-import {ModelPicker} from './Discovery'
-import {withoutModel} from './mutations'
+import {DiscoveryPanel} from './Discovery'
 
 const newOp = () => crypto.randomUUID()
 const message = (error: unknown, fallback: string) => error instanceof Error && error.message ? error.message : fallback
 
-type PickerTarget = {kind: 'task'; index: number} | {kind: 'default'; which: keyof LLMDefaults} | {kind: 'provider'; index: number}
-
-// toggleTask switches a feature on or off. Turning it on restores a saved
-// custom override when there is one, otherwise it inherits the default.
-function toggleTask(task: LLMTaskDraft, checked: boolean): Partial<LLMTaskDraft> {
-  if (!checked) return {mode: 'off'}
-  return {mode: task.provider || task.model ? 'custom' : 'default'}
+type ProviderFormValues = {
+  name: string
+  kind: LLMProviderKind
+  base_url: string
+  api_key: string
+  clear_api_key: boolean
+  monthly_limit_usd: string
+  timeout_seconds: string
+  token_field: LLMTokenField
 }
 
-// selectableModels lists the models a route may use. A provider-scoped model
-// only applies to its own provider; the legacy global record applies to every
-// provider. Embedding routes additionally need real geometry.
-function selectableModels(models: ModelDraft[], provider: string, capability: LLMCapability): ModelDraft[] {
-  const scoped = models.filter(model => model.provider === provider)
-  // A scoped record wins over the global record with the same name, so the
-  // global one is not offered a second time for this provider.
-  const scopedNames = new Set(scoped.map(model => model.name))
-  const candidates = [...scoped, ...models.filter(model => model.provider === '' && !scopedNames.has(model.name))]
-  if (capability === 'chat') return candidates
-  return candidates.filter(model => Number(model.dimensions) > 0 || model.supports_custom_dimensions)
+type ModelFormValues = {
+  name: string
+  input_per_1m: string
+  output_per_1m: string
+  embedding_per_1m: string
+  dimensions: string
+  truncatable: boolean
 }
 
-// LLMSettings is the server-wide AI service configuration section. The server
+function emptyProvider(): ProviderDraft {
+  return {
+    name: '',
+    kind: 'openai',
+    base_url: LLM_DEFAULT_BASE_URLS.openai,
+    has_api_key: false,
+    monthly_limit_usd: '0',
+    timeout_seconds: '60',
+    token_field: 'max_completion_tokens',
+    api_key: '',
+    clear_api_key: false,
+    original_name: null,
+  }
+}
+
+// LLMSettings is the server-wide service configuration section. The server
 // owns the only copy; this form edits a draft and Save replaces the whole
-// provider, default, task and model configuration in one request. Provider
-// fields are edited directly in the draft; there is no separate apply step.
+// provider, task and model configuration in one request.
 export function LLMSettings() {
   const queryClient = useQueryClient()
   const [loaded, setLoaded] = useState<LLMSettingsData | null>(null)
@@ -73,19 +73,15 @@ export function LLMSettings() {
   const [problems, setProblems] = useState<string[]>([])
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
-  const [providerForm, setProviderForm] = useState<{mode: 'edit'; index: number} | null>(null)
-  const [conflict, setConflict] = useState(false)
-  const [picker, setPicker] = useState<PickerTarget | null>(null)
+  const [providerForm, setProviderForm] = useState<{mode: 'add'} | {mode: 'edit'; index: number} | null>(null)
+  const [modelForm, setModelForm] = useState(false)
+  // Which catalogue panel is open: beside one provider row or inside one
+  // task's routing row. The panel inside the provider editor keeps its own
+  // open state because its values change while it is mounted.
+  const [discovery, setDiscovery] = useState<{target: 'provider' | 'task'; index: number} | null>(null)
   // The op_id of the request whose outcome is uncertain, so a retry of the
   // identical body reuses it instead of risking a second apply.
   const attempt = useRef<{body: string; opID: string} | null>(null)
-  // Catalogue results are kept for this settings session only. Closing and
-  // reopening the picker reuses them; remounting the section starts fresh.
-  const catalogueCache = useRef(new Map<string, DiscoveredModel[]>())
-  // The provider name that references currently point at. A half-typed empty
-  // name must not capture unrelated routes, so the last valid name is kept
-  // until a non-empty replacement arrives.
-  const providerEditName = useRef<string | null>(null)
 
   const load = useCallback(async (notice: string) => {
     setBusy(true)
@@ -96,13 +92,12 @@ export function LLMSettings() {
       attempt.current = null
       setLoaded(next)
       setDraft(draftFromSettings(next))
-      providerEditName.current = null
       setProviderForm(null)
-      setConflict(false)
-      setPicker(null)
+      setModelForm(false)
+      setDiscovery(null)
       setNotice(notice)
     } catch (error) {
-      setProblems([message(error, 'Could not load the AI services.')])
+      setProblems([message(error, 'Could not load the LLM services.')])
     } finally {
       setBusy(false)
     }
@@ -113,15 +108,11 @@ export function LLMSettings() {
   const loadedDraft = loaded ? draftFromSettings(loaded) : null
   const dirty = draft !== null && loadedDraft !== null
     && JSON.stringify(inputFromDraft(draft)) !== JSON.stringify(inputFromDraft(loadedDraft))
-  useBlocker(dirty, 'Leave without saving your AI settings?')
+  const hasOpenEditor = providerForm !== null || modelForm
+  useBlocker(dirty || hasOpenEditor, 'Leave without saving your LLM service settings?')
 
-  function setTask(index: number, patch: Partial<LLMTaskDraft>) {
+  function setTask(index: number, patch: Partial<LLMTask>) {
     setDraft(current => current ? {...current, tasks: current.tasks.map((task, i) => i === index ? {...task, ...patch} : task)} : current)
-    setNotice('')
-  }
-
-  function setDefault(which: keyof LLMDefaults, route: {provider: string; model: string}) {
-    setDraft(current => current ? {...current, defaults: {...current.defaults, [which]: route}} : current)
     setNotice('')
   }
 
@@ -130,145 +121,88 @@ export function LLMSettings() {
     setNotice('')
   }
 
-  // Renaming a provider moves its task routes, defaults and scoped models with
-  // it, so nothing is left pointing at the old name. The move is deferred
-  // while the name field is empty: an empty name is the global model scope,
-  // not this provider, and matching it would capture unrelated records.
-  function updateProvider(index: number, patch: Partial<ProviderDraft>) {
-    setDraft(current => {
-      if (!current) return current
-      const previous = current.providers[index]
-      const next = {...previous, ...patch, routed_name: patch.name || previous.routed_name || previous.name}
-      const from = previous.routed_name ?? previous.name
-      const to = next.name
-      const move = patch.name !== undefined && to !== '' && to !== from ? {from, to} : null
-      if (move) providerEditName.current = to
-      return {
-        ...current,
-        providers: current.providers.map((provider, i) => i === index ? next : provider),
-        tasks: move ? current.tasks.map(task => task.provider === move.from ? {...task, provider: move.to} : task) : current.tasks,
-        defaults: move ? {
-          text: current.defaults.text.provider === move.from ? {...current.defaults.text, provider: move.to} : current.defaults.text,
-          embedding: current.defaults.embedding.provider === move.from ? {...current.defaults.embedding, provider: move.to} : current.defaults.embedding,
-        } : current.defaults,
-        models: move ? current.models.map(model => model.provider === move.from ? {...model, provider: move.to} : model) : current.models,
-      }
-    })
+  function addProvider(values: ProviderFormValues) {
+    if (!draft) return
+    const provider: ProviderDraft = {...values, has_api_key: false, original_name: null}
+    const found = validateProvider(provider, undefined, new Set(draft.providers.map(item => item.name)))
+    if (found.length) { setProblems(found); return }
+    setDraft({...draft, providers: [...draft.providers, provider]})
+    setProviderForm(null)
+    setDiscovery(null)
+    setProblems([])
     setNotice('')
   }
 
-  function addProvider(preset: LLMProviderPreset) {
+  function updateProvider(index: number, values: ProviderFormValues) {
     if (!draft) return
-    const name = uniqueProviderName(preset.label, new Set(draft.providers.map(provider => provider.name)))
-    const provider: ProviderDraft = {
-      name,
-      kind: preset.kind,
-      base_url: preset.base_url,
-      has_api_key: false,
-      monthly_limit_usd: '0',
-      timeout_seconds: '60',
-      token_field: 'max_completion_tokens',
-      api_key: '',
-      clear_api_key: false,
-      original_name: null,
-    }
-    setDraft({...draft, providers: [...draft.providers, provider]})
-    providerEditName.current = name
-    setProviderForm({mode: 'edit', index: draft.providers.length})
-    setPicker(null)
+    const previousName = draft.providers[index].name
+    const providers = draft.providers.map((provider, i) => i === index
+      ? {...values, has_api_key: provider.has_api_key, original_name: provider.original_name}
+      : provider)
+    const provider = providers[index]
+    const original = loaded?.providers?.find(item => item.name === provider.original_name)
+    const others = new Set(providers.filter((_, i) => i !== index).map(item => item.name))
+    const found = validateProvider(provider, original, others)
+    if (found.length) { setProblems(found); return }
+    setDraft({
+      ...draft,
+      providers,
+      tasks: previousName !== provider.name
+        ? draft.tasks.map(task => task.provider === previousName ? {...task, provider: provider.name} : task)
+        : draft.tasks,
+    })
+    setProviderForm(null)
+    setDiscovery(null)
     setProblems([])
-    setNotice(`${preset.label} provider added. Edit the details, then Save.`)
+    setNotice('')
   }
 
   function removeProvider(index: number) {
     if (!draft) return
     const provider = draft.providers[index]
-    // While a rename is half-typed, references still point at the last valid
-    // name; removal must follow those references, not the empty field.
-    const name = provider.routed_name || provider.name
-    const usesProvider = (candidate: string) => candidate === name
-    const affected = draft.tasks.filter(task => usesProvider(task.provider)
-      || (task.mode === 'default' && usesProvider(defaultRouteFor(task.task, draft.defaults).provider)))
-    const off = affected.map(task => taskLabel(task.task))
+    const off = draft.tasks.filter(task => task.provider === provider.name).map(task => task.task)
     const note = off.length ? ` Removing it turns off ${off.join(', ')}.` : ''
-    if (!window.confirm(`Remove provider ${name}?${note}`)) return
+    if (!window.confirm(`Remove provider ${provider.name}?${note}`)) return
     setDraft({
       ...draft,
       providers: draft.providers.filter((_, i) => i !== index),
-      // Scoped prices belong to the provider and cannot outlive it; global
-      // records stay available to every other provider.
-      models: draft.models.filter(model => model.provider !== name),
-      tasks: draft.tasks.map(task => usesProvider(task.provider)
-        || (task.mode === 'default' && usesProvider(defaultRouteFor(task.task, draft.defaults).provider))
-        ? {task: task.task, mode: 'off', provider: '', model: ''}
-        : task),
-      defaults: {
-        text: usesProvider(draft.defaults.text.provider) ? {provider: '', model: ''} : draft.defaults.text,
-        embedding: usesProvider(draft.defaults.embedding.provider) ? {provider: '', model: ''} : draft.defaults.embedding,
-      },
+      tasks: draft.tasks.map(task => task.provider === provider.name ? {task: task.task, provider: '', model: ''} : task),
     })
-    if (providerForm?.mode === 'edit') {
-      if (providerForm.index === index) {
-        providerEditName.current = null
-        setProviderForm(null)
-      } else if (providerForm.index > index) {
-        setProviderForm({mode: 'edit', index: providerForm.index - 1})
-      }
-    }
-    setPicker(null)
+    if (providerForm?.mode === 'edit' && providerForm.index === index) setProviderForm(null)
+    setDiscovery(null)
     setProblems([])
     setNotice('')
   }
 
-  // pickModel adds the selected model to the draft unless its provider+name
-  // identity is already configured; an existing record keeps its saved prices.
-  // The picker target decides which route the model becomes.
-  function pickModel(model: ModelDraft) {
-    if (!draft) return
-    const target = picker
-    const existing = draft.models.find(item => sameModel(item, model))
-    if (!existing && draft.models.length >= MAX_MODELS) {
-      setProblems([`The model table is full at ${MAX_MODELS} entries; remove one before adding ${model.name}.`])
-      return
-    }
-    setDraft(current => {
-      if (!current) return current
-      const found = current.models.find(item => sameModel(item, model))
-      const models = found ? current.models : [...current.models, model]
-      if (target?.kind === 'task') {
-        return {...current, models, tasks: current.tasks.map((task, i) => i === target.index ? {...task, mode: 'custom', provider: model.provider, model: model.name} : task)}
-      }
-      if (target?.kind === 'default') {
-        return {...current, models, defaults: {...current.defaults, [target.which]: {provider: model.provider, model: model.name}}}
-      }
-      return {...current, models}
-    })
-    setPicker(null)
-    setProblems([])
-    setNotice(`${model.name} selected. Save to persist it.`)
+  // Catalogue imports enter the same draft the manual model form writes to;
+  // only Save persists them.
+  function importModels(models: ModelDraft[]) {
+    setDraft(current => current ? {...current, models: [...current.models, ...models]} : current)
+    setNotice('')
   }
 
-  // Observed geometry from a model check updates only geometry in the draft;
-  // rates stay exactly as the user entered them.
-  function applyGeometry(patch: {provider: string; name: string; dimensions?: number; supports_custom_dimensions?: boolean}) {
-    setDraft(current => current ? {
-      ...current,
-      models: current.models.map(model => model.provider === patch.provider && model.name === patch.name ? {
-        ...model,
-        ...(patch.dimensions !== undefined ? {dimensions: String(patch.dimensions)} : {}),
-        ...(patch.supports_custom_dimensions !== undefined ? {supports_custom_dimensions: patch.supports_custom_dimensions} : {}),
-      } : model),
-    } : current)
+  function addModel(values: ModelFormValues) {
+    if (!draft) return
+    const model: ModelDraft = {...values}
+    const found = validateModel(model, new Set(draft.models.map(item => item.name)))
+    if (found.length) { setProblems(found); return }
+    setDraft({...draft, models: [...draft.models, model]})
+    setModelForm(false)
+    setProblems([])
+    setNotice('')
   }
 
   function removeModel(index: number) {
     if (!draft) return
     const model = draft.models[index]
-    const next = withoutModel(draft, model)
-    const affected = draft.tasks.filter((task, i) => task.mode !== 'off' && next.tasks[i].mode === 'off')
-    const note = affected.length ? ` Removing it turns off ${affected.map(task => taskLabel(task.task)).join(', ')}.` : ''
+    const off = draft.tasks.filter(task => task.model === model.name).map(task => task.task)
+    const note = off.length ? ` Tasks using it are turned off: ${off.join(', ')}.` : ''
     if (!window.confirm(`Remove model ${model.name}?${note}`)) return
-    setDraft(next)
+    setDraft({
+      ...draft,
+      models: draft.models.filter((_, i) => i !== index),
+      tasks: draft.tasks.map(task => task.model === model.name ? {task: task.task, provider: '', model: ''} : task),
+    })
     setProblems([])
     setNotice('')
   }
@@ -291,11 +225,10 @@ export function LLMSettings() {
         attempt.current = null
         setLoaded(next)
         setDraft(draftFromSettings(next))
-        providerEditName.current = null
         setProviderForm(null)
-        setConflict(false)
-        setPicker(null)
-        setNotice('AI settings saved.')
+        setModelForm(false)
+        setDiscovery(null)
+        setNotice('LLM services saved.')
         // The shell gates Ask on this cache, not on the settings response.
         void queryClient.invalidateQueries({queryKey: ['pipeline']})
       } catch (error) {
@@ -303,7 +236,6 @@ export function LLMSettings() {
           // A conflict means the saved configuration moved on. Keep the draft
           // and make the reload explicit; never overwrite what changed.
           attempt.current = null
-          setConflict(true)
           setProblems(['These settings changed after you loaded them. Reload to get the current version; your edits are kept and nothing was overwritten.'])
         } else {
           setProblems([message(error, 'The settings did not save. Your edits are kept.')])
@@ -314,233 +246,188 @@ export function LLMSettings() {
     })()
   }
 
-  function discard() {
-    if (!dirty || window.confirm('Discard your unsaved AI changes and reload?')) void load('AI settings reloaded.')
-  }
-
-  function pickerProvider(target: PickerTarget): {provider: ProviderDraft; capability: LLMCapability | null; taskLabel: string | null} {
-    if (target.kind === 'provider') {
-      const provider = draft!.providers[target.index]
-      return {provider, capability: null, taskLabel: null}
-    }
-    if (target.kind === 'default') {
-      const which = target.which
-      const route = draft!.defaults[which]
-      const provider = draft!.providers.find(item => item.name === route.provider) ?? draft!.providers[0] ?? null
-      return {provider: provider!, capability: which === 'embedding' ? 'embedding' : 'chat', taskLabel: which === 'embedding' ? 'the default embedding model' : 'the default text model'}
-    }
-    const task = draft!.tasks[target.index]
-    const provider = draft!.providers.find(item => item.name === task.provider) ?? null
-    return {provider: provider!, capability: taskCapability(task.task), taskLabel: taskLabel(task.task)}
-  }
-
   return <section aria-labelledby="llm-services-heading">
-    <h2 id="llm-services-heading">AI</h2>
-    <p>Server-wide settings. Add a provider, choose models, then enable the features you want.</p>
+    <h2 id="llm-services-heading">LLM services</h2>
+    <p>These settings are shared by the whole server and affect every account. API keys are encrypted on the server and are never sent back to the browser. Every task stays off until it has both a provider and a model, so nothing leaves the server by default.</p>
     {loaded && loaded.revision === 0 && <p className="hint">The server is still using its environment defaults. Saving stores this configuration in the database; from then on the saved configuration takes precedence and survives restarts.</p>}
-    {problems.length > 0 && <div role="alert" className="form-error">{loaded ? <p>Save blocked. Fix the following:</p> : null}<ul>{problems.map((problem, i) => <li key={i}>{problem}</li>)}</ul></div>}
+    {problems.length > 0 && <div role="alert" className="form-error"><ul>{problems.map((problem, i) => <li key={i}>{problem}</li>)}</ul></div>}
     {notice && <p role="status">{notice}</p>}
     {busy && <p role="status" className="muted">Working…</p>}
-    {!loaded && <div className="button-row"><button className="primary" disabled={busy} onClick={() => void load('AI settings loaded.')}>{busy ? 'Loading…' : 'Retry loading'}</button></div>}
+    {!loaded && <div className="button-row"><button className="primary" disabled={busy} onClick={() => void load('LLM services loaded.')}>{busy ? 'Loading…' : 'Load'}</button></div>}
     {loaded && draft && <form onSubmit={save} onChange={() => setNotice('')}>
       <div className="button-row">
-        <button className="primary" disabled={busy || !dirty || conflict}>Save</button>
-        <button type="button" disabled={busy || !dirty} onClick={discard}>Discard</button>
-        {conflict && <button type="button" disabled={busy} onClick={discard}>Reload</button>}
+        <button className="primary" disabled={busy || !dirty || hasOpenEditor}>Save</button>
+        <button type="button" disabled={busy} onClick={() => { if ((!dirty && !hasOpenEditor) || window.confirm('Discard your unsaved LLM service changes and reload?')) void load('LLM services reloaded.') }}>Reload</button>
+        <button type="button" disabled={busy || providerForm !== null} onClick={() => setProviderForm({mode: 'add'})}>Add provider</button>
         {dirty ? <span className="muted">Unsaved changes</span> : <span className="muted">No unsaved changes</span>}
       </div>
 
       <h3>Providers</h3>
-      <p className="hint">Choose a service or connect your own compatible server. API keys are stored encrypted.</p>
-      <div className="button-row">
-        {LLM_PROVIDER_PRESETS.map(preset => <button key={preset.label} type="button" disabled={busy} onClick={() => addProvider(preset)}>Add {preset.label}</button>)}
-      </div>
+      <p className="hint">Each provider is a named API destination. Point the base URL at any compatible server; a local server on a private address needs EARNEST_OUTBOUND_ALLOW_PRIVATE allowlisting, which this page cannot bypass.</p>
       <ul className="settings-list">
         {draft.providers.map((provider, index) => <li key={index}>
           {providerForm?.mode === 'edit' && providerForm.index === index
-            ? <ProviderForm provider={provider} busy={busy} onChange={patch => updateProvider(index, patch)} onRemove={() => removeProvider(index)} />
+            ? <ProviderForm initial={provider} revision={draft.revision} configured={new Set(draft.models.map(model => model.name))} room={MAX_MODELS - draft.models.length} onImport={importModels} onCancel={() => setProviderForm(null)} onSubmit={values => updateProvider(index, values)} />
             : <>
               <div className="settings-row-head">
                 <strong>{provider.name}</strong>
                 <span className="chip">{provider.kind}</span>
                 <span className="chip" data-tone={apiKeyStatus(provider) === 'saved' ? 'green' : apiKeyStatus(provider) === 'entered' ? 'blue' : 'amber'}>{LLM_KEY_STATUS_LABELS[apiKeyStatus(provider)]}</span>
               </div>
-              <p className="settings-row-detail muted">{provider.base_url} · {/^0+(?:\.0+)?$/.test(provider.monthly_limit_usd) ? 'no monthly limit' : `$${provider.monthly_limit_usd} per month`}</p>
+              <p className="settings-row-detail muted">{provider.base_url} · {/^0+(?:\.0+)?$/.test(provider.monthly_limit_usd) ? 'no monthly limit' : `$${provider.monthly_limit_usd} per month`} · {provider.timeout_seconds}s timeout · {provider.token_field}</p>
               <div className="button-row">
-                <button type="button" disabled={busy} onClick={() => { providerEditName.current = provider.name; setProviderForm({mode: 'edit', index}) }}>Edit</button>
-                <button type="button" disabled={busy} onClick={() => removeProvider(index)}>Remove</button>
-                <button type="button" disabled={busy} onClick={() => setPicker({kind: 'provider', index})}>Browse models</button>
+                <button type="button" disabled={busy || providerForm !== null} onClick={() => setProviderForm({mode: 'edit', index})}>Edit</button>
+                <button type="button" disabled={busy || providerForm !== null} onClick={() => removeProvider(index)}>Remove</button>
+                <button type="button" disabled={busy || providerForm !== null} onClick={() => setDiscovery(discovery?.target === 'provider' && discovery.index === index ? null : {target: 'provider', index})}>Fetch models</button>
               </div>
+              {discovery?.target === 'provider' && discovery.index === index && <DiscoveryPanel
+                disabled={busy}
+                provider={provider}
+                revision={draft.revision}
+                capability={null}
+                taskLabel={null}
+                configured={new Set(draft.models.map(model => model.name))}
+                room={MAX_MODELS - draft.models.length}
+                onImport={importModels}
+                onClose={() => setDiscovery(null)} />}
             </>}
         </li>)}
       </ul>
-      {picker?.kind === 'provider' && <ModelPicker
-        disabled={busy}
-        provider={pickerProvider(picker).provider}
-        revision={draft.revision}
-        capability={null}
-        taskLabel={null}
-        models={draft.models}
-        room={MAX_MODELS - draft.models.length}
-        cache={catalogueCache.current}
-        onConflict={() => setConflict(true)}
-        onPick={pickModel}
-        onGeometry={applyGeometry}
-        onClose={() => setPicker(null)} />}
+      {providerForm?.mode === 'add' && <ProviderForm initial={emptyProvider()} revision={draft.revision} configured={new Set(draft.models.map(model => model.name))} room={MAX_MODELS - draft.models.length} onImport={importModels} onCancel={() => setProviderForm(null)} onSubmit={addProvider} />}
 
-      <h3>Defaults</h3>
-      <p className="hint">Choose the models your enabled features will use. Existing custom routes stay unchanged.</p>
-      <RouteSelect label="Default text model" route={draft.defaults.text} providers={draft.providers} models={draft.models} capability="chat" busy={busy} onChange={route => setDefault('text', route)} onBrowse={() => setPicker({kind: 'default', which: 'text'})} />
-      <RouteSelect label="Default embedding model" route={draft.defaults.embedding} providers={draft.providers} models={draft.models} capability="embedding" busy={busy} onChange={route => setDefault('embedding', route)} onBrowse={() => setPicker({kind: 'default', which: 'embedding'})} />
-      {picker?.kind === 'default' && <ModelPicker
-        disabled={busy}
-        provider={pickerProvider(picker).provider}
-        revision={draft.revision}
-        capability={pickerProvider(picker).capability}
-        taskLabel={pickerProvider(picker).taskLabel}
-        models={draft.models}
-        room={MAX_MODELS - draft.models.length}
-        cache={catalogueCache.current}
-        onConflict={() => setConflict(true)}
-        onPick={pickModel}
-        onGeometry={applyGeometry}
-        onClose={() => setPicker(null)} />}
-
-      <h3>Features</h3>
-      <p className="hint">Enable each feature separately. Open Advanced to use a different model for a feature.</p>
+      <h3>Task routing</h3>
+      <p className="hint">All seven tasks are always listed. Choose a provider and a model to turn a task on, or set the provider to Disabled to turn it off.</p>
       <ul className="settings-list">
         {draft.tasks.map((task, index) => {
-          const label = taskLabel(task.task)
-          const capability = taskCapability(task.task)
-          const resolved = effectiveTaskRoute(task, draft.defaults)
-          const enabled = task.mode !== 'off'
-          const on = enabled && !!resolved.provider && !!resolved.model
+          const provider = draft.providers.find(item => item.name === task.provider)
           return <li key={index}>
-            <div className="settings-row-head">
-              <label><input type="checkbox" checked={enabled} disabled={busy} onChange={e => setTask(index, toggleTask(task, e.target.checked))} /> <strong>{label}</strong></label>
-              <span className="chip" data-tone={on ? (task.mode === 'default' ? 'blue' : 'green') : undefined}>{on ? task.mode : enabled ? 'Default' : 'Off'}</span>
-            </div>
-            {enabled && <>
-              <p className="settings-row-detail muted">{resolved.provider && resolved.model ? `Uses ${resolved.provider} · ${resolved.model}.` : 'Choose a default model before saving this feature.'}</p>
-              <details className="llm-advanced">
-                <summary>Advanced</summary>
-                <label>Provider
-                  <select aria-label={`${label} provider`} value={task.provider} disabled={busy} onChange={e => setTask(index, {provider: e.target.value, model: e.target.value ? task.model : '', mode: e.target.value ? 'custom' : 'default'})}>
-                    <option value="">Default</option>
-                    {draft.providers.map(item => <option key={item.name} value={item.name}>{item.name} ({item.kind})</option>)}
-                  </select>
-                </label>
-                <label>Model
-                  <select aria-label={`${label} model`} value={task.model} disabled={busy || !task.provider} onChange={e => setTask(index, {model: e.target.value, mode: e.target.value ? 'custom' : 'default'})}>
-                    <option value="">Default</option>
-                    {selectableModels(draft.models, task.provider, capability).map(item => <option key={modelKey(item.provider, item.name)} value={item.name}>{item.name}{item.provider ? '' : ' (any provider)'}</option>)}
-                  </select>
-                </label>
-                <div className="button-row"><button type="button" disabled={busy || !task.provider} onClick={() => setPicker({kind: 'task', index})}>Browse models</button></div>
-              </details>
-            </>}
-            {picker?.kind === 'task' && picker.index === index && <ModelPicker
+            <div className="settings-row-head"><strong>{task.task}</strong>{!task.provider && <span className="chip">Off</span>}</div>
+            <label>Provider
+              <select aria-label={`${task.task} provider`} value={task.provider} disabled={busy} onChange={e => {
+                const provider = e.target.value
+                setTask(index, {provider, model: provider ? task.model : ''})
+              }}>
+                <option value="">Disabled</option>
+                {draft.providers.map(item => <option key={item.name} value={item.name}>{item.name} ({item.kind})</option>)}
+              </select>
+            </label>
+            <label>Model
+              <select aria-label={`${task.task} model`} value={task.model} disabled={busy || !task.provider} onChange={e => setTask(index, {model: e.target.value})}>
+                <option value="">No model</option>
+                <optgroup label="Configured / manual models">{draft.models.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</optgroup>
+              </select>
+            </label>
+            {provider && <div className="button-row">
+              <button type="button" disabled={busy} onClick={() => setDiscovery(discovery?.target === 'task' && discovery.index === index ? null : {target: 'task', index})}>Fetch models</button>
+            </div>}
+            {provider && discovery?.target === 'task' && discovery.index === index && <DiscoveryPanel
               disabled={busy}
-              provider={pickerProvider(picker).provider}
+              provider={provider}
               revision={draft.revision}
-              capability={pickerProvider(picker).capability}
-              taskLabel={pickerProvider(picker).taskLabel}
-              models={draft.models}
+              capability={taskCapability(task.task)}
+              taskLabel={task.task}
+              configured={new Set(draft.models.map(model => model.name))}
               room={MAX_MODELS - draft.models.length}
-              cache={catalogueCache.current}
-        onConflict={() => setConflict(true)}
-              onPick={pickModel}
-              onGeometry={applyGeometry}
-              onClose={() => setPicker(null)} />}
+              onPick={name => setTask(index, {provider: provider.name, model: name})}
+              onImport={importModels}
+              onClose={() => setDiscovery(null)} />}
           </li>
         })}
       </ul>
 
       <details>
         <summary>Model pricing</summary>
-        <p className="hint">Prices are USD per million tokens and must be explicit; use 0 for a local model. Editing one model keeps every other entry and its prices. A model scoped to a provider wins over the global entry with the same name.</p>
+        <p className="hint">Prices are USD per million tokens and must be explicit; use 0 for a local model. Editing one model keeps every other entry and its prices.</p>
         <ul className="settings-list">
           {draft.models.map((model, index) => <li key={index}>
-            <div className="settings-row-head">
-              <strong>{model.name || 'Unnamed model'}</strong>
-              {model.provider && <span className="chip">{model.provider}</span>}
-              {model.truncatable && <span className="chip">truncatable</span>}
-              {model.supports_custom_dimensions && <span className="chip">provider resizing</span>}
-            </div>
-            {!model.provider && <p className="hint">Legacy shared pricing</p>}
+            <div className="settings-row-head"><strong>{model.name || 'Unnamed model'}</strong>{model.truncatable && <span className="chip">truncatable</span>}</div>
             <label>Input price per 1M tokens<input aria-label={`${model.name || 'new model'} input price`} value={model.input_per_1m} inputMode="decimal" autoCapitalize="none" spellCheck={false} disabled={busy} onChange={e => setModel(index, {input_per_1m: e.target.value})} /></label>
             <label>Output price per 1M tokens<input aria-label={`${model.name || 'new model'} output price`} value={model.output_per_1m} inputMode="decimal" autoCapitalize="none" spellCheck={false} disabled={busy} onChange={e => setModel(index, {output_per_1m: e.target.value})} /></label>
             <label>Embedding price per 1M tokens<input aria-label={`${model.name || 'new model'} embedding price`} value={model.embedding_per_1m} inputMode="decimal" autoCapitalize="none" spellCheck={false} disabled={busy} onChange={e => setModel(index, {embedding_per_1m: e.target.value})} /></label>
             <label>Dimensions<input aria-label={`${model.name || 'new model'} dimensions`} type="number" min="0" step="1" value={model.dimensions} disabled={busy} onChange={e => setModel(index, {dimensions: e.target.value})} /></label>
             <label><input aria-label={`${model.name || 'new model'} truncatable`} type="checkbox" checked={model.truncatable} disabled={busy} onChange={e => setModel(index, {truncatable: e.target.checked})} /> Truncatable</label>
-            <label><input aria-label={`${model.name || 'new model'} supports custom dimensions`} type="checkbox" checked={model.supports_custom_dimensions} disabled={busy} onChange={e => setModel(index, {supports_custom_dimensions: e.target.checked})} /> Provider supports custom dimensions</label>
             <div className="button-row"><button type="button" disabled={busy} onClick={() => removeModel(index)}>Remove model</button></div>
           </li>)}
         </ul>
-
+        {modelForm
+          ? <ModelForm onCancel={() => setModelForm(false)} onAdd={addModel} />
+          : <button type="button" disabled={busy} onClick={() => setModelForm(true)}>Add model</button>}
       </details>
     </form>}
   </section>
 }
 
-// RouteSelect edits one default route. The provider choice scopes the model
-// list; the model choice includes global records, which apply to any provider.
-function RouteSelect({label, route, providers, models, capability, busy, onChange, onBrowse}: {
-  label: string
-  route: {provider: string; model: string}
-  providers: ProviderDraft[]
-  models: ModelDraft[]
-  capability: LLMCapability
-  busy: boolean
-  onChange: (route: {provider: string; model: string}) => void
-  onBrowse: () => void
-}) {
-  return <div className="llm-route-field">
-    <span>{label}</span>
-    <span className="llm-route">
-      <select aria-label={`${label} provider`} value={route.provider} disabled={busy} onChange={e => onChange({provider: e.target.value, model: ''})}>
-        <option value="">No provider</option>
-        {providers.map(provider => <option key={provider.name} value={provider.name}>{provider.name} ({provider.kind})</option>)}
-      </select>
-      <select aria-label={`${label} model`} value={route.model} disabled={busy || !route.provider} onChange={e => onChange({provider: route.provider, model: e.target.value})}>
-        <option value="">No model</option>
-        {selectableModels(models, route.provider, capability).map(model => <option key={modelKey(model.provider, model.name)} value={model.name}>{model.name}{model.provider ? '' : ' (any provider)'}</option>)}
-      </select>
-      <button type="button" disabled={busy || !route.provider} onClick={onBrowse}>Browse models</button>
-    </span>
+function ProviderForm({initial, revision, configured, room, onImport, onSubmit, onCancel}: {initial: ProviderDraft; revision: number; configured: Set<string>; room: number; onImport: (models: ModelDraft[]) => void; onSubmit: (values: ProviderFormValues) => void; onCancel: () => void}) {
+  const [name, setName] = useState(initial.name)
+  const [kind, setKind] = useState<LLMProviderKind>(initial.kind)
+  const [baseURL, setBaseURL] = useState(initial.base_url)
+  const [apiKey, setApiKey] = useState(initial.api_key)
+  const [clearKey, setClearKey] = useState(initial.clear_api_key)
+  const [limit, setLimit] = useState(initial.monthly_limit_usd)
+  const [timeoutSeconds, setTimeoutSeconds] = useState(initial.timeout_seconds)
+  const [tokenField, setTokenField] = useState<LLMTokenField>(initial.token_field)
+  const [discovering, setDiscovering] = useState(false)
+  // The values under edit, rebuilt every render so the panel can tell when
+  // they drift from whatever a running fetch was launched with.
+  const current: ProviderDraft = {
+    name: name.trim(),
+    kind,
+    base_url: baseURL.trim(),
+    has_api_key: initial.has_api_key,
+    monthly_limit_usd: limit,
+    timeout_seconds: timeoutSeconds,
+    token_field: tokenField,
+    api_key: apiKey,
+    clear_api_key: clearKey,
+    original_name: initial.original_name,
+  }
+  return <div className="llm-provider-form">
+    <label>Name<input value={name} onChange={e => setName(e.target.value)} autoCapitalize="none" spellCheck={false} /></label>
+    <label>Kind
+      <select value={kind} onChange={e => {
+        const next = e.target.value as LLMProviderKind
+        setKind(next)
+        if (baseURL === '' || (Object.values(LLM_DEFAULT_BASE_URLS) as string[]).includes(baseURL)) setBaseURL(LLM_DEFAULT_BASE_URLS[next])
+      }}>{LLM_PROVIDER_KINDS.map(option => <option key={option} value={option}>{option}</option>)}</select>
+    </label>
+    <label>Base URL<input value={baseURL} onChange={e => setBaseURL(e.target.value)} inputMode="url" autoCapitalize="none" spellCheck={false} /></label>
+    <p className="hint">The URL must be http(s) with a host and no credentials, query or fragment.</p>
+    <label>API key<input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} autoComplete="new-password" placeholder={initial.has_api_key ? 'Leave blank to keep the saved key' : 'Optional'} /></label>
+    {initial.has_api_key
+      ? <><p className="hint">An API key is saved. Leave the field blank to keep it, or type a replacement.</p><label><input type="checkbox" checked={clearKey} onChange={e => setClearKey(e.target.checked)} /> Clear the saved API key</label></>
+      : <p className="hint">No key is saved. Leave the field blank if the server needs none.</p>}
+    <label>Monthly limit (USD)<input value={limit} onChange={e => setLimit(e.target.value)} inputMode="decimal" autoCapitalize="none" spellCheck={false} /></label>
+    <p className="hint">0 means no limit; at most 99999999.999999.</p>
+    <label>Timeout (seconds)<input type="number" min="1" max="600" step="1" value={timeoutSeconds} onChange={e => setTimeoutSeconds(e.target.value)} /></label>
+    <label>Token field<select value={tokenField} onChange={e => setTokenField(e.target.value as LLMTokenField)}>{LLM_TOKEN_FIELDS.map(option => <option key={option} value={option}>{option}</option>)}</select></label>
+    <div className="button-row">
+      <button type="button" onClick={() => onSubmit({name: name.trim(), kind, base_url: baseURL.trim(), api_key: apiKey, clear_api_key: clearKey, monthly_limit_usd: limit, timeout_seconds: timeoutSeconds, token_field: tokenField})}>Apply provider</button>
+      <button type="button" onClick={onCancel}>Cancel</button>
+      <button type="button" onClick={() => setDiscovering(!discovering)}>Fetch models</button>
+    </div>
+    <p className="hint">Apply provider writes these edits to the draft; Save persists the whole configuration.</p>
+    {discovering && <DiscoveryPanel provider={current} revision={revision} capability={null} taskLabel={null} configured={configured} room={room} onImport={onImport} onClose={() => setDiscovering(false)} />}
   </div>
 }
 
-// ProviderForm edits one provider in place. Every change writes to the draft;
-// there is no apply step. Monthly budget and key stay visible, while timeout
-// and token field live under Advanced.
-function ProviderForm({provider, busy, onChange, onRemove}: {provider: ProviderDraft; busy: boolean; onChange: (patch: Partial<ProviderDraft>) => void; onRemove: () => void}) {
-  return <div className="llm-provider-form">
-    <label>Name<input value={provider.name} disabled={busy} onChange={e => onChange({name: e.target.value})} autoCapitalize="none" spellCheck={false} /></label>
-    <label>Base URL<input value={provider.base_url} disabled={busy} onChange={e => onChange({base_url: e.target.value})} inputMode="url" autoCapitalize="none" spellCheck={false} /></label>
-
-    <label>API key<input type="password" value={provider.api_key} disabled={busy} onChange={e => onChange({api_key: e.target.value})} autoComplete="new-password" placeholder={provider.has_api_key ? 'Leave blank to keep the saved key' : 'Enter your provider API key'} /></label>
-    <p className="hint">Key status: <span data-tone={apiKeyStatus(provider) === 'saved' ? 'green' : apiKeyStatus(provider) === 'entered' ? 'blue' : apiKeyStatus(provider) === 'removal' ? 'amber' : undefined}>{LLM_KEY_STATUS_LABELS[apiKeyStatus(provider)]}</span></p>
-    {provider.has_api_key
-      ? <><p className="hint">An API key is saved. Leave the field blank to keep it, or type a replacement.</p><label><input type="checkbox" checked={provider.clear_api_key} disabled={busy} onChange={e => onChange({clear_api_key: e.target.checked})} /> Clear the saved API key</label></>
-      : <p className="hint">No key is saved. Leave the field blank if the server needs none.</p>}
-    <label>Monthly limit (USD)<input value={provider.monthly_limit_usd} aria-invalid={!!validateMoney(provider.monthly_limit_usd)} disabled={busy} onChange={e => onChange({monthly_limit_usd: e.target.value})} inputMode="decimal" autoCapitalize="none" spellCheck={false} /></label>
-    {validateMoney(provider.monthly_limit_usd) ? <p className="field-error">Monthly limit {validateMoney(provider.monthly_limit_usd)}</p> : <p className="hint">Set 0 for no monthly limit.</p>}
-    <details className="llm-advanced">
-      <summary>Advanced</summary>
-    <label>Kind
-      <select value={provider.kind} disabled={busy} onChange={e => {
-        const kind = e.target.value as LLMProviderKind
-        const patch: Partial<ProviderDraft> = {kind}
-        if (provider.base_url === '' || (Object.values(LLM_DEFAULT_BASE_URLS) as string[]).includes(provider.base_url)) patch.base_url = LLM_DEFAULT_BASE_URLS[kind]
-        onChange(patch)
-      }}>{LLM_PROVIDER_KINDS.map(option => <option key={option} value={option}>{option}</option>)}</select>
-    </label>
-      <label>Timeout (seconds)<input type="number" min="1" max="600" step="1" value={provider.timeout_seconds} aria-invalid={!!validateTimeout(provider.timeout_seconds)} disabled={busy} onChange={e => onChange({timeout_seconds: e.target.value})} /></label>
-      {validateTimeout(provider.timeout_seconds) && <p className="field-error">Timeout {validateTimeout(provider.timeout_seconds)}</p>}
-      <label>Token field<select value={provider.token_field} disabled={busy} onChange={e => onChange({token_field: e.target.value as LLMTokenField})}>{LLM_TOKEN_FIELDS.map(option => <option key={option} value={option}>{option}</option>)}</select></label>
-    </details>
-    <div className="button-row"><button type="button" disabled={busy} onClick={onRemove}>Remove provider</button></div>
-
+function ModelForm({onAdd, onCancel}: {onAdd: (values: ModelFormValues) => void; onCancel: () => void}) {
+  const [name, setName] = useState('')
+  const [input, setInput] = useState('')
+  const [output, setOutput] = useState('')
+  const [embedding, setEmbedding] = useState('')
+  const [dimensions, setDimensions] = useState('0')
+  const [truncatable, setTruncatable] = useState(false)
+  return <div className="llm-model-form">
+    <label>Name<input aria-label="New model name" value={name} onChange={e => setName(e.target.value)} autoCapitalize="none" spellCheck={false} /></label>
+    <label>Input price per 1M tokens<input aria-label="New model input price" value={input} onChange={e => setInput(e.target.value)} inputMode="decimal" autoCapitalize="none" spellCheck={false} /></label>
+    <label>Output price per 1M tokens<input aria-label="New model output price" value={output} onChange={e => setOutput(e.target.value)} inputMode="decimal" autoCapitalize="none" spellCheck={false} /></label>
+    <label>Embedding price per 1M tokens<input aria-label="New model embedding price" value={embedding} onChange={e => setEmbedding(e.target.value)} inputMode="decimal" autoCapitalize="none" spellCheck={false} /></label>
+    <p className="hint">Set all three rates explicitly; use 0 for a local model.</p>
+    <label>Dimensions<input aria-label="New model dimensions" type="number" min="0" step="1" value={dimensions} onChange={e => setDimensions(e.target.value)} /></label>
+    <label><input type="checkbox" checked={truncatable} onChange={e => setTruncatable(e.target.checked)} /> Truncatable</label>
+    <div className="button-row">
+      <button type="button" onClick={() => onAdd({name: name.trim(), input_per_1m: input, output_per_1m: output, embedding_per_1m: embedding, dimensions, truncatable})}>Apply model</button>
+      <button type="button" onClick={onCancel}>Cancel</button>
+    </div>
   </div>
 }

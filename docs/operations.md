@@ -73,14 +73,7 @@ Outbound requests to private addresses are denied unless the exact destination i
 
 The media worker also fetches through the outbound client. For each subscribed feed it reads the site's home page and icon about once a month, or weekly while the site offers none. For each new article with an image, it downloads up to three candidate images. It stores a 64-pixel icon per feed and a 192-pixel square thumbnail per article in Postgres, a few kilobytes each. Backups include them. Retention deletes an article's thumbnail with its body; a feed's icon stays with the feed. After an upgrade it also covers articles from the previous seven days.
 
-The model pipeline is disabled by default. In **Settings > AI**, add a provider,
-choose default text and embedding models, enable the features you want, and save.
-These settings apply to the whole server. Review prices and the content each
-feature sends before enabling it; credentialed feeds require explicit human
-opt-in even for local providers. See [LLM providers](llm-providers.md#configure-in-settings)
-for discovery, manual model IDs, optional checks and configuration limits.
-
-For deployments managed through environment variables, before the AI configuration is first saved:
+The model pipeline is disabled by default. To enable it:
 
 1. Choose a provider and model, and understand what feed content will be sent. Credentialed feeds require explicit human opt-in even for local providers.
 2. In `.env`, set `EARNEST_LLM_PROVIDER_<NAME>_KIND` and `_BASE_URL`, plus `_API_KEY` if needed. Add a private server to the outbound allowlist. Set a positive `_LIMIT_USD`; zero means unlimited.
