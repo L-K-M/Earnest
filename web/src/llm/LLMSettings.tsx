@@ -40,6 +40,12 @@ import {withoutModel} from './mutations'
 const newOp = () => crypto.randomUUID()
 const message = (error: unknown, fallback: string) => error instanceof Error && error.message ? error.message : fallback
 
+// A live name-collision error is kept in the shared problem list so Save
+// already reports it, but it carries this prefix so a later valid rename can
+// clear exactly this error without discarding unrelated problems.
+const NAME_TAKEN_PREFIX = 'Provider name is already used by another provider'
+const nameTakenMessage = (name: string) => `${NAME_TAKEN_PREFIX}: ${name}. Choose a different name.`
+
 type PickerTarget = {kind: 'task'; index: number} | {kind: 'default'; which: keyof LLMDefaults} | {kind: 'provider'; index: number}
 
 // toggleTask switches a feature on or off. Turning it on restores a saved
@@ -117,10 +123,16 @@ export function LLMSettings() {
 
   function setTask(index: number, patch: Partial<LLMTaskDraft>) {
     setDraft(current => current ? {...current, tasks: current.tasks.map((task, i) => i === index ? {...task, ...patch} : task)} : current)
+    if (patch.mode === 'off' || patch.mode === 'default' || patch.provider === '') {
+      setPicker(current => current?.kind === 'task' && current.index === index ? null : current)
+    }
     setNotice('')
   }
 
   function setDefault(which: keyof LLMDefaults, route: {provider: string; model: string}) {
+    if (draft?.defaults[which].provider !== route.provider) {
+      setPicker(current => current?.kind === 'default' && current.which === which ? null : current)
+    }
     setDraft(current => current ? {...current, defaults: {...current.defaults, [which]: route}} : current)
     setNotice('')
   }
@@ -131,21 +143,35 @@ export function LLMSettings() {
   }
 
   // Renaming a provider moves its task routes, defaults and scoped models with
-  // it, so nothing is left pointing at the old name. The move is deferred
-  // while the name field is empty: an empty name is the global model scope,
-  // not this provider, and matching it would capture unrelated records.
+  // it, so nothing is left pointing at the old name. A name that collides
+  // with a sibling's current or retained name is rejected before the draft
+  // changes, because moving onto it would hand the sibling's rows to this
+  // provider. The move is deferred while the name field is empty: an empty
+  // name is the global model scope, not this provider, and matching it would
+  // capture unrelated records.
   function updateProvider(index: number, patch: Partial<ProviderDraft>) {
+    if (!draft) return
+    const name = patch.name
+    if (name !== undefined) {
+      const collision = name !== '' && draft.providers.some((provider, i) => i !== index
+        && (provider.name === name || provider.routed_name === name))
+      if (collision) {
+        setProblems(current => [...current.filter(problem => !problem.startsWith(NAME_TAKEN_PREFIX)), nameTakenMessage(name)])
+        return
+      }
+      setProblems(current => current.filter(problem => !problem.startsWith(NAME_TAKEN_PREFIX)))
+    }
     setDraft(current => {
       if (!current) return current
       const previous = current.providers[index]
-      const next = {...previous, ...patch, routed_name: patch.name || previous.routed_name || previous.name}
+      const to = patch.name !== undefined ? patch.name : previous.name
       const from = previous.routed_name ?? previous.name
-      const to = next.name
-      const move = patch.name !== undefined && to !== '' && to !== from ? {from, to} : null
+      const move = patch.name !== undefined && to !== '' && from !== '' && to !== from ? {from, to} : null
+      const routedName = patch.name === undefined ? previous.routed_name : to || previous.routed_name || previous.name
       if (move) providerEditName.current = to
       return {
         ...current,
-        providers: current.providers.map((provider, i) => i === index ? next : provider),
+        providers: current.providers.map((provider, i) => i === index ? {...provider, ...patch, name: to, routed_name: routedName} : provider),
         tasks: move ? current.tasks.map(task => task.provider === move.from ? {...task, provider: move.to} : task) : current.tasks,
         defaults: move ? {
           text: current.defaults.text.provider === move.from ? {...current.defaults.text, provider: move.to} : current.defaults.text,
@@ -159,7 +185,14 @@ export function LLMSettings() {
 
   function addProvider(preset: LLMProviderPreset) {
     if (!draft) return
-    const name = uniqueProviderName(preset.label, new Set(draft.providers.map(provider => provider.name)))
+    // Reserve both the current names and the names a half-typed empty field
+    // still routes through, so a preset cannot capture a retained identity.
+    const taken = new Set<string>()
+    for (const provider of draft.providers) {
+      if (provider.name) taken.add(provider.name)
+      if (provider.routed_name) taken.add(provider.routed_name)
+    }
+    const name = uniqueProviderName(preset.label, taken)
     const provider: ProviderDraft = {
       name,
       kind: preset.kind,
@@ -318,27 +351,31 @@ export function LLMSettings() {
     if (!dirty || window.confirm('Discard your unsaved AI changes and reload?')) void load('AI settings reloaded.')
   }
 
-  function pickerProvider(target: PickerTarget): {provider: ProviderDraft; capability: LLMCapability | null; taskLabel: string | null} {
+  function pickerProvider(target: PickerTarget): {provider: ProviderDraft | null; capability: LLMCapability | null; taskLabel: string | null} {
     if (target.kind === 'provider') {
-      const provider = draft!.providers[target.index]
+      const provider = draft?.providers[target.index] ?? null
       return {provider, capability: null, taskLabel: null}
     }
     if (target.kind === 'default') {
       const which = target.which
-      const route = draft!.defaults[which]
-      const provider = draft!.providers.find(item => item.name === route.provider) ?? draft!.providers[0] ?? null
-      return {provider: provider!, capability: which === 'embedding' ? 'embedding' : 'chat', taskLabel: which === 'embedding' ? 'the default embedding model' : 'the default text model'}
+      const route = draft?.defaults[which]
+      const provider = draft?.providers.find(item => item.name === route?.provider) ?? draft?.providers[0] ?? null
+      return {provider, capability: which === 'embedding' ? 'embedding' : 'chat', taskLabel: which === 'embedding' ? 'the default embedding model' : 'the default text model'}
     }
-    const task = draft!.tasks[target.index]
-    const provider = draft!.providers.find(item => item.name === task.provider) ?? null
-    return {provider: provider!, capability: taskCapability(task.task), taskLabel: taskLabel(task.task)}
+    const task = draft?.tasks[target.index]
+    const provider = task?.mode === 'custom' ? draft?.providers.find(item => item.name === task.provider) ?? null : null
+    return {provider, capability: task ? taskCapability(task.task) : null, taskLabel: task ? taskLabel(task.task) : null}
   }
+
+  const activePicker = picker ? pickerProvider(picker) : null
+  const providerNameError = problems.find(problem => problem.startsWith(NAME_TAKEN_PREFIX))
+  const saveProblems = problems.filter(problem => !problem.startsWith(NAME_TAKEN_PREFIX))
 
   return <section aria-labelledby="llm-services-heading">
     <h2 id="llm-services-heading">AI</h2>
     <p>Server-wide settings. Add a provider, choose models, then enable the features you want.</p>
     {loaded && loaded.revision === 0 && <p className="hint">The server is still using its environment defaults. Saving stores this configuration in the database; from then on the saved configuration takes precedence and survives restarts.</p>}
-    {problems.length > 0 && <div role="alert" className="form-error">{loaded ? <p>Save blocked. Fix the following:</p> : null}<ul>{problems.map((problem, i) => <li key={i}>{problem}</li>)}</ul></div>}
+    {saveProblems.length > 0 && <div role="alert" className="form-error">{loaded ? <p>Save blocked. Fix the following:</p> : null}<ul>{saveProblems.map((problem, i) => <li key={i}>{problem}</li>)}</ul></div>}
     {notice && <p role="status">{notice}</p>}
     {busy && <p role="status" className="muted">Working…</p>}
     {!loaded && <div className="button-row"><button className="primary" disabled={busy} onClick={() => void load('AI settings loaded.')}>{busy ? 'Loading…' : 'Retry loading'}</button></div>}
@@ -358,7 +395,7 @@ export function LLMSettings() {
       <ul className="settings-list">
         {draft.providers.map((provider, index) => <li key={index}>
           {providerForm?.mode === 'edit' && providerForm.index === index
-            ? <ProviderForm provider={provider} busy={busy} onChange={patch => updateProvider(index, patch)} onRemove={() => removeProvider(index)} />
+            ? <ProviderForm provider={provider} nameError={providerNameError} busy={busy} onChange={patch => updateProvider(index, patch)} onRemove={() => removeProvider(index)} />
             : <>
               <div className="settings-row-head">
                 <strong>{provider.name}</strong>
@@ -367,16 +404,16 @@ export function LLMSettings() {
               </div>
               <p className="settings-row-detail muted">{provider.base_url} · {/^0+(?:\.0+)?$/.test(provider.monthly_limit_usd) ? 'no monthly limit' : `$${provider.monthly_limit_usd} per month`}</p>
               <div className="button-row">
-                <button type="button" disabled={busy} onClick={() => { providerEditName.current = provider.name; setProviderForm({mode: 'edit', index}) }}>Edit</button>
+                <button type="button" disabled={busy} onClick={() => { providerEditName.current = provider.name; setProblems(current => current.filter(problem => !problem.startsWith(NAME_TAKEN_PREFIX))); setProviderForm({mode: 'edit', index}) }}>Edit</button>
                 <button type="button" disabled={busy} onClick={() => removeProvider(index)}>Remove</button>
                 <button type="button" disabled={busy} onClick={() => setPicker({kind: 'provider', index})}>Browse models</button>
               </div>
             </>}
         </li>)}
       </ul>
-      {picker?.kind === 'provider' && <ModelPicker
+      {picker?.kind === 'provider' && activePicker?.provider && <ModelPicker
         disabled={busy}
-        provider={pickerProvider(picker).provider}
+        provider={activePicker.provider}
         revision={draft.revision}
         capability={null}
         taskLabel={null}
@@ -392,12 +429,12 @@ export function LLMSettings() {
       <p className="hint">Choose the models your enabled features will use. Existing custom routes stay unchanged.</p>
       <RouteSelect label="Default text model" route={draft.defaults.text} providers={draft.providers} models={draft.models} capability="chat" busy={busy} onChange={route => setDefault('text', route)} onBrowse={() => setPicker({kind: 'default', which: 'text'})} />
       <RouteSelect label="Default embedding model" route={draft.defaults.embedding} providers={draft.providers} models={draft.models} capability="embedding" busy={busy} onChange={route => setDefault('embedding', route)} onBrowse={() => setPicker({kind: 'default', which: 'embedding'})} />
-      {picker?.kind === 'default' && <ModelPicker
+      {picker?.kind === 'default' && activePicker?.provider && <ModelPicker
         disabled={busy}
-        provider={pickerProvider(picker).provider}
+        provider={activePicker.provider}
         revision={draft.revision}
-        capability={pickerProvider(picker).capability}
-        taskLabel={pickerProvider(picker).taskLabel}
+        capability={activePicker.capability}
+        taskLabel={activePicker.taskLabel}
         models={draft.models}
         room={MAX_MODELS - draft.models.length}
         cache={catalogueCache.current}
@@ -425,7 +462,7 @@ export function LLMSettings() {
               <details className="llm-advanced">
                 <summary>Advanced</summary>
                 <label>Provider
-                  <select aria-label={`${label} provider`} value={task.provider} disabled={busy} onChange={e => setTask(index, {provider: e.target.value, model: e.target.value ? task.model : '', mode: e.target.value ? 'custom' : 'default'})}>
+                  <select aria-label={`${label} provider`} value={task.provider} disabled={busy} onChange={e => setTask(index, {provider: e.target.value, model: '', mode: e.target.value ? 'custom' : 'default'})}>
                     <option value="">Default</option>
                     {draft.providers.map(item => <option key={item.name} value={item.name}>{item.name} ({item.kind})</option>)}
                   </select>
@@ -439,12 +476,12 @@ export function LLMSettings() {
                 <div className="button-row"><button type="button" disabled={busy || !task.provider} onClick={() => setPicker({kind: 'task', index})}>Browse models</button></div>
               </details>
             </>}
-            {picker?.kind === 'task' && picker.index === index && <ModelPicker
+            {picker?.kind === 'task' && picker.index === index && activePicker?.provider && <ModelPicker
               disabled={busy}
-              provider={pickerProvider(picker).provider}
+              provider={activePicker.provider}
               revision={draft.revision}
-              capability={pickerProvider(picker).capability}
-              taskLabel={pickerProvider(picker).taskLabel}
+              capability={activePicker.capability}
+              taskLabel={activePicker.taskLabel}
               models={draft.models}
               room={MAX_MODELS - draft.models.length}
               cache={catalogueCache.current}
@@ -514,9 +551,10 @@ function RouteSelect({label, route, providers, models, capability, busy, onChang
 // ProviderForm edits one provider in place. Every change writes to the draft;
 // there is no apply step. Monthly budget and key stay visible, while timeout
 // and token field live under Advanced.
-function ProviderForm({provider, busy, onChange, onRemove}: {provider: ProviderDraft; busy: boolean; onChange: (patch: Partial<ProviderDraft>) => void; onRemove: () => void}) {
+function ProviderForm({provider, nameError, busy, onChange, onRemove}: {provider: ProviderDraft; nameError?: string; busy: boolean; onChange: (patch: Partial<ProviderDraft>) => void; onRemove: () => void}) {
   return <div className="llm-provider-form">
-    <label>Name<input value={provider.name} disabled={busy} onChange={e => onChange({name: e.target.value})} autoCapitalize="none" spellCheck={false} /></label>
+    <label>Name<input value={provider.name} disabled={busy} aria-invalid={!!nameError} aria-describedby={nameError ? 'provider-name-error' : undefined} onChange={e => onChange({name: e.target.value})} autoCapitalize="none" spellCheck={false} /></label>
+    {nameError && <span id="provider-name-error" className="field-error" role="alert">{nameError}</span>}
     <label>Base URL<input value={provider.base_url} disabled={busy} onChange={e => onChange({base_url: e.target.value})} inputMode="url" autoCapitalize="none" spellCheck={false} /></label>
 
     <label>API key<input type="password" value={provider.api_key} disabled={busy} onChange={e => onChange({api_key: e.target.value})} autoComplete="new-password" placeholder={provider.has_api_key ? 'Leave blank to keep the saved key' : 'Enter your provider API key'} /></label>

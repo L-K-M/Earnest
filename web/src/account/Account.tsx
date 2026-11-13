@@ -38,6 +38,23 @@ function formatTimestamp(value: string | null | undefined): string {
   return Number.isNaN(at.getTime()) ? 'never' : at.toLocaleString()
 }
 
+// Drafts count as unfinished only while their fields differ from the form's
+// initial defaults, so clearing every field releases the navigation guard.
+// Reading the live form avoids depending on React's batched checkbox state.
+function tokenDraftDirty(form: HTMLFormElement): boolean {
+  const data = new FormData(form)
+  return String(data.get('name')) !== ''
+    || String(data.get('audience')) !== 'mcp'
+    || scopes.some(([scope]) => data.getAll(scope).length > 0)
+    || String(data.get('daily_budget')) !== '3'
+    || String(data.get('expires_at')) !== ''
+}
+
+function webhookDraftDirty(form: HTMLFormElement): boolean {
+  const data = new FormData(form)
+  return String(data.get('url')) !== '' || events.some(event => data.getAll(event).length > 0)
+}
+
 function Secret({secret, onClose}: {secret:string; onClose:()=>void}) {
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
@@ -59,7 +76,8 @@ export function Tokens() {
   const [selected, setSelected] = useState<string[]>([])
   const [secret, setSecret] = useState('')
   const [error, setError] = useState('')
-  const [code, setCode] = useState(() => new URLSearchParams(location.search).get('user_code') ?? '')
+  const [initialCode] = useState(() => new URLSearchParams(location.search).get('user_code') ?? '')
+  const [code, setCode] = useState(initialCode)
   const [approved, setApproved] = useState(false)
   const [pending, setPending] = useState(false)
   const [draftDirty, setDraftDirty] = useState(false)
@@ -100,13 +118,13 @@ export function Tokens() {
       </li>)}
       {list.isSuccess && !list.data?.length && <li className="empty-state">No agent tokens yet.</li>}
     </ul>
-    <form onSubmit={e => {void create(e)}} onChange={() => setDraftDirty(true)}>
+    <form onSubmit={e => {void create(e)}} onChange={e => setDraftDirty(tokenDraftDirty(e.currentTarget))}>
       <h3>Create an agent token</h3>
       <p>Agents can read everything you subscribe to, including private feeds and full text.</p>
       <label>Name<input name="name" required aria-describedby="token-name-hint" /></label>
       <p id="token-name-hint" className="hint">Shown in Activity next to everything this agent does.</p>
       <label>Audience<select name="audience"><option value="mcp">MCP</option><option value="api">REST</option></select></label>
-      <fieldset><legend>Agent scopes</legend>{scopes.map(([scope, description]) => <label key={scope}><input type="checkbox" checked={selected.includes(scope)} onChange={e => setSelected(e.target.checked ? [...selected, scope] : selected.filter(item => item !== scope))} /> {scope}: {description}</label>)}</fieldset>
+      <fieldset><legend>Agent scopes</legend>{scopes.map(([scope, description]) => <label key={scope}><input type="checkbox" name={scope} checked={selected.includes(scope)} onChange={e => setSelected(e.target.checked ? [...selected, scope] : selected.filter(item => item !== scope))} /> {scope}: {description}</label>)}</fieldset>
       <label>Daily notification budget<input name="daily_budget" type="number" min="0" defaultValue="3" required aria-describedby="daily-budget-hint" /></label>
       <p id="daily-budget-hint" className="hint">0 means the agent cannot notify you.</p>
       <label>Expiry (optional)<input name="expires_at" type="datetime-local" aria-describedby="token-expiry-hint" /></label>
@@ -117,7 +135,7 @@ export function Tokens() {
     <form id="device" onSubmit={e => {e.preventDefault(); void run(async () => {await request('/v1/devices/approve', json({user_code:code.trim().toUpperCase()})); setApproved(true)})}}>
       <h3>Approve an app or CLI</h3>
       <p>Only approve a code shown by a device you are signing in.</p>
-      <label>Device code<input id="device-code" value={code} onChange={e => {setCode(e.target.value); setApproved(false); setDeviceDirty(true)}} required autoComplete="one-time-code" autoCapitalize="characters" spellCheck={false} placeholder="ABCD-EFGH" aria-describedby="device-code-hint" /></label>
+      <label>Device code<input id="device-code" value={code} onChange={e => {const value = e.target.value; setCode(value); setApproved(false); setDeviceDirty(value.trim() !== '' && value !== initialCode)}} required autoComplete="one-time-code" autoCapitalize="characters" spellCheck={false} placeholder="ABCD-EFGH" aria-describedby="device-code-hint" /></label>
       <p id="device-code-hint" className="hint">The code appears in the app or terminal that asked to sign in.</p>
       <button disabled={pending}>Approve device</button>
       {approved && <p role="status">Device approved.</p>}
@@ -150,10 +168,10 @@ export function Webhooks() {
       </li>)}
       {list.isSuccess && !list.data?.length && <li className="empty-state">No webhooks yet.</li>}
     </ul>
-    <form onSubmit={e => {e.preventDefault(); const form = e.currentTarget; void run(async () => {const data = new FormData(form); const result = await request<Schema['WebhookSecret']>('/v1/webhooks', json({url:String(data.get('url')), events:chosen, op_id:op()}));setSecret(result.secret); form.reset(); setChosen([]); setDraftDirty(false)})}} onChange={() => setDraftDirty(true)}>
+    <form onSubmit={e => {e.preventDefault(); const form = e.currentTarget; void run(async () => {const data = new FormData(form); const result = await request<Schema['WebhookSecret']>('/v1/webhooks', json({url:String(data.get('url')), events:chosen, op_id:op()}));setSecret(result.secret); form.reset(); setChosen([]); setDraftDirty(false)})}} onChange={e => setDraftDirty(webhookDraftDirty(e.currentTarget))}>
       <h3>Create webhook</h3>
       <label>URL<input name="url" type="url" inputMode="url" spellCheck={false} required /></label>
-      <fieldset><legend>Events</legend>{events.map(event => <label key={event}><input type="checkbox" checked={chosen.includes(event)} onChange={e => setChosen(e.target.checked ? [...chosen,event] : chosen.filter(item => item !== event))} /> {event}</label>)}</fieldset>
+      <fieldset><legend>Events</legend>{events.map(event => <label key={event}><input type="checkbox" name={event} checked={chosen.includes(event)} onChange={e => setChosen(e.target.checked ? [...chosen,event] : chosen.filter(item => item !== event))} /> {event}</label>)}</fieldset>
       <button disabled={pending || Boolean(secret) || chosen.length === 0}>Create webhook</button>
     </form>
     {secret && <Secret secret={secret} onClose={() => setSecret('')} />}

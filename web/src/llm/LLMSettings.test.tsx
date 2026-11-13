@@ -74,7 +74,8 @@ function mount(server: LLMSettings = fixture, catalogue: DiscoveredModel[] = [])
   vi.mocked(request).mockImplementation(async (path: string, options?: RequestInit) => {
     if (path === '/v1/settings/llm/models') return {models: catalogue}
     if (path === '/v1/settings/llm' && !options?.method) return server
-    return {...server, revision: server.revision + 1}
+    if (path === '/v1/settings/llm' && options?.method === 'PUT') return {...server, revision: server.revision + 1}
+    throw new Error(`Unexpected request: ${path}`)
   })
   renderSection()
 }
@@ -134,6 +135,43 @@ it('keeps a saved key when the replacement field is blank and omits has_api_key'
   expect(body.revision).toBe(3)
   expect(body.op_id).toEqual(expect.any(String))
   expect(body.tasks).toHaveLength(7)
+})
+
+it('keeps a replacement key visibly unsaved through failure and clears it after a successful retry', async () => {
+  let fail = true
+  let revision = fixture.revision
+  vi.mocked(request).mockImplementation(async (path, options) => {
+    if (path !== '/v1/settings/llm') throw new Error(`Unexpected request: ${path}`)
+    if (options?.method === 'PUT') {
+      if (fail) throw new Error('Save failed')
+      revision++
+    }
+    return {...fixture, revision}
+  })
+  renderSection()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
+  fireEvent.change(screen.getByLabelText('API key'), {target: {value: 'test-replacement-key'}})
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText('Save failed')
+  expect(screen.getByText('API key entered · unsaved')).toBeTruthy()
+  expect((screen.getByLabelText('API key') as HTMLInputElement).value).toBe('test-replacement-key')
+  const first = lastPut()
+  fail = false
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText('AI settings saved.')
+  expect(lastPut().op_id).toBe(first.op_id)
+  expect(providerOf(lastPut(), 'openai').api_key).toBe('test-replacement-key')
+  expect(screen.queryByText('API key entered · unsaved')).toBeNull()
+  expect(screen.getByText('API key saved')).toBeTruthy()
+  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
+  expect((screen.getByLabelText('API key') as HTMLInputElement).value).toBe('')
+  fireEvent.change(screen.getByLabelText('Name'), {target: {value: 'temporary'}})
+  confirm()
+  fireEvent.click(screen.getByRole('button', {name: 'Discard'}))
+  await screen.findByText('AI settings reloaded.')
+  expect(screen.getByText('API key saved')).toBeTruthy()
+  expect(screen.queryByText('API key entered · unsaved')).toBeNull()
 })
 
 it('edits providers directly in the draft without an apply step', async () => {
@@ -345,6 +383,28 @@ it('turns a feature off with its switch', async () => {
   fireEvent.click(screen.getByRole('button', {name: 'Save'}))
   await screen.findByText(/AI settings saved/)
   expect(lastPut().tasks.find(task => task.task === 'embed')).toEqual({task: 'embed', mode: 'off', provider: '', model: ''})
+})
+
+it.each(['disable', 'default'])('closes a feature picker when its route is set to %s', async action => {
+  mount(fixture, [{id: 'new-chat', name: 'New Chat', chat: true, embedding: false, input_per_1m: '1', output_per_1m: '2'}])
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  const row = screen.getByText('Blurbs', {selector: 'strong'}).closest('li')!
+  fireEvent.click(within(row).getByRole('button', {name: 'Browse models'}))
+  await within(row).findByRole('button', {name: 'Select new-chat'})
+  if (action === 'disable') fireEvent.click(within(row).getByLabelText('Blurbs'))
+  else fireEvent.change(within(row).getByLabelText('Blurbs provider'), {target: {value: ''}})
+  expect(within(row).queryByRole('button', {name: 'Select new-chat'})).toBeNull()
+  expect(within(row).queryByRole('button', {name: 'Enter model ID manually'})).toBeNull()
+})
+
+it('requires an explicit model selection after a feature changes provider', async () => {
+  mount()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.change(screen.getByLabelText('Blurbs provider'), {target: {value: 'openai'}})
+  expect(valueOf('Blurbs model')).toBe('')
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  expect(await screen.findByText(/Blurbs needs both a provider and a model/)).toBeTruthy()
+  expect(putCalls()).toHaveLength(0)
 })
 
 it('refuses to save a half-configured custom route', async () => {

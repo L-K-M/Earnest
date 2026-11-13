@@ -17,7 +17,7 @@ export function ImportExportSettings() {
       await client.invalidateQueries()
       return true
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not refresh your imported data.')
+      setError(cause instanceof Error ? cause.message : 'Could not finish the import. Please try again.')
       return false
     } finally {
       setBusy(false)

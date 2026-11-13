@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import {afterEach, expect, it, vi} from 'vitest'
 import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react'
-import {request} from '../request'
+import {request, RequestError} from '../request'
 import {ModelPicker} from './Discovery'
 import type {DiscoveredModel, ModelDraft, ProviderDraft} from './model'
 
-vi.mock('../request', () => ({request: vi.fn(), RequestError: class extends Error {status = 503}}))
+vi.mock('../request', async importOriginal => ({...await importOriginal<typeof import('../request')>(), request: vi.fn()}))
 afterEach(() => { cleanup(); vi.resetAllMocks() })
 
 const provider: ProviderDraft = {
@@ -144,6 +144,31 @@ it('applies observed geometry from a check to the selection only', async () => {
   expect(onGeometry).toHaveBeenCalledWith({provider: 'local', name: 'emb', dimensions: 2048, supports_custom_dimensions: true})
 })
 
+it('checks unknown embedding width with the API zero sentinel and applies the observed width', async () => {
+  vi.mocked(request).mockImplementation(async (path: string, options?: RequestInit) => {
+    if (path === '/v1/settings/llm/models') return {models: []}
+    if (path === '/v1/settings/llm/models/check') {
+      const body = JSON.parse(String(options?.body))
+      expect(body.model.dimensions).toBe(0)
+      expect(body.capability).toBe('embedding')
+      return {compatible: true, dimensions: 4096, supports_custom_dimensions: true, message: 'Provider can return 1024 dimensions.'}
+    }
+    throw new Error(`unexpected ${path}`)
+  })
+  const onPick = vi.fn()
+  render(picker({onPick, capability: 'embedding'}))
+  fireEvent.click(await screen.findByRole('button', {name: 'Enter model ID manually'}))
+  fireEvent.change(screen.getByLabelText('Manual model ID'), {target: {value: 'unknown-width'}})
+  fireEvent.click(screen.getByRole('button', {name: 'Add model ID'}))
+  fireEvent.click(screen.getByLabelText('This model is free'))
+  fireEvent.click(screen.getByRole('button', {name: 'Check model'}))
+  await screen.findByText('Provider can return 1024 dimensions.')
+  expect((screen.getByLabelText('unknown-width dimensions') as HTMLInputElement).value).toBe('4096')
+  expect((screen.getByLabelText('unknown-width truncatable') as HTMLInputElement).checked).toBe(false)
+  fireEvent.click(screen.getByRole('button', {name: /Add to draft/}))
+  expect(onPick).toHaveBeenCalledWith(expect.objectContaining({dimensions: '4096', supports_custom_dimensions: true, truncatable: false}))
+})
+
 it('starts a fresh metadata form when another model is selected', async () => {
   mockCatalogue({models: [...models, {id: 'emb2', name: 'Emb Two', embedding: true}]})
   render(picker({capability: 'embedding', taskLabel: 'Embeddings'}))
@@ -169,6 +194,45 @@ it('falls back to a manual model ID', async () => {
   expect(onPick).toHaveBeenCalledWith(expect.objectContaining({name: 'manual-model', provider: 'local', input_per_1m: '0', output_per_1m: '0'}))
 })
 
+it.each([404, 503])('keeps manual selection usable after catalogue error %s', async status => {
+  vi.mocked(request).mockRejectedValue(new RequestError(status, 'Catalogue temporarily unavailable'))
+  const onPick = vi.fn()
+  render(picker({onPick}))
+  expect((await screen.findByRole('alert')).textContent).toContain(status === 404
+    ? 'This server does not support model discovery'
+    : 'Catalogue temporarily unavailable')
+  fireEvent.click(screen.getByRole('button', {name: 'Enter model ID manually'}))
+  fireEvent.change(screen.getByLabelText('Manual model ID'), {target: {value: 'manual-fallback'}})
+  fireEvent.click(screen.getByRole('button', {name: 'Add model ID'}))
+  fireEvent.click(screen.getByLabelText('This model is free'))
+  fireEvent.click(screen.getByRole('button', {name: /Add to draft/}))
+  expect(onPick).toHaveBeenCalledWith(expect.objectContaining({name: 'manual-fallback', provider: 'local', dimensions: '0'}))
+})
+
+it('reports a catalogue revision conflict to the settings draft', async () => {
+  vi.mocked(request).mockRejectedValue(new RequestError(409, 'Stale revision'))
+  const onConflict = vi.fn()
+  render(picker({onConflict}))
+  expect((await screen.findByRole('alert')).textContent).toContain('Reload, then fetch again')
+  expect(onConflict).toHaveBeenCalledOnce()
+})
+
+it.each(['catalogue', 'manual'])('does not create unscoped %s metadata while a provider name is blank', async source => {
+  mockCatalogue({models})
+  const onPick = vi.fn()
+  render(picker({onPick, provider: {...provider, name: ''}}))
+  await screen.findByText('First (first)')
+  if (source === 'catalogue') fireEvent.click(screen.getByRole('button', {name: 'Select first'}))
+  else {
+    fireEvent.click(screen.getByRole('button', {name: 'Enter model ID manually'}))
+    fireEvent.change(screen.getByLabelText('Manual model ID'), {target: {value: 'manual'}})
+    fireEvent.click(screen.getByRole('button', {name: 'Add model ID'}))
+  }
+  expect(screen.getByText(/Give this provider a name/)).toBeTruthy()
+  expect(onPick).not.toHaveBeenCalled()
+  expect(screen.queryByRole('button', {name: /Add to draft/})).toBeNull()
+})
+
 it('refuses to add when the configured-model table is full', async () => {
   mockCatalogue({models})
   const onPick = vi.fn()
@@ -177,6 +241,65 @@ it('refuses to add when the configured-model table is full', async () => {
   fireEvent.click(screen.getByRole('button', {name: 'Select first'}))
   expect(screen.getByText(/table is full/)).toBeTruthy()
   expect(onPick).not.toHaveBeenCalled()
+})
+
+it.each(['catalogue', 'manual'])('reports a full table before completing %s metadata', async source => {
+  mockCatalogue({models})
+  const onPick = vi.fn()
+  render(picker({onPick, room: 0, capability: 'embedding'}))
+  await screen.findByText('Emb (emb)')
+  if (source === 'catalogue') {
+    fireEvent.click(screen.getByRole('button', {name: 'Select emb, missing embedding price, dimensions'}))
+  } else {
+    fireEvent.click(screen.getByRole('button', {name: 'Enter model ID manually'}))
+    fireEvent.change(screen.getByLabelText('Manual model ID'), {target: {value: 'manual'}})
+    fireEvent.click(screen.getByRole('button', {name: 'Add model ID'}))
+  }
+  expect(screen.getByText(/table is full/)).toBeTruthy()
+  expect(screen.queryByRole('button', {name: /Add to draft/})).toBeNull()
+  expect(onPick).not.toHaveBeenCalled()
+})
+
+it('rechecks available room when a metadata form is submitted', async () => {
+  mockCatalogue({models})
+  const onPick = vi.fn()
+  const view = render(picker({onPick, capability: 'embedding'}))
+  await screen.findByText('Emb (emb)')
+  fireEvent.click(screen.getByRole('button', {name: 'Select emb, missing embedding price, dimensions'}))
+  fireEvent.click(screen.getByLabelText('This model is free'))
+  fireEvent.change(screen.getByLabelText('emb dimensions'), {target: {value: '1024'}})
+  view.rerender(picker({onPick, room: 0, capability: 'embedding'}))
+  fireEvent.click(screen.getByRole('button', {name: /Add to draft/}))
+  expect(screen.getByText(/table is full/)).toBeTruthy()
+  expect(onPick).not.toHaveBeenCalled()
+  expect((screen.getByLabelText('emb dimensions') as HTMLInputElement).value).toBe('1024')
+})
+
+it('restores published prices when the free choice is undone', async () => {
+  mockCatalogue({models: [{id: 'paid', name: 'Paid', embedding: true, embedding_per_1m: '0.7'}]})
+  const onPick = vi.fn()
+  render(picker({onPick, capability: 'embedding'}))
+  fireEvent.click(await screen.findByRole('button', {name: 'Select paid, missing dimensions'}))
+  const rate = screen.getByLabelText('paid embedding price per 1m tokens') as HTMLInputElement
+  fireEvent.click(screen.getByLabelText('This model is free'))
+  expect(rate.value).toBe('0')
+  expect(rate.disabled).toBe(true)
+  fireEvent.click(screen.getByLabelText('This model is free'))
+  expect(rate.disabled).toBe(false)
+  expect(rate.value).toBe('0.7')
+  fireEvent.change(screen.getByLabelText('paid dimensions'), {target: {value: '1024'}})
+  fireEvent.click(screen.getByRole('button', {name: /Add to draft/}))
+  expect(onPick).toHaveBeenCalledWith(expect.objectContaining({embedding_per_1m: '0.7'}))
+})
+
+it('focuses missing dimensions after an otherwise complete embedding selection', async () => {
+  mockCatalogue({models})
+  render(picker({capability: 'embedding'}))
+  fireEvent.click(await screen.findByRole('button', {name: 'Select emb, missing embedding price, dimensions'}))
+  fireEvent.click(screen.getByLabelText('This model is free'))
+  fireEvent.click(screen.getByRole('button', {name: /Add to draft/}))
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('emb dimensions')))
+  expect(screen.getByLabelText('emb embedding price per 1m tokens').getAttribute('aria-invalid')).toBe('false')
 })
 
 it('filters known-incompatible models for a task and labels unknown capabilities', async () => {

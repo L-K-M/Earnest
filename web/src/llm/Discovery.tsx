@@ -140,6 +140,10 @@ export function ModelPicker({provider, revision, capability: requestedCapability
 
   function choose(model: DiscoveredModel) {
     if (disabled || !results || results.generation !== generation) return
+    if (!provider.name.trim()) {
+      setError('Give this provider a name before selecting a model.')
+      return
+    }
     const base = draftFromDiscovered(model, provider.name, capability)
     // Identity is provider+name. A legacy global record is a different entry;
     // selecting this provider's catalogue model creates its scoped record and
@@ -150,14 +154,14 @@ export function ModelPicker({provider, revision, capability: requestedCapability
       setNotice(`${model.id} is already configured; its saved prices are kept.`)
       return
     }
+    if (room < 1) {
+      setError(`The configured-model table is full at ${MAX_MODELS} entries; remove one before adding.`)
+      return
+    }
     if (missingApplicableFields(model, capability).length > 0 || validateModel(base, new Set()).length > 0) {
       setDraft(base)
       setError('')
       setNotice('')
-      return
-    }
-    if (room < 1) {
-      setError(`The configured-model table is full at ${MAX_MODELS} entries; remove one before adding.`)
       return
     }
     onPick(base)
@@ -165,6 +169,10 @@ export function ModelPicker({provider, revision, capability: requestedCapability
   }
 
   function openManual() {
+    if (!provider.name.trim()) {
+      setError('Give this provider a name before selecting a model.')
+      return
+    }
     const id = manualID.trim()
     if (!id) { setError('Enter a model ID to add manually.'); return }
     setError('')
@@ -175,6 +183,10 @@ export function ModelPicker({provider, revision, capability: requestedCapability
       setNotice(`${id} is already configured; its saved prices are kept.`)
       setManualOpen(false)
       setManualID('')
+      return
+    }
+    if (room < 1) {
+      setError(`The configured-model table is full at ${MAX_MODELS} entries; remove one before adding.`)
       return
     }
     setDraft(base)
@@ -247,6 +259,10 @@ export function ModelPicker({provider, revision, capability: requestedCapability
       taken={new Set(models.filter(item => !sameModel(item, draft)).map(item => modelKey(item.provider, item.name)))}
       onGeometry={onGeometry}
       onAdd={values => {
+        if (room < 1 && !models.some(model => sameModel(model, values))) {
+          setError(`The configured-model table is full at ${MAX_MODELS} entries; remove one before adding.`)
+          return
+        }
         onPick(values)
         setDraft(null)
         setNotice(`${values.name} added to the draft. Save to persist it.`)
@@ -290,6 +306,7 @@ function MetadataForm({draft, capability, taskLabel, revision, provider, taken, 
 }) {
   const [values, setValues] = useState<ModelDraft>(draft)
   const [free, setFree] = useState(false)
+  const paidRates = useRef<Pick<ModelDraft, 'input_per_1m' | 'output_per_1m' | 'embedding_per_1m'> | null>(null)
   const [problems, setProblems] = useState<string[]>([])
   const [checking, setChecking] = useState(false)
   const [checkMessage, setCheckMessage] = useState('')
@@ -299,7 +316,11 @@ function MetadataForm({draft, capability, taskLabel, revision, provider, taken, 
   const mounted = useRef(true)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   const firstField = useRef<HTMLInputElement>(null)
+  const form = useRef<HTMLDivElement>(null)
   useEffect(() => { firstField.current?.focus() }, [])
+  useEffect(() => {
+    if (problems.length) (form.current?.querySelector<HTMLElement>('[aria-invalid="true"]') ?? firstField.current)?.focus()
+  }, [problems])
   const chat = capability !== 'embedding'
   const embedding = capability !== 'chat'
   const applicableRates: Array<{label: string; field: 'input_per_1m' | 'output_per_1m' | 'embedding_per_1m'}> = [
@@ -308,6 +329,7 @@ function MetadataForm({draft, capability, taskLabel, revision, provider, taken, 
     ...(embedding ? [{label: 'Embedding price per 1M tokens', field: 'embedding_per_1m' as const}] : []),
   ]
   const ratesReady = free || applicableRates.every(({field}) => validateMoney(values[field]) === '')
+  const dimensionsError = problems.length ? validateDimensions(values.dimensions, values.truncatable, values.supports_custom_dimensions) : ''
 
   function set(patch: Partial<ModelDraft>) {
     setValues(current => ({...current, ...patch}))
@@ -317,7 +339,14 @@ function MetadataForm({draft, capability, taskLabel, revision, provider, taken, 
 
   function toggleFree(checked: boolean) {
     setFree(checked)
-    if (!checked) return
+    setProblems([])
+    setCheckMessage('')
+    if (!checked) {
+      const previous = paidRates.current
+      if (previous) setValues(current => ({...current, ...previous}))
+      return
+    }
+    paidRates.current = {input_per_1m: values.input_per_1m, output_per_1m: values.output_per_1m, embedding_per_1m: values.embedding_per_1m}
     setValues(current => ({
       ...current,
       ...(chat ? {input_per_1m: '0', output_per_1m: '0'} : {}),
@@ -344,6 +373,8 @@ function MetadataForm({draft, capability, taskLabel, revision, provider, taken, 
         input_per_1m: values.input_per_1m,
         output_per_1m: values.output_per_1m,
         embedding_per_1m: values.embedding_per_1m,
+        // Zero is the check API's explicit unknown-width value. Text drafts
+        // also use zero; the save validator still requires embedding width.
         dimensions: Number(values.dimensions),
         truncatable: values.truncatable,
         supports_custom_dimensions: values.supports_custom_dimensions,
@@ -375,31 +406,34 @@ function MetadataForm({draft, capability, taskLabel, revision, provider, taken, 
     const found = validateModel({...values, name: values.name.trim()}, taken)
     setProblems(found)
     if (!found.length) onAdd({...values, name: values.name.trim()})
-    else firstField.current?.focus()
   }
 
-  return <div className="llm-model-form" role="group" aria-label={`Complete ${draft.name}`}>
+  return <div ref={form} className="llm-model-form" role="group" aria-label={`Complete ${draft.name}`}>
     <div className="settings-row-head"><strong>{draft.name}</strong>
       {draft.provider && <span className="chip">{draft.provider}</span>}
       {free && <span className="chip" data-tone="green">free</span>}
     </div>
     {problems.length > 0 && <div role="alert" className="form-error"><ul>{problems.map((problem, i) => <li key={i}>{problem}</li>)}</ul></div>}
-    {applicableRates.map(({label, field}, index) => <label key={field}>{label}
-      <input
-        ref={index === 0 ? firstField : undefined}
-        aria-label={`${draft.name} ${label.toLowerCase()}`}
-        value={values[field]}
-        aria-invalid={problems.length > 0 && !!validateMoney(values[field])}
-        inputMode="decimal"
-        autoCapitalize="none"
-        spellCheck={false}
-        onChange={e => set({[field]: e.target.value} as Partial<ModelDraft>)} />
-      {problems.length > 0 && validateMoney(values[field]) && <span className="field-error">Enter a price or select “This model is free”.</span>}
-    </label>)}
+    {applicableRates.map(({label, field}, index) => {
+      const priceError = !free && problems.length > 0 ? validateMoney(values[field]) : ''
+      return <label key={field}>{label}
+        <input
+          ref={index === 0 ? firstField : undefined}
+          aria-label={`${draft.name} ${label.toLowerCase()}`}
+          value={values[field]}
+          disabled={free}
+          aria-invalid={!!priceError}
+          inputMode="decimal"
+          autoCapitalize="none"
+          spellCheck={false}
+          onChange={e => set({[field]: e.target.value} as Partial<ModelDraft>)} />
+        {priceError && <span className="field-error">{values[field].trim() ? priceError : 'Enter a price or select “This model is free”.'}</span>}
+      </label>
+    })}
     <label><input type="checkbox" checked={free} onChange={e => toggleFree(e.target.checked)} /> This model is free</label>
     {embedding && <>
-      <label>Dimensions<input aria-label={`${draft.name} dimensions`} type="number" min="0" step="1" value={values.dimensions} aria-invalid={!!validateDimensions(values.dimensions, values.truncatable, values.supports_custom_dimensions)} onChange={e => set({dimensions: e.target.value})} />
-        {validateDimensions(values.dimensions, values.truncatable, values.supports_custom_dimensions) && <span className="field-error">Enter the native embedding width, or use Check model to detect it.</span>}
+      <label>Dimensions<input aria-label={`${draft.name} dimensions`} type="number" min="0" step="1" value={values.dimensions} aria-invalid={!!dimensionsError} onChange={e => set({dimensions: e.target.value})} />
+        {dimensionsError && <span className="field-error">{values.dimensions.trim() ? dimensionsError : 'Enter the native embedding width, or use Check model to detect it.'}</span>}
       </label>
       <label><input aria-label={`${draft.name} truncatable`} type="checkbox" checked={values.truncatable} onChange={e => set({truncatable: e.target.checked})} /> Truncatable</label>
       <label><input aria-label={`${draft.name} supports custom dimensions`} type="checkbox" checked={values.supports_custom_dimensions} onChange={e => set({supports_custom_dimensions: e.target.checked})} /> Provider supports custom dimensions</label>
