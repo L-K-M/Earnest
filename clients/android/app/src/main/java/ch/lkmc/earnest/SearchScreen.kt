@@ -51,6 +51,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -116,7 +118,7 @@ internal fun SearchScreen(
                 )
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs)) {
                     Button(onClick = submit, enabled = state.query.isNotBlank()) { Text("Search") }
-                    FilledTonalButton(onClick = { filtersExpanded = !filtersExpanded }) {
+                    FilledTonalButton(onClick = { filtersExpanded = !filtersExpanded }, modifier = Modifier.semantics { stateDescription = if (filtersExpanded) "Expanded" else "Collapsed" }) {
                         Text(if (filterCount == 0) "Filters" else "Filters ($filterCount)")
                         Icon(if (filtersExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown, contentDescription = null)
                     }
@@ -137,7 +139,7 @@ internal fun SearchScreen(
         }
         if (state.savedSearches.isNotEmpty()) {
             item("saved-heading") {
-                TextButton(onClick = { savedExpanded = !savedExpanded }) {
+                TextButton(onClick = { savedExpanded = !savedExpanded }, modifier = Modifier.semantics { heading(); stateDescription = if (savedExpanded) "Expanded" else "Collapsed" }) {
                     Text("Saved searches (${state.savedSearches.size})")
                     Icon(if (savedExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown, contentDescription = null)
                 }
@@ -217,8 +219,8 @@ private fun SearchHeading(text: String) {
 }
 
 @Composable
-private fun SearchResult(match: SearchMatch, source: String?, onOpen: (SearchMatch) -> Unit) {
-    Column(Modifier.fillMaxWidth().clickable(onClickLabel = "Open article", onClick = { onOpen(match) }).padding(vertical = ReaderSpace.sm), verticalArrangement = Arrangement.spacedBy(ReaderSpace.xs)) {
+internal fun SearchResult(match: SearchMatch, source: String?, onOpen: (SearchMatch) -> Unit) {
+    Column(Modifier.fillMaxWidth().clickable(onClickLabel = "Open article", role = Role.Button, onClick = { onOpen(match) }).padding(vertical = ReaderSpace.sm), verticalArrangement = Arrangement.spacedBy(ReaderSpace.xs)) {
         Text(
             if (match.kind == "agent_note") "Agent note · ${match.agentName?.takeIf(String::isNotEmpty) ?: "Unknown agent"}" else source ?: "Article",
             style = MaterialTheme.typography.labelMedium,

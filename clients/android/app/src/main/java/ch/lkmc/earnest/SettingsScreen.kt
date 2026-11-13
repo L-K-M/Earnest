@@ -3,6 +3,7 @@ package ch.lkmc.earnest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -43,6 +45,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
@@ -149,8 +152,8 @@ internal fun SettingsScreen(
                     horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
                     verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
                 ) {
-                    TextButton(onClick = model::loadReaderSettings, enabled = !ui.loading) { Text("Load") }
-                    TextButton(onClick = model::reloadReaderSettings, enabled = !ui.loading) { Text("Reload") }
+                    TextButton(onClick = model::loadReaderSettings, enabled = !ui.loading && !ui.saving) { Text("Load") }
+                    TextButton(onClick = model::reloadReaderSettings, enabled = !ui.loading && !ui.saving) { Text("Reload") }
                     if (ui.frozen != null) {
                         TextButton(onClick = model::retryReaderSettingsSave, enabled = !ui.saving) { Text("Retry") }
                     }
@@ -303,12 +306,17 @@ internal fun SettingsScreen(
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Row(
-                    Modifier.fillMaxWidth(),
+                    Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(
+                        value = subscribeMissing,
+                        enabled = !keptImport.busy && !readingImport,
+                        role = Role.Checkbox,
+                        onValueChange = { subscribeMissing = it },
+                    ),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Checkbox(
                         checked = subscribeMissing,
-                        onCheckedChange = { subscribeMissing = it },
+                        onCheckedChange = null,
                         enabled = !keptImport.busy && !readingImport,
                     )
                     Spacer(Modifier.width(ReaderSpace.xs))
@@ -453,7 +461,7 @@ internal fun SettingsScreen(
 
 /** A full-width switch row: the label wraps and the switch stays reachable. */
 @Composable
-private fun SwitchRow(
+internal fun SwitchRow(
     text: String,
     contentDescription: String,
     checked: Boolean,
@@ -462,7 +470,10 @@ private fun SwitchRow(
 ) {
     val accessibilityLabel = contentDescription
     Row(
-        Modifier.fillMaxWidth().padding(vertical = ReaderSpace.xxs),
+        Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            .toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange)
+            .semantics { this.contentDescription = accessibilityLabel }
+            .padding(vertical = ReaderSpace.xxs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs)) {
@@ -472,11 +483,7 @@ private fun SwitchRow(
             }
         }
         Spacer(Modifier.width(ReaderSpace.sm))
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            modifier = Modifier.semantics { this.contentDescription = accessibilityLabel },
-        )
+        Switch(checked = checked, onCheckedChange = null)
     }
 }
 

@@ -112,7 +112,7 @@ internal fun FrontPageScreen(
 ) {
     val page = state.page
     if (page == null) {
-        // Without a page there is nothing to scroll, so the masthead stays put.
+        // Keep long errors and large text reachable even in a short window.
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
             FrontPageMasthead(
                 state = state,

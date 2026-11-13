@@ -71,14 +71,19 @@ palette. Short landscape windows use a navigation rail to preserve reading
 height. Insets, keyboard resizing and scrolling keep content clear of system
 UI, and actions retain Android's standard touch targets. Find focuses its
 input and temporarily hides the reader header to leave room for the keyboard.
+Wide-screen search retains the open article; resizing search into a compact
+window keeps the search task visible, and Back restores the reading context.
 
 ## Verification
 
 Automated coverage includes the existing core and app suites, Compose layout
 and navigation tests, a cancelled-swipe regression, narrow-phone cadence and
 reader-tool checks at 200% text, and contrast checks for notice/control text in
-every theme. The cancelled-swipe and large-label chip-height regressions were
-observed failing before their fixes.
+every theme. Follow-up coverage checks feed-icon taps, wide-search context and
+Back, result/button semantics, expanded filter state, full-row 48dp toggles,
+load/save exclusion and theme selection in short windows. The cancelled-swipe,
+large-label chip-height and interaction regressions were observed failing
+before their fixes.
 
 For visual acceptance, inspect a populated front page, article list, inline
 article, reader, feeds, search/results, settings and connect screen. Repeat on

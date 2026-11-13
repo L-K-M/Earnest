@@ -257,6 +257,7 @@ internal fun MainScaffold(
     // would reopen into a list the user was not looking at.
     var section by rememberSection()
     var searchReturn by rememberSection()
+    var searchDetail by rememberSaveable { mutableStateOf(false) }
     val adaptiveInfo = currentWindowAdaptiveInfo()
     val directive = calculatePaneScaffoldDirective(adaptiveInfo)
     // The newspaper owns the reading area; an original opens on the next
@@ -277,13 +278,31 @@ internal fun MainScaffold(
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     var feedSelection by rememberFeedSelection(state.accountKey)
     val detailOnly = navigator.currentDestination?.pane == ListDetailPaneScaffoldRole.Detail &&
-        (section.view == View.FRONT || directive.maxHorizontalPartitions == 1)
+        (section.view == View.FRONT || directive.maxHorizontalPartitions == 1) &&
+        (section.view != View.SEARCH || searchDetail)
     // Entries reached through an agent's output (a notification, a deep link
     // of unknown origin, an agent-change notice) open with click-to-load
     // images; see AppViewModel.openEntry. The set is saved with the navigator's
     // destination: after a rotation or process death the reader reopens the
     // same entry, and a plain remember would reload it with automatic images.
     var agentSelected by rememberSaveable(saver = AgentSelectedSaver) { mutableStateOf(emptySet<Long>()) }
+
+    @Composable
+    fun SearchContent() {
+        SearchScreen(
+            search = model.search,
+            accountKey = state.accountKey,
+            snapshot = state.snapshot,
+            onOpen = { match ->
+                searchDetail = true
+                if (match.kind == "agent_note" || match.untrusted) agentSelected = agentSelected + match.entryId
+                scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, match.entryId) }
+            },
+        )
+        // Register in the list pane after the scaffold's own handler. The
+        // detail pane's find handler can still take priority over this one.
+        BackHandler(enabled = !detailOnly) { section = searchReturn }
+    }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(lifecycleOwner) {
@@ -297,6 +316,7 @@ internal fun MainScaffold(
     LaunchedEffect(initialEntry) {
         initialEntry?.let {
             agentSelected = agentSelected + it
+            searchDetail = true
             navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, it)
         }
     }
@@ -305,6 +325,7 @@ internal fun MainScaffold(
         val id = notificationId ?: return@LaunchedEffect
         model.notificationEntry(id)?.let {
             agentSelected = agentSelected + it
+            searchDetail = true
             navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, it)
         }
     }
@@ -395,9 +416,6 @@ internal fun MainScaffold(
 
     // Color identifies the selected destination; the rest stays quiet so
     // navigation does not compete with article content. Labels remain ink.
-    BackHandler(enabled = section.view == View.SEARCH && !showSettings && !detailOnly) {
-        section = searchReturn
-    }
     val tones = LocalTones.current
     val scheme = MaterialTheme.colorScheme
     val suiteItemColors = View.entries.mapNotNull { destination ->
@@ -483,8 +501,8 @@ internal fun MainScaffold(
                     onRequestNotifications,
                     onSearch = {
                         searchReturn = section
+                        searchDetail = false
                         section = section.copy(view = View.SEARCH)
-                        scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.List) }
                     },
                     onSettings = { showSettings = true },
                     onRefresh = {
@@ -519,6 +537,10 @@ internal fun MainScaffold(
                         onBack = { showSettings = false },
                         modifier = Modifier.weight(1f),
                     )
+                } else if (section.view == View.SEARCH && !searchDetail && directive.maxHorizontalPartitions == 1) {
+                    // Search owns a compact window until a result is opened,
+                    // even when the previous wide layout had an article open.
+                    SearchContent()
                 } else {
                 NavigableListDetailPaneScaffold(
                     navigator = navigator,
@@ -548,15 +570,7 @@ internal fun MainScaffold(
                                     onPeriodChange = { period -> section = section.copy(period = period) },
                                     onRefresh = { model.refreshFrontPage() },
                                 )
-                                View.SEARCH -> SearchScreen(
-                                    search = model.search,
-                                    accountKey = state.accountKey,
-                                    snapshot = state.snapshot,
-                                    onOpen = { match ->
-                                        if (match.kind == "agent_note" || match.untrusted) agentSelected = agentSelected + match.entryId
-                                        scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, match.entryId) }
-                                    },
-                                )
+                                View.SEARCH -> SearchContent()
                                 View.FEEDS -> FeedsScreen(
                                     model = model,
                                     state = state,
@@ -854,7 +868,7 @@ private fun EarnestTopBar(
 }
 
 @Composable
-private fun ThemeDialog(
+internal fun ThemeDialog(
     current: ThemeSetting,
     onDismiss: () -> Unit,
     onSelect: (ThemeSetting) -> Unit,
@@ -863,7 +877,7 @@ private fun ThemeDialog(
         onDismissRequest = onDismiss,
         title = { Text("Theme") },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 ThemeSetting.entries.forEach { setting ->
                     Row(
                         Modifier.fillMaxWidth().clickable { onSelect(setting) },
@@ -1520,15 +1534,15 @@ internal fun FeedRow(
     var menuOpen by remember { mutableStateOf(false) }
     var confirmUnsubscribe by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().padding(horizontal = ReaderSpace.gutter, vertical = ReaderSpace.md)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ReaderSpace.sm)) {
-            Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClickLabel = "Read feed", onClick = onOpen), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ReaderSpace.sm)) {
+            Surface(modifier = Modifier.testTag("feed-icon-${subscription.id}"), shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
                 if (iconUrl != null) {
                     MediaImage(iconUrl, Modifier.padding(10.dp).size(24.dp), RoundedCornerShape(4.dp))
                 } else {
                     Icon(FeedIcon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(10.dp).size(24.dp))
                 }
             }
-            Column(Modifier.weight(1f).clickable(onClickLabel = "Read feed", onClick = onOpen).padding(vertical = ReaderSpace.xs)) {
+            Column(Modifier.weight(1f).padding(vertical = ReaderSpace.xs)) {
                 Text(subscription.name.ifBlank { "Untitled feed" }, style = MaterialTheme.typography.titleMedium)
                 Text(subscription.raw.url(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
