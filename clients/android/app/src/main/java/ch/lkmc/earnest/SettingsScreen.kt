@@ -2,29 +2,31 @@ package ch.lkmc.earnest
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import ch.lkmc.earnest.ReaderFilterChip as FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -36,12 +38,17 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import ch.lkmc.earnest.core.KeptImportReport
 import ch.lkmc.earnest.core.ReaderFont
 import ch.lkmc.earnest.core.MAX_KEPT_IMPORT_BYTES
@@ -62,11 +69,19 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 
+/** Approximate width of one reader measure character, in dp, for the preview. */
+private const val PREVIEW_CHAR_WIDTH_DP = 8
+
 /**
  * The account reader preferences. Every field edits a local draft; only the
  * explicit Save button publishes it. The chrome theme is deliberately absent:
  * it stays a device-local preference.
+ *
+ * Reading controls come first, then the starred import and the server-managed
+ * LLM services. The starred import and LLM sections stay available even before
+ * the account's reader settings have loaded.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun SettingsScreen(
     model: AppViewModel,
@@ -112,180 +127,244 @@ internal fun SettingsScreen(
         }
     }
 
-    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-            }
-            Text("Settings", style = MaterialTheme.typography.titleLarge)
-            Spacer(Modifier.width(8.dp))
-            if (ui.loading) CircularProgressIndicator(Modifier.width(20.dp))
-            if (ui.saving) CircularProgressIndicator(Modifier.width(20.dp))
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = model::loadReaderSettings, enabled = !ui.loading) { Text("Load") }
-            val dirty = ui.draft != null
-            TextButton(onClick = model::saveReaderSettings, enabled = ui.loaded != null && state.snapshot.cursor.generation.isNotEmpty() && dirty && !ui.saving) { Text("Save") }
-            TextButton(onClick = model::retryReaderSettingsSave, enabled = ui.frozen != null && !ui.saving) { Text("Retry") }
-            TextButton(onClick = model::reloadReaderSettings, enabled = !ui.loading) { Text("Reload") }
-        }
-        ui.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        if (ui.success) Text("Saved", color = MaterialTheme.colorScheme.primary)
+    val blocked = ui.loaded == null || state.snapshot.cursor.generation.isEmpty()
+    val largeText = LocalDensity.current.fontScale >= 1.5f
 
-        Section("Starred articles") {
-            Text(
-                "Bring starred articles from another reader into Kept. Export them as Google Reader JSON, for example from FreshRSS or Inoreader.",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(
-                    checked = subscribeMissing,
-                    onCheckedChange = { subscribeMissing = it },
+    // The outer app bar owns the back affordance and the system back gesture,
+    // so this screen renders no title or back button of its own; onBack stays
+    // in the signature for its callers.
+    Column(modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(
+            Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
+                .padding(horizontal = ReaderSpace.md, vertical = ReaderSpace.sm),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+        Column(
+            // Cap the readable width on tablets; fill the narrower screen.
+            Modifier.widthIn(max = ReaderSpace.contentWidth).fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(ReaderSpace.sm),
+        ) {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(ReaderSpace.xs)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+                    verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+                ) {
+                    TextButton(onClick = model::loadReaderSettings, enabled = !ui.loading) { Text("Load") }
+                    TextButton(onClick = model::reloadReaderSettings, enabled = !ui.loading) { Text("Reload") }
+                    if (ui.frozen != null) {
+                        TextButton(onClick = model::retryReaderSettingsSave, enabled = !ui.saving) { Text("Retry") }
+                    }
+                    if (ui.loading || ui.saving) {
+                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    }
+                }
+                ui.error?.let { NoticeBanner(it, tone = NoticeTone.ERROR) }
+                if (ui.success) NoticeBanner("Saved", tone = NoticeTone.SUCCESS)
+                if (blocked) {
+                    NoticeBanner("Sync or load your account settings before editing.", tone = NoticeTone.INFO)
+                }
+            }
+
+            if (!blocked) {
+                SettingsGroup("Reading preferences") {
+                    Text(
+                        "Reading preferences sync across your devices. The app theme stays on this device.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text("Reading mode", style = MaterialTheme.typography.labelLarge)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+                        verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+                    ) {
+                        ReadingMode.entries.forEach { mode ->
+                            FilterChip(
+                                selected = settings.readingMode == mode,
+                                onClick = { model.updateReaderSettingsDraft { it.copy(readingMode = mode) } },
+                                label = { Text(if (mode == ReadingMode.RIVER) "River" else "Unread counts") },
+                            )
+                        }
+                    }
+                    Text("Article visibility", style = MaterialTheme.typography.labelLarge)
+                    SwitchRow(
+                        text = "Show only unread",
+                        contentDescription = "Show only unread",
+                        description = "Read articles stay until you reopen or refresh the list. Front page, saved shelves and search include read articles.",
+                        checked = settings.showOnlyUnread,
+                        onCheckedChange = { value -> model.updateReaderSettingsDraft { it.copy(showOnlyUnread = value) } },
+                    )
+                    Text("River retention", style = MaterialTheme.typography.labelLarge)
+                    Text("${settings.todayDecayDays} days", style = MaterialTheme.typography.bodyMedium)
+                    Slider(
+                        value = settings.todayDecayDays.toFloat(),
+                        onValueChange = { value ->
+                            model.updateReaderSettingsDraft { it.copy(todayDecayDays = value.roundToInt().toLong().coerceIn(1, 365)) }
+                        },
+                        valueRange = 1f..365f,
+                        steps = 363,
+                        modifier = Modifier.semantics { contentDescription = "River retention in days" },
+                    )
+                    Text(
+                        "Cadence and retention apply to river lists. Front page always covers the past 24 hours or 7 days across your unmuted feeds.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text("Shortcuts", style = MaterialTheme.typography.labelLarge)
+                    SwitchRow(
+                        text = "Single-key shortcuts (shared with web and Mac)",
+                        contentDescription = "Single-key shortcuts",
+                        checked = settings.singleKeyShortcuts,
+                        onCheckedChange = { checked -> model.updateReaderSettingsDraft { it.copy(singleKeyShortcuts = checked) } },
+                    )
+                }
+
+                SettingsGroup("Typography") {
+                    Text("Article theme", style = MaterialTheme.typography.labelLarge)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+                        verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+                    ) {
+                        ReaderTheme.entries.forEach { theme ->
+                            FilterChip(
+                                selected = settings.theme == theme,
+                                onClick = { model.updateReaderSettingsDraft { it.copy(theme = theme) } },
+                                label = { Text(theme.label()) },
+                            )
+                        }
+                    }
+                    Text("Measure", style = MaterialTheme.typography.labelLarge)
+                    Text("${settings.measure}", style = MaterialTheme.typography.bodyMedium)
+                    Slider(
+                        value = settings.measure.toFloat(),
+                        onValueChange = { value ->
+                            model.updateReaderSettingsDraft { it.copy(measure = value.roundToInt().toLong().coerceIn(62, 72)) }
+                        },
+                        valueRange = 62f..72f,
+                        steps = 9,
+                        modifier = Modifier.semantics { contentDescription = "Measure" },
+                    )
+                    Text("Font", style = MaterialTheme.typography.labelLarge)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+                        verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+                    ) {
+                        ReaderFont.entries.forEach { font ->
+                            FilterChip(
+                                selected = settings.font == font,
+                                onClick = { model.updateReaderSettingsDraft { it.copy(font = font) } },
+                                label = { Text(font.label()) },
+                            )
+                        }
+                    }
+                    Text("Preview", style = MaterialTheme.typography.labelLarge)
+                    TypographyPreview(settings)
+                    Text("Per-feed typography", style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        "Overrides are keyed by feed ID and inherit the account setting for members left as Inherit.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    feeds.forEach { (_, feedId, name) ->
+                        val override = settings.feedOverrides[feedId.toString()]
+                        Column(
+                            Modifier.fillMaxWidth().padding(vertical = ReaderSpace.xxs),
+                            verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+                        ) {
+                            Text("$name (feed $feedId)", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                overrideSummary(override),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+                                verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+                            ) {
+                                TextButton(onClick = {
+                                    overrideFeedId = feedId
+                                    overrideTheme = override?.theme
+                                    overrideMeasureInput = OverrideMeasureInput.fromValue(override?.measure)
+                                    overrideFont = override?.font
+                                }) { Text("Override") }
+                                TextButton(
+                                    onClick = { model.updateReaderSettingsDraft { it.copy(feedOverrides = it.feedOverrides - feedId.toString()) } },
+                                    enabled = override != null,
+                                ) { Text("Reset") }
+                            }
+                        }
+                    }
+                    TextButton(onClick = { addOverride = true }) { Text("Add override by feed ID") }
+                }
+            }
+
+            SettingsGroup("Starred articles") {
+                Text(
+                    "Bring starred articles from another reader into Kept. Export them as Google Reader JSON, for example from FreshRSS or Inoreader.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(
+                        checked = subscribeMissing,
+                        onCheckedChange = { subscribeMissing = it },
+                        enabled = !keptImport.busy && !readingImport,
+                    )
+                    Spacer(Modifier.width(ReaderSpace.xs))
+                    Text(
+                        "Also subscribe to feeds you don't follow",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Button(
+                    onClick = { importPicker.launch(arrayOf("application/json", "*/*")) },
                     enabled = !keptImport.busy && !readingImport,
-                )
-                Text("Also subscribe to feeds you don't follow")
-            }
-            Button(
-                onClick = { importPicker.launch(arrayOf("application/json", "*/*")) },
-                enabled = !keptImport.busy && !readingImport,
-            ) { Text("Import starred articles") }
-            if (keptImport.busy || readingImport) Text("Importing starred articles…")
-            keptImport.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            keptImport.report?.let { report ->
-                KeptImportReportView(report = report, busy = keptImport.busy, onRetry = model::importKeptAgain)
-            }
-        }
-
-        LlmServicesSection(model = model, state = state, modifier = Modifier.padding(vertical = 8.dp))
-
-        if (ui.loaded == null || state.snapshot.cursor.generation.isEmpty()) {
-            Text("Sync or load your account settings before editing.")
-            return@Column
-        }
-
-        Section("Reading mode") {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ReadingMode.entries.forEach { mode ->
-                    FilterChip(
-                        selected = settings.readingMode == mode,
-                        onClick = { model.updateReaderSettingsDraft { it.copy(readingMode = mode) } },
-                        label = { Text(if (mode == ReadingMode.RIVER) "River" else "Unread counts") },
+                ) { Text("Import starred articles") }
+                if (keptImport.busy || readingImport) {
+                    Text(
+                        "Importing starred articles…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-            }
-        }
-
-        Section("Article visibility") {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Switch(
-                    checked = settings.showOnlyUnread,
-                    onCheckedChange = { value -> model.updateReaderSettingsDraft { it.copy(showOnlyUnread = value) } },
-                    modifier = Modifier.semantics { contentDescription = "Show only unread" },
-                )
-                Text("Show only unread")
-            }
-            Text("Read articles stay until you reopen or refresh the list. Front page, saved shelves and search include read articles.")
-        }
-
-        Section("River retention") {
-            Text("Cadence and retention apply to river lists. Front page always covers the past 24 hours or 7 days across your unmuted feeds.")
-            Text("${settings.todayDecayDays} days")
-            Slider(
-                value = settings.todayDecayDays.toFloat(),
-                onValueChange = { value ->
-                    model.updateReaderSettingsDraft { it.copy(todayDecayDays = value.roundToInt().toLong().coerceIn(1, 365)) }
-                },
-                valueRange = 1f..365f,
-                steps = 363,
-                modifier = Modifier.semantics { contentDescription = "River retention in days" },
-            )
-        }
-
-        Section("Shortcuts") {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Switch(
-                    checked = settings.singleKeyShortcuts,
-                    onCheckedChange = { checked -> model.updateReaderSettingsDraft { it.copy(singleKeyShortcuts = checked) } },
-                    modifier = Modifier.semantics { contentDescription = "Single-key shortcuts" },
-                )
-                Text("Single-key shortcuts (shared with web and Mac)")
-            }
-        }
-
-        Section("Article theme") {
-            ReaderTheme.entries.forEach { theme ->
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    RadioButton(
-                        selected = settings.theme == theme,
-                        onClick = { model.updateReaderSettingsDraft { it.copy(theme = theme) } },
-                    )
-                    Text(theme.label())
+                keptImport.error?.let { NoticeBanner(it, tone = NoticeTone.ERROR) }
+                keptImport.report?.let { report ->
+                    KeptImportReportView(report = report, busy = keptImport.busy, onRetry = model::importKeptAgain)
                 }
             }
-        }
 
-        Section("Measure") {
-            Text("${settings.measure}")
-            Slider(
-                value = settings.measure.toFloat(),
-                onValueChange = { value ->
-                    model.updateReaderSettingsDraft { it.copy(measure = value.roundToInt().toLong().coerceIn(62, 72)) }
-                },
-                valueRange = 62f..72f,
-                steps = 9,
-                modifier = Modifier.semantics { contentDescription = "Measure" },
-            )
+            LlmServicesSection(model = model, state = state, modifier = Modifier.fillMaxWidth())
         }
-
-        Section("Font") {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ReaderFont.entries.forEach { font ->
-                    FilterChip(
-                        selected = settings.font == font,
-                        onClick = { model.updateReaderSettingsDraft { it.copy(font = font) } },
-                        label = { Text(font.label()) },
-                    )
-                }
-            }
         }
-
-        Section("Per-feed typography") {
-            Text(
-                "Overrides are keyed by feed ID and inherit the account setting for members left as Inherit.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            feeds.forEach { (_, feedId, name) ->
-                val override = settings.feedOverrides[feedId.toString()]
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text("$name (feed $feedId)", style = MaterialTheme.typography.bodyMedium)
+        Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
+            Row(
+                Modifier.widthIn(max = ReaderSpace.contentWidth).fillMaxWidth().padding(ReaderSpace.md),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(ReaderSpace.md),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Reading preferences", style = MaterialTheme.typography.labelLarge)
+                    if (!largeText || ui.saving || blocked || ui.draft != null) {
                         Text(
-                            overrideSummary(override),
+                            when {
+                                ui.saving -> "Saving your preferences…"
+                                blocked -> "Load settings to make changes"
+                                ui.draft != null -> "Unsaved changes"
+                                else -> "No unsaved changes"
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    TextButton(onClick = {
-                        overrideFeedId = feedId
-                        overrideTheme = override?.theme
-                        overrideMeasureInput = OverrideMeasureInput.fromValue(override?.measure)
-                        overrideFont = override?.font
-                    }) { Text("Override") }
-                    TextButton(
-                        onClick = { model.updateReaderSettingsDraft { it.copy(feedOverrides = it.feedOverrides - feedId.toString()) } },
-                        enabled = override != null,
-                    ) { Text("Reset") }
                 }
+                Button(
+                    onClick = model::saveReaderSettings,
+                    enabled = !blocked && ui.draft != null && !ui.saving,
+                    modifier = Modifier.testTag("reader-settings-save"),
+                ) { Text("Save") }
             }
-            TextButton(onClick = { addOverride = true }) { Text("Add override by feed ID") }
         }
     }
 
@@ -308,7 +387,10 @@ internal fun SettingsScreen(
             onDismissRequest = { overrideFeedId = null },
             title = { Text("Feed $editingFeed override") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(
+                    Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(ReaderSpace.sm),
+                ) {
                     Text("Theme")
                     ChipRow(
                         options = ReaderTheme.entries.map { it to it.label() },
@@ -369,61 +451,146 @@ internal fun SettingsScreen(
     }
 }
 
+/** A full-width switch row: the label wraps and the switch stays reachable. */
+@Composable
+private fun SwitchRow(
+    text: String,
+    contentDescription: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    description: String? = null,
+) {
+    val accessibilityLabel = contentDescription
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = ReaderSpace.xxs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs)) {
+            Text(text, style = MaterialTheme.typography.bodyLarge)
+            if (description != null) {
+                Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        Spacer(Modifier.width(ReaderSpace.sm))
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            modifier = Modifier.semantics { this.contentDescription = accessibilityLabel },
+        )
+    }
+}
+
+/** A quiet live sample of the draft's reader typography; no request is made. */
+@Composable
+private fun TypographyPreview(settings: ReaderSettings, modifier: Modifier = Modifier) {
+    val systemDark = isSystemInDarkTheme()
+    val (background, foreground) = previewColors(settings.theme, systemDark)
+    val family = when (settings.font) {
+        ReaderFont.SERIF -> FontFamily.Serif
+        ReaderFont.SANS -> FontFamily.SansSerif
+        ReaderFont.DYSLEXIC -> FontFamily.SansSerif
+    }
+    val letterSpacing = if (settings.font == ReaderFont.DYSLEXIC) 0.9.sp else 0.sp
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = background,
+        contentColor = foreground,
+    ) {
+        Column(
+            // The reader's measure is a character width, approximated here;
+            // the parent's constraints cap it on a narrow screen.
+            Modifier.width((settings.measure.toInt() * PREVIEW_CHAR_WIDTH_DP).dp)
+                .padding(ReaderSpace.md),
+            verticalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+        ) {
+            Text(
+                "The quick brown fox jumps over the lazy dog",
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontFamily = family,
+                    fontSize = 18.sp,
+                    lineHeight = 26.sp,
+                    letterSpacing = letterSpacing,
+                ),
+            )
+            Text(
+                "A little space makes room for a good story. Settle into the articles you love, at your own pace.",
+                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = family, letterSpacing = letterSpacing),
+            )
+            Text(
+                "${settings.measure} characters per line · ${settings.font.label()} · ${settings.theme.label()}",
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+    }
+}
+
+/** The reader content palette, mirroring the offline reader CSS. */
+private fun previewColors(theme: ReaderTheme, systemDark: Boolean): Pair<Color, Color> = when (theme) {
+    ReaderTheme.SYSTEM -> if (systemDark) Color(0xFF242424) to Color(0xFFEEEEEE) else Color(0xFFFFFFFF) to Color(0xFF202020)
+    ReaderTheme.LIGHT -> Color(0xFFFFFFFF) to Color(0xFF202020)
+    ReaderTheme.DARK -> Color(0xFF242424) to Color(0xFFEEEEEE)
+    ReaderTheme.BLACK -> Color(0xFF000000) to Color(0xFFFFFFFF)
+    ReaderTheme.EINK -> Color(0xFFFFFFFF) to Color(0xFF000000)
+}
+
 /** The import report, worded the same way as the web client's. */
 @Composable
 private fun KeptImportReportView(report: KeptImportReport, busy: Boolean, onRetry: () -> Unit) {
     val summary = summarizeKeptImport(report)
     val total = summary.added + summary.existing
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(
-            "$total ${if (total == 1) "article" else "articles"} in Kept: " +
-                "${summary.added} added from the export, ${summary.existing} already in Earnest.",
-        )
-        if (summary.subscribed > 0) {
+    Surface(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+    ) {
+        Column(Modifier.fillMaxWidth().padding(ReaderSpace.sm), verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs)) {
             Text(
-                "Subscribed to ${summary.subscribed} ${if (summary.subscribed == 1) "feed" else "feeds"}. " +
-                    "Their first fetches run in the background.",
+                "$total ${if (total == 1) "article" else "articles"} in Kept: " +
+                    "${summary.added} added from the export, ${summary.existing} already in Earnest.",
             )
-        }
-        if (summary.labelled > 0) {
-            Text("Added the export's labels to ${summary.labelled} ${if (summary.labelled == 1) "article" else "articles"}.")
-        }
-        if (summary.unkept > 0) {
-            Text("${summary.unkept} left out because you removed ${if (summary.unkept == 1) "it" else "them"} from Kept.")
-        }
-        if (summary.gone > 0) Text("${summary.gone} no longer available in Earnest.")
-        if (summary.skipped.isNotEmpty()) {
-            val skippedTotal = summary.skipped.sumOf { it.count }
-            Text("$skippedTotal skipped because you don't follow their feed:")
-            summary.skipped.forEach { skip ->
+            if (summary.subscribed > 0) {
                 Text(
-                    "${skip.feedUrl.ifBlank { "Unknown feed" }} (${skip.count})",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    "Subscribed to ${summary.subscribed} ${if (summary.subscribed == 1) "feed" else "feeds"}. " +
+                        "Their first fetches run in the background.",
                 )
             }
-            TextButton(onClick = onRetry, enabled = !busy) { Text("Subscribe to these feeds and import again") }
-        }
-        if (summary.failed.isNotEmpty()) {
-            Text(
-                "${summary.failed.size} could not be imported: ${summary.failed.joinToString("; ")}",
-                color = MaterialTheme.colorScheme.error,
-            )
+            if (summary.labelled > 0) {
+                Text("Added the export's labels to ${summary.labelled} ${if (summary.labelled == 1) "article" else "articles"}.")
+            }
+            if (summary.unkept > 0) {
+                Text("${summary.unkept} left out because you removed ${if (summary.unkept == 1) "it" else "them"} from Kept.")
+            }
+            if (summary.gone > 0) Text("${summary.gone} no longer available in Earnest.")
+            if (summary.skipped.isNotEmpty()) {
+                val skippedTotal = summary.skipped.sumOf { it.count }
+                Text("$skippedTotal skipped because you don't follow their feed:")
+                summary.skipped.forEach { skip ->
+                    Text(
+                        "${skip.feedUrl.ifBlank { "Unknown feed" }} (${skip.count})",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                TextButton(onClick = onRetry, enabled = !busy) { Text("Subscribe to these feeds and import again") }
+            }
+            if (summary.failed.isNotEmpty()) {
+                Text(
+                    "${summary.failed.size} could not be imported: ${summary.failed.joinToString("; ")}",
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
         }
     }
 }
 
-@Composable
-private fun Section(title: String, content: @Composable () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        Text(title, style = MaterialTheme.typography.titleMedium)
-        content()
-    }
-}
-
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun <T> ChipRow(options: List<Pair<T, String>>, selected: T?, onSelect: (T?) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+        verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+    ) {
         FilterChip(
             selected = selected == null,
             onClick = { onSelect(null) },
@@ -447,13 +614,18 @@ private fun AddFeedOverrideDialog(onDismiss: () -> Unit, onConfirm: (Long) -> Un
         onDismissRequest = onDismiss,
         title = { Text("Add override by feed ID") },
         text = {
-            OutlinedTextField(
-                value = value,
-                onValueChange = { value = it },
-                label = { Text("Feed ID") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            )
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(ReaderSpace.sm),
+            ) {
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = { value = it },
+                    label = { Text("Feed ID") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                )
+            }
         },
         confirmButton = { TextButton(onClick = { feedId?.let(onConfirm) }, enabled = feedId != null) { Text("Add") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },

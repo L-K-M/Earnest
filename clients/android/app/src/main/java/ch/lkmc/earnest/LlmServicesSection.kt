@@ -10,16 +10,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
+import ch.lkmc.earnest.ReaderFilterChip as FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -52,6 +54,7 @@ import ch.lkmc.earnest.core.LlmTokenField
  * whole configuration. Typed API keys live only in that draft, are masked,
  * and are never written to preferences, Room, saved instance state or logs.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun LlmServicesSection(
     model: AppViewModel,
@@ -73,8 +76,7 @@ internal fun LlmServicesSection(
     var discoveryTarget by remember(state.accountKey, ui.epoch) { mutableStateOf<Pair<Int, LlmTask?>?>(null) }
 
     val current = draft
-    Column(modifier.fillMaxWidth()) {
-        Text("LLM services", style = MaterialTheme.typography.titleMedium)
+    SettingsGroup("LLM services", modifier = modifier) {
         Text(
             "These settings are shared for the whole server: changing them affects all accounts. " +
                 "API keys are stored encrypted on the server and are never returned to this app. " +
@@ -82,9 +84,9 @@ internal fun LlmServicesSection(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+            verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
         ) {
             TextButton(onClick = model::loadLlmSettings, enabled = !ui.loading && !ui.saving) { Text("Load") }
             TextButton(onClick = model::reloadLlmSettings, enabled = !ui.loading && !ui.saving) { Text("Reload") }
@@ -96,19 +98,21 @@ internal fun LlmServicesSection(
                 onClick = model::retryLlmSettingsSave,
                 enabled = ui.frozen != null && !ui.loading && !ui.saving && !ui.conflict,
             ) { Text("Retry") }
-            if (ui.loading || ui.saving) CircularProgressIndicator(Modifier.width(20.dp))
+            if (ui.loading || ui.saving) {
+                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+            }
         }
-        ui.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        if (ui.success) Text("Saved", color = MaterialTheme.colorScheme.primary)
+        ui.error?.let { NoticeBanner(it, tone = NoticeTone.ERROR) }
+        if (ui.success) NoticeBanner("Saved", tone = NoticeTone.SUCCESS)
         if (ui.conflict) {
-            Text(
+            NoticeBanner(
                 "The saved settings changed on the server. Reload them to review; your draft is kept.",
-                color = MaterialTheme.colorScheme.error,
+                tone = NoticeTone.ERROR,
             )
         }
         if (current == null) {
-            Text("Load the LLM services settings to review them.")
-            return@Column
+            NoticeBanner("Load the LLM services settings to review them.", tone = NoticeTone.INFO)
+            return@SettingsGroup
         }
 
         Text("Providers", style = MaterialTheme.typography.titleSmall)
@@ -172,7 +176,6 @@ internal fun LlmServicesSection(
             }
         }
 
-        Spacer(Modifier.height(8.dp))
         Row(
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -188,28 +191,31 @@ internal fun LlmServicesSection(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             current.models.forEach { target ->
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                Column(
+                    Modifier.fillMaxWidth().padding(vertical = ReaderSpace.xxs),
+                    verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
                 ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(target.name, style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            "in ${target.inputPer1m} / out ${target.outputPer1m} / embed ${target.embeddingPer1m} per 1M, " +
-                                "${target.dimensions} dimensions" + if (target.truncatable) " (truncatable)" else "",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                    Text(target.name, style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "in ${target.inputPer1m} / out ${target.outputPer1m} / embed ${target.embeddingPer1m} per 1M, " +
+                            "${target.dimensions} dimensions" + if (target.truncatable) " (truncatable)" else "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+                        verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+                    ) {
+                        TextButton(onClick = { editingModel = target.name }) { Text("Edit") }
+                        TextButton(
+                            onClick = {
+                                model.updateLlmSettingsDraft { draftCopy ->
+                                    draftCopy.copy(models = draftCopy.models.filterNot { it.name == target.name })
+                                }
+                            },
+                            enabled = current.tasks.none { it.model == target.name && it.model.isNotEmpty() },
+                        ) { Text("Remove") }
                     }
-                    TextButton(onClick = { editingModel = target.name }) { Text("Edit") }
-                    TextButton(
-                        onClick = {
-                            model.updateLlmSettingsDraft { draftCopy ->
-                                draftCopy.copy(models = draftCopy.models.filterNot { it.name == target.name })
-                            }
-                        },
-                        enabled = current.tasks.none { it.model == target.name && it.model.isNotEmpty() },
-                    ) { Text("Remove") }
                 }
             }
             TextButton(onClick = { addingModel = true }, enabled = !ui.saving) { Text("Add model") }
@@ -343,6 +349,7 @@ internal fun LlmServicesSection(
 private fun retargetModel(tasks: List<LlmTaskRoute>, old: String, replacement: String): List<LlmTaskRoute> =
     tasks.map { if (it.model == old) it.copy(model = replacement) else it }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ProviderCard(
     provider: LlmProviderDraft,
@@ -351,118 +358,138 @@ private fun ProviderCard(
     onRemove: () -> Unit,
     onFetchModels: () -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(provider.name.ifBlank { "(unnamed provider)" }, style = MaterialTheme.typography.titleSmall)
-            Spacer(Modifier.width(8.dp))
-            KeyStatusChip(provider.apiKeyStatus())
-            Spacer(Modifier.weight(1f))
-            TextButton(onClick = onFetchModels) { Text("Fetch models") }
-            TextButton(onClick = onRemove, enabled = referencedBy.isEmpty()) { Text("Remove") }
-        }
-        if (referencedBy.isNotEmpty()) {
-            Text(
-                "Used by ${referencedBy.joinToString(", ")}; clear those routes first.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(ReaderSpace.md),
+            verticalArrangement = Arrangement.spacedBy(ReaderSpace.sm),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    provider.name.ifBlank { "(unnamed provider)" },
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.weight(1f),
+                )
+                KeyStatusChip(provider.apiKeyStatus())
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs)) {
+                TextButton(onClick = onFetchModels) { Text("Fetch models") }
+                TextButton(onClick = onRemove, enabled = referencedBy.isEmpty()) { Text("Remove") }
+            }
+            if (referencedBy.isNotEmpty()) {
+                Text(
+                    "Used by ${referencedBy.joinToString(", ")}; clear those routes first.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            OutlinedTextField(
+                value = provider.name,
+                onValueChange = { value -> onTransform(provider.copy(name = value)) },
+                label = { Text("Name") },
+                singleLine = true,
+                // A saved key is bound to the provider name on the server, so a
+                // keyed provider cannot be renamed silently; remove and re-add it.
+                enabled = !provider.hasApiKey,
+                supportingText = if (provider.hasApiKey) {
+                    { Text("A saved key is bound to this name; remove the provider to rename it.") }
+                } else {
+                    null
+                },
+                modifier = Modifier.fillMaxWidth(),
             )
-        }
-        OutlinedTextField(
-            value = provider.name,
-            onValueChange = { value -> onTransform(provider.copy(name = value)) },
-            label = { Text("Name") },
-            singleLine = true,
-            // A saved key is bound to the provider name on the server, so a
-            // keyed provider cannot be renamed silently; remove and re-add it.
-            enabled = !provider.hasApiKey,
-            supportingText = if (provider.hasApiKey) {
-                { Text("A saved key is bound to this name; remove the provider to rename it.") }
-            } else {
-                null
-            },
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Text("Kind", style = MaterialTheme.typography.bodySmall)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            LlmProviderKind.entries.forEach { kind ->
-                FilterChip(
-                    selected = provider.kind == kind,
-                    onClick = { onTransform(provider.copy(kind = kind)) },
-                    label = { Text(kind.label()) },
-                )
-            }
-        }
-        OutlinedTextField(
-            value = provider.baseUrl,
-            onValueChange = { value -> onTransform(provider.copy(baseUrl = value)) },
-            label = { Text("Base URL") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = provider.monthlyLimitUsd,
-            onValueChange = { value -> onTransform(provider.copy(monthlyLimitUsd = value)) },
-            label = { Text("Monthly limit (USD, 0 = unlimited)") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = provider.timeoutSeconds,
-            onValueChange = { value -> onTransform(provider.copy(timeoutSeconds = value)) },
-            label = { Text("Timeout (seconds, 1-600)") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Text("Token field", style = MaterialTheme.typography.bodySmall)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            LlmTokenField.entries.forEach { field ->
-                FilterChip(
-                    selected = provider.tokenField == field,
-                    onClick = { onTransform(provider.copy(tokenField = field)) },
-                    label = { Text(field.label()) },
-                )
-            }
-        }
-        OutlinedTextField(
-            value = provider.apiKeyInput,
-            onValueChange = { value -> onTransform(provider.copy(apiKeyInput = value)) },
-            label = { Text(if (provider.hasApiKey) "API key (blank keeps the saved key)" else "API key") },
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            singleLine = true,
-            enabled = !provider.clearApiKey,
-            supportingText = if (provider.hasApiKey) {
-                {
-                    Text(
-                        when {
-                            provider.clearApiKey -> "The saved key will be removed on save."
-                            provider.apiKeyInput.isEmpty() -> "A key is saved on the server."
-                            else -> "The saved key will be replaced on save."
-                        },
+            Text("Kind", style = MaterialTheme.typography.bodySmall)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+                verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+            ) {
+                LlmProviderKind.entries.forEach { kind ->
+                    FilterChip(
+                        selected = provider.kind == kind,
+                        onClick = { onTransform(provider.copy(kind = kind)) },
+                        label = { Text(kind.label()) },
                     )
                 }
-            } else {
-                null
-            },
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(
-                checked = provider.clearApiKey,
-                onCheckedChange = { checked ->
-                    // Clearing removes any typed replacement too, so a removal
-                    // can never be combined with a new key.
-                    onTransform(provider.copy(clearApiKey = checked, apiKeyInput = if (checked) "" else provider.apiKeyInput))
-                },
-                enabled = provider.hasApiKey,
+            }
+            OutlinedTextField(
+                value = provider.baseUrl,
+                onValueChange = { value -> onTransform(provider.copy(baseUrl = value)) },
+                label = { Text("Base URL") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
             )
-            Text("Remove the saved key")
+            OutlinedTextField(
+                value = provider.monthlyLimitUsd,
+                onValueChange = { value -> onTransform(provider.copy(monthlyLimitUsd = value)) },
+                label = { Text("Monthly limit (USD, 0 = unlimited)") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = provider.timeoutSeconds,
+                onValueChange = { value -> onTransform(provider.copy(timeoutSeconds = value)) },
+                label = { Text("Timeout (seconds, 1-600)") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text("Token field", style = MaterialTheme.typography.bodySmall)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+                verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+            ) {
+                LlmTokenField.entries.forEach { field ->
+                    FilterChip(
+                        selected = provider.tokenField == field,
+                        onClick = { onTransform(provider.copy(tokenField = field)) },
+                        label = { Text(field.label()) },
+                    )
+                }
+            }
+            OutlinedTextField(
+                value = provider.apiKeyInput,
+                onValueChange = { value -> onTransform(provider.copy(apiKeyInput = value)) },
+                label = { Text(if (provider.hasApiKey) "API key (blank keeps the saved key)" else "API key") },
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                singleLine = true,
+                enabled = !provider.clearApiKey,
+                supportingText = if (provider.hasApiKey) {
+                    {
+                        Text(
+                            when {
+                                provider.clearApiKey -> "The saved key will be removed on save."
+                                provider.apiKeyInput.isEmpty() -> "A key is saved on the server."
+                                else -> "The saved key will be replaced on save."
+                            },
+                        )
+                    }
+                } else {
+                    null
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(
+                    checked = provider.clearApiKey,
+                    onCheckedChange = { checked ->
+                        // Clearing removes any typed replacement too, so a removal
+                        // can never be combined with a new key.
+                        onTransform(provider.copy(clearApiKey = checked, apiKeyInput = if (checked) "" else provider.apiKeyInput))
+                    },
+                    enabled = provider.hasApiKey,
+                )
+                Text("Remove the saved key", modifier = Modifier.weight(1f))
+            }
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AddProviderDialog(onDismiss: () -> Unit, onConfirm: (String, LlmProviderKind) -> Unit) {
     var name by remember { mutableStateOf("") }
@@ -471,7 +498,10 @@ private fun AddProviderDialog(onDismiss: () -> Unit, onConfirm: (String, LlmProv
         onDismissRequest = onDismiss,
         title = { Text("Add provider") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(ReaderSpace.sm),
+            ) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
@@ -479,7 +509,10 @@ private fun AddProviderDialog(onDismiss: () -> Unit, onConfirm: (String, LlmProv
                     singleLine = true,
                 )
                 Text("Kind")
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+                    verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+                ) {
                     LlmProviderKind.entries.forEach { option ->
                         FilterChip(
                             selected = kind == option,
@@ -514,9 +547,9 @@ private fun RouteTaskDialog(
         onDismissRequest = onDismiss,
         title = { Text("Route ${LlmTask.fromWire(taskName)?.label() ?: taskName}") },
         text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(ReaderSpace.sm)) {
                 Text("Provider")
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs), verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs)) {
                     FilterChip(
                         selected = provider.isEmpty(),
                         onClick = { onProviderChange(""); onModelChange("") },
@@ -537,20 +570,22 @@ private fun RouteTaskDialog(
                             Text("Fetch models")
                         }
                     }
-                    Column {
+                    if (draft.models.isEmpty()) {
+                        Text(
+                            "No models are configured yet.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+                        verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+                    ) {
                         draft.models.forEach { option ->
                             FilterChip(
                                 selected = model == option.name,
                                 onClick = { onModelChange(option.name) },
                                 label = { Text(option.name) },
-                                modifier = Modifier.padding(vertical = 2.dp),
-                            )
-                        }
-                        if (draft.models.isEmpty()) {
-                            Text(
-                                "No models are configured yet.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
@@ -590,7 +625,7 @@ private fun ModelDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(ReaderSpace.sm)) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
@@ -708,6 +743,7 @@ private fun KeyStatusChip(status: LlmApiKeyStatus) {
  * hides only models the provider says cannot do the work, while unknown
  * capabilities stay visible and labelled.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DiscoveryDialog(
     providerName: String,
@@ -760,7 +796,10 @@ private fun DiscoveryDialog(
                                 "available when discovery fails or is unsupported.",
                             style = MaterialTheme.typography.bodySmall,
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+                            verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+                        ) {
                             TextButton(onClick = onFetch) { Text("Fetch models") }
                             TextButton(onClick = onDismiss) { Text("Close") }
                         }
@@ -779,7 +818,10 @@ private fun DiscoveryDialog(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+                            verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+                        ) {
                             TextButton(onClick = onFetch) { Text("Fetch again") }
                             TextButton(onClick = onDismiss) { Text("Close") }
                         }
@@ -851,7 +893,10 @@ private fun DiscoveryDialog(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+                            verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+                        ) {
                             TextButton(
                                 onClick = {
                                     val picked = models.filter { it.id in selected }
@@ -908,6 +953,7 @@ private fun DiscoveryDialog(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CatalogueRow(
     entry: LlmDiscoveredModel,
@@ -930,7 +976,10 @@ private fun CatalogueRow(
                 StatusChip("capabilities unknown", MaterialTheme.colorScheme.tertiaryContainer)
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+            verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+        ) {
             if (entry.chat == true) StatusChip("chat", MaterialTheme.colorScheme.surfaceVariant)
             if (entry.embedding == true) StatusChip("embedding", MaterialTheme.colorScheme.surfaceVariant)
             if (task == null && entry.chat == null && entry.embedding == null) {
@@ -989,7 +1038,7 @@ private fun PriceReviewDialog(
         onDismissRequest = onDismiss,
         title = { Text("Review model prices") },
         text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(ReaderSpace.sm)) {
                 Text(
                     "Published rates are suggestions in USD per million tokens. Missing applicable prices and " +
                         "embedding geometry need explicit input; an unknown price is never treated as free. " +

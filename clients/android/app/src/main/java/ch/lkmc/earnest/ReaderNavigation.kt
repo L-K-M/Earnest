@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -20,6 +19,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -166,7 +167,7 @@ internal fun ReaderDrawer(
             item {
                 Row(Modifier.padding(start = 28.dp, end = 12.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("Your library", style = MaterialTheme.typography.titleLarge)
+                        Text("Your library", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() })
                         Text("Read by folder or feed", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     IconButton(onClick = onClose) { Icon(Icons.Filled.Close, contentDescription = "Close folders") }
@@ -184,7 +185,7 @@ internal fun ReaderDrawer(
             item {
                 HorizontalDivider(Modifier.padding(horizontal = 28.dp, vertical = 12.dp))
                 Row(Modifier.fillMaxWidth().padding(start = 28.dp, end = 16.dp)) {
-                    Text("Folders & feeds", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f).padding(vertical = 14.dp))
+                    Text("Folders & feeds", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f).padding(vertical = 14.dp).semantics { heading() })
                     TextButton(onClick = { onView(View.FEEDS) }) { Text("Manage") }
                 }
             }
@@ -233,7 +234,7 @@ internal fun ReaderDrawer(
                         NavigationDrawerItem(
                             label = { Text(subscription.name, maxLines = 2, overflow = TextOverflow.Ellipsis) },
                             selected = view == View.ALL && selection == FeedSelection.Subscription(subscription.id),
-                            icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                            icon = { Icon(FeedIcon, contentDescription = null, modifier = Modifier.size(20.dp)) },
                             onClick = { onFeed(FeedSelection.Subscription(subscription.id)) },
                             modifier = Modifier.padding(start = 28.dp, end = 12.dp),
                         )
@@ -242,7 +243,7 @@ internal fun ReaderDrawer(
             }
             item {
                 HorizontalDivider(Modifier.padding(horizontal = 28.dp, vertical = 12.dp))
-                Text("Saved & activity", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(horizontal = 28.dp, vertical = 12.dp))
+                Text("Saved & activity", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(horizontal = 28.dp, vertical = 12.dp).semantics { heading() })
             }
             items(listOf(View.LATER, View.KEPT, View.DONE, View.ACTIVITY), key = { "view-${it.name}" }) { destination ->
                 NavigationDrawerItem(

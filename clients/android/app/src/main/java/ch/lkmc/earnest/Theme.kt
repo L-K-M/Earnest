@@ -6,7 +6,12 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.MaterialExpressiveTheme
+import androidx.compose.material3.MotionScheme
+import androidx.compose.material3.Shapes
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -219,6 +224,10 @@ internal fun colorScheme(setting: ThemeSetting, systemDark: Boolean): ColorSchem
             onTertiary = Color.White,
             tertiaryContainer = Color(0xFFE8E8E8),
             onTertiaryContainer = Color.Black,
+            error = Color.Black,
+            onError = Color.White,
+            errorContainer = Color(0xFFE8E8E8),
+            onErrorContainer = Color.Black,
             background = Color.White,
             onBackground = Color.Black,
             surface = Color.White,
@@ -263,6 +272,7 @@ internal fun ComponentActivity.applyBarIcons(icons: BarIcons) {
     enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun EarnestTheme(setting: ThemeSetting, content: @Composable () -> Unit) {
     val systemDark = isSystemInDarkTheme()
@@ -277,6 +287,18 @@ fun EarnestTheme(setting: ThemeSetting, content: @Composable () -> Unit) {
         activity.applyBarIcons(barIcons(scheme))
     }
     CompositionLocalProvider(LocalTones provides tone) {
-        MaterialTheme(colorScheme = scheme, content = content)
+        MaterialExpressiveTheme(
+            colorScheme = scheme,
+            typography = EarnestTypography,
+            shapes = Shapes(
+                extraSmall = RoundedCornerShape(8.dp),
+                small = RoundedCornerShape(12.dp),
+                medium = RoundedCornerShape(16.dp),
+                large = RoundedCornerShape(24.dp),
+                extraLarge = RoundedCornerShape(28.dp),
+            ),
+            motionScheme = MotionScheme.expressive(),
+            content = content,
+        )
     }
 }
