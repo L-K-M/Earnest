@@ -72,8 +72,10 @@ class AppViewModelTest {
     }
     @After fun teardown() { Dispatchers.resetMain() }
 
-    private fun api(agentChangesStatus: Int = 200, unauthorizedPath: String? = null, cancelledPath: String? = null) = EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { chain ->
+    private fun api(agentChangesStatus: Int = 200, unauthorizedPath: String? = null, cancelledPath: String? = null,
+                    onRequest: (String) -> Unit = {}) = EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { chain ->
         val path = chain.request().url.encodedPath
+        onRequest(path)
         calls += path
         chain.request().body?.takeIf { !it.isOneShot() }?.let { body ->
             val buffer = okio.Buffer()
@@ -531,16 +533,19 @@ class AppViewModelTest {
     @Test fun concurrentImageLoadsShareOneApiClient() = runBlocking(Dispatchers.IO) {
         SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
         val created = java.util.concurrent.atomic.AtomicInteger()
+        val imageClients = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
         val model = AppViewModel(app, Sessions(AuthenticatedSession(identity, "token"))) {
-            created.incrementAndGet()
-            api()
+            val clientID = created.incrementAndGet()
+            api(onRequest = { path -> if (path.endsWith("/thumbnail")) imageClients += clientID })
         }
         withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
-        created.set(0)
+        // Metadata may still be loading. Count clients used by the images,
+        // and use distinct URLs so cache coalescing cannot hide extra clients.
         kotlinx.coroutines.coroutineScope {
-            repeat(8) { launch { model.mediaBitmap("/v1/entries/2/thumbnail?v=1") } }
+            repeat(8) { index -> launch { model.mediaBitmap("/v1/entries/${index + 2}/thumbnail?v=1") } }
         }
-        assertEquals("a list's image loads must share one client", 1, created.get())
+        assertEquals(8, calls.count { it.endsWith("/thumbnail") })
+        assertEquals("a list's image loads must share one client", 1, imageClients.size)
     }
 
     @Test fun notificationMissingFromSnapshotFetchesMetadata() = runBlocking(Dispatchers.IO) {
@@ -742,15 +747,10 @@ class AppViewModelTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(scheduler))
         val sessions = Sessions(AuthenticatedSession(identity, "token"))
         SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
-        val unauthorized = EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { chain ->
-            calls += chain.request().url.encodedPath
-            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(401).message("unauthorized")
-                .body("""{"detail":"expired"}""".toResponseBody()).build()
-        }.build())
-        var factory: () -> EarnestApi = { api() }
-        val model = AppViewModel(app, sessions) { factory() }
+        // Background metadata may finish after initial loading. Only the
+        // outbox request should expire this session in a flush-specific test.
+        val model = AppViewModel(app, sessions) { api(unauthorizedPath = "/v1/state:batch") }
         withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
-        factory = { unauthorized }
         val saved = java.util.concurrent.atomic.AtomicInteger()
         model.later(2) { saved.incrementAndGet() }
         withTimeout(15000) { while (saved.get() == 0) delay(10) }
@@ -770,17 +770,12 @@ class AppViewModelTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(scheduler))
         val sessions = Sessions(AuthenticatedSession(identity, "token"))
         SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
-        val unauthorized = EarnestApi(identity.server, "token", OkHttpClient.Builder().addInterceptor { chain ->
-            calls += chain.request().url.encodedPath
-            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(401).message("unauthorized")
-                .body("""{"detail":"expired"}""".toResponseBody()).build()
-        }.build())
-        var factory: () -> EarnestApi = { api() }
-        val model = AppViewModel(app, sessions) { factory() }
+        // Background metadata may finish after initial loading. Only the
+        // outbox request should expire this session in a flush-specific test.
+        val model = AppViewModel(app, sessions) { api(unauthorizedPath = "/v1/state:batch") }
         withTimeout(15000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
         val fresh = AuthenticatedSession(identity, "fresh-token")
         // The flush fails with a 401 while the login flow stores a new session.
-        factory = { unauthorized }
         sessions.onClear = { sessions.value = fresh }
         val saved = java.util.concurrent.atomic.AtomicInteger()
         model.later(2) { saved.incrementAndGet() }
@@ -791,6 +786,7 @@ class AppViewModelTest {
                 delay(10)
             }
         }
+        assertTrue(calls.contains("/v1/state:batch"))
         assertTrue(model.loggedIn.value)
         assertEquals(fresh, sessions.current())
         assertNull(model.sessionNotice.value)
