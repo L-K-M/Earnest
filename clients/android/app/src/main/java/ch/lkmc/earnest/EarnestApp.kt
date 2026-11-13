@@ -128,6 +128,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -277,9 +278,9 @@ internal fun MainScaffold(
     val selected = navigator.currentDestination?.contentKey
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     var feedSelection by rememberFeedSelection(state.accountKey)
+    val searchListFocused = section.view == View.SEARCH && !searchDetail
     val detailOnly = navigator.currentDestination?.pane == ListDetailPaneScaffoldRole.Detail &&
-        (section.view == View.FRONT || directive.maxHorizontalPartitions == 1) &&
-        (section.view != View.SEARCH || searchDetail)
+        (section.view == View.FRONT || directive.maxHorizontalPartitions == 1) && !searchListFocused
     // Entries reached through an agent's output (a notification, a deep link
     // of unknown origin, an agent-change notice) open with click-to-load
     // images; see AppViewModel.openEntry. The set is saved with the navigator's
@@ -529,23 +530,17 @@ internal fun MainScaffold(
                 state.error?.let {
                     NoticeBanner(it, tone = NoticeTone.ERROR, modifier = Modifier.padding(horizontal = ReaderSpace.md, vertical = ReaderSpace.xxs))
                 }
-                if (showSettings) {
-                    BackHandler { showSettings = false }
-                    SettingsScreen(
-                        model = model,
-                        state = state,
-                        onBack = { showSettings = false },
-                        modifier = Modifier.weight(1f),
-                    )
-                } else if (section.view == View.SEARCH && !searchDetail && directive.maxHorizontalPartitions == 1) {
-                    // Search owns a compact window until a result is opened,
-                    // even when the previous wide layout had an article open.
-                    SearchContent()
-                } else {
+                val compactSearch = searchListFocused && directive.maxHorizontalPartitions == 1
+                val panesCovered = showSettings || compactSearch
+                Box(Modifier.weight(1f)) {
+                // Keep the adaptive transition bound while focused screens
+                // cover its panes. Disposing it can leave history pointing at
+                // an article while the scaffold still shows the list.
                 NavigableListDetailPaneScaffold(
                     navigator = navigator,
+                    modifier = if (panesCovered) Modifier.clearAndSetSemantics {} else Modifier,
                     listPane = {
-                        AnimatedPane {
+                        if (!panesCovered) AnimatedPane {
                             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
                             Box(Modifier.widthIn(max = if (section.view == View.FRONT) 1100.dp else ReaderSpace.contentWidth).fillMaxSize()) {
                             when (section.view) {
@@ -645,7 +640,7 @@ internal fun MainScaffold(
                         }
                     },
                     detailPane = {
-                        AnimatedPane {
+                        if (!panesCovered) AnimatedPane {
                             val entry = readerEntry
                             if (entry == null) {
                                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -760,6 +755,17 @@ internal fun MainScaffold(
                         }
                     },
                 )
+                if (showSettings) {
+                    BackHandler { showSettings = false }
+                    SettingsScreen(
+                        model = model,
+                        state = state,
+                        onBack = { showSettings = false },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else if (compactSearch) {
+                    SearchContent()
+                }
                 }
             }
         }

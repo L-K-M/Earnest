@@ -60,7 +60,8 @@ font download or additional runtime network dependency is introduced.
 - **Settings:** account reading preferences precede imports and server-level AI
   configuration. Logical groups, wrapping controls and a local typography
   preview replace the previous undifferentiated form. The labelled reading
-  preferences Save bar stays reachable while the form scrolls.
+  preferences Save bar stays reachable while the form scrolls. Reload asks
+  before discarding local edits or a frozen save retry; Load preserves both.
 - **Connect:** a focused, scrollable form with URL keyboard support, honest
   request progress, clear authorization-code instructions and retry feedback.
 
@@ -73,6 +74,9 @@ UI, and actions retain Android's standard touch targets. Find focuses its
 input and temporarily hides the reader header to leave room for the keyboard.
 Wide-screen search retains the open article; resizing search into a compact
 window keeps the search task visible, and Back restores the reading context.
+The adaptive transition stays bound beneath focused settings/search screens,
+with inactive panes empty and hidden from accessibility, so incoming articles
+cannot leave navigation history and the visible pane out of step.
 
 ## Verification
 
@@ -81,7 +85,8 @@ and navigation tests, a cancelled-swipe regression, narrow-phone cadence and
 reader-tool checks at 200% text, and contrast checks for notice/control text in
 every theme. Follow-up coverage checks feed-icon taps, wide-search context and
 Back, result/button semantics, expanded filter state, full-row 48dp toggles,
-load/save exclusion and theme selection in short windows. The cancelled-swipe,
+load/save exclusion, explicit draft discard, incoming articles during focused
+screens and theme selection in short windows. The cancelled-swipe,
 large-label chip-height and interaction regressions were observed failing
 before their fixes.
 

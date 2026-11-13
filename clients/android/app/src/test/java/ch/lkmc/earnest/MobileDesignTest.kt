@@ -23,6 +23,10 @@ import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -209,6 +213,44 @@ class MobileDesignTest {
         compose.runOnIdle { assertEquals(9L, opened) }
     }
 
+    @Test fun reloadingAFailedSaveRequiresAnExplicitDiscard() {
+        val settings = ReaderSettings()
+        content {
+            SettingsScreen(
+                model = viewModel(),
+                state = UiState(
+                    snapshot = SyncSnapshot(Revision("generation", 1)),
+                    readerSettingsUi = ReaderSettingsUi(loaded = settings, draft = settings, frozen = FrozenReaderSettings(settings, "retry-operation")),
+                ),
+                onBack = {},
+            )
+        }
+        compose.onAllNodesWithText("Reload")[0].performClick()
+        compose.onNodeWithText("Reload settings?").assertIsDisplayed()
+        compose.onNodeWithText("Keep editing").performClick()
+        compose.onAllNodesWithText("Retry")[0].assertIsDisplayed()
+        compose.onAllNodesWithText("Reload")[0].performClick()
+        compose.onNodeWithText("Discard draft").performClick()
+        compose.onNodeWithText("Reload settings?").assertDoesNotExist()
+    }
+
+    @Test fun closingSettingsStillShowsAnIncomingArticle() {
+        var incoming by mutableStateOf<Long?>(null)
+        content {
+            MainScaffold(
+                model = viewModel(),
+                state = UiState(snapshot = SyncSnapshot(Revision("generation", 1), entries = listOf(CachedEntry(7, title = "An incoming article")))),
+                theme = ThemeSetting.LIGHT, onThemeChange = {}, initialEntry = incoming, notificationId = null,
+                notificationsDenied = false, onRequestNotifications = {},
+            )
+        }
+        compose.onNodeWithContentDescription("More options").performClick()
+        compose.onNode(hasText("Settings") and hasAnyAncestor(isPopup())).performClick()
+        compose.runOnIdle { incoming = 7 }
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.onNodeWithContentDescription("Find in article").assertExists()
+    }
+
     @Test fun anIncomingArticleCanOpenWhileCompactSearchIsActive() {
         var incoming by mutableStateOf<Long?>(null)
         content {
@@ -221,6 +263,11 @@ class MobileDesignTest {
         }
         compose.onNodeWithContentDescription("Search").performClick()
         compose.runOnIdle { incoming = 7 }
+        // External links navigate from a LaunchedEffect, after the state
+        // mutation's frame rather than inside a synchronous click handler.
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithContentDescription("Find in article").fetchSemanticsNodes().isNotEmpty()
+        }
         compose.onNodeWithContentDescription("Find in article").assertExists()
         compose.onNodeWithContentDescription("Back").performClick()
         compose.onNodeWithText("Find something worth revisiting").assertExists()

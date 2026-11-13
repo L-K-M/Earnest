@@ -98,6 +98,7 @@ internal fun SettingsScreen(
         .filter { it.kind == SyncEngine.OBJECT_SUBSCRIPTION && !it.deleted }
         .mapNotNull { obj -> obj.feedId()?.let { feedId -> Triple(obj.id, feedId, obj.name) } }
     var addOverride by remember(state.accountKey, ui.epoch) { mutableStateOf(false) }
+    var confirmReload by remember(state.accountKey, ui.epoch) { mutableStateOf(false) }
     var overrideFeedId by remember(state.accountKey, ui.epoch) { mutableStateOf<Long?>(null) }
     var overrideTheme by remember(state.accountKey, ui.epoch) { mutableStateOf<ReaderTheme?>(null) }
     var overrideMeasureInput by remember(state.accountKey, ui.epoch) { mutableStateOf(OverrideMeasureInput.fromValue(null)) }
@@ -152,8 +153,11 @@ internal fun SettingsScreen(
                     horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
                     verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
                 ) {
+                    // Load preserves the draft and frozen retry; Reload discards them.
                     TextButton(onClick = model::loadReaderSettings, enabled = !ui.loading && !ui.saving) { Text("Load") }
-                    TextButton(onClick = model::reloadReaderSettings, enabled = !ui.loading && !ui.saving) { Text("Reload") }
+                    TextButton(onClick = {
+                        if (ui.draft != null || ui.frozen != null) confirmReload = true else model.reloadReaderSettings()
+                    }, enabled = !ui.loading && !ui.saving) { Text("Reload") }
                     if (ui.frozen != null) {
                         TextButton(onClick = model::retryReaderSettingsSave, enabled = !ui.saving) { Text("Retry") }
                     }
@@ -438,6 +442,26 @@ internal fun SettingsScreen(
                 }, enabled = overrideMeasureInput.canApply) { Text("Apply") }
             },
             dismissButton = { TextButton(onClick = { overrideFeedId = null }) { Text("Cancel") } },
+        )
+    }
+
+    if (confirmReload) {
+        AlertDialog(
+            onDismissRequest = { confirmReload = false },
+            title = { Text("Reload settings?") },
+            text = {
+                Text(
+                    "Reloading discards your local edits and pending save retry. Your server's settings will be loaded instead.",
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmReload = false
+                    model.reloadReaderSettings()
+                }, enabled = !ui.loading && !ui.saving) { Text("Discard draft") }
+            },
+            dismissButton = { TextButton(onClick = { confirmReload = false }) { Text("Keep editing") } },
         )
     }
 
