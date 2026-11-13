@@ -106,15 +106,18 @@ func llmCapabilitySummary(_ model: APIDiscoveredModel) -> String {
             }
             if let error = settings.error { Text(error).foregroundStyle(.red) }
             if let review {
-                LLMModelReviewEditor(
-                    review: Binding(get: { self.review ?? review }, set: { self.review = $0 }),
-                    check: settings.modelCheck(providerID: target.providerID, modelName: review.id,
-                                                capability: review.usage == .embedding ? .embedding : .chat),
-                    target: target,
-                    onBack: { self.review = nil },
-                    onCheck: { if let current = self.review { check(current) } },
-                    onUse: { if let current = self.review { commit(current) } }
-                )
+                ScrollView {
+                    LLMModelReviewEditor(
+                        review: Binding(get: { self.review ?? review }, set: { self.review = $0 }),
+                        check: settings.modelCheck(providerID: target.providerID, modelName: review.id,
+                                                    capability: review.usage == .embedding ? .embedding : .chat),
+                        target: target,
+                        onBack: { self.review = nil },
+                        onCheck: { if let current = self.review { check(current) } },
+                        onUse: { if let current = self.review { commit(current) } }
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
             } else {
                 browseContent
                 manualFallback
