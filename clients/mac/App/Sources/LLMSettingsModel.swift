@@ -298,7 +298,7 @@ struct LLMDiscoverySession: Equatable {
     var phase: Phase
 }
 
-/// A model check bound to the exact provider and revision it was sent with.
+/// A model check bound to its model, capability, provider and revision.
 /// Results are memory-only and never change a route or a price.
 struct LLMModelCheckSession: Equatable {
     enum Phase: Equatable {
@@ -307,6 +307,8 @@ struct LLMModelCheckSession: Equatable {
         case failed(String)
     }
     let checkID: Int
+    let modelName: String
+    let capability: APILLMModelCapability
     let identity: APILLMProviderInput
     let revision: Int64
     var phase: Phase
@@ -458,6 +460,7 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
 /// conflicting save never claims success, and a 409 preserves the draft until
 /// the user reloads.
 @MainActor final class LLMSettingsModel: ObservableObject {
+    private static let providerNameConflict = "That provider name is already in use. Choose a different name."
     @Published var draft: LLMSettingsDraft = LLMSettingsDraft() {
         didSet {
             saved = false
@@ -755,6 +758,13 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
 
     // MARK: - Model check
 
+    func modelCheck(providerID: UUID, modelName: String,
+                    capability: APILLMModelCapability) -> LLMModelCheckSession? {
+        guard let check = checks[providerID], check.modelName == modelName,
+              check.capability == capability else { return nil }
+        return check
+    }
+
     /// Check one draft model against its provider with a fixed sample. The
     /// sample may cost; nothing is persisted and no route changes. Observed
     /// geometry is applied to the matching draft model only.
@@ -784,7 +794,8 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
         }
         checkCounter &+= 1
         let checkID = checkCounter
-        checks[providerID] = LLMModelCheckSession(checkID: checkID, identity: identity,
+        checks[providerID] = LLMModelCheckSession(checkID: checkID, modelName: model.name,
+                                                  capability: capability, identity: identity,
                                                   revision: revision, phase: .checking)
         Task { [weak self] in
             guard let self else { return }
@@ -907,6 +918,10 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
 
     private func applySelection(_ review: LLMModelReview, provider: LLMProviderDraft,
                                 selection: LLMModelSelection) -> Bool {
+        guard !provider.name.isEmpty else {
+            error = "Name this provider before choosing a model."
+            return false
+        }
         guard review.isReady else {
             error = "Fill in the missing metadata before selecting this model."
             return false
@@ -943,6 +958,14 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
         guard let scope, app.ownsLLMSettings(scope), ready, !busy, !conflict,
               let provider = draft.providers.first(where: { $0.id == providerID }) else {
             error = "The provider is no longer current. Fetch models again before selecting this model."
+            return false
+        }
+        guard !provider.name.isEmpty else {
+            error = "Name this provider before choosing a model."
+            return false
+        }
+        guard draft.model(provider: provider.name, name: model.name)?.id == model.id else {
+            error = "This model is no longer configured for this provider. Choose a current model."
             return false
         }
         return applyRoute(providerName: provider.name, modelName: model.name, selection: selection)
@@ -1107,9 +1130,11 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
     }
 
     /// A preset's base name is used once; the next one gains a numeric
-    /// suffix. Names stay valid provider identifiers.
+    /// suffix. Names stay valid provider identifiers. A sibling's name and
+    /// its routed name are both reserved, so a cleared name keeps its
+    /// identity out of the pool.
     private func uniqueProviderName(base: String) -> String {
-        var names = Set(draft.providers.map(\.name))
+        var names = Set(draft.providers.flatMap { [$0.name, $0.routedName] })
         if names.insert(base).inserted { return base }
         var suffix = 2
         while !names.insert("\(base)-\(suffix)").inserted { suffix += 1 }
@@ -1119,6 +1144,15 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
     // An empty name is a transient edit, never the identity of global models.
     func renameProvider(id: UUID, name: String) {
         guard let index = draft.providers.firstIndex(where: { $0.id == id }) else { return }
+        // A name is an identity routes, defaults and scoped models already
+        // use. A sibling's name or routed name is spoken for, so taking it
+        // would merge two providers' routes; reject the edit whole.
+        if !name.isEmpty, draft.providers.contains(where: {
+            $0.id != id && ($0.name == name || $0.routedName == name)
+        }) {
+            error = Self.providerNameConflict
+            return
+        }
         var next = draft
         let old = next.providers[index].routedName.isEmpty ? next.providers[index].name : next.providers[index].routedName
         next.providers[index].name = name
@@ -1136,6 +1170,7 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
             }
         }
         draft = next
+        if error == Self.providerNameConflict { error = nil }
     }
 
     /// Changing a provider's dialect offers that dialect's default base URL,
@@ -1150,10 +1185,15 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
     }
 
     func removeProvider(id: UUID) {
-        let provider = draft.providers.first { $0.id == id }
-        let name = provider.map { $0.routedName.isEmpty ? $0.name : $0.routedName }
+        guard let provider = draft.providers.first(where: { $0.id == id }) else { return }
+        let name = provider.routedName.isEmpty ? provider.name : provider.routedName
+        let affected = draft.tasks.indices.filter { index in
+            let task = draft.tasks[index]
+            return !name.isEmpty && (effectiveTaskRoute(task).provider == name
+                || (task.mode != .default && task.provider == name))
+        }
         draft.providers.removeAll { $0.id == id }
-        guard let name else { return }
+        guard !name.isEmpty else { return }
         // A removed provider takes its scoped models, routes and defaults with
         // it. Global models and other providers' routes stay.
         draft.models.removeAll { $0.provider == name }
@@ -1162,16 +1202,10 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
             if defaults.embedding.provider == name { defaults.embedding = APILLMDefaultRoute() }
             draft.defaults = defaults.isEmpty ? nil : defaults
         }
-        for index in draft.tasks.indices {
-            let task = draft.tasks[index]
-            let route = effectiveTaskRoute(task)
-            if route.provider == name
-                || (task.mode != .default && task.provider == name)
-                || (task.mode != .off && route.provider.isEmpty && route.model.isEmpty) {
-                draft.tasks[index].mode = .off
-                draft.tasks[index].provider = ""
-                draft.tasks[index].model = ""
-            }
+        for index in affected {
+            draft.tasks[index].mode = .off
+            draft.tasks[index].provider = ""
+            draft.tasks[index].model = ""
         }
     }
 

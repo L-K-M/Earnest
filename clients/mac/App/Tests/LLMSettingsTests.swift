@@ -1213,6 +1213,33 @@ import EarnestKit
         LLMHTTP.assertFinished()
     }
 
+    func testCheckResultBelongsToTheReviewedModelAndCapability() async throws {
+        let (api, session) = try makeAPI([
+            .init(path: "/v1/settings/llm", body: settingsJSON(revision: 2)),
+            .init(method: "POST", path: "/v1/settings/llm/models/check",
+                  body: #"{"compatible":true,"dimensions":4096,"supports_custom_dimensions":true,"message":"checked"}"#),
+        ])
+        defer { session.invalidateAndCancel() }
+        let model = makeModel(api: api)
+        model.loggedIn = true
+        let settings = LLMSettingsModel(app: model)
+        settings.load()
+        try await waitUntil { settings.loaded && !settings.busy }
+        let providerID = settings.draft.providers[0].id
+        let checked = settings.draft.models[0]
+        settings.checkModel(providerID: providerID, model: checked, capability: .embedding)
+        try await waitUntil {
+            if case .result = settings.checks[providerID]?.phase { return true }
+            return false
+        }
+        XCTAssertNotNil(settings.modelCheck(providerID: providerID, modelName: checked.name, capability: .embedding))
+        XCTAssertNil(settings.modelCheck(providerID: providerID, modelName: "another-model", capability: .embedding),
+                     "opening another model must not display the previous model's result")
+        XCTAssertNil(settings.modelCheck(providerID: providerID, modelName: checked.name, capability: .chat),
+                     "an embedding check does not verify text generation")
+        LLMHTTP.assertFinished()
+    }
+
     func testCheckCanObserveAnUnknownEmbeddingWidth() async throws {
         let (api, session) = try makeAPI([
             .init(path: "/v1/settings/llm", body: settingsJSON(revision: 2)),
@@ -1259,6 +1286,37 @@ import EarnestKit
         })
         XCTAssertEqual(settings.draft.tasks.first { $0.task == .blurb }?.mode, .custom)
         XCTAssertEqual(settings.draft.tasks.first { $0.task == .blurb }?.model, "manual-chat")
+    }
+
+    func testManualSelectionRequiresANamedProvider() {
+        let app = makeModel()
+        app.loggedIn = true
+        let settings = LLMSettingsModel(app: app)
+        let providerID = settings.addProvider(preset: .venice)
+        settings.renameProvider(id: providerID, name: "")
+        let before = settings.draft
+        var review = LLMModelReview(discovered: APIDiscoveredModel(id: "chat", name: "Chat"),
+                                    provider: "", usage: .chat, isManual: true)
+        review.markFree()
+        XCTAssertFalse(settings.selectManualModel(review, providerID: providerID, selection: .defaultText))
+        XCTAssertEqual(settings.draft, before, "a transient empty provider name must not create global pricing")
+        XCTAssertNotNil(settings.error)
+    }
+
+    func testConfiguredSelectionRejectsARemovedModel() {
+        let app = makeModel()
+        app.loggedIn = true
+        let settings = LLMSettingsModel(app: app)
+        let providerID = settings.addProvider(preset: .venice)
+        var model = LLMModelDraft()
+        model.provider = "venice"
+        model.name = "chat"
+        settings.importModels([model])
+        settings.removeModel(id: model.id)
+        let before = settings.draft
+        XCTAssertFalse(settings.selectConfiguredModel(model, providerID: providerID, selection: .defaultText))
+        XCTAssertEqual(settings.draft, before)
+        XCTAssertNotNil(settings.error)
     }
 
     func testDiscardRestoresTheLoadedBaseline() async throws {

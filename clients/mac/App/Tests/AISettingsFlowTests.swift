@@ -58,6 +58,16 @@ import EarnestKit
         XCTAssertTrue(settings.defaultRoute(for: .embed).provider.isEmpty)
     }
 
+    func testRemovingProviderPreservesUnrelatedIncompleteEdits() throws {
+        let settings = settings()
+        let providerID = settings.addProvider(preset: .venice)
+        settings.setTaskEnabled(.blurb, true)
+        let before = try XCTUnwrap(settings.draft.tasks.first { $0.task == .blurb })
+        XCTAssertEqual(before.mode, .custom)
+        settings.removeProvider(id: providerID)
+        XCTAssertEqual(settings.draft.tasks.first { $0.task == .blurb }, before)
+    }
+
     func testCustomRouteSurvivesDisablingAndEnablingAFeature() {
         let settings = settings()
         settings.setDefaultRoute(provider: "default-provider", model: "default-model", usage: .chat)

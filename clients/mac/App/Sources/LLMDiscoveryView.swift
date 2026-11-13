@@ -107,12 +107,13 @@ func llmCapabilitySummary(_ model: APIDiscoveredModel) -> String {
             if let error = settings.error { Text(error).foregroundStyle(.red) }
             if let review {
                 LLMModelReviewEditor(
-                    review: Binding(get: { review }, set: { self.review = $0 }),
-                    check: settings.checks[target.providerID],
+                    review: Binding(get: { self.review ?? review }, set: { self.review = $0 }),
+                    check: settings.modelCheck(providerID: target.providerID, modelName: review.id,
+                                                capability: review.usage == .embedding ? .embedding : .chat),
                     target: target,
                     onBack: { self.review = nil },
-                    onCheck: { check(review) },
-                    onUse: { commit(review) }
+                    onCheck: { if let current = self.review { check(current) } },
+                    onUse: { if let current = self.review { commit(current) } }
                 )
             } else {
                 browseContent
@@ -288,6 +289,10 @@ private struct LLMModelReviewEditor: View {
     let onUse: () -> Void
 
     private var dimensionsMessage: String? { review.dimensionsMessage }
+    private var isChecking: Bool {
+        if case .checking = check?.phase { return true }
+        return false
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -361,7 +366,7 @@ private struct LLMModelReviewEditor: View {
     @ViewBuilder private var checkSection: some View {
         VStack(alignment: .leading, spacing: 4) {
             Button("Check Model") { onCheck() }
-                .disabled(!review.isCheckable)
+                .disabled(!review.isCheckable || isChecking)
             Text("A fixed sample is sent to the provider and may cost. Checking an embedding can observe its width and resizing support.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)

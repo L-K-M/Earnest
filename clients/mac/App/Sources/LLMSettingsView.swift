@@ -457,8 +457,8 @@ private struct DefaultRouteRow: View {
                 LabeledContent("Provider") {
                     Picker("Provider", selection: $model.provider) {
                         if model.provider.isEmpty { Text("Legacy shared pricing").tag("") }
-                        ForEach(providers) { provider in
-                            Text(provider.name.isEmpty ? "New provider" : provider.name).tag(provider.name)
+                        ForEach(providers.filter { !$0.name.isEmpty }) { provider in
+                            Text(provider.name).tag(provider.name)
                         }
                     }
                     .labelsHidden()
