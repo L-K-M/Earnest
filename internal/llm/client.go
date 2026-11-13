@@ -51,7 +51,7 @@ func (c *Client) Complete(ctx context.Context, task Task, req CompleteRequest) (
 	if req.MaxTokens <= 0 {
 		req.MaxTokens = DefaultMaxTokens
 	}
-	estimate, err := EstimateCompletion(req, c.models[route.Model])
+	estimate, err := EstimateCompletion(req, ModelFor(c.models, route))
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +63,7 @@ func (c *Client) Complete(ctx context.Context, task Task, req CompleteRequest) (
 	actual := estimate
 	var pricingErr error
 	if completion != nil {
-		actual, pricingErr = c.models[route.Model].CompletionCost(completion.Usage)
+		actual, pricingErr = ModelFor(c.models, route).CompletionCost(completion.Usage)
 		if pricingErr != nil || completion.Usage == (Usage{}) {
 			actual = estimate
 		}
@@ -86,7 +86,7 @@ func (c *Client) Embed(ctx context.Context, task Task, req EmbedRequest) ([]Vect
 		return nil, Usage{}, err
 	}
 	req.Model = route.Model
-	info := c.models[route.Model]
+	info := ModelFor(c.models, route)
 	if req.Dimensions == 0 {
 		req.Dimensions = StorageDimensions
 		if info.Dimensions > 0 && info.Dimensions < req.Dimensions {
@@ -97,18 +97,36 @@ func (c *Client) Embed(ctx context.Context, task Task, req EmbedRequest) ([]Vect
 		return nil, Usage{}, fmt.Errorf("llm: task %s requests %d dimensions but model %s produces %d",
 			task, req.Dimensions, route.Model, info.Dimensions)
 	}
+	result, err := c.embedRaw(ctx, route, req, info)
+	if err != nil {
+		return nil, Usage{}, err
+	}
+	vectors := make([]Vector, 0, len(result.Vectors))
+	for _, raw := range result.Vectors {
+		vector, err := NormaliseEmbedding(raw, info.Truncatable)
+		if err != nil {
+			return nil, Usage{}, err
+		}
+		vectors = append(vectors, vector)
+	}
+	return vectors, result.Usage, nil
+}
+
+// embedRaw shares reservation and reconciliation between ingestion and setup checks.
+// Unlike Embed it preserves a zero dimensions request and the native vector width.
+func (c *Client) embedRaw(ctx context.Context, route Route, req EmbedRequest, info ModelInfo) (*EmbedResult, error) {
 	// Gemini's embedding API supplies no billable usage; a priced, capped
 	// configuration cannot safely authorize these calls.
 	if _, gemini := route.Provider.(*Gemini); gemini && info.EmbeddingPer1M > 0 && c.budget.limits[route.Provider.Name()] > 0 {
-		return nil, Usage{}, fmt.Errorf("%w: capped Gemini embeddings require billable token counts", ErrUnsupported)
+		return nil, fmt.Errorf("%w: capped Gemini embeddings require billable token counts", ErrUnsupported)
 	}
 	estimate, err := estimateEmbedding(req, info)
 	if err != nil {
-		return nil, Usage{}, err
+		return nil, err
 	}
 	id, err := c.budget.Reserve(ctx, route.Provider.Name(), estimate)
 	if err != nil {
-		return nil, Usage{}, err
+		return nil, err
 	}
 	result, err := route.Provider.Embed(ctx, req)
 	actual := estimate
@@ -123,17 +141,12 @@ func (c *Client) Embed(ctx context.Context, task Task, req EmbedRequest) ([]Vect
 	}
 	recordErr := c.budget.Reconcile(context.WithoutCancel(ctx), route.Provider.Name(), id, actual)
 	if err := errors.Join(err, pricingErr, recordErr); err != nil {
-		return nil, Usage{}, err
+		return nil, err
 	}
-	vectors := make([]Vector, 0, len(result.Vectors))
-	for _, raw := range result.Vectors {
-		vector, err := NormaliseEmbedding(raw, info.Truncatable)
-		if err != nil {
-			return nil, Usage{}, err
-		}
-		vectors = append(vectors, vector)
+	if result == nil || len(result.Vectors) != len(req.Texts) {
+		return nil, ErrInvalidOutput
 	}
-	return vectors, result.Usage, nil
+	return result, nil
 }
 
 // A lost response may still have incurred a charge. Keep the estimate rather

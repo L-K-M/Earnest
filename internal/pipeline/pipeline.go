@@ -92,7 +92,7 @@ func New(router *llm.Router, client *llm.Client, cache *llm.Cache, models map[st
 	}
 	dimensions := llm.StorageDimensions
 	if route, err := router.Task(llm.TaskEmbed); err == nil {
-		if native := models[route.Model].Dimensions; native > 0 && native < dimensions {
+		if native := llm.ModelFor(models, route).Dimensions; native > 0 && native < dimensions {
 			dimensions = native
 		}
 	}

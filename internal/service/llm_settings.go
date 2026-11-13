@@ -28,6 +28,7 @@ type LLMSettings struct {
 	Providers []LLMProviderSettings `json:"providers"`
 	Tasks     []LLMTaskSettings     `json:"tasks"`
 	Models    []LLMModelSettings    `json:"models"`
+	Defaults  *llm.DefaultRoutes    `json:"defaults,omitempty"`
 }
 
 type LLMProviderSettings struct {
@@ -55,18 +56,21 @@ type LLMProviderInput struct {
 
 type LLMTaskSettings struct {
 	Task     string `json:"task"`
+	Mode     string `json:"mode,omitempty" enum:"off,default,custom"`
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
 }
 
 // Prices are decimal strings, not floating point, matching the budget layer.
 type LLMModelSettings struct {
-	Name           string `json:"name"`
-	InputPer1M     string `json:"input_per_1m"`
-	OutputPer1M    string `json:"output_per_1m"`
-	EmbeddingPer1M string `json:"embedding_per_1m"`
-	Dimensions     int    `json:"dimensions"`
-	Truncatable    bool   `json:"truncatable"`
+	Name                     string `json:"name"`
+	Provider                 string `json:"provider,omitempty"`
+	SupportsCustomDimensions bool   `json:"supports_custom_dimensions,omitempty"`
+	InputPer1M               string `json:"input_per_1m"`
+	OutputPer1M              string `json:"output_per_1m"`
+	EmbeddingPer1M           string `json:"embedding_per_1m"`
+	Dimensions               int    `json:"dimensions"`
+	Truncatable              bool   `json:"truncatable"`
 }
 
 type LLMSettingsInput struct {
@@ -74,6 +78,7 @@ type LLMSettingsInput struct {
 	Providers []LLMProviderInput `json:"providers"`
 	Tasks     []LLMTaskSettings  `json:"tasks"`
 	Models    []LLMModelSettings `json:"models"`
+	Defaults  *llm.DefaultRoutes `json:"defaults,omitempty"`
 	OpID      string             `json:"op_id"`
 }
 
@@ -183,7 +188,7 @@ func (s *Service) loadLLMSettings(ctx context.Context, q llmSettingsQuery) (llm.
 }
 
 func redactedLLMSettings(cfg llm.Config, revision int64) LLMSettings {
-	out := LLMSettings{Revision: revision, Providers: []LLMProviderSettings{}, Tasks: []LLMTaskSettings{}, Models: []LLMModelSettings{}}
+	out := LLMSettings{Defaults: cfg.Defaults, Revision: revision, Providers: []LLMProviderSettings{}, Tasks: []LLMTaskSettings{}, Models: []LLMModelSettings{}}
 	for name, p := range cfg.Providers {
 		timeout := int((p.Timeout + time.Second - 1) / time.Second)
 		if timeout <= 0 {
@@ -198,12 +203,15 @@ func redactedLLMSettings(cfg llm.Config, revision int64) LLMSettings {
 	slices.SortFunc(out.Providers, func(a, b LLMProviderSettings) int { return strings.Compare(a.Name, b.Name) })
 	for _, task := range llmTasks {
 		route := cfg.Tasks[task]
-		out.Tasks = append(out.Tasks, LLMTaskSettings{Task: string(task), Provider: route.Provider, Model: route.Model})
+		out.Tasks = append(out.Tasks, LLMTaskSettings{Task: string(task), Mode: cfg.TaskModes[task], Provider: route.Provider, Model: route.Model})
 	}
-	for name, m := range cfg.Models {
-		out.Models = append(out.Models, LLMModelSettings{Name: name, InputPer1M: m.InputPer1M.String(), OutputPer1M: m.OutputPer1M.String(), EmbeddingPer1M: m.EmbeddingPer1M.String(), Dimensions: m.Dimensions, Truncatable: m.Truncatable})
+	for key, m := range cfg.Models {
+		provider, name := llm.SplitModelKey(key)
+		out.Models = append(out.Models, LLMModelSettings{Provider: provider, SupportsCustomDimensions: m.SupportsCustomDimensions, Name: name, InputPer1M: m.InputPer1M.String(), OutputPer1M: m.OutputPer1M.String(), EmbeddingPer1M: m.EmbeddingPer1M.String(), Dimensions: m.Dimensions, Truncatable: m.Truncatable})
 	}
-	slices.SortFunc(out.Models, func(a, b LLMModelSettings) int { return strings.Compare(a.Name, b.Name) })
+	slices.SortFunc(out.Models, func(a, b LLMModelSettings) int {
+		return strings.Compare(llm.ModelKey(a.Provider, a.Name), llm.ModelKey(b.Provider, b.Name))
+	})
 	return out
 }
 
@@ -220,7 +228,7 @@ func redactedLLMBaseURL(raw string) string {
 }
 
 func validateLLMSettings(in LLMSettingsInput, previous llm.Config) (llm.Config, error) {
-	cfg := llm.Config{Providers: map[string]llm.ProviderConfig{}, Tasks: map[llm.Task]llm.TaskConfig{}, Models: map[string]llm.ModelInfo{}}
+	cfg := llm.Config{Providers: map[string]llm.ProviderConfig{}, Tasks: map[llm.Task]llm.TaskConfig{}, Models: map[string]llm.ModelInfo{}, Defaults: in.Defaults, TaskModes: map[llm.Task]string{}}
 	if len(in.Providers) > 32 || len(in.Models) > 128 || len(in.Tasks) > len(llmTasks) {
 		return cfg, fmt.Errorf("too many providers, models or tasks: %w", ErrInvalid)
 	}
@@ -270,7 +278,13 @@ func validateLLMSettings(in LLMSettingsInput, previous llm.Config) (llm.Config, 
 		if !validLLMModelName(m.Name) {
 			return cfg, fmt.Errorf("model name must be 1-256 characters without whitespace: %w", ErrInvalid)
 		}
-		if _, exists := cfg.Models[m.Name]; exists {
+		if m.Provider != "" {
+			if _, exists := cfg.Providers[m.Provider]; !exists {
+				return cfg, fmt.Errorf("model provider is not configured: %w", ErrInvalid)
+			}
+		}
+		key := llm.ModelKey(m.Provider, m.Name)
+		if _, exists := cfg.Models[key]; exists {
 			return cfg, fmt.Errorf("duplicate model name: %w", ErrInvalid)
 		}
 		input, e1 := llmSettingsMoney(m.InputPer1M)
@@ -279,10 +293,23 @@ func validateLLMSettings(in LLMSettingsInput, previous llm.Config) (llm.Config, 
 		if e1 != nil || e2 != nil || e3 != nil {
 			return cfg, fmt.Errorf("model prices must be nonnegative decimal USD with at most six decimal places: %w", ErrInvalid)
 		}
-		if m.Dimensions < 0 || m.Dimensions > 65536 || (m.Dimensions > llm.StorageDimensions && !m.Truncatable) {
+		if m.Dimensions < 0 || m.Dimensions > 65536 || (m.Dimensions > llm.StorageDimensions && !m.Truncatable && !m.SupportsCustomDimensions) {
 			return cfg, fmt.Errorf("model embedding dimensions require a supported width or truncation: %w", ErrInvalid)
 		}
-		cfg.Models[m.Name] = llm.ModelInfo{InputPer1M: input, OutputPer1M: output, EmbeddingPer1M: embedding, Dimensions: m.Dimensions, Truncatable: m.Truncatable}
+		cfg.Models[key] = llm.ModelInfo{SupportsCustomDimensions: m.SupportsCustomDimensions, InputPer1M: input, OutputPer1M: output, EmbeddingPer1M: embedding, Dimensions: m.Dimensions, Truncatable: m.Truncatable}
+	}
+	if in.Defaults != nil {
+		for _, def := range []struct {
+			route llm.TaskConfig
+			task  llm.Task
+		}{{in.Defaults.Text, llm.TaskBlurb}, {in.Defaults.Embedding, llm.TaskEmbed}} {
+			if def.route.Provider == "" && def.route.Model == "" {
+				continue
+			}
+			if err := validateLLMRoute(cfg, def.route, def.task); err != nil {
+				return cfg, err
+			}
+		}
 	}
 	seen := map[llm.Task]bool{}
 	for _, t := range in.Tasks {
@@ -291,22 +318,52 @@ func validateLLMSettings(in LLMSettingsInput, previous llm.Config) (llm.Config, 
 			return cfg, fmt.Errorf("unknown or duplicate LLM task: %w", ErrInvalid)
 		}
 		seen[task] = true
-		if t.Provider == "" && t.Model == "" {
+		route := llm.TaskConfig{Provider: t.Provider, Model: t.Model}
+		switch t.Mode {
+		case "": // Older clients send concrete routes, never inheritance.
+		case "off":
+			route = llm.TaskConfig{}
+		case "custom":
+		case "default":
+			if cfg.Defaults == nil {
+				return cfg, fmt.Errorf("choose a default model before enabling this feature: %w", ErrInvalid)
+			}
+			route = cfg.Defaults.Text
+			if task == llm.TaskEmbed {
+				route = cfg.Defaults.Embedding
+			}
+		default:
+			return cfg, fmt.Errorf("unknown task mode: %w", ErrInvalid)
+		}
+		if t.Mode != "" {
+			cfg.TaskModes[task] = t.Mode
+		}
+		if route.Provider == "" && route.Model == "" {
+			if t.Mode == "default" || t.Mode == "custom" {
+				return cfg, fmt.Errorf("choose a model before enabling this feature: %w", ErrInvalid)
+			}
 			continue
 		}
-		p, exists := cfg.Providers[t.Provider]
-		if !exists || t.Model == "" {
-			return cfg, fmt.Errorf("each enabled task needs a configured provider and model: %w", ErrInvalid)
+		if err := validateLLMRoute(cfg, route, task); err != nil {
+			return cfg, err
 		}
-		if _, exists := cfg.Models[t.Model]; !exists {
-			return cfg, fmt.Errorf("task model needs explicit price configuration (zero for local models): %w", ErrInvalid)
-		}
-		if task == llm.TaskEmbed && p.Kind == llm.KindAnthropic {
-			return cfg, fmt.Errorf("Anthropic does not support embeddings: %w", ErrInvalid)
-		}
-		cfg.Tasks[task] = llm.TaskConfig{Provider: t.Provider, Model: t.Model}
+		cfg.Tasks[task] = route
 	}
 	return cfg, nil
+}
+
+func validateLLMRoute(cfg llm.Config, route llm.TaskConfig, task llm.Task) error {
+	p, exists := cfg.Providers[route.Provider]
+	if !exists || route.Model == "" {
+		return fmt.Errorf("each enabled feature needs a configured provider and model: %w", ErrInvalid)
+	}
+	if _, exists := llm.LookupModel(cfg.Models, route.Provider, route.Model); !exists {
+		return fmt.Errorf("model needs explicit price configuration (zero for free models): %w", ErrInvalid)
+	}
+	if task == llm.TaskEmbed && p.Kind == llm.KindAnthropic {
+		return fmt.Errorf("Anthropic does not support embeddings: %w", ErrInvalid)
+	}
+	return nil
 }
 
 func validLLMProviderName(name string) bool {

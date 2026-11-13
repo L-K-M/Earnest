@@ -91,6 +91,26 @@ func TestVeniceCatalogue(t *testing.T) {
 	}
 }
 
+func TestVeniceEmbeddingGeometry(t *testing.T) {
+	models, _, err := decodeCatalogue([]byte(`{"data":[{"id":"text-embedding-qwen3-8b","type":"embedding","model_spec":{"embeddingDimensions":4096,"supportsCustomDimensions":true,"pricing":{"input":{"usd":0.0125}}}}]}`), KindOpenAI, true)
+	if err != nil || len(models) != 1 {
+		t.Fatalf("catalogue: %+v %v", models, err)
+	}
+	if models[0].Dimensions == nil || *models[0].Dimensions != 4096 {
+		t.Fatalf("native embedding dimensions were lost: %+v", models[0])
+	}
+	if models[0].SupportsCustomDimensions == nil || !*models[0].SupportsCustomDimensions || models[0].Truncatable != nil {
+		t.Fatal("provider resizing must not imply local truncation")
+	}
+	for _, value := range []string{`null`, `0`, `-1`, `65537`, `1.5`, `"4096"`, `{}`} {
+		raw := []byte(`{"data":[{"id":"embed","type":"embedding","model_spec":{"embeddingDimensions":` + value + `,"supportsCustomDimensions":"unknown"}}]}`)
+		found, _, err := decodeCatalogue(raw, KindOpenAI, true)
+		if err != nil || len(found) != 1 || found[0].Dimensions != nil || found[0].SupportsCustomDimensions != nil {
+			t.Fatalf("invalid optional metadata should remain unknown: %s %+v %v", value, found, err)
+		}
+	}
+}
+
 func TestGeminiCatalogueUnknownCapabilities(t *testing.T) {
 	models, _, err := decodeCatalogue([]byte(`{"models":[{"name":"models/unknown"},{"name":"models/null","supportedGenerationMethods":null},{"name":"models/none","supportedGenerationMethods":[]}]}`), KindGemini, false)
 	if err != nil || len(models) != 2 {
@@ -207,5 +227,15 @@ func TestVeniceDiscoveryRequestsAllTypes(t *testing.T) {
 	models, err := DiscoverModels(t.Context(), "venice", ProviderConfig{Kind: KindOpenAI, BaseURL: strings.Replace(server.URL, "127.0.0.1", "api.venice.ai", 1) + "/api/v1"}, client)
 	if err != nil || len(models) != 2 {
 		t.Fatalf("Venice discovery: %+v %v", models, err)
+	}
+}
+
+func TestVeniceMalformedOptionalPricing(t *testing.T) {
+	for _, price := range []string{`true`, `"unknown"`, `{}`, `[]`} {
+		raw := []byte(`{"data":[{"id":"chat","type":"text","model_spec":{"pricing":{"input":{"usd":` + price + `},"output":{"usd":0.5}}}}]}`)
+		models, _, err := decodeCatalogue(raw, KindOpenAI, true)
+		if err != nil || len(models) != 1 || models[0].InputPer1M != nil || models[0].OutputPer1M == nil || *models[0].OutputPer1M != "0.500000" {
+			t.Fatalf("invalid optional price must not discard catalogue: %+v %v", models, err)
+		}
 	}
 }

@@ -154,8 +154,12 @@ class OpenApiContractTest {
                         LlmTokenField.MAX_COMPLETION_TOKENS,
                     ),
                 ),
-                listOf(LlmTaskRoute("embed", "openai", "text-embedding-3-small")),
-                listOf(LlmModel("text-embedding-3-small", "0.000000", "0.000000", "0.020000", 1536, true)),
+                listOf(LlmTaskRoute("embed", "openai", "text-embedding-3-small", LlmTaskMode.CUSTOM)),
+                listOf(LlmModel("text-embedding-3-small", "0.000000", "0.000000", "0.020000", 1536, true, "openai", false)),
+                LlmSettingsDefaults(
+                    LlmDefaultRoute("openai", "gpt-5"),
+                    LlmDefaultRoute("openai", "text-embedding-3-small"),
+                ),
             ),
         ),
         "LLMProviderSettings" to encode(
@@ -175,10 +179,13 @@ class OpenApiContractTest {
                 LlmTokenField.MAX_COMPLETION_TOKENS,
             ),
         ),
-        "LLMTaskSettings" to encode(LlmTaskRoute.serializer(), LlmTaskRoute("compile_rule", "local", "llama3")),
+        "LLMTaskSettings" to encode(
+            LlmTaskRoute.serializer(),
+            LlmTaskRoute("compile_rule", "local", "llama3", LlmTaskMode.DEFAULT),
+        ),
         "LLMModelSettings" to encode(
             LlmModel.serializer(),
-            LlmModel("llama3", "0", "0", "0", 1024, false),
+            LlmModel("llama3", "0", "0", "0", 1024, false, "local", true),
         ),
         "LLMSettingsInput" to encode(
             LlmSettingsInput.serializer(),
@@ -186,8 +193,12 @@ class OpenApiContractTest {
                 9007199254740993,
                 "op-1",
                 listOf(LlmProviderInput("openai", LlmProviderKind.OPENAI, "https://api.openai.com/v1", apiKey = "sk-test")),
-                listOf(LlmTaskRoute("embed", "openai", "text-embedding-3-small")),
-                listOf(LlmModel("text-embedding-3-small", "0.000000", "0.000000", "0.020000", 1536, true)),
+                listOf(LlmTaskRoute("embed", "openai", "text-embedding-3-small", LlmTaskMode.CUSTOM)),
+                listOf(LlmModel("text-embedding-3-small", "0.000000", "0.000000", "0.020000", 1536, true, "openai", false)),
+                LlmSettingsDefaults(
+                    LlmDefaultRoute("openai", "gpt-5"),
+                    LlmDefaultRoute("openai", "text-embedding-3-small"),
+                ),
             ),
         ),
     )

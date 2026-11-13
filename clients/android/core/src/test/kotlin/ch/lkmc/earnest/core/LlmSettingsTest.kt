@@ -3,6 +3,7 @@ package ch.lkmc.earnest.core
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -76,7 +77,9 @@ class LlmSettingsTest {
         embedding: String = "0.020000",
         dimensions: Long = 1536,
         truncatable: Boolean = true,
-    ) = LlmModel(name, input, output, embedding, dimensions, truncatable)
+        provider: String = "",
+        supportsCustomDimensions: Boolean = false,
+    ) = LlmModel(name, input, output, embedding, dimensions, truncatable, provider, supportsCustomDimensions)
 
     private fun settings(
         revision: Long = 0,
@@ -91,7 +94,8 @@ class LlmSettingsTest {
         providers: List<LlmProviderInput> = emptyList(),
         tasks: List<LlmTaskRoute> = emptyList(),
         models: List<LlmModel> = emptyList(),
-    ) = LlmSettingsInput(revision, opId, providers, tasks, models)
+        defaults: LlmSettingsDefaults? = null,
+    ) = LlmSettingsInput(revision, opId, providers, tasks, models, defaults)
 
     private val defaultsJSON =
         """{"revision":0,"providers":[],"tasks":[],"models":[]}"""
@@ -506,6 +510,279 @@ class LlmSettingsTest {
         val (api, requests) = client { response(it, body = """{"revision":1,"providers":[],"tasks":[],"models":[]}""") }
         api.updateLlmSettings(input(providers = providers, tasks = tasks(), models = models), settings())
         assertEquals(1, requests.size)
+    }
+
+    @Test
+    fun getDecodesDefaultsModesAndScopedModels() = runBlocking {
+        val (api, _) = client {
+            response(it, body = """
+                {"revision":3,
+                 "providers":[{"name":"openai","kind":"openai","base_url":"https://api.openai.com/v1"}],
+                 "tasks":[{"task":"embed","provider":"openai","model":"text-embedding-3-small","mode":"custom"},
+                          {"task":"summary","provider":"openai","model":"gpt-5","mode":"default"},
+                          {"task":"ask","provider":"","model":"","mode":"off"}],
+                 "models":[{"name":"shared","provider":"openai","input_per_1m":"1","output_per_1m":"2",
+                            "embedding_per_1m":"0","dimensions":0,"truncatable":false,"supports_custom_dimensions":false},
+                           {"name":"shared","provider":"","input_per_1m":"0","output_per_1m":"0",
+                            "embedding_per_1m":"0","dimensions":0,"truncatable":false}],
+                 "defaults":{"text":{"provider":"openai","model":"gpt-5"},
+                             "embedding":{"provider":"openai","model":"text-embedding-3-small"}}}
+            """.trimIndent())
+        }
+        val loaded = api.llmSettings()
+        assertEquals(
+            LlmSettingsDefaults(LlmDefaultRoute("openai", "gpt-5"), LlmDefaultRoute("openai", "text-embedding-3-small")),
+            loaded.defaults,
+        )
+        assertEquals(LlmTaskMode.CUSTOM, loaded.tasks[0].mode)
+        assertEquals(LlmTaskMode.DEFAULT, loaded.tasks[1].mode)
+        assertEquals(LlmTaskMode.OFF, loaded.tasks[2].mode)
+        assertEquals("openai", loaded.models[0].provider)
+        assertFalse(loaded.models[0].supportsCustomDimensions)
+        assertEquals("", loaded.models[1].provider)
+    }
+
+    @Test
+    fun putSendsDefaultsModesAndEffectiveDefaultRoutes() = runBlocking {
+        val defaults = LlmSettingsDefaults(
+            text = LlmDefaultRoute("openai", "gpt-5"),
+            embedding = LlmDefaultRoute("openai", "text-embedding-3-small"),
+        )
+        val tasks = LlmTask.entries.map { task ->
+            when (task) {
+                LlmTask.EMBED -> LlmTaskRoute("embed", "openai", "text-embedding-3-small", LlmTaskMode.CUSTOM)
+                LlmTask.SUMMARY -> LlmTaskRoute("summary", "openai", "gpt-5", LlmTaskMode.DEFAULT)
+                else -> LlmTaskRoute(task.wireName, "", "", LlmTaskMode.OFF)
+            }
+        }
+        val (api, requests) = client { response(it, body = """{"revision":9,"providers":[],"tasks":[],"models":[]}""") }
+        api.updateLlmSettings(
+            input(
+                revision = 8,
+                providers = listOf(LlmProviderInput("openai", LlmProviderKind.OPENAI, "https://api.openai.com/v1")),
+                tasks = tasks,
+                models = listOf(
+                    model("text-embedding-3-small", provider = "openai", truncatable = true),
+                    LlmModel("gpt-5", provider = "openai"),
+                ),
+                defaults = defaults,
+            ),
+            settings(),
+        )
+        val body = requests.single().bodyObject()
+        assertEquals("openai", body.getValue("defaults").jsonObject.getValue("text").jsonObject.getValue("provider").jsonPrimitive.content)
+        val sentTasks = body.getValue("tasks").jsonArray.map { it.jsonObject }
+        val summary = sentTasks.first { it.getValue("task").jsonPrimitive.content == "summary" }
+        assertEquals("default", summary.getValue("mode").jsonPrimitive.content)
+        // A default task also sends the effective route for older readers.
+        assertEquals("openai", summary.getValue("provider").jsonPrimitive.content)
+        assertEquals("gpt-5", summary.getValue("model").jsonPrimitive.content)
+        val ask = sentTasks.first { it.getValue("task").jsonPrimitive.content == "ask" }
+        assertEquals("off", ask.getValue("mode").jsonPrimitive.content)
+        assertFalse("an off task sends no route", ask.getValue("provider").jsonPrimitive.content.isNotEmpty())
+        assertTrue(body.getValue("models").jsonArray.any {
+            it.jsonObject.getValue("name").jsonPrimitive.content == "text-embedding-3-small" &&
+                it.jsonObject.getValue("provider").jsonPrimitive.content == "openai"
+        })
+    }
+
+    @Test
+    fun missingModeKeepsTheLegacyRouteMeaning() {
+        // A missing mode is the legacy explicit route: custom when routed.
+        val routed = LlmTaskRoute("summary", "openai", "gpt-5")
+        assertEquals(LlmTaskMode.CUSTOM, routed.resolvedMode())
+        val empty = LlmTaskRoute("summary")
+        assertEquals(LlmTaskMode.OFF, empty.resolvedMode())
+    }
+
+    @Test
+    fun offAndDefaultModesAreValidatedBeforeAnyRequest() = runBlocking {
+        val validProvider = LlmProviderInput("openai", LlmProviderKind.OPENAI, "https://api.openai.com/v1")
+        val defaults = LlmSettingsDefaults(text = LlmDefaultRoute("openai", "gpt-5"))
+        val models = listOf(LlmModel("gpt-5", provider = "openai"))
+        val base = LlmTask.entries.map { LlmTaskRoute(it.wireName, "", "", LlmTaskMode.OFF) }
+        val (api, requests) = client { error("unexpected request") }
+        for ((index, tasks) in listOf(
+            // Default must send the effective default route.
+            base.map { if (it.task == "ask") LlmTaskRoute("ask", "", "", LlmTaskMode.DEFAULT) else it },
+            // A default route must reference a configured model.
+            base.map { if (it.task == "ask") LlmTaskRoute("ask", "openai", "missing", LlmTaskMode.DEFAULT) else it },
+            // A custom route must be complete.
+            base.map { if (it.task == "ask") LlmTaskRoute("ask", "openai", "", LlmTaskMode.CUSTOM) else it },
+            // Default mode requires defaults to exist.
+            base.map { if (it.task == "ask") LlmTaskRoute("ask", "openai", "gpt-5", LlmTaskMode.DEFAULT) else it },
+        ).withIndex()) {
+            val failure = runCatching {
+                api.updateLlmSettings(
+                    input(
+                        revision = 0,
+                        providers = listOf(validProvider),
+                        tasks = tasks,
+                        models = models,
+                        defaults = if (index == 3) null else defaults,
+                    ),
+                    settings(),
+                )
+            }.exceptionOrNull()
+            assertTrue("case $index accepted", failure is IllegalArgumentException)
+            assertTrue("case $index sent a request", requests.isEmpty())
+        }
+        // The effective route matches the default and passes; an Off route is
+        // ignored, so a carried route is accepted.
+        val (okApi, okRequests) = client { response(it, body = """{"revision":1,"providers":[],"tasks":[],"models":[]}""") }
+        okApi.updateLlmSettings(
+            input(
+                revision = 0,
+                providers = listOf(validProvider),
+                tasks = base.map {
+                    when (it.task) {
+                        "ask" -> LlmTaskRoute("ask", "openai", "gpt-5", LlmTaskMode.DEFAULT)
+                        "blurb" -> LlmTaskRoute("blurb", "openai", "gpt-5", LlmTaskMode.OFF)
+                        else -> it
+                    }
+                },
+                models = models,
+                defaults = defaults,
+            ),
+            settings(),
+        )
+        assertEquals(1, okRequests.size)
+    }
+
+    @Test
+    fun scopedModelIdentityWinsOverGlobalAndRepeatsFail() = runBlocking {
+        val validProvider = LlmProviderInput("openai", LlmProviderKind.OPENAI, "https://api.openai.com/v1")
+        val baseTasks = LlmTask.entries.map { LlmTaskRoute(it.wireName, "", "", LlmTaskMode.OFF) }
+        // A scoped row and a global row are distinct identities.
+        val models = listOf(
+            LlmModel("shared", provider = "openai", inputPer1m = "1"),
+            LlmModel("shared", provider = "", inputPer1m = "2"),
+        )
+        val (api, requests) = client { response(it, body = """{"revision":1,"providers":[],"tasks":[],"models":[]}""") }
+        api.updateLlmSettings(input(revision = 0, providers = listOf(validProvider), tasks = baseTasks, models = models), settings())
+        assertEquals(1, requests.size)
+        // A repeated identity fails before any request.
+        val duplicate = listOf(
+            LlmModel("shared", provider = "openai", inputPer1m = "1"),
+            LlmModel("shared", provider = "openai", inputPer1m = "2"),
+        )
+        val (failedApi, failedRequests) = client { error("unexpected request") }
+        val failure = runCatching {
+            failedApi.updateLlmSettings(input(revision = 0, providers = listOf(validProvider), tasks = baseTasks, models = duplicate), settings())
+        }.exceptionOrNull()
+        assertTrue(failure is IllegalArgumentException)
+        assertTrue(failedRequests.isEmpty())
+        // Resolution prefers the scoped row and falls back to global.
+        assertEquals(models[0], LlmModel.resolve(models, "openai", "shared"))
+        assertEquals(models[1], LlmModel.resolve(models, "other", "shared"))
+        assertNull(LlmModel.resolve(models, "openai", "missing"))
+    }
+
+    @Test
+    fun wideDimensionsAcceptTruncationOrCustomWidth() = runBlocking {
+        val validProvider = LlmProviderInput("openai", LlmProviderKind.OPENAI, "https://api.openai.com/v1")
+        val baseTasks = LlmTask.entries.map { LlmTaskRoute(it.wireName, "", "", LlmTaskMode.OFF) }
+        val (api, requests) = client { response(it, body = """{"revision":1,"providers":[],"tasks":[],"models":[]}""") }
+        api.updateLlmSettings(
+            input(
+                revision = 0,
+                providers = listOf(validProvider),
+                tasks = baseTasks,
+                models = listOf(
+                    model("wide-custom", dimensions = 3072, truncatable = false, supportsCustomDimensions = true),
+                    model("wide-truncatable", dimensions = 3072, truncatable = true, supportsCustomDimensions = false),
+                ),
+            ),
+            settings(),
+        )
+        assertEquals(1, requests.size)
+        // Without either flag, above 1024 fails.
+        val (failedApi, failedRequests) = client { error("unexpected request") }
+        val failure = runCatching {
+            failedApi.updateLlmSettings(
+                input(revision = 0, providers = listOf(validProvider), tasks = baseTasks, models = listOf(model("wide", dimensions = 3072, truncatable = false))),
+                settings(),
+            )
+        }.exceptionOrNull()
+        assertTrue(failure is IllegalArgumentException)
+        assertTrue(failedRequests.isEmpty())
+    }
+
+    @Test
+    fun checkPostsTheRevisionProviderModelAndCapability() = runBlocking {
+        val (api, requests) = client {
+            response(it, body = """{"compatible":true,"dimensions":1536,"supports_custom_dimensions":true,"message":"ok"}""")
+        }
+        val result = api.checkLlmModel(
+            LlmModelCheckInput(
+                revision = 7,
+                provider = LlmProviderInput(
+                    name = "openai",
+                    kind = LlmProviderKind.OPENAI,
+                    baseUrl = "https://api.openai.com/v1",
+                    apiKey = "sk-typed",
+                ),
+                model = LlmModel("text-embedding-3-small", provider = "openai", dimensions = 1536, truncatable = true),
+                capability = LlmModelCapability.EMBEDDING,
+            ),
+            settings(),
+        )
+        assertTrue(result.compatible)
+        assertEquals(1536L, result.dimensions)
+        assertEquals(true, result.supportsCustomDimensions)
+        assertEquals("ok", result.message)
+        val request = requests.single()
+        assertEquals("POST", request.method)
+        assertEquals("/v1/settings/llm/models/check", request.url.encodedPath)
+        val body = request.bodyObject()
+        assertEquals(setOf("revision", "provider", "model", "capability"), body.keys)
+        assertEquals("7", body.getValue("revision").jsonPrimitive.content)
+        assertEquals("embedding", body.getValue("capability").jsonPrimitive.content)
+        assertEquals("sk-typed", body.getValue("provider").jsonObject.getValue("api_key").jsonPrimitive.content)
+        assertEquals("openai", body.getValue("model").jsonObject.getValue("provider").jsonPrimitive.content)
+    }
+
+    @Test
+    fun checkCanDiscoverResizingForAKnownWideModel() = runBlocking {
+        val (api, requests) = client {
+            response(it, body = """{"compatible":true,"dimensions":4096,"supports_custom_dimensions":true}""")
+        }
+        val draft = LlmModel("text-embedding-qwen3-8b", provider = "venice", dimensions = 4096)
+        val result = api.checkLlmModel(
+            LlmModelCheckInput(
+                revision = 0,
+                provider = LlmProviderInput("venice", LlmProviderKind.OPENAI, "https://api.venice.ai/api/v1"),
+                model = draft,
+                capability = LlmModelCapability.EMBEDDING,
+            ),
+            settings(),
+        )
+        assertTrue(result.compatible)
+        assertEquals(true, result.supportsCustomDimensions)
+        assertEquals("4096", requests.single().bodyObject().getValue("model").jsonObject.getValue("dimensions").jsonPrimitive.content)
+        assertFalse(draft.supportsCustomDimensions)
+        assertFalse(draft.truncatable)
+    }
+
+    @Test
+    fun checkValidationFailsBeforeAnyRequest() = runBlocking {
+        val provider = LlmProviderInput("openai", LlmProviderKind.OPENAI, "https://api.openai.com/v1")
+        val invalid = listOf(
+            LlmModelCheckInput(-1, provider, LlmModel("m"), LlmModelCapability.CHAT),
+            LlmModelCheckInput(0, provider, LlmModel(""), LlmModelCapability.CHAT),
+            LlmModelCheckInput(0, provider, LlmModel("m", inputPer1m = ""), LlmModelCapability.CHAT),
+            LlmModelCheckInput(0, provider, LlmModel("m", dimensions = -1), LlmModelCapability.EMBEDDING),
+            LlmModelCheckInput(0, provider, LlmModel("m", dimensions = 65537), LlmModelCapability.EMBEDDING),
+            LlmModelCheckInput(0, provider, LlmModel("m", provider = "different"), LlmModelCapability.CHAT),
+            LlmModelCheckInput(0, provider.copy(kind = LlmProviderKind.ANTHROPIC), LlmModel("m"), LlmModelCapability.EMBEDDING),
+            LlmModelCheckInput(0, LlmProviderInput("Bad", LlmProviderKind.OPENAI, "https://api.openai.com/v1"), LlmModel("m"), LlmModelCapability.CHAT),
+        )
+        for ((index, document) in invalid.withIndex()) {
+            val (api, requests) = client { error("unexpected request") }
+            val failure = runCatching { api.checkLlmModel(document, settings()) }.exceptionOrNull()
+            assertTrue("case $index accepted: $document", failure is IllegalArgumentException)
+            assertTrue("case $index sent a request", requests.isEmpty())
+        }
     }
 
     @Test

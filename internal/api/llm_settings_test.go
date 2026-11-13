@@ -77,6 +77,23 @@ func TestLLMSettingsProductionMount(t *testing.T) {
 	}
 }
 
+func TestHTTPLLMModelCheckAccess(t *testing.T) {
+	f := newAPIFixture(t, storetest.NewTemplate(t))
+	path := "/v1/settings/llm/models/check"
+	body := map[string]any{"revision": 0, "capability": "embedding", "provider": map[string]any{"name": "test", "kind": "openai", "base_url": "http://127.0.0.1:1/v1", "api_key": "secret-value", "monthly_limit_usd": "0", "timeout_seconds": 1, "token_field": "max_tokens"}, "model": map[string]any{"name": "test", "input_per_1m": "0", "output_per_1m": "0", "embedding_per_1m": "0", "dimensions": 0, "truncatable": false}}
+	requireStatus(t, f.do(t, http.MethodPost, path, body, requestCredentials{}), http.StatusUnauthorized)
+	requireStatus(t, f.do(t, http.MethodPost, path, body, requestCredentials{bearer: f.token(t, service.AudienceAPI)}), http.StatusForbidden)
+	requireStatus(t, f.do(t, http.MethodPost, path, body, requestCredentials{cookie: f.cookie}), http.StatusForbidden)
+	body["revision"] = 1
+	requireStatus(t, f.do(t, http.MethodPost, path, body, f.session()), http.StatusConflict)
+	body["revision"] = 0
+	rec := f.do(t, http.MethodPost, path, body, f.session())
+	requireStatus(t, rec, http.StatusServiceUnavailable)
+	if rec.Header().Get("Cache-Control") != "no-store" || strings.Contains(rec.Body.String(), "secret-value") {
+		t.Fatal("unsafe check response")
+	}
+}
+
 func TestHTTPLLMModelDiscoveryAccess(t *testing.T) {
 	f := newAPIFixture(t, storetest.NewTemplate(t))
 	path := "/v1/settings/llm/models"

@@ -26,6 +26,49 @@ public enum APILLMTask: String, Codable, Sendable, Equatable, CaseIterable {
     case ask
 }
 
+/// How one task chooses its route. A missing wire value is the legacy form:
+/// a nonempty explicit route means custom, an empty one means off.
+public enum APILLMTaskMode: String, Codable, Sendable, Equatable, CaseIterable {
+    case off
+    case `default` = "default"
+    case custom
+}
+
+/// One default route. Both strings empty means the task resolves to disabled.
+public struct APILLMDefaultRoute: Codable, Sendable, Equatable {
+    public var provider: String
+    public var model: String
+
+    enum CodingKeys: String, CodingKey { case provider, model }
+
+    public init(provider: String = "", model: String = "") {
+        self.provider = provider
+        self.model = model
+    }
+}
+
+/// Editor inheritance for tasks: every non-embed task follows `text`, embed
+/// follows `embedding`. The server stores effective routes too, so old
+/// readers keep working.
+public struct APILLMDefaults: Codable, Sendable, Equatable {
+    public var text: APILLMDefaultRoute
+    public var embedding: APILLMDefaultRoute
+
+    enum CodingKeys: String, CodingKey { case text, embedding }
+
+    public init(text: APILLMDefaultRoute = APILLMDefaultRoute(),
+                embedding: APILLMDefaultRoute = APILLMDefaultRoute()) {
+        self.text = text
+        self.embedding = embedding
+    }
+
+    /// A defaults block with neither route set carries no selection.
+    public var isEmpty: Bool {
+        text.provider.isEmpty && text.model.isEmpty
+            && embedding.provider.isEmpty && embedding.model.isEmpty
+    }
+}
+
 /// One provider as the server reports it. It never carries the key itself,
 /// only whether one is stored.
 public struct APILLMProviderSettings: Codable, Sendable, Equatable {
@@ -99,13 +142,15 @@ public struct APILLMProviderInput: Codable, Sendable, Equatable {
 /// outbound calls.
 public struct APILLMTaskSettings: Codable, Sendable, Equatable {
     public var task: APILLMTask
+    public var mode: APILLMTaskMode?
     public var provider: String
     public var model: String
 
-    enum CodingKeys: String, CodingKey { case task, provider, model }
+    enum CodingKeys: String, CodingKey { case task, mode, provider, model }
 
-    public init(task: APILLMTask, provider: String, model: String) {
+    public init(task: APILLMTask, mode: APILLMTaskMode? = nil, provider: String, model: String) {
         self.task = task
+        self.mode = mode
         self.provider = provider
         self.model = model
     }
@@ -115,6 +160,13 @@ public struct APILLMTaskSettings: Codable, Sendable, Equatable {
 /// floating point, so an exact configured price can never drift.
 public struct APILLMModelSettings: Codable, Sendable, Equatable {
     public var name: String
+    /// Empty is the legacy global entry; a nonempty value scopes the model to
+    /// one provider. Identity is provider plus name, and a scoped entry wins
+    /// over a global one.
+    public var provider: String
+    /// Provider-side resizing, never local truncation. A width above the
+    /// storage limit is valid when either this or `truncatable` is set.
+    public var supportsCustomDimensions: Bool
     public var inputPer1M: String
     public var outputPer1M: String
     public var embeddingPer1M: String
@@ -122,21 +174,36 @@ public struct APILLMModelSettings: Codable, Sendable, Equatable {
     public var truncatable: Bool
 
     enum CodingKeys: String, CodingKey {
-        case name
+        case name, provider, supportsCustomDimensions = "supports_custom_dimensions"
         case inputPer1M = "input_per_1m"
         case outputPer1M = "output_per_1m"
         case embeddingPer1M = "embedding_per_1m"
         case dimensions, truncatable
     }
 
-    public init(name: String, inputPer1M: String, outputPer1M: String, embeddingPer1M: String,
+    public init(name: String, provider: String = "", supportsCustomDimensions: Bool = false,
+                inputPer1M: String, outputPer1M: String, embeddingPer1M: String,
                 dimensions: Int64, truncatable: Bool) {
         self.name = name
+        self.provider = provider
+        self.supportsCustomDimensions = supportsCustomDimensions
         self.inputPer1M = inputPer1M
         self.outputPer1M = outputPer1M
         self.embeddingPer1M = embeddingPer1M
         self.dimensions = dimensions
         self.truncatable = truncatable
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        provider = try container.decodeIfPresent(String.self, forKey: .provider) ?? ""
+        supportsCustomDimensions = try container.decodeIfPresent(Bool.self, forKey: .supportsCustomDimensions) ?? false
+        inputPer1M = try container.decode(String.self, forKey: .inputPer1M)
+        outputPer1M = try container.decode(String.self, forKey: .outputPer1M)
+        embeddingPer1M = try container.decode(String.self, forKey: .embeddingPer1M)
+        dimensions = try container.decode(Int64.self, forKey: .dimensions)
+        truncatable = try container.decode(Bool.self, forKey: .truncatable)
     }
 }
 
@@ -153,6 +220,7 @@ public struct APIDiscoveredModel: Codable, Sendable, Equatable {
     public var embeddingPer1M: String?
     public var dimensions: Int64?
     public var truncatable: Bool?
+    public var supportsCustomDimensions: Bool?
 
     enum CodingKeys: String, CodingKey {
         case id, name, chat, embedding
@@ -160,12 +228,13 @@ public struct APIDiscoveredModel: Codable, Sendable, Equatable {
         case outputPer1M = "output_per_1m"
         case embeddingPer1M = "embedding_per_1m"
         case dimensions, truncatable
+        case supportsCustomDimensions = "supports_custom_dimensions"
     }
 
     public init(id: String, name: String, chat: Bool? = nil, embedding: Bool? = nil,
                 inputPer1M: String? = nil, outputPer1M: String? = nil,
                 embeddingPer1M: String? = nil, dimensions: Int64? = nil,
-                truncatable: Bool? = nil) {
+                truncatable: Bool? = nil, supportsCustomDimensions: Bool? = nil) {
         self.id = id
         self.name = name
         self.chat = chat
@@ -175,6 +244,7 @@ public struct APIDiscoveredModel: Codable, Sendable, Equatable {
         self.embeddingPer1M = embeddingPer1M
         self.dimensions = dimensions
         self.truncatable = truncatable
+        self.supportsCustomDimensions = supportsCustomDimensions
     }
 }
 
@@ -197,15 +267,17 @@ public struct APILLMSettings: Codable, Sendable, Equatable {
     public var providers: [APILLMProviderSettings]
     public var tasks: [APILLMTaskSettings]
     public var models: [APILLMModelSettings]
+    public var defaults: APILLMDefaults?
 
-    enum CodingKeys: String, CodingKey { case revision, providers, tasks, models }
+    enum CodingKeys: String, CodingKey { case revision, providers, tasks, models, defaults }
 
     public init(revision: Int64, providers: [APILLMProviderSettings], tasks: [APILLMTaskSettings],
-                models: [APILLMModelSettings]) {
+                models: [APILLMModelSettings], defaults: APILLMDefaults? = nil) {
         self.revision = revision
         self.providers = providers
         self.tasks = tasks
         self.models = models
+        self.defaults = defaults
     }
 }
 
@@ -217,20 +289,71 @@ public struct APILLMSettingsInput: Codable, Sendable, Equatable {
     public var providers: [APILLMProviderInput]
     public var tasks: [APILLMTaskSettings]
     public var models: [APILLMModelSettings]
+    public var defaults: APILLMDefaults?
 
     enum CodingKeys: String, CodingKey {
         case revision
         case opID = "op_id"
-        case providers, tasks, models
+        case providers, tasks, models, defaults
     }
 
     public init(revision: Int64, opID: String, providers: [APILLMProviderInput],
-                tasks: [APILLMTaskSettings], models: [APILLMModelSettings]) {
+                tasks: [APILLMTaskSettings], models: [APILLMModelSettings],
+                defaults: APILLMDefaults? = nil) {
         self.revision = revision
         self.opID = opID
         self.providers = providers
         self.tasks = tasks
         self.models = models
+        self.defaults = defaults
+    }
+}
+
+/// Which capability a model check exercises.
+public enum APILLMModelCapability: String, Codable, Sendable, Equatable, CaseIterable {
+    case chat
+    case embedding
+}
+
+/// A model check sends a fixed sample through the same provider path as a
+/// real request. It never changes routing or writes article content.
+public struct APILLMModelCheckInput: Codable, Sendable, Equatable {
+    public var revision: Int64
+    public var provider: APILLMProviderInput
+    public var model: APILLMModelSettings
+    public var capability: APILLMModelCapability
+
+    enum CodingKeys: String, CodingKey { case revision, provider, model, capability }
+
+    public init(revision: Int64, provider: APILLMProviderInput, model: APILLMModelSettings,
+                capability: APILLMModelCapability) {
+        self.revision = revision
+        self.provider = provider
+        self.model = model
+        self.capability = capability
+    }
+}
+
+/// The observed result of a model check. `dimensions` and
+/// `supportsCustomDimensions` are observations, not saved settings; a caller
+/// may apply them to its draft only.
+public struct APILLMModelCheck: Codable, Sendable, Equatable {
+    public var compatible: Bool
+    public var dimensions: Int64?
+    public var supportsCustomDimensions: Bool?
+    public var message: String
+
+    enum CodingKeys: String, CodingKey {
+        case compatible, dimensions, message
+        case supportsCustomDimensions = "supports_custom_dimensions"
+    }
+
+    public init(compatible: Bool, dimensions: Int64? = nil,
+                supportsCustomDimensions: Bool? = nil, message: String) {
+        self.compatible = compatible
+        self.dimensions = dimensions
+        self.supportsCustomDimensions = supportsCustomDimensions
+        self.message = message
     }
 }
 
@@ -283,33 +406,91 @@ public func validateLLMSettings(_ input: APILLMSettingsInput, previous: APILLMSe
         }
     }
 
-    var modelNames = Set<String>()
+    var modelIdentities = Set<String>()
     for model in input.models {
         guard isValidLLMModelName(model.name) else { throw APILLMSettingsError(field: "models.name") }
-        guard modelNames.insert(model.name).inserted else { throw APILLMSettingsError(field: "models.name") }
+        guard modelIdentities.insert(llmModelIdentity(model.provider, model.name)).inserted else {
+            throw APILLMSettingsError(field: "models.name")
+        }
+        if !model.provider.isEmpty, !providerNames.contains(model.provider) {
+            throw APILLMSettingsError(field: "models.provider")
+        }
         guard isValidLLMMoney(model.inputPer1M), isValidLLMMoney(model.outputPer1M),
               isValidLLMMoney(model.embeddingPer1M) else {
             throw APILLMSettingsError(field: "models.prices")
         }
         guard (0...65536).contains(model.dimensions),
-              model.dimensions <= llmStorageDimensions || model.truncatable else {
+              model.dimensions <= llmStorageDimensions
+              || model.truncatable || model.supportsCustomDimensions else {
             throw APILLMSettingsError(field: "models.dimensions")
+        }
+    }
+
+    if let defaults = input.defaults {
+        for (target, embed) in [(defaults.text, false), (defaults.embedding, true)] {
+            if target.provider.isEmpty, target.model.isEmpty { continue }
+            try validateLLMRoute(target.provider, target.model,
+                                 providers: input.providers, models: input.models,
+                                 embed: embed, field: "defaults")
         }
     }
 
     var seenTasks = Set<APILLMTask>()
     for task in input.tasks {
         guard seenTasks.insert(task.task).inserted else { throw APILLMSettingsError(field: "tasks") }
-        if task.provider.isEmpty, task.model.isEmpty { continue }
-        guard !task.provider.isEmpty, !task.model.isEmpty,
-              providerNames.contains(task.provider), modelNames.contains(task.model) else {
-            throw APILLMSettingsError(field: "tasks.\(task.task.rawValue)")
+        let route: APILLMDefaultRoute
+        switch task.mode {
+        case .none:
+            // Legacy explicit route: empty means off, a half-configured
+            // route is rejected below.
+            route = APILLMDefaultRoute(provider: task.provider, model: task.model)
+        case .custom:
+            route = APILLMDefaultRoute(provider: task.provider, model: task.model)
+            guard !route.provider.isEmpty, !route.model.isEmpty else {
+                throw APILLMSettingsError(field: "tasks.\(task.task.rawValue)")
+            }
+        case .off:
+            route = APILLMDefaultRoute()
+        case .default:
+            guard let defaults = input.defaults else {
+                throw APILLMSettingsError(field: "tasks.\(task.task.rawValue)")
+            }
+            route = task.task == .embed ? defaults.embedding : defaults.text
+            guard !route.provider.isEmpty, !route.model.isEmpty else {
+                throw APILLMSettingsError(field: "tasks.\(task.task.rawValue)")
+            }
         }
-        if task.task == .embed,
-           let provider = input.providers.first(where: { $0.name == task.provider }),
-           provider.kind == .anthropic {
-            throw APILLMSettingsError(field: "tasks.embed")
-        }
+        if route.provider.isEmpty, route.model.isEmpty { continue }
+        try validateLLMRoute(route.provider, route.model,
+                             providers: input.providers, models: input.models,
+                             embed: task.task == .embed,
+                             field: "tasks.\(task.task.rawValue)")
+    }
+}
+
+/// Provider plus name. Model names cannot contain control characters, so the
+/// separator is unambiguous and mirrors the server's key.
+public func llmModelIdentity(_ provider: String, _ name: String) -> String {
+    provider.isEmpty ? name : provider + "\u{0}" + name
+}
+
+/// A route names a configured provider and a model. A provider-scoped model
+/// entry wins over a legacy global one with the same name.
+func llmScopedModel(_ models: [APILLMModelSettings], provider: String, name: String) -> APILLMModelSettings? {
+    models.first { $0.provider == provider && $0.name == name }
+        ?? models.first { $0.provider.isEmpty && $0.name == name }
+}
+
+private func validateLLMRoute(_ provider: String, _ model: String,
+                              providers: [APILLMProviderInput], models: [APILLMModelSettings],
+                              embed: Bool, field: String) throws {
+    guard !provider.isEmpty, !model.isEmpty,
+          providers.contains(where: { $0.name == provider }),
+          llmScopedModel(models, provider: provider, name: model) != nil else {
+        throw APILLMSettingsError(field: field)
+    }
+    if embed, providers.first(where: { $0.name == provider })?.kind == .anthropic {
+        throw APILLMSettingsError(field: field)
     }
 }
 

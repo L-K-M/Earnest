@@ -31,7 +31,9 @@ func editionBatchConfig(cfg llm.Config) llm.Config {
 		if route, ok := cfg.Tasks[task]; ok {
 			out.Tasks[task] = route
 			out.Providers[route.Provider] = cfg.Providers[route.Provider]
-			out.Models[route.Model] = cfg.Models[route.Model]
+			if info, priced := llm.LookupModel(cfg.Models, route.Provider, route.Model); priced {
+				out.Models[llm.ModelKey(route.Provider, route.Model)] = info
+			}
 		}
 	}
 	return out

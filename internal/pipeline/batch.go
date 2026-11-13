@@ -119,7 +119,7 @@ func (b *openAIEditionBatch) Submit(ctx context.Context, requests []llm.Complete
 		return "", err
 	}
 	var lines bytes.Buffer
-	price := b.models[route.Model]
+	price := llm.ModelFor(b.models, route)
 	var reserved llm.USD
 	for i, req := range requests {
 		if req.Schema == nil {
@@ -243,7 +243,7 @@ func (b *openAIEditionBatch) Poll(ctx context.Context, id string, requests []llm
 	if err != nil {
 		return nil, false, err
 	}
-	price := b.models[route.Model]
+	price := llm.ModelFor(b.models, route)
 	output := make([]string, len(requests))
 	seen := make(map[int]bool)
 	var actual llm.USD

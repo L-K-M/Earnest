@@ -327,6 +327,20 @@ class EarnestApi(
     }
 
     /**
+     * Exercises one draft model against its provider with a fixed sample.
+     * The provider may bill for that sample. [input] carries the loaded
+     * revision, the draft provider (which may include an unsaved replacement
+     * key) and the model record; [baseline] is the loaded redacted settings
+     * so a stored key is never forwarded to a changed destination. The
+     * response never enters the saved settings; the caller applies observed
+     * geometry to its draft only.
+     */
+    suspend fun checkLlmModel(input: LlmModelCheckInput, baseline: LlmSettings?): LlmModelCheck {
+        validateLlmModelCheckInput(input, baseline)
+        return post(url("/v1/settings/llm/models/check"), encoder.encodeToJsonElement(LlmModelCheckInput.serializer(), input)).decode()
+    }
+
+    /**
      * Replaces the reader slice. The supplied [opId] is sent verbatim (no
      * implicit new ID), [ReaderSettings.rev] is never sent, and the returned
      * settings carry the server's new revision.

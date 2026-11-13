@@ -87,7 +87,7 @@ func TestClientEmbedDimensionMismatch(t *testing.T) {
 	client, _ := newTestClient(t, provider, nil, map[string]ModelInfo{
 		"test-model": {Dimensions: 768},
 	})
-	_, _, err := client.Embed(context.Background(), TaskBlurb, EmbedRequest{Dimensions: StorageDimensions})
+	_, _, err := client.Embed(context.Background(), TaskBlurb, EmbedRequest{Texts: []string{"example"}, Dimensions: StorageDimensions})
 	if err == nil {
 		t.Fatal("expected an error when the request exceeds the model's width")
 	}
@@ -109,7 +109,7 @@ func TestClientEmbedNormalises(t *testing.T) {
 	client, spend := newTestClient(t, provider, nil, map[string]ModelInfo{
 		"test-model": {EmbeddingPer1M: 20000},
 	})
-	vectors, usage, err := client.Embed(context.Background(), TaskBlurb, EmbedRequest{Dimensions: StorageDimensions})
+	vectors, usage, err := client.Embed(context.Background(), TaskBlurb, EmbedRequest{Texts: []string{"example"}, Dimensions: StorageDimensions})
 	if err != nil {
 		t.Fatal(err)
 	}

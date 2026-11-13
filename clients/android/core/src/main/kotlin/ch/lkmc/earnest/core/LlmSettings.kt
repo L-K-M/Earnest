@@ -29,6 +29,24 @@ enum class LlmTokenField {
     @SerialName("max_tokens") MAX_TOKENS,
 }
 
+/**
+ * How a task picks its route. [OFF] disables the task, [DEFAULT] resolves
+ * through the matching default route (text for every task except embed, which
+ * uses the embedding default), and [CUSTOM] uses the explicit provider and
+ * model. A missing mode is the legacy explicit route: [CUSTOM] when the route
+ * is non-empty, [OFF] otherwise.
+ */
+@Serializable
+enum class LlmTaskMode(val wireName: String) {
+    @SerialName("off") OFF("off"),
+    @SerialName("default") DEFAULT("default"),
+    @SerialName("custom") CUSTOM("custom");
+
+    companion object {
+        fun fromWire(name: String): LlmTaskMode? = entries.firstOrNull { it.wireName == name }
+    }
+}
+
 /** The seven server task routes. A route with both halves empty is disabled. */
 enum class LlmTask(val wireName: String) {
     EMBED("embed"),
@@ -42,6 +60,38 @@ enum class LlmTask(val wireName: String) {
     companion object {
         fun fromWire(name: String): LlmTask? = entries.firstOrNull { it.wireName == name }
     }
+}
+
+/** One provider/model pair. Both halves empty means "no default route". */
+@Serializable
+data class LlmDefaultRoute(
+    val provider: String = "",
+    val model: String = "",
+)
+
+/**
+ * The optional server-wide default routes. Text work (every task except
+ * embed) resolves through [text]; embed resolves through [embedding]. An
+ * empty route leaves the task disabled: selecting a default never enables a
+ * task that is switched off.
+ */
+@Serializable
+data class LlmSettingsDefaults(
+    val text: LlmDefaultRoute = LlmDefaultRoute(),
+    val embedding: LlmDefaultRoute = LlmDefaultRoute(),
+) {
+    fun routeFor(task: LlmTask): LlmDefaultRoute = if (task == LlmTask.EMBED) embedding else text
+
+    val isEmpty: Boolean
+        get() = text.provider.isEmpty() && text.model.isEmpty() &&
+            embedding.provider.isEmpty() && embedding.model.isEmpty()
+}
+
+/** The capability a model check exercises. */
+@Serializable
+enum class LlmModelCapability(val wireName: String) {
+    @SerialName("chat") CHAT("chat"),
+    @SerialName("embedding") EMBEDDING("embedding");
 }
 
 @Serializable
@@ -79,14 +129,32 @@ data class LlmModel(
     @SerialName("embedding_per_1m") val embeddingPer1m: String = "0",
     val dimensions: Long = 0,
     val truncatable: Boolean = false,
-)
+    /** The provider this price row belongs to; empty is the legacy global fallback. */
+    val provider: String = "",
+    /** Whether the provider accepts a custom embedding width; distinct from [truncatable]. */
+    @SerialName("supports_custom_dimensions") val supportsCustomDimensions: Boolean = false,
+) {
+    /** The identity a route resolves: a scoped row wins over the global one. */
+    fun identity(): Pair<String, String> = provider to name
+
+    companion object {
+        /** Resolves a route's model: the scoped row first, then the global fallback. */
+        fun resolve(models: List<LlmModel>, provider: String, name: String): LlmModel? =
+            models.firstOrNull { it.provider == provider && it.name == name }
+                ?: models.firstOrNull { it.provider.isEmpty() && it.name == name }
+    }
+}
 
 @Serializable
 data class LlmTaskRoute(
     val task: String,
     val provider: String = "",
     val model: String = "",
-)
+    val mode: LlmTaskMode? = null,
+) {
+    /** The mode a legacy missing value means: custom when routed, off otherwise. */
+    fun resolvedMode(): LlmTaskMode = mode ?: if (provider.isNotEmpty()) LlmTaskMode.CUSTOM else LlmTaskMode.OFF
+}
 
 /** The redacted settings document returned by GET and by PUT. */
 @Serializable
@@ -95,6 +163,7 @@ data class LlmSettings(
     val providers: List<LlmProvider> = emptyList(),
     val tasks: List<LlmTaskRoute> = emptyList(),
     val models: List<LlmModel> = emptyList(),
+    val defaults: LlmSettingsDefaults? = null,
 )
 
 /** The whole-configuration replacement body; [revision] comes from the GET. */
@@ -105,6 +174,7 @@ data class LlmSettingsInput(
     val providers: List<LlmProviderInput>,
     val tasks: List<LlmTaskRoute>,
     val models: List<LlmModel>,
+    val defaults: LlmSettingsDefaults? = null,
 )
 
 /**
@@ -124,6 +194,7 @@ data class LlmDiscoveredModel(
     @SerialName("embedding_per_1m") val embeddingPer1m: String? = null,
     val dimensions: Long? = null,
     val truncatable: Boolean? = null,
+    @SerialName("supports_custom_dimensions") val supportsCustomDimensions: Boolean? = null,
 )
 
 /**
@@ -135,6 +206,28 @@ data class LlmDiscoveredModel(
 data class LlmModelsInput(
     val revision: Long,
     val provider: LlmProviderInput,
+)
+
+/**
+ * The explicit model check body: the loaded [revision], the draft provider
+ * (which may carry an unsaved replacement key), the model being considered
+ * and the capability to exercise. The provider may bill a fixed sample.
+ */
+@Serializable
+data class LlmModelCheckInput(
+    val revision: Long,
+    val provider: LlmProviderInput,
+    val model: LlmModel,
+    val capability: LlmModelCapability,
+)
+
+/** The check outcome. Observed geometry is a suggestion for the draft only. */
+@Serializable
+data class LlmModelCheck(
+    val compatible: Boolean = false,
+    val dimensions: Long? = null,
+    @SerialName("supports_custom_dimensions") val supportsCustomDimensions: Boolean? = null,
+    val message: String = "",
 )
 
 /** The catalogue preview response. A null list means the provider listed none. */
@@ -225,32 +318,87 @@ internal fun validateLlmSettingsInput(input: LlmSettingsInput, baseline: LlmSett
         validateProviderInput(provider, storedByName[provider.name])
     }
 
-    val modelNames = mutableSetOf<String>()
+    val modelIdentities = mutableSetOf<Pair<String, String>>()
     for (model in input.models) {
         require(model.name.isNotEmpty() && model.name.length <= LlmSettingsLimits.MAX_MODEL_NAME_CHARS) {
             "model names are 1 to ${LlmSettingsLimits.MAX_MODEL_NAME_CHARS} characters"
         }
-        require(modelNames.add(model.name)) { "model names must be unique" }
+        require(model.provider.isEmpty() || model.provider in providerNames) { "model provider is not configured" }
+        require(modelIdentities.add(model.identity())) { "model provider and name must be unique" }
         require(validMoney(model.inputPer1m)) { "input_per_1m must be a decimal with at most six fractional digits" }
         require(validMoney(model.outputPer1m)) { "output_per_1m must be a decimal with at most six fractional digits" }
         require(validMoney(model.embeddingPer1m)) { "embedding_per_1m must be a decimal with at most six fractional digits" }
-        val maxDimensions = if (model.truncatable) LlmSettingsLimits.MAX_TRUNCATABLE_DIMENSIONS else LlmSettingsLimits.MAX_DIMENSIONS
+        // A wide native vector needs either truncation or a provider that can
+        // accept a requested width; the two flags are not interchangeable.
+        val maxDimensions = if (model.truncatable || model.supportsCustomDimensions) {
+            LlmSettingsLimits.MAX_TRUNCATABLE_DIMENSIONS
+        } else {
+            LlmSettingsLimits.MAX_DIMENSIONS
+        }
         require(model.dimensions in 0..maxDimensions) { "dimensions must be between 0 and $maxDimensions" }
+    }
+
+    val kinds = input.providers.associate { it.name to it.kind }
+    input.defaults?.let { defaults ->
+        validateDefaultRoute(defaults.text, false, kinds, input.models)
+        validateDefaultRoute(defaults.embedding, true, kinds, input.models)
     }
 
     require(input.tasks.size == LlmTask.entries.size) { "every known task must be configured exactly once" }
     require(input.tasks.all { LlmTask.fromWire(it.task) != null }) { "unknown task name" }
     require(input.tasks.map { it.task }.let { it.size == it.toSet().size }) { "task names must be unique" }
-    val kinds = input.providers.associate { it.name to it.kind }
     for (task in input.tasks) {
-        require((task.provider.isEmpty()) == (task.model.isEmpty())) { "task provider and model must be configured together" }
-        if (task.provider.isEmpty()) continue
-        require(task.provider in kinds) { "task provider is not configured" }
-        require(task.model in modelNames) { "task model is not configured" }
-        if (task.task == LlmTask.EMBED.wireName) {
-            require(kinds.getValue(task.provider) != LlmProviderKind.ANTHROPIC) { "Anthropic cannot embed" }
+        val known = requireNotNull(LlmTask.fromWire(task.task))
+        val embedding = known == LlmTask.EMBED
+        val route = LlmDefaultRoute(task.provider, task.model)
+        when (task.mode) {
+            // Off ignores any route it carries; the effective route is empty.
+            LlmTaskMode.OFF -> Unit
+            LlmTaskMode.CUSTOM -> {
+                require(route.provider.isNotEmpty() && route.model.isNotEmpty()) {
+                    "a custom task needs both a provider and a model"
+                }
+                validateDefaultRoute(route, embedding, kinds, input.models)
+            }
+            LlmTaskMode.DEFAULT -> {
+                require(input.defaults != null) { "choose a default model before enabling this feature" }
+                val effective = input.defaults.routeFor(known)
+                require(effective.provider.isNotEmpty() && effective.model.isNotEmpty()) {
+                    "choose a model before enabling this feature"
+                }
+                // The effective route is resolved from the defaults and sent
+                // too, so an older server without modes still routes it.
+                require(task.provider == effective.provider && task.model == effective.model) {
+                    "a default task must send the effective default route"
+                }
+                validateDefaultRoute(effective, embedding, kinds, input.models)
+            }
+            null -> {
+                // A missing mode is the legacy explicit route.
+                if (route.provider.isEmpty() && route.model.isEmpty()) continue
+                require(route.provider.isNotEmpty() && route.model.isNotEmpty()) {
+                    "task provider and model must be configured together"
+                }
+                validateDefaultRoute(route, embedding, kinds, input.models)
+            }
         }
     }
+}
+
+/** One route half must imply the other, the provider must exist, the model
+ *  must resolve (scoped first, then the global fallback), and embed cannot
+ *  use Anthropic. */
+private fun validateDefaultRoute(
+    route: LlmDefaultRoute,
+    embedding: Boolean,
+    kinds: Map<String, LlmProviderKind>,
+    models: List<LlmModel>,
+) {
+    require((route.provider.isEmpty()) == (route.model.isEmpty())) { "provider and model must be configured together" }
+    if (route.provider.isEmpty()) return
+    require(route.provider in kinds) { "provider is not configured" }
+    require(LlmModel.resolve(models, route.provider, route.model) != null) { "model is not configured" }
+    if (embedding) require(kinds.getValue(route.provider) != LlmProviderKind.ANTHROPIC) { "Anthropic cannot embed" }
 }
 
 /**
@@ -282,4 +430,30 @@ private fun validateProviderInput(provider: LlmProviderInput, stored: LlmProvide
 internal fun validateLlmModelsInput(input: LlmModelsInput, baseline: LlmSettings?) {
     require(input.revision >= 0) { "revision out of range" }
     validateProviderInput(input.provider, baseline?.providers?.firstOrNull { it.name == input.provider.name })
+}
+
+/**
+ * Validates an explicit model check before any request. The model is the
+ * draft record, so prices and provider identity must be valid. Wide native
+ * dimensions are allowed while resizing support is still unknown: the check
+ * verifies that support without changing the draft or relaxing save rules.
+ * The provider rules match the catalogue preview.
+ */
+internal fun validateLlmModelCheckInput(input: LlmModelCheckInput, baseline: LlmSettings?) {
+    require(input.revision >= 0) { "revision out of range" }
+    validateProviderInput(input.provider, baseline?.providers?.firstOrNull { it.name == input.provider.name })
+    require(input.model.name.isNotEmpty() && input.model.name.length <= LlmSettingsLimits.MAX_MODEL_NAME_CHARS) {
+        "model names are 1 to ${LlmSettingsLimits.MAX_MODEL_NAME_CHARS} characters"
+    }
+    require(input.model.provider.isEmpty() || input.model.provider == input.provider.name) {
+        "model belongs to a different provider"
+    }
+    require(input.capability != LlmModelCapability.EMBEDDING || input.provider.kind != LlmProviderKind.ANTHROPIC) {
+        "Anthropic cannot embed"
+    }
+    require(validMoney(input.model.inputPer1m)) { "input_per_1m must be a decimal with at most six fractional digits" }
+    require(validMoney(input.model.outputPer1m)) { "output_per_1m must be a decimal with at most six fractional digits" }
+    require(validMoney(input.model.embeddingPer1m)) { "embedding_per_1m must be a decimal with at most six fractional digits" }
+    val maxDimensions = LlmSettingsLimits.MAX_TRUNCATABLE_DIMENSIONS
+    require(input.model.dimensions in 0..maxDimensions) { "dimensions must be between 0 and $maxDimensions" }
 }
