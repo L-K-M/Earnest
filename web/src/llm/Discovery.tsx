@@ -150,7 +150,7 @@ export function ModelPicker({provider, revision, capability: requestedCapability
       setNotice(`${model.id} is already configured; its saved prices are kept.`)
       return
     }
-    if (missingApplicableFields(model, capability).length > 0) {
+    if (missingApplicableFields(model, capability).length > 0 || validateModel(base, new Set()).length > 0) {
       setDraft(base)
       setError('')
       setNotice('')
@@ -219,6 +219,7 @@ export function ModelPicker({provider, revision, capability: requestedCapability
                   {model.chat === true && <span className="chip">chat</span>}
                   {model.embedding === true && <span className="chip">embedding</span>}
                   {model.chat === undefined && model.embedding === undefined && <span className="chip" data-tone="amber">capabilities unknown</span>}
+                  {capability === 'embedding' && model.dimensions !== undefined && model.dimensions > 1024 && model.supports_custom_dimensions === undefined && !model.truncatable && <span className="chip" data-tone="amber">resizing support unknown</span>}
                   {missing.length > 0 && <span className="chip" data-tone="amber">missing {missing.join(', ')}</span>}
                 </span>
                 <CatalogueDetail model={model} />

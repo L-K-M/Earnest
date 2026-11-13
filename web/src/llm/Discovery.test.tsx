@@ -189,6 +189,33 @@ it('filters known-incompatible models for a task and labels unknown capabilities
   expect(screen.getByText('capabilities unknown')).toBeTruthy()
 })
 
+it('keeps unknown resizing support available for an explicit compatibility check', async () => {
+  const onPick = vi.fn()
+  vi.mocked(request).mockImplementation(async path => {
+    if (path === '/v1/settings/llm/models') return {models: [
+      {id: 'unknown-width', name: 'Unknown resize', embedding: true, dimensions: 4096, embedding_per_1m: '0.1'},
+      {id: 'unsupported-width', name: 'Cannot resize', embedding: true, dimensions: 4096, supports_custom_dimensions: false},
+    ]}
+    if (path === '/v1/settings/llm/models/check') return {
+      compatible: true, dimensions: 4096, supports_custom_dimensions: true, message: 'Supports 1024 dimensions.',
+    }
+    throw new Error(`unexpected ${path}`)
+  })
+  render(picker({capability: 'embedding', taskLabel: 'Embeddings', onPick}))
+  const choose = await screen.findByRole('button', {name: 'Select unknown-width'})
+  expect(screen.queryByText('Cannot resize (unsupported-width)')).toBeNull()
+  expect(screen.getByText('resizing support unknown')).toBeTruthy()
+  fireEvent.click(choose)
+  expect(onPick).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', {name: 'Check model'}))
+  await screen.findByText('Supports 1024 dimensions.')
+  fireEvent.click(screen.getByRole('button', {name: 'Add to draft and use for Embeddings'}))
+  expect(onPick).toHaveBeenCalledWith(expect.objectContaining({
+    provider: 'local', name: 'unknown-width', dimensions: '4096',
+    supports_custom_dimensions: true, truncatable: false, embedding_per_1m: '0.1',
+  }))
+})
+
 it('does not apply a model check after its picker closes', async () => {
   let finish!: (value: unknown) => void
   vi.mocked(request).mockImplementation(async path => {

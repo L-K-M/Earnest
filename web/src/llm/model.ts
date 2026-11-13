@@ -282,11 +282,12 @@ export function missingApplicableFields(model: DiscoveredModel, capability: LLMC
 }
 
 // geometryIncompatible reports an embedding model whose published width cannot
-// be used: above the storage width without local truncation or provider-side
-// resizing. Chat selections ignore embedding geometry entirely.
+// be used: above the storage width with resizing explicitly unsupported and no
+// local truncation. Unknown resizing remains available for an explicit check.
+// Chat selections ignore embedding geometry entirely.
 export function geometryIncompatible(model: DiscoveredModel, capability: LLMCapability | null): boolean {
   if (model.dimensions === undefined || model.dimensions <= 1024) return false
-  if (model.truncatable || model.supports_custom_dimensions) return false
+  if (model.truncatable || model.supports_custom_dimensions !== false) return false
   if (capability === 'chat') return false
   if (capability === 'embedding') return model.embedding !== false
   // Without a task context, only a model the catalogue says can embed is
