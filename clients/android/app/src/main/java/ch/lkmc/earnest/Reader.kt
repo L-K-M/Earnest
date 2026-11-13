@@ -6,8 +6,11 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Color
 import android.os.Build
+import android.view.ViewOutlineProvider
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -113,12 +116,15 @@ internal fun Reader(
     modifier: Modifier = Modifier,
     onFallback: () -> Unit = {},
     onWebView: (WebView?) -> Unit = {},
+    onLiveContent: () -> Unit = {},
     onContentHeight: ((Int) -> Unit)? = null,
 ) {
     val systemDark = isSystemInDarkTheme()
     val displayUrl = url?.let { readerUrl(it, typography, systemDark) }
     val fallbackHtml = cachedHtml?.let { offlineReaderHtml(it, typography, systemDark) }
+    val backgroundColor = Color.parseColor(readerColors(typography, systemDark).first)
     val fallbackCallback = rememberUpdatedState(onFallback)
+    val liveContentCallback = rememberUpdatedState(onLiveContent)
     val webViewCallback = rememberUpdatedState(onWebView)
     val heightCallback = rememberUpdatedState(onContentHeight)
     // The last WebView handed out; a release may run after a replacement has
@@ -131,12 +137,15 @@ internal fun Reader(
                 createReaderWebView(
                     context, displayUrl, fallbackHtml,
                     onContentHeight = { height -> heightCallback.value?.invoke(height) },
+                    backgroundColor = backgroundColor,
+                    onLiveContent = { liveContentCallback.value() },
                     onFallback = { fallbackCallback.value() },
                 )
             },
             update = { webView ->
                 published[0] = webView
                 webViewCallback.value(webView)
+                webView.setBackgroundColor(backgroundColor)
                 if (webView.settings.textZoom != textZoom) webView.settings.textZoom = textZoom
                 if (webView.tag != (displayUrl ?: fallbackHtml)) {
                     webView.tag = displayUrl ?: fallbackHtml
@@ -193,24 +202,29 @@ internal fun readerUrl(url: String, typography: ReaderTypography, systemDark: Bo
         .appendQueryParameter("font", typography.font.wireName())
         .toString()
 
+private fun readerColors(typography: ReaderTypography, systemDark: Boolean): Pair<String, String> =
+    when (typography.theme.contentTheme(systemDark)) {
+        "dark" -> "#242424" to "#eee"
+        "black" -> "#000000" to "#fff"
+        "eink" -> "#ffffff" to "#000"
+        else -> "#ffffff" to "#202020"
+    }
+
 /**
  * Mirrors the content origin's typography CSS for the offline fallback, so a
  * cached article keeps the account's safe enum-based presentation.
  */
 internal fun readerCss(typography: ReaderTypography, systemDark: Boolean): String {
-    val (background, foreground) = when (typography.theme.contentTheme(systemDark)) {
-        "dark" -> "#242424" to "#eee"
-        "black" -> "#000" to "#fff"
-        "eink" -> "#fff" to "#000"
-        else -> "#fff" to "#202020"
-    }
+    val (background, foreground) = readerColors(typography, systemDark)
+    val scheme = if (typography.theme.contentTheme(systemDark) in setOf("dark", "black")) "dark" else "light"
     val family = when (typography.font) {
         ReaderFont.SERIF -> "Georgia,serif"
         ReaderFont.SANS -> "system-ui,sans-serif"
         ReaderFont.DYSLEXIC -> "Verdana,Arial,sans-serif"
     }
     val spacing = if (typography.font == ReaderFont.DYSLEXIC) "letter-spacing:.05em;word-spacing:.12em;" else ""
-    return "body{max-width:${typography.measure}ch;margin:2rem auto;padding:0 1rem;font:1.1rem/1.65 $family;" +
+    return "html{color-scheme:$scheme;background:$background;color:$foreground}" +
+        "body{max-width:${typography.measure}ch;margin:2rem auto;padding:0 1rem;font:1.1rem/1.65 $family;" +
         "background:$background;color:$foreground;${spacing}overflow-wrap:anywhere}" +
         "img{max-width:100%;height:auto}a{color:inherit}pre{overflow:auto}"
 }
@@ -254,6 +268,8 @@ internal fun createReaderWebView(
     url: String?,
     cachedHtml: String?,
     onContentHeight: ((Int) -> Unit)? = null,
+    backgroundColor: Int = Color.WHITE,
+    onLiveContent: () -> Unit = {},
     onFallback: () -> Unit = {},
 ): WebView {
     val allowedOrigin = url?.toUri()
@@ -263,12 +279,22 @@ internal fun createReaderWebView(
     // Only the article path itself may drive the main frame: click-to-load
     // /img/ links share the origin and would otherwise replace the article.
     fun article(uri: android.net.Uri): Boolean = allowed(uri) && uri.encodedPath == allowedOrigin?.encodedPath
+    var documentVisible = false
     return object : WebView(context) {
         private var reportedHeight = 0
 
+        override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+            super.onSizeChanged(w, h, oldw, oldh)
+            // A new viewport must be measured even if the document's height
+            // happens to equal the last report from the previous layout.
+            reportedHeight = 0
+        }
+
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
-            if (onContentHeight == null) return
+            // Blank navigation frames describe the viewport, not the article.
+            // They must not overwrite a retained measurement on reattachment.
+            if (onContentHeight == null || !documentVisible) return
             // Native layout reports changes after images and fonts settle.
             // No JavaScript bridge or script execution is needed for inline reading.
             @Suppress("DEPRECATION")
@@ -279,6 +305,11 @@ internal fun createReaderWebView(
             }
         }
     }.apply {
+        // Cover the first Chromium frame and clip its separate native draw
+        // layer while Compose resizes the preview. CSS alone cannot do either.
+        setBackgroundColor(backgroundColor)
+        outlineProvider = ViewOutlineProvider.BOUNDS
+        clipToOutline = true
         settings.javaScriptEnabled = false
         settings.allowFileAccess = false
         settings.allowContentAccess = false
@@ -301,6 +332,18 @@ internal fun createReaderWebView(
 
         webViewClient = object : WebViewClient() {
             private var usingFallback = url == null
+
+            override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+                documentVisible = false
+            }
+
+            override fun onPageCommitVisible(view: WebView, url: String) {
+                val currentDocument = if (usingFallback) url == ASSET_URL else article(url.toUri())
+                if (!currentDocument) return
+                documentVisible = true
+                if (!usingFallback) onLiveContent()
+                view.invalidate()
+            }
 
             private fun fallback(view: WebView, request: WebResourceRequest) {
                 if (usingFallback || cachedHtml == null || !request.isForMainFrame || !allowed(request.url)) return

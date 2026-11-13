@@ -14,7 +14,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -78,16 +77,44 @@ internal fun inlineHeightPx(pixels: Int, density: Float): Int {
     return pixels.coerceIn(minimum, MAX_INLINE_HEIGHT_PX)
 }
 
+/** Owned by the list, not its disposable lazy item or native WebView. */
+internal class InlineArticleState {
+    var pixels by mutableIntStateOf(0)
+        private set
+    var offline by mutableStateOf(false)
+        private set
+    private var measurement: Measurement? = null
+
+    fun configure(widthPx: Int, typography: ReaderTypography, zoom: Int, density: Float, fontScale: Float) {
+        if (widthPx <= 0) return
+        val next = Measurement(widthPx, typography, zoom, density, fontScale)
+        if (measurement != next) {
+            measurement = next
+            pixels = 0
+        }
+    }
+
+    fun reportHeight(height: Int) { if (height > 0) pixels = height }
+    fun showCachedCopy() { offline = true }
+    fun showLiveCopy() { offline = false }
+
+    private data class Measurement(
+        val widthPx: Int,
+        val typography: ReaderTypography,
+        val zoom: Int,
+        val density: Float,
+        val fontScale: Float,
+    )
+}
+
 /** A single, explicitly opened article. Merely showing headlines never fetches content. */
 @Composable
-internal fun InlineArticleContent(content: ContentUrlResult, typography: ReaderTypography) {
+internal fun InlineArticleContent(content: ContentUrlResult, typography: ReaderTypography, state: InlineArticleState) {
     val context = LocalContext.current
     val density = LocalDensity.current
-    var pixels by remember(content) { mutableIntStateOf(0) }
-    var offline by remember(content) { mutableStateOf(false) }
-    val height = with(density) { inlineHeightPx(pixels, density.density).toDp() }
+    val height = with(density) { inlineHeightPx(state.pixels, density.density).toDp() }
     Column {
-        if (offline) {
+        if (state.offline || content.url == null) {
             Text(
                 "Cached copy",
                 style = MaterialTheme.typography.labelSmall,
@@ -101,10 +128,11 @@ internal fun InlineArticleContent(content: ContentUrlResult, typography: ReaderT
             typography = typography,
             textZoom = context.readerZoom(),
             modifier = Modifier.fillMaxWidth().height(height).testTag("inline-article-content"),
-            onFallback = { offline = true },
-            onContentHeight = { pixels = it },
+            onFallback = state::showCachedCopy,
+            onLiveContent = state::showLiveCopy,
+            onContentHeight = state::reportHeight,
         )
-        if (pixels > MAX_INLINE_HEIGHT_PX) {
+        if (state.pixels > MAX_INLINE_HEIGHT_PX) {
             Text(
                 "Long article. Open the reader to continue.",
                 style = MaterialTheme.typography.bodySmall,

@@ -292,6 +292,27 @@ class ReaderTest {
         view.destroy()
     }
 
+    @Test fun onlyTheCurrentLiveArticleCommitClearsTheCachedIndicator() {
+        var live = 0
+        var cached = 0
+        val view = createReaderWebView(
+            ApplicationProvider.getApplicationContext<Context>(), url, "<p>cached</p>",
+            onLiveContent = { live++ }, onFallback = { cached++ },
+        )
+        val client = view.webViewClient
+        client.onPageCommitVisible(view, "about:blank")
+        client.onPageCommitVisible(view, "https://publisher.test/article")
+        assertEquals(0, live)
+        client.onPageCommitVisible(view, url)
+        assertEquals(1, live)
+        client.onReceivedError(view, request(), error)
+        assertEquals(1, cached)
+        client.onPageCommitVisible(view, url)
+        client.onPageCommitVisible(view, "https://appassets.androidplatform.net/article/index.html")
+        assertEquals("cached and stale live commits must not claim live content", 1, live)
+        view.destroy()
+    }
+
     @Test fun noCacheDoesNotLoadEmptyFallback() {
         val view = createReaderWebView(ApplicationProvider.getApplicationContext<Context>(), url, null)
         view.loadUrl(url)

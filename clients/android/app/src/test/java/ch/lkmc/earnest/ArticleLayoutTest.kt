@@ -60,7 +60,7 @@ class ArticleLayoutTest {
                     }
                     ContentUrlResult(null, null, "Article body $it")
                 },
-                inlineContent = { content, _ -> Text(content.cachedHtml.orEmpty()) },
+                inlineContent = { content, _, _ -> Text(content.cachedHtml.orEmpty()) },
             )
         }
     }
@@ -179,6 +179,34 @@ class ArticleLayoutTest {
         compose.onNodeWithText("Mark unread").assertExists()
         compose.onNodeWithText("Larger text").performClick()
         assertEquals(1, zooms)
+    }
+
+    @Test fun retainedHeightOnlyResetsWhenTheReadingLayoutChanges() {
+        val state = InlineArticleState()
+        val typography = ch.lkmc.earnest.core.ReaderTypography(
+            ch.lkmc.earnest.core.ReaderTheme.DARK, 68, ch.lkmc.earnest.core.ReaderFont.SERIF,
+        )
+        state.configure(1080, typography, 100, 3f, 1f)
+        state.reportHeight(2400)
+        state.showCachedCopy()
+        state.configure(1080, typography, 100, 3f, 1f)
+        assertEquals(2400, state.pixels)
+        state.configure(0, typography, 100, 3f, 1f)
+        assertEquals("an unmeasured lazy item must not erase the retained height", 2400, state.pixels)
+        state.reportHeight(0)
+        assertEquals(2400, state.pixels)
+        state.configure(720, typography, 100, 3f, 1f)
+        assertEquals(0, state.pixels)
+        assertTrue("resizing must not erase the cached-copy notice", state.offline)
+        state.reportHeight(1800)
+        state.configure(720, typography, 150, 3f, 1f)
+        assertEquals(0, state.pixels)
+        state.reportHeight(1600)
+        state.configure(720, typography.copy(measure = 62), 150, 3f, 1f)
+        assertEquals(0, state.pixels)
+        state.reportHeight(1600)
+        state.configure(720, typography.copy(measure = 62), 150, 2f, 2f)
+        assertEquals(0, state.pixels)
     }
 
     @Test fun inlineAllocationHasTheSamePixelBudgetOnDenseScreens() {
