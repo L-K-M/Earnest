@@ -144,11 +144,9 @@ export function LLMSettings() {
 
   // Renaming a provider moves its task routes, defaults and scoped models with
   // it, so nothing is left pointing at the old name. A name that collides
-  // with a sibling's current or retained name is rejected before the draft
-  // changes, because moving onto it would hand the sibling's rows to this
-  // provider. The move is deferred while the name field is empty: an empty
-  // name is the global model scope, not this provider, and matching it would
-  // capture unrelated records.
+  // with a sibling's current or retained name is kept as an invalid edit,
+  // without moving rows onto that identity. An empty name is the global model
+  // scope, so the move also waits while the field is empty.
   function updateProvider(index: number, patch: Partial<ProviderDraft>) {
     if (!draft) return
     const name = patch.name
@@ -157,17 +155,20 @@ export function LLMSettings() {
         && (provider.name === name || provider.routed_name === name))
       if (collision) {
         setProblems(current => [...current.filter(problem => !problem.startsWith(NAME_TAKEN_PREFIX)), nameTakenMessage(name)])
-        return
+        setPicker(null)
+      } else {
+        setProblems(current => current.filter(problem => !problem.startsWith(NAME_TAKEN_PREFIX)))
       }
-      setProblems(current => current.filter(problem => !problem.startsWith(NAME_TAKEN_PREFIX)))
     }
     setDraft(current => {
       if (!current) return current
       const previous = current.providers[index]
       const to = patch.name !== undefined ? patch.name : previous.name
       const from = previous.routed_name ?? previous.name
-      const move = patch.name !== undefined && to !== '' && from !== '' && to !== from ? {from, to} : null
-      const routedName = patch.name === undefined ? previous.routed_name : to || previous.routed_name || previous.name
+      const collision = patch.name !== undefined && to !== '' && current.providers.some((provider, i) => i !== index
+        && (provider.name === to || provider.routed_name === to))
+      const move = patch.name !== undefined && !collision && to !== '' && from !== '' && to !== from ? {from, to} : null
+      const routedName = patch.name === undefined ? previous.routed_name : collision ? from : to || from
       if (move) providerEditName.current = to
       return {
         ...current,
@@ -381,7 +382,7 @@ export function LLMSettings() {
     {!loaded && <div className="button-row"><button className="primary" disabled={busy} onClick={() => void load('AI settings loaded.')}>{busy ? 'Loading…' : 'Retry loading'}</button></div>}
     {loaded && draft && <form onSubmit={save} onChange={() => setNotice('')}>
       <div className="button-row">
-        <button className="primary" disabled={busy || !dirty || conflict}>Save</button>
+        <button className="primary" disabled={busy || !dirty || conflict || Boolean(providerNameError)}>Save</button>
         <button type="button" disabled={busy || !dirty} onClick={discard}>Discard</button>
         {conflict && <button type="button" disabled={busy} onClick={discard}>Reload</button>}
         {dirty ? <span className="muted">Unsaved changes</span> : <span className="muted">No unsaved changes</span>}
@@ -464,7 +465,7 @@ export function LLMSettings() {
                 <label>Provider
                   <select aria-label={`${label} provider`} value={task.provider} disabled={busy} onChange={e => setTask(index, {provider: e.target.value, model: '', mode: e.target.value ? 'custom' : 'default'})}>
                     <option value="">Default</option>
-                    {draft.providers.map(item => <option key={item.name} value={item.name}>{item.name} ({item.kind})</option>)}
+                    {draft.providers.filter(item => item.name && (item.routed_name ?? item.name) === item.name).map(item => <option key={item.name} value={item.name}>{item.name} ({item.kind})</option>)}
                   </select>
                 </label>
                 <label>Model
@@ -537,7 +538,7 @@ function RouteSelect({label, route, providers, models, capability, busy, onChang
     <span className="llm-route">
       <select aria-label={`${label} provider`} value={route.provider} disabled={busy} onChange={e => onChange({provider: e.target.value, model: ''})}>
         <option value="">No provider</option>
-        {providers.map(provider => <option key={provider.name} value={provider.name}>{provider.name} ({provider.kind})</option>)}
+        {providers.filter(provider => provider.name && (provider.routed_name ?? provider.name) === provider.name).map(provider => <option key={provider.name} value={provider.name}>{provider.name} ({provider.kind})</option>)}
       </select>
       <select aria-label={`${label} model`} value={route.model} disabled={busy || !route.provider} onChange={e => onChange({provider: route.provider, model: e.target.value})}>
         <option value="">No model</option>

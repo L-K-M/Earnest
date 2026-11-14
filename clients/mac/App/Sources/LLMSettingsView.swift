@@ -269,6 +269,7 @@ extension APILLMTask {
                     .padding(.top, 4)
                 }
                 Button("Browse Models…", action: onBrowse)
+                    .disabled(provider.name.isEmpty || provider.name != provider.routedName)
                 Text("Browse available models or enter a model ID manually.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -322,7 +323,7 @@ private struct DefaultRouteRow: View {
     }
 
     private var providerChoices: [LLMProviderDraft] {
-        usage == .embedding ? providers.filter { $0.kind != .anthropic } : providers
+        providers.filter { !$0.name.isEmpty && $0.name == $0.routedName && (usage != .embedding || $0.kind != .anthropic) }
     }
 
     var body: some View {
@@ -376,9 +377,9 @@ private struct DefaultRouteRow: View {
     let onBrowse: (String) -> Void
 
     private var providerChoices: [LLMProviderDraft] {
-        task.task == .embed
-            ? settings.draft.providers.filter { $0.kind != .anthropic }
-            : settings.draft.providers
+        settings.draft.providers.filter {
+            !$0.name.isEmpty && $0.name == $0.routedName && (task.task != .embed || $0.kind != .anthropic)
+        }
     }
 
     private var route: APILLMDefaultRoute {

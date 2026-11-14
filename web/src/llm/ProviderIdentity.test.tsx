@@ -67,17 +67,37 @@ function mount(server: LLMSettings = fixture) {
 
 afterEach(() => {cleanup(); vi.restoreAllMocks(); vi.resetAllMocks()})
 
-it('rejects renaming a provider onto a sibling current name without moving routes', async () => {
+it('preserves every character when a name temporarily matches a sibling', async () => {
+  mount()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[1])
+  const input = screen.getByLabelText('Name') as HTMLInputElement
+  for (const name of ['', 'o', 'op', 'ope', 'open', 'opena', 'openai', 'openai-', 'openai-b', 'openai-backup']) {
+    fireEvent.change(input, {target: {value: name}})
+    expect(input.value).toBe(name)
+    if (name === 'openai') expect(screen.getByText(/already used by another provider/)).toBeTruthy()
+  }
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText(/AI settings saved/)
+  const body = lastPut()
+  expect(body.providers.map(provider => provider.name)).toEqual(['openai', 'openai-backup'])
+  expect(body.tasks.find(task => task.task === 'blurb')?.provider).toBe('openai-backup')
+  expect(body.models.find(model => model.name === 'local-chat')?.provider).toBe('openai-backup')
+  expect(body.models.find(model => model.name === 'text-embedding-3-small')?.provider).toBe('openai')
+})
+
+it('blocks a sibling name without moving routes', async () => {
   mount()
   await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
   fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
   fireEvent.change(screen.getByLabelText('Name'), {target: {value: 'local'}})
   expect(await screen.findByText(/already used by another provider/)).toBeTruthy()
-  expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('openai')
+  expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('local')
   expect(screen.getByLabelText('Name').getAttribute('aria-invalid')).toBe('true')
   expect(screen.queryByText('Save blocked. Fix the following:')).toBeNull()
-  // The rejected rename leaves the draft clean; a neutral edit makes it
-  // saveable so the intact rows can be inspected.
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  expect(putCalls()).toHaveLength(0)
+  fireEvent.change(screen.getByLabelText('Name'), {target: {value: 'openai'}})
   fireEvent.change(screen.getByLabelText('Monthly limit (USD)'), {target: {value: '21'}})
   fireEvent.click(screen.getByRole('button', {name: 'Save'}))
   await screen.findByText(/AI settings saved/)
@@ -91,7 +111,7 @@ it('rejects renaming a provider onto a sibling current name without moving route
   expect(body.models.find(model => model.name === 'local-chat')).toMatchObject({provider: 'local'})
 })
 
-it('rejects renaming a provider onto a sibling retained routed name without moving routes', async () => {
+it('blocks a sibling retained routed name without moving routes', async () => {
   mount()
   await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
   fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[1])
@@ -100,7 +120,10 @@ it('rejects renaming a provider onto a sibling retained routed name without movi
   fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
   fireEvent.change(screen.getByLabelText('Name'), {target: {value: 'local'}})
   expect(await screen.findByText(/already used by another provider/)).toBeTruthy()
-  expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('openai')
+  expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('local')
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  expect(putCalls()).toHaveLength(0)
+  fireEvent.change(screen.getByLabelText('Name'), {target: {value: 'openai'}})
   // Restore the blank name so the draft is valid, then save. If the rejected
   // rename had moved the first provider's rows, the save would be blocked by
   // the duplicate name or would show the moved rows.
@@ -126,10 +149,10 @@ it('keeps the retained routed name through a rejected collision and renames from
   fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[1])
   fireEvent.change(screen.getByLabelText('Name'), {target: {value: ''}})
   expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('')
-  // A colliding name is rejected, so it must not become the routed name.
+  // A colliding name is retained as text, but must not become the routed name.
   fireEvent.change(screen.getByLabelText('Name'), {target: {value: 'openai'}})
   expect(await screen.findByText(/already used by another provider/)).toBeTruthy()
-  expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('')
+  expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('openai')
   fireEvent.change(screen.getByLabelText('Name'), {target: {value: 'renamed-local'}})
   expect(screen.queryByText(/already used by another provider/)).toBeNull()
   fireEvent.click(screen.getByRole('button', {name: 'Save'}))
