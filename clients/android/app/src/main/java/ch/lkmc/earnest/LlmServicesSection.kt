@@ -194,6 +194,7 @@ internal fun LlmServicesSection(
             draft = current ?: return,
             title = title,
             capability = if (key == "embedding") LlmCapability.EMBEDDING else LlmCapability.CHAT,
+            selected = if (key == "embedding") current.defaults.embedding else current.defaults.text,
             onBrowse = { index ->
                 defaultsPicker = null
                 discoveryDefault = key
@@ -557,12 +558,15 @@ private fun DefaultModelPickerDialog(
     draft: LlmSettingsDraft,
     title: String,
     capability: LlmCapability,
+    selected: LlmDefaultRoute,
     onBrowse: (Int) -> Unit,
     onChoose: (LlmDefaultRoute) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val options = draft.providers.filter { it.name.isNotEmpty() && it.name == it.routedName }.flatMap { provider ->
-        draft.modelsForProvider(provider.name).filter { it.name.isNotEmpty() && it.usableFor(capability) }.map { provider.name to it }
+        draft.modelsForProvider(provider.name).filter {
+            it.name.isNotEmpty() && ((provider.name == selected.provider && it.name == selected.model) || it.usableFor(capability))
+        }.map { provider.name to it }
     }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -711,7 +715,7 @@ private fun RouteTaskDialog(
                         Text("Model", style = MaterialTheme.typography.bodySmall)
                         Column {
                             draft.modelsForProvider(provider).filter {
-                                it.name.isNotEmpty() && it.usableFor(task.requiredCapability())
+                                it.name.isNotEmpty() && (it.name == model || it.usableFor(task.requiredCapability()))
                             }.forEach { option ->
                                 FilterChip(
                                     selected = model == option.name,
@@ -722,7 +726,9 @@ private fun RouteTaskDialog(
                                     modifier = Modifier.padding(vertical = 2.dp),
                                 )
                             }
-                            if (draft.modelsForProvider(provider).none { it.name.isNotEmpty() && it.usableFor(task.requiredCapability()) }) {
+                            if (draft.modelsForProvider(provider).none {
+                                    it.name.isNotEmpty() && (it.name == model || it.usableFor(task.requiredCapability()))
+                                }) {
                                 Text(
                                     "No models are ready for this feature. Browse models to confirm their prices.",
                                     style = MaterialTheme.typography.bodySmall,

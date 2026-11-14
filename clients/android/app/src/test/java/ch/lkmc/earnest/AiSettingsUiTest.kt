@@ -20,10 +20,13 @@ import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import ch.lkmc.earnest.core.LlmDiscoveredModel
+import ch.lkmc.earnest.core.LlmDefaultRoute
 import ch.lkmc.earnest.core.LlmModel
 import ch.lkmc.earnest.core.LlmProvider
 import ch.lkmc.earnest.core.LlmProviderKind
 import ch.lkmc.earnest.core.LlmSettings
+import ch.lkmc.earnest.core.LlmSettingsDefaults
+import ch.lkmc.earnest.core.LlmTaskRoute
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -40,6 +43,8 @@ class AiSettingsUiTest {
     private fun show(
         discoveryError: String? = null,
         models: List<LlmModel> = emptyList(),
+        tasks: List<LlmTaskRoute> = emptyList(),
+        defaults: LlmSettingsDefaults? = null,
     ): AppViewModel {
         // Network/state transitions have separate AppViewModel tests. This
         // fixture exercises the actual Compose picker at a phone-sized width.
@@ -53,7 +58,7 @@ class AiSettingsUiTest {
         }
         val loaded = LlmSettings(revision = 3, providers = listOf(
             LlmProvider("venice", LlmProviderKind.OPENAI, "https://api.venice.ai/api/v1"),
-        ), models = models)
+        ), models = models, tasks = tasks, defaults = defaults)
         val discovery = LlmDiscoveryUi(
             0, loaded.toDraft().providers[0].discoveryFingerprint(), 3, 1,
             models = if (discoveryError == null) listOf(LlmDiscoveredModel(
@@ -116,8 +121,24 @@ class AiSettingsUiTest {
         compose.onNodeWithText("venice/vec").assertExists()
     }
 
-    private fun editChatModelDimensions() {
-        show(models = listOf(LlmModel("chat", inputPer1m = "1", outputPer1m = "2", provider = "venice")))
+    @Test fun legacyDefaultRemainsVisibleWhenEditingItsRoute() {
+        show(models = listOf(LlmModel("legacy", inputPer1m = "1", outputPer1m = "0", provider = "venice")),
+             defaults = LlmSettingsDefaults(text = LlmDefaultRoute("venice", "legacy")))
+        compose.onAllNodesWithText("Choose")[0].performScrollTo().performClick()
+        compose.onNodeWithText("venice/legacy").assertExists()
+    }
+
+    @Test fun legacyCustomModelRemainsVisibleWhenEditingItsRoute() {
+        show(models = listOf(LlmModel("legacy", inputPer1m = "1", outputPer1m = "0", provider = "venice")),
+             tasks = listOf(LlmTaskRoute("blurb", "venice", "legacy")))
+        compose.onNodeWithText("Advanced custom feature routes").performScrollTo().performClick()
+        compose.onNodeWithText("Edit custom route").performScrollTo().performClick()
+        compose.onNodeWithText("legacy").assertExists()
+        compose.onNodeWithText("No models are ready", substring = true).assertDoesNotExist()
+    }
+
+    private fun editModelDimensions(model: LlmModel) {
+        show(models = listOf(model))
         val pricingToggle = compose.onAllNodesWithText("Edit")
         pricingToggle[pricingToggle.fetchSemanticsNodes().lastIndex].performScrollTo().performClick()
         val modelEdit = compose.onAllNodesWithText("Edit")
@@ -127,13 +148,13 @@ class AiSettingsUiTest {
     }
 
     @Test fun editingAChatModelCanLeaveEmbeddingDimensionsBlank() {
-        editChatModelDimensions()
+        editModelDimensions(LlmModel("chat", inputPer1m = "1", outputPer1m = "2", provider = "venice"))
         compose.onNodeWithText("Apply").assertIsEnabled().performClick()
         compose.onNodeWithText("Edit model").assertDoesNotExist()
     }
 
     @Test fun editingAChatModelRejectsIncompatibleEmbeddingDimensions() {
-        editChatModelDimensions()
+        editModelDimensions(LlmModel("chat", inputPer1m = "1", outputPer1m = "2", provider = "venice"))
         compose.onNodeWithText("Embedding dimensions (0-1024, wider with truncation or custom width)")
             .performTextInput("4096")
         compose.onNodeWithText("Apply").assertIsNotEnabled()
@@ -142,6 +163,12 @@ class AiSettingsUiTest {
         compose.onNodeWithText("Embedding dimensions (0-1024, wider with truncation or custom width)")
             .performTextInput("1024")
         compose.onNodeWithText("Apply").assertIsEnabled()
+    }
+
+    @Test fun editingAnEmbeddingModelRequiresItsWidth() {
+        editModelDimensions(LlmModel("embed", embeddingPer1m = "1", dimensions = 1024, provider = "venice"))
+        compose.onNodeWithText("Apply").assertIsNotEnabled()
+        compose.onNodeWithText("Model embed: embedding dimensions are missing.").assertExists()
     }
 
     @Test fun failedDiscoveryKeepsManualEntryAndUnknownDimensionCheckReachable() {
