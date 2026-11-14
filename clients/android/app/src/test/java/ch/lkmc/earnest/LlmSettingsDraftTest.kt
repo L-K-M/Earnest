@@ -53,6 +53,51 @@ class LlmSettingsDraftTest {
         assertEquals(tasks[1], renamed[1])
         assertEquals(tasks[2], renamed[2])
     }
+
+    @Test
+    fun collidingProviderNameKeepsItsOwnIdentityUntilNameIsUnique() {
+        val draft = LlmSettingsDraft(
+            revision = 1,
+            providers = listOf(
+                LlmProviderDraft("local", LlmProviderKind.OPENAI, "http://localhost/v1"),
+                LlmProviderDraft("openai", LlmProviderKind.OPENAI, "https://api.openai.com/v1"),
+            ),
+            tasks = listOf(LlmTaskRoute("blurb", "local", "local-chat")),
+            models = listOf(LlmModel("local-chat", provider = "local"), LlmModel("gpt", provider = "openai")),
+            defaults = LlmSettingsDefaults(text = LlmDefaultRoute("openai", "gpt")),
+        )
+        val colliding = draft.editProvider(0, draft.providers[0].copy(name = "openai"))
+        assertEquals("openai", colliding.providers[0].name)
+        assertEquals("local", colliding.providers[0].routedName)
+        assertEquals(draft.tasks, colliding.tasks)
+        assertEquals(draft.models, colliding.models)
+        assertEquals(draft.defaults, colliding.defaults)
+        val renamed = colliding.editProvider(0, colliding.providers[0].copy(name = "openai-backup"))
+        assertEquals("openai-backup", renamed.tasks[0].provider)
+        assertEquals("openai-backup", renamed.models[0].provider)
+        assertEquals("openai", renamed.models[1].provider)
+        assertEquals(draft.defaults, renamed.defaults)
+
+        val siblingCleared = draft.editProvider(1, draft.providers[1].copy(name = ""))
+        val retainedCollision = siblingCleared.editProvider(0, siblingCleared.providers[0].copy(name = "openai"))
+        assertEquals("local", retainedCollision.providers[0].routedName)
+        assertEquals(siblingCleared.models, retainedCollision.models)
+        assertEquals(siblingCleared.tasks, retainedCollision.tasks)
+    }
+
+    @Test
+    fun removingAnOldCustomProviderKeepsTaskUsingAnotherDefault() {
+        val draft = LlmSettingsDraft(
+            revision = 1,
+            providers = listOf(
+                LlmProviderDraft("local", LlmProviderKind.OPENAI, "http://localhost/v1"),
+                LlmProviderDraft("openai", LlmProviderKind.OPENAI, "https://api.openai.com/v1"),
+            ),
+            tasks = listOf(LlmTaskRoute("blurb", "local", "old", LlmTaskMode.DEFAULT)),
+            defaults = LlmSettingsDefaults(text = LlmDefaultRoute("openai", "gpt")),
+        )
+        assertEquals(LlmTaskMode.DEFAULT, draft.withoutProvider(0).tasks[0].mode)
+    }
 }
 
 class LlmSettingsDefaultsDraftTest {

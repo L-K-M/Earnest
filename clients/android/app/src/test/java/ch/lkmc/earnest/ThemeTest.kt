@@ -160,6 +160,30 @@ class ThemeTest {
         assertTrue("keep text on dark background", contrast(DarkTones.plum, DarkColors.background) >= 4.5f)
     }
 
+    @Test fun noticeAndControlTextRemainReadableInEveryTheme() {
+        ThemeSetting.entries.forEach { setting ->
+            val scheme = colorScheme(setting, systemDark = false)
+            listOf(
+                scheme.onSurface to scheme.surfaceContainerLowest,
+                scheme.onSurfaceVariant to scheme.surface,
+                scheme.onPrimaryContainer to scheme.primaryContainer,
+                scheme.onErrorContainer to scheme.errorContainer,
+                scheme.onPrimary to scheme.primary,
+            ).forEach { (ink, surface) ->
+                assertTrue("$setting text $ink on $surface", contrast(ink, surface) >= 4.5f)
+            }
+        }
+    }
+
+    @Test fun eInkFeedbackStaysMonochrome() {
+        val scheme = colorScheme(ThemeSetting.E_INK, systemDark = false)
+        assertEquals(Color.Black, scheme.error)
+        assertEquals(Color.Black, scheme.onErrorContainer)
+        val surface = scheme.errorContainer
+        assertEquals(surface.red, surface.green, 0.001f)
+        assertEquals(surface.green, surface.blue, 0.001f)
+    }
+
     // A snackbar draws its action, such as Undo after a swipe, in
     // inversePrimary on inverseSurface, and its message in inverseOnSurface.
     @Test fun snackbarTextIsReadableInEveryTheme() {

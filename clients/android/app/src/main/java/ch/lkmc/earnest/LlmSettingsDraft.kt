@@ -189,7 +189,10 @@ internal fun LlmProviderDraft.discoveryFingerprint(): String = listOf(
 /** Applies a provider edit and keeps the routes bound to its name. */
 internal fun LlmSettingsDraft.editProvider(index: Int, replacement: LlmProviderDraft): LlmSettingsDraft {
     val previous = providers.getOrNull(index) ?: return this
-    val edited = replacement.copy(routedName = replacement.name.ifEmpty { previous.routedName })
+    val collides = replacement.name.isNotEmpty() && providers.withIndex().any { (i, provider) ->
+        i != index && (provider.name == replacement.name || provider.routedName == replacement.name)
+    }
+    val edited = replacement.copy(routedName = if (collides) previous.routedName else replacement.name.ifEmpty { previous.routedName })
     // An empty name is a transient edit: the retained routed name keeps the
     // scoped models, defaults and routes bound until a real name is typed.
     return copy(
@@ -214,7 +217,8 @@ internal fun LlmSettingsDraft.withoutProvider(index: Int): LlmSettingsDraft {
         models = models.filterNot { it.provider == name },
         defaults = LlmSettingsDefaults(keep(defaults.text), keep(defaults.embedding)),
         tasks = tasks.map {
-            if (it.provider == name || it.effectiveRoute(defaults)?.provider == name) {
+            if ((it.resolvedMode() != LlmTaskMode.DEFAULT && it.provider == name) ||
+                it.effectiveRoute(defaults)?.provider == name) {
                 LlmTaskRoute(it.task, "", "", LlmTaskMode.OFF)
             } else it
         },

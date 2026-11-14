@@ -19,7 +19,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
+import ch.lkmc.earnest.ReaderFilterChip as FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -102,8 +102,8 @@ internal fun LlmServicesSection(
             ) { Text("Retry save") }
             if (ui.loading || ui.saving) CircularProgressIndicator(Modifier.width(20.dp))
         }
-        ui.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        if (ui.success) Text("Saved", color = MaterialTheme.colorScheme.primary)
+        ui.error?.let { NoticeBanner(it, tone = NoticeTone.ERROR) }
+        if (ui.success) NoticeBanner("Saved", tone = NoticeTone.SUCCESS)
         if (ui.conflict) {
             Text(
                 "The saved settings changed on the server. Reload them to review; your draft is kept.",
@@ -177,7 +177,7 @@ internal fun LlmServicesSection(
 
     if (addProvider) {
         AddProviderDialog(
-            existing = current?.providers?.map { it.name }?.toSet().orEmpty(),
+            existing = current?.providers?.flatMap { listOf(it.name, it.routedName) }?.toSet().orEmpty(),
             onDismiss = { addProvider = false },
             onConfirm = { name, kind, baseUrl ->
                 addProvider = false
@@ -269,10 +269,7 @@ internal fun LlmServicesSection(
                 providerIndex = providerIndex,
                 task = task,
                 onSelect = { addition ->
-                    model.selectLlmModel(providerIndex, addition, if (discoveryDefault == null) task else null)
-                    discoveryDefault?.let { key ->
-                        model.updateLlmSettingsDraft { it.withDefaultModel(key, addition) }
-                    }
+                    model.selectLlmModel(providerIndex, addition, if (discoveryDefault == null) task else null, discoveryDefault)
                 },
                 onDismiss = {
                     discoveryTarget = null
@@ -307,14 +304,16 @@ private fun ProvidersSection(
     onModels: (Int) -> Unit,
     onAdd: () -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth()) {
-        Text("Providers", style = MaterialTheme.typography.titleSmall)
+    SettingsGroup("Providers") {
         draft.providers.forEachIndexed { index, provider ->
             ProviderCard(
                 provider = provider,
                 referencedBy = draft.tasks
                     .filter { it.provider == provider.routedName && it.provider.isNotEmpty() }
                     .map { it.task },
+                nameTaken = provider.name.isNotEmpty() && draft.providers.withIndex().any { (i, other) ->
+                    i != index && (other.name == provider.name || other.routedName == provider.name)
+                },
                 onTransform = { onTransform(index, it) },
                 onRemove = { onRemove(index) },
                 onModels = { onModels(index) },
@@ -328,18 +327,19 @@ private fun ProvidersSection(
 private fun ProviderCard(
     provider: LlmProviderDraft,
     referencedBy: List<String>,
+    nameTaken: Boolean,
     onTransform: (LlmProviderDraft) -> Unit,
     onRemove: () -> Unit,
     onModels: () -> Unit,
 ) {
-    var advanced by remember(provider.name, provider.hasApiKey) { mutableStateOf(false) }
+    var advanced by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(provider.name.ifBlank { "(unnamed provider)" }, style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.width(8.dp))
             KeyStatusChip(provider.apiKeyStatus())
             Spacer(Modifier.weight(1f))
-            TextButton(onClick = onModels) { Text("Models") }
+            TextButton(onClick = onModels, enabled = provider.name.isNotBlank() && !nameTaken) { Text("Models") }
             TextButton(onClick = onRemove) { Text("Remove") }
         }
         if (referencedBy.isNotEmpty()) {
@@ -353,11 +353,14 @@ private fun ProviderCard(
             value = provider.name,
             onValueChange = { value -> onTransform(provider.copy(name = value)) },
             label = { Text("Name") },
+            isError = nameTaken,
             singleLine = true,
             // A saved key is bound to the provider name on the server, so a
             // keyed provider cannot be renamed silently; remove and re-add it.
             enabled = !provider.hasApiKey,
-            supportingText = if (provider.hasApiKey) {
+            supportingText = if (nameTaken) {
+                { Text("Choose a name that is not used by another provider.") }
+            } else if (provider.hasApiKey) {
                 { Text("A saved key is bound to this name; remove the provider to rename it.") }
             } else {
                 null
@@ -483,6 +486,10 @@ private fun AddProviderDialog(
                     value = name,
                     onValueChange = { name = it },
                     label = { Text("Name") },
+                    isError = name.trim() in existing,
+                    supportingText = if (name.trim() in existing) {
+                        { Text("Choose a name that is not used by another provider.") }
+                    } else null,
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -498,7 +505,7 @@ private fun AddProviderDialog(
         confirmButton = {
             TextButton(
                 onClick = { onConfirm(name.trim(), preset.kind, baseUrl.trim()) },
-                enabled = name.trim().isNotEmpty() && baseUrl.trim().isNotEmpty(),
+                enabled = name.trim().isNotEmpty() && name.trim() !in existing && baseUrl.trim().isNotEmpty(),
             ) { Text("Add") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
@@ -510,8 +517,7 @@ private fun DefaultsSection(
     draft: LlmSettingsDraft,
     onPick: (String) -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        Text("Default models", style = MaterialTheme.typography.titleSmall)
+    SettingsGroup("Default models") {
         Text(
             "Switched-on tasks use these routes. Embed uses the embedding default; every other task uses the text default.",
             style = MaterialTheme.typography.bodySmall,
@@ -571,7 +577,9 @@ private fun DefaultModelPickerDialog(
                     )
                 }
                 draft.providers.forEachIndexed { index, provider ->
-                    TextButton(onClick = { onBrowse(index) }) { Text("Browse ${provider.name} models") }
+                    TextButton(onClick = { onBrowse(index) }, enabled = provider.name.isNotBlank() && provider.name == provider.routedName) {
+                        Text("Browse ${provider.name} models")
+                    }
                 }
                 if (draft.providers.isEmpty()) Text("Add a provider to choose a model.")
             }
@@ -587,8 +595,7 @@ private fun FeaturesSection(
     onRoute: (LlmTaskRoute) -> Unit,
 ) {
     var advanced by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        Text("Features", style = MaterialTheme.typography.titleSmall)
+    SettingsGroup("Features") {
         Text(
             "The switch turns a feature on; it uses the matching default above unless Advanced names a " +
                 "provider and model. Off disables it.",
@@ -683,7 +690,7 @@ private fun RouteTaskDialog(
                 if (!useDefault) {
                     Text("Provider", style = MaterialTheme.typography.bodySmall)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        draft.providers.forEach { option ->
+                        draft.providers.filter { it.name.isNotBlank() && it.name == it.routedName }.forEach { option ->
                             FilterChip(
                                 selected = provider == option.name,
                                 onClick = {
@@ -770,8 +777,8 @@ private fun ModelPricingSection(
                         Text(
                             "in ${target.inputPer1m} / out ${target.outputPer1m} / embed ${target.embeddingPer1m} per 1M, " +
                                 "${target.dimensions} dimensions" +
-                                if (target.truncatable) " (truncatable)" else "" +
-                                if (target.supportsCustomDimensions) " (custom width)" else "",
+                                (if (target.truncatable) " (truncatable)" else "") +
+                                (if (target.supportsCustomDimensions) " (custom width)" else ""),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -924,7 +931,8 @@ private fun CatalogueDialog(
     var query by remember { mutableStateOf("") }
     var manualId by remember { mutableStateOf("") }
     var selection by remember { mutableStateOf<ModelSelection?>(null) }
-    var free by remember(selection?.review?.name) { mutableStateOf(false) }
+    var free by remember { mutableStateOf(false) }
+    var previousPrices by remember { mutableStateOf<LlmModelReview?>(null) }
     var refresh by remember { mutableStateOf(0) }
     // Provider browsing starts with text; a default or task fixes the capability.
     var capability by remember { mutableStateOf(task?.requiredCapability() ?: LlmCapability.CHAT) }
@@ -974,10 +982,10 @@ private fun CatalogueDialog(
                 )
                 if (task == null) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(selected = capability == LlmCapability.CHAT, onClick = {
-                        capability = LlmCapability.CHAT; selection = null
+                        capability = LlmCapability.CHAT; selection = null; free = false; previousPrices = null
                     }, label = { Text("Text") })
                     FilterChip(selected = capability == LlmCapability.EMBEDDING, onClick = {
-                        capability = LlmCapability.EMBEDDING; selection = null
+                        capability = LlmCapability.EMBEDDING; selection = null; free = false; previousPrices = null
                     }, label = { Text("Embedding") })
                 }
                 Spacer(Modifier.height(8.dp))
@@ -1042,8 +1050,9 @@ private fun CatalogueDialog(
                                     onConfigure = {
                                         selection = ModelSelection(entry, prefill)
                                         free = false
+                                        previousPrices = null
                                     },
-                                    onUse = if (ready) {
+                                    onUse = if (ready && (alreadyConfigured || room > 0)) {
                                         {
                                             onSelect(draft.models.firstOrNull { it.identity() == identity } ?: prefill.toConfiguredModel(capability))
                                             onDismiss()
@@ -1080,6 +1089,7 @@ private fun CatalogueDialog(
                                         selection = ModelSelection(null, LlmModelReview(name = id, provider = providerName))
                                         manualId = ""
                                         free = false
+                                        previousPrices = null
                                     }
                                 },
                                 enabled = manualId.isNotBlank(),
@@ -1100,28 +1110,23 @@ private fun CatalogueDialog(
                         configured = configured,
                         room = room,
                         onFreeChange = { value ->
+                            if (value) previousPrices = current.review
+                            selection = current.copy(review = current.review.freePriceChoice(capability, value, previousPrices))
                             free = value
-                            if (value) {
-                                selection = current.copy(
-                                    review = current.review.copy(
-                                        input = if (capability != LlmCapability.EMBEDDING) "0" else current.review.input,
-                                        output = if (capability != LlmCapability.EMBEDDING) "0" else current.review.output,
-                                        embedding = if (capability != LlmCapability.CHAT) "0" else current.review.embedding,
-                                    ),
-                                )
-                            }
+                            if (!value) previousPrices = null
                         },
                         onReviewChange = { review ->
                             selection = current.copy(review = review)
                         },
                         onApply = {
-                            onSelect(draft.models.firstOrNull { it.identity() == current.review.provider to current.review.name }
+                            onSelect(draft.models.firstOrNull { it.identity() == (current.review.provider.trim() to current.review.name.trim()) }
                                 ?: current.review.toConfiguredModel(capability))
                             onDismiss()
                         },
                         onDismiss = {
                             selection = null
                             free = false
+                            previousPrices = null
                         },
                     )
                 }
@@ -1238,7 +1243,8 @@ private fun SelectionPane(
         it.providerIndex == providerIndex &&
             it.providerKey == providerKey &&
             it.revision == state.llmSettingsUi.loadedRevision &&
-            it.modelId == review.name.trim()
+            it.modelId == review.name.trim() &&
+            it.capability == if (capability == LlmCapability.EMBEDDING) LlmModelCapability.EMBEDDING else LlmModelCapability.CHAT
     }
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
@@ -1276,6 +1282,7 @@ private fun SelectionPane(
                     value = review.input,
                     onValueChange = { onReviewChange(review.copy(input = it)) },
                     label = { Text("Input per 1M (USD)") },
+                    enabled = !free,
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.fillMaxWidth(),
@@ -1284,6 +1291,7 @@ private fun SelectionPane(
                     value = review.output,
                     onValueChange = { onReviewChange(review.copy(output = it)) },
                     label = { Text("Output per 1M (USD)") },
+                    enabled = !free,
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.fillMaxWidth(),
@@ -1294,6 +1302,7 @@ private fun SelectionPane(
                     value = review.embedding,
                     onValueChange = { onReviewChange(review.copy(embedding = it)) },
                     label = { Text("Embedding per 1M (USD)") },
+                    enabled = !free,
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.fillMaxWidth(),

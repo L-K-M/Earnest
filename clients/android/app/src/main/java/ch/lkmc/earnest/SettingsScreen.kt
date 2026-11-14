@@ -13,6 +13,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -21,7 +27,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
+import ch.lkmc.earnest.ReaderFilterChip as FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -29,6 +35,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -43,8 +50,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
@@ -61,12 +73,15 @@ import ch.lkmc.earnest.core.ReadingMode
 import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.core.SyncObject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+
+private const val PREVIEW_CHAR_WIDTH_DP = 8
 
 /** The settings categories. Each owns one existing settings surface. */
 internal enum class SettingsCategory(val label: String) {
@@ -95,6 +110,8 @@ internal fun SettingsScreen(
     val readerUi = state.readerSettingsUi
     val llmUi = state.llmSettingsUi
     val dirty = readerUi.draft != null || llmUi.draft != null
+    val readingImport = remember(state.accountKey) { mutableStateOf(false) }
+    val importScope = rememberCoroutineScope()
 
     // Opening a category loads its settings once, unless a draft protects
     // unsaved edits. A failed load leaves the baseline absent, so reopening
@@ -118,13 +135,13 @@ internal fun SettingsScreen(
     val guardOpen = pendingCategory != null || leaving
     if (!guardOpen) {
         BackHandler {
-            if (dirty) leaving = true else onBack()
+            if (dirty || readingImport.value) leaving = true else onBack()
         }
     }
 
     Column(modifier.fillMaxSize().padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { if (dirty) leaving = true else onBack() }) {
+            IconButton(onClick = { if (dirty || readingImport.value) leaving = true else onBack() }) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
             }
             Text("Settings", style = MaterialTheme.typography.titleLarge)
@@ -153,9 +170,10 @@ internal fun SettingsScreen(
                     state = state,
                     modifier = Modifier.padding(vertical = 8.dp),
                 )
-                SettingsCategory.IMPORT_EXPORT -> ImportExportCategory(model, state)
+                SettingsCategory.IMPORT_EXPORT -> ImportExportCategory(model, state, importScope, readingImport)
             }
         }
+        if (category == SettingsCategory.READING) ReadingSettingsActions(model, state)
     }
 
     val pending = pendingCategory
@@ -184,7 +202,7 @@ internal fun SettingsScreen(
         AlertDialog(
             onDismissRequest = { leaving = false },
             title = { Text("Discard unsaved changes?") },
-            text = { Text("The ${category.label} settings have edits that are not saved. Discard them and leave Settings?") },
+            text = { Text(if (readingImport.value) "The file is still being read. Leaving cancels the import." else "The ${category.label} settings have edits that are not saved. Discard them and leave Settings?") },
             confirmButton = {
                 TextButton(onClick = {
                     discardCurrent()
@@ -197,7 +215,28 @@ internal fun SettingsScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ReadingSettingsActions(model: AppViewModel, state: UiState) {
+    val ui = state.readerSettingsUi
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+        verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+    ) {
+        val dirty = ui.draft != null
+        Button(
+            onClick = model::saveReaderSettings,
+            enabled = ui.loaded != null && state.snapshot.cursor.generation.isNotEmpty() && dirty && !ui.saving,
+            modifier = Modifier.testTag("reader-settings-save"),
+        ) { Text("Save") }
+        TextButton(onClick = model::discardReaderSettingsDraft, enabled = dirty && !ui.saving) { Text("Discard") }
+        if (ui.frozen != null) TextButton(onClick = model::retryReaderSettingsSave, enabled = !ui.saving) { Text("Retry save") }
+        if (ui.loading || ui.saving) CircularProgressIndicator(Modifier.width(20.dp))
+    }
+}
+
 /** The reader preferences, with contextual Save, Discard and Retry. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ReadingSettingsCategory(model: AppViewModel, state: UiState) {
     val ui = state.readerSettingsUi
@@ -212,19 +251,6 @@ private fun ReadingSettingsCategory(model: AppViewModel, state: UiState) {
     var overrideFont by remember(state.accountKey, ui.epoch) { mutableStateOf<ReaderFont?>(null) }
 
     Column(Modifier.fillMaxWidth()) {
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            val dirty = ui.draft != null
-            TextButton(
-                onClick = model::saveReaderSettings,
-                enabled = ui.loaded != null && state.snapshot.cursor.generation.isNotEmpty() && dirty && !ui.saving,
-            ) { Text("Save") }
-            TextButton(onClick = model::discardReaderSettingsDraft, enabled = dirty && !ui.saving) { Text("Discard") }
-            if (ui.frozen != null) TextButton(onClick = model::retryReaderSettingsSave, enabled = !ui.saving) { Text("Retry save") }
-            if (ui.loading || ui.saving) CircularProgressIndicator(Modifier.width(20.dp))
-        }
         ui.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (ui.success) Text("Saved", color = MaterialTheme.colorScheme.primary)
 
@@ -234,8 +260,17 @@ private fun ReadingSettingsCategory(model: AppViewModel, state: UiState) {
             return@Column
         }
 
-        Section("Reading mode") {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        SettingsGroup("Reading preferences") {
+            Text(
+                "Reading preferences sync across your devices. The app theme stays on this device.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text("Reading mode", style = MaterialTheme.typography.labelLarge)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+                verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+            ) {
                 ReadingMode.entries.forEach { mode ->
                     FilterChip(
                         selected = settings.readingMode == mode,
@@ -244,23 +279,16 @@ private fun ReadingSettingsCategory(model: AppViewModel, state: UiState) {
                     )
                 }
             }
-        }
-
-        Section("Article visibility") {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Switch(
-                    checked = settings.showOnlyUnread,
-                    onCheckedChange = { value -> model.updateReaderSettingsDraft { it.copy(showOnlyUnread = value) } },
-                    modifier = Modifier.semantics { contentDescription = "Show only unread" },
-                )
-                Text("Show only unread")
-            }
-            Text("Read articles stay until you reopen or refresh the list. Front page, saved shelves and search include read articles.")
-        }
-
-        Section("River retention") {
-            Text("Cadence and retention apply to river lists. Front page always covers the past 24 hours or 7 days across your unmuted feeds.")
-            Text("${settings.todayDecayDays} days")
+            Text("Article visibility", style = MaterialTheme.typography.labelLarge)
+            SwitchRow(
+                text = "Show only unread",
+                contentDescription = "Show only unread",
+                description = "Read articles stay until you reopen or refresh the list. Front page, saved shelves and search include read articles.",
+                checked = settings.showOnlyUnread,
+                onCheckedChange = { value -> model.updateReaderSettingsDraft { it.copy(showOnlyUnread = value) } },
+            )
+            Text("River retention", style = MaterialTheme.typography.labelLarge)
+            Text("${settings.todayDecayDays} days", style = MaterialTheme.typography.bodyMedium)
             Slider(
                 value = settings.todayDecayDays.toFloat(),
                 onValueChange = { value ->
@@ -270,36 +298,36 @@ private fun ReadingSettingsCategory(model: AppViewModel, state: UiState) {
                 steps = 363,
                 modifier = Modifier.semantics { contentDescription = "River retention in days" },
             )
+            Text(
+                "Cadence and retention apply to river lists. Front page always covers the past 24 hours or 7 days across your unmuted feeds.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text("Shortcuts", style = MaterialTheme.typography.labelLarge)
+            SwitchRow(
+                text = "Single-key shortcuts (shared with web and Mac)",
+                contentDescription = "Single-key shortcuts",
+                checked = settings.singleKeyShortcuts,
+                onCheckedChange = { checked -> model.updateReaderSettingsDraft { it.copy(singleKeyShortcuts = checked) } },
+            )
         }
 
-        Section("Shortcuts") {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Switch(
-                    checked = settings.singleKeyShortcuts,
-                    onCheckedChange = { checked -> model.updateReaderSettingsDraft { it.copy(singleKeyShortcuts = checked) } },
-                    modifier = Modifier.semantics { contentDescription = "Single-key shortcuts" },
-                )
-                Text("Single-key shortcuts (shared with web and Mac)")
-            }
-        }
-
-        Section("Article theme") {
-            ReaderTheme.entries.forEach { theme ->
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    RadioButton(
+        SettingsGroup("Typography") {
+            Text("Article theme", style = MaterialTheme.typography.labelLarge)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+                verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+            ) {
+                ReaderTheme.entries.forEach { theme ->
+                    FilterChip(
                         selected = settings.theme == theme,
                         onClick = { model.updateReaderSettingsDraft { it.copy(theme = theme) } },
+                        label = { Text(theme.label()) },
                     )
-                    Text(theme.label())
                 }
             }
-        }
-
-        Section("Measure") {
-            Text("${settings.measure}")
+            Text("Measure", style = MaterialTheme.typography.labelLarge)
+            Text("${settings.measure}", style = MaterialTheme.typography.bodyMedium)
             Slider(
                 value = settings.measure.toFloat(),
                 onValueChange = { value ->
@@ -309,10 +337,11 @@ private fun ReadingSettingsCategory(model: AppViewModel, state: UiState) {
                 steps = 9,
                 modifier = Modifier.semantics { contentDescription = "Measure" },
             )
-        }
-
-        Section("Font") {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Font", style = MaterialTheme.typography.labelLarge)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+                verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+            ) {
                 ReaderFont.entries.forEach { font ->
                     FilterChip(
                         selected = settings.font == font,
@@ -321,9 +350,9 @@ private fun ReadingSettingsCategory(model: AppViewModel, state: UiState) {
                     )
                 }
             }
-        }
-
-        Section("Per-feed typography") {
+            Text("Preview", style = MaterialTheme.typography.labelLarge)
+            TypographyPreview(settings)
+            Text("Per-feed typography", style = MaterialTheme.typography.labelLarge)
             Text(
                 "Overrides are keyed by feed ID and inherit the account setting for members left as Inherit.",
                 style = MaterialTheme.typography.bodySmall,
@@ -331,29 +360,31 @@ private fun ReadingSettingsCategory(model: AppViewModel, state: UiState) {
             )
             feeds.forEach { (_, feedId, name) ->
                 val override = settings.feedOverrides[feedId.toString()]
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                Column(
+                    Modifier.fillMaxWidth().padding(vertical = ReaderSpace.xxs),
+                    verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
                 ) {
-                    Column(Modifier.weight(1f)) {
-                        Text("$name (feed $feedId)", style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            overrideSummary(override),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                    Text("$name (feed $feedId)", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        overrideSummary(override),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+                        verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+                    ) {
+                        TextButton(onClick = {
+                            overrideFeedId = feedId
+                            overrideTheme = override?.theme
+                            overrideMeasureInput = OverrideMeasureInput.fromValue(override?.measure)
+                            overrideFont = override?.font
+                        }) { Text("Override") }
+                        TextButton(
+                            onClick = { model.updateReaderSettingsDraft { it.copy(feedOverrides = it.feedOverrides - feedId.toString()) } },
+                            enabled = override != null,
+                        ) { Text("Reset") }
                     }
-                    TextButton(onClick = {
-                        overrideFeedId = feedId
-                        overrideTheme = override?.theme
-                        overrideMeasureInput = OverrideMeasureInput.fromValue(override?.measure)
-                        overrideFont = override?.font
-                    }) { Text("Override") }
-                    TextButton(
-                        onClick = { model.updateReaderSettingsDraft { it.copy(feedOverrides = it.feedOverrides - feedId.toString()) } },
-                        enabled = override != null,
-                    ) { Text("Reset") }
                 }
             }
             TextButton(onClick = { addOverride = true }) { Text("Add override by feed ID") }
@@ -442,11 +473,10 @@ private fun ReadingSettingsCategory(model: AppViewModel, state: UiState) {
 
 /** The starred-article import, owned by the Import & export category. */
 @Composable
-private fun ImportExportCategory(model: AppViewModel, state: UiState) {
+private fun ImportExportCategory(model: AppViewModel, state: UiState, importScope: CoroutineScope, reading: androidx.compose.runtime.MutableState<Boolean>) {
     val keptImport = state.keptImport
     var subscribeMissing by remember(state.accountKey) { mutableStateOf(false) }
-    var readingImport by remember(state.accountKey) { mutableStateOf(false) }
-    val importScope = rememberCoroutineScope()
+    var readingImport by reading
     val context = LocalContext.current
     val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -471,15 +501,23 @@ private fun ImportExportCategory(model: AppViewModel, state: UiState) {
     }
 
     Column(Modifier.fillMaxWidth()) {
-        Section("Starred articles") {
+        SettingsGroup("Starred articles") {
             Text(
                 "Bring starred articles from another reader into Kept. Export them as Google Reader JSON, for example from FreshRSS or Inoreader.",
                 style = MaterialTheme.typography.bodyMedium,
             )
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(
+                    value = subscribeMissing,
+                    enabled = !keptImport.busy && !readingImport,
+                    role = Role.Checkbox,
+                    onValueChange = { subscribeMissing = it },
+                ),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Checkbox(
                     checked = subscribeMissing,
-                    onCheckedChange = { subscribeMissing = it },
+                    onCheckedChange = null,
                     enabled = !keptImport.busy && !readingImport,
                 )
                 Text("Also subscribe to feeds you don't follow")
@@ -494,13 +532,94 @@ private fun ImportExportCategory(model: AppViewModel, state: UiState) {
                 KeptImportReportView(report = report, busy = keptImport.busy, onRetry = model::importKeptAgain)
             }
         }
-        Section("Subscriptions") {
+        SettingsGroup("Subscriptions") {
             Text(
                 "OPML import and export stay on the Feeds screen, next to the subscription list.",
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
     }
+}
+
+@Composable
+internal fun SwitchRow(
+    text: String,
+    contentDescription: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    description: String? = null,
+) {
+    val accessibilityLabel = contentDescription
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            .toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange)
+            .semantics { this.contentDescription = accessibilityLabel }
+            .padding(vertical = ReaderSpace.xxs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs)) {
+            Text(text, style = MaterialTheme.typography.bodyLarge)
+            if (description != null) {
+                Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        Spacer(Modifier.width(ReaderSpace.sm))
+        Switch(checked = checked, onCheckedChange = null)
+    }
+}
+
+/** A quiet live sample of the draft's reader typography; no request is made. */
+@Composable
+private fun TypographyPreview(settings: ReaderSettings, modifier: Modifier = Modifier) {
+    val systemDark = isSystemInDarkTheme()
+    val (background, foreground) = previewColors(settings.theme, systemDark)
+    val family = when (settings.font) {
+        ReaderFont.SERIF -> FontFamily.Serif
+        ReaderFont.SANS -> FontFamily.SansSerif
+        ReaderFont.DYSLEXIC -> FontFamily.SansSerif
+    }
+    val letterSpacing = if (settings.font == ReaderFont.DYSLEXIC) 0.9.sp else 0.sp
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = background,
+        contentColor = foreground,
+    ) {
+        Column(
+            // The reader's measure is a character width, approximated here;
+            // the parent's constraints cap it on a narrow screen.
+            Modifier.width((settings.measure.toInt() * PREVIEW_CHAR_WIDTH_DP).dp)
+                .padding(ReaderSpace.md),
+            verticalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+        ) {
+            Text(
+                "The quick brown fox jumps over the lazy dog",
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontFamily = family,
+                    fontSize = 18.sp,
+                    lineHeight = 26.sp,
+                    letterSpacing = letterSpacing,
+                ),
+            )
+            Text(
+                "A little space makes room for a good story. Settle into the articles you love, at your own pace.",
+                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = family, letterSpacing = letterSpacing),
+            )
+            Text(
+                "${settings.measure} characters per line · ${settings.font.label()} · ${settings.theme.label()}",
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+    }
+}
+
+/** The reader content palette, mirroring the offline reader CSS. */
+private fun previewColors(theme: ReaderTheme, systemDark: Boolean): Pair<Color, Color> = when (theme) {
+    ReaderTheme.SYSTEM -> if (systemDark) Color(0xFF242424) to Color(0xFFEEEEEE) else Color(0xFFFFFFFF) to Color(0xFF202020)
+    ReaderTheme.LIGHT -> Color(0xFFFFFFFF) to Color(0xFF202020)
+    ReaderTheme.DARK -> Color(0xFF242424) to Color(0xFFEEEEEE)
+    ReaderTheme.BLACK -> Color(0xFF000000) to Color(0xFFFFFFFF)
+    ReaderTheme.EINK -> Color(0xFFFFFFFF) to Color(0xFF000000)
 }
 
 /** The import report, worded the same way as the web client's. */
@@ -544,14 +663,6 @@ private fun KeptImportReportView(report: KeptImportReport, busy: Boolean, onRetr
                 color = MaterialTheme.colorScheme.error,
             )
         }
-    }
-}
-
-@Composable
-private fun Section(title: String, content: @Composable () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        Text(title, style = MaterialTheme.typography.titleMedium)
-        content()
     }
 }
 

@@ -70,7 +70,9 @@ class FrontPageModelTest {
     @Test fun firstResponseAndExplicitRefreshPublishWithoutReadingAnything() = runBlocking(Dispatchers.IO) {
         val model = model()
         model.openFrontPage(FrontPagePeriod.DAILY)
-        val first = withTimeout(5_000) { model.state.first { it.frontPage.page != null } }
+        // A cached page may appear before its load finishes. Wait until the
+        // screen's Refresh button is enabled before invoking that action.
+        val first = withTimeout(5_000) { model.state.first { it.frontPage.page != null && !it.frontPage.loading } }
         assertEquals("daily-1", first.frontPage.page?.revision)
         revision.set(2)
         model.refreshFrontPage()

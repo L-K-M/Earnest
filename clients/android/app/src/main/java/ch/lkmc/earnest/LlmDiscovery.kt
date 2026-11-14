@@ -48,6 +48,17 @@ internal data class LlmModelReview(
     val provider: String = "",
 )
 
+internal fun LlmModelReview.freePriceChoice(capability: LlmCapability, enabled: Boolean, previous: LlmModelReview?): LlmModelReview =
+    if (!enabled) copy(
+        input = previous?.input ?: input,
+        output = previous?.output ?: output,
+        embedding = previous?.embedding ?: embedding,
+    ) else copy(
+        input = if (capability != LlmCapability.EMBEDDING) "0" else input,
+        output = if (capability != LlmCapability.EMBEDDING) "0" else output,
+        embedding = if (capability != LlmCapability.CHAT) "0" else embedding,
+    )
+
 /**
  * Seeds the selection from a catalogue entry. Published fields prefill;
  * only a model known to be chat-only may default embedding price and geometry

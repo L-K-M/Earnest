@@ -12,6 +12,19 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LlmDiscoveryTest {
+    @Test
+    fun undoingFreeChoiceRestoresPublishedPrices() {
+        val original = LlmModelReview(name = "chat", input = "1.25", output = "2.5", embedding = "0.1")
+        val free = original.freePriceChoice(LlmCapability.CHAT, true, null)
+        assertEquals("0", free.input)
+        assertEquals("0", free.output)
+        assertEquals(original, free.freePriceChoice(LlmCapability.CHAT, false, original))
+        val embeddingFree = original.freePriceChoice(LlmCapability.EMBEDDING, true, null)
+        assertEquals("0", embeddingFree.embedding)
+        assertEquals("1.25", embeddingFree.input)
+        assertEquals("0.1", embeddingFree.copy(dimensions = "4096")
+            .freePriceChoice(LlmCapability.EMBEDDING, false, original).embedding)
+    }
     private fun provider(
         hasApiKey: Boolean = false,
         apiKeyInput: String = "",

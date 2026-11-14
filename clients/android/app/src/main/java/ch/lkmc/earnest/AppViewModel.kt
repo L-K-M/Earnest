@@ -915,6 +915,7 @@ class AppViewModel internal constructor(
                             loaded = if (replaceBaseline) canonical else ui.loaded,
                             loadedRevision = if (replaceBaseline) canonicalRevision else ui.loadedRevision,
                             catalogues = if (replaceBaseline) emptyMap() else ui.catalogues,
+                            check = if (replaceBaseline && canonicalRevision != ui.loadedRevision) null else ui.check,
                             draft = if (replaceDraft) null else ui.draft,
                             frozen = if (replaceDraft) null else ui.frozen,
                             conflict = if (replaceBaseline) false else ui.conflict,
@@ -973,12 +974,15 @@ class AppViewModel internal constructor(
      * that task to the selection as a custom route. Nothing is persisted
      * until an explicit Save.
      */
-    fun selectLlmModel(providerIndex: Int, addition: LlmModel, task: LlmTask?) {
-        val providerName = (_state.value.llmSettingsUi.draft ?: _state.value.llmSettingsUi.loaded?.toDraft())
-            ?.providers?.getOrNull(providerIndex)?.routedName.orEmpty()
-        val scoped = if (addition.provider.isEmpty()) addition.copy(provider = providerName) else addition
+    fun selectLlmModel(providerIndex: Int, addition: LlmModel, task: LlmTask?, defaultKey: String? = null) {
         updateLlmSettingsDraft { draft ->
+            val provider = draft.providers.getOrNull(providerIndex) ?: return@updateLlmSettingsDraft draft
+            val providerName = provider.routedName
+            if (providerName.isEmpty() || provider.name != providerName ||
+                (addition.provider.isNotEmpty() && addition.provider != providerName)) return@updateLlmSettingsDraft draft
+            val scoped = if (addition.provider.isEmpty()) addition.copy(provider = providerName) else addition
             val merged = importReviewedModels(draft.models, listOf(scoped))
+            if (merged.none { it.identity() == scoped.identity() }) return@updateLlmSettingsDraft draft
             val tasks = task?.let { selected ->
                 draft.tasks.map {
                     if (it.task == selected.wireName) {
@@ -988,7 +992,8 @@ class AppViewModel internal constructor(
                     }
                 }
             } ?: draft.tasks
-            draft.copy(models = merged, tasks = tasks)
+            val next = draft.copy(models = merged, tasks = tasks)
+            if (defaultKey == null) next else next.withDefaultModel(defaultKey, scoped)
         }
     }
 
@@ -1160,6 +1165,7 @@ class AppViewModel internal constructor(
      * draft only by an explicit action. A 409 asks for a reload; a 404 means
      * an older server without checks.
      */
+    @Synchronized
     fun checkLlmModel(providerIndex: Int, model: LlmModel, capability: LlmModelCapability) {
         val intent = _state.value
         val ui = intent.llmSettingsUi
@@ -1174,6 +1180,11 @@ class AppViewModel internal constructor(
             }
             return
         }
+        if (ui.conflict) return
+        if (ui.check?.let {
+            it.loading && it.providerIndex == providerIndex && it.providerKey == provider.discoveryFingerprint() &&
+                it.revision == loaded.revision && it.modelId == model.name && it.capability == capability
+        } == true) return
         val request = llmCheckId.incrementAndGet()
         publishLlm(expected, session, cache) {
             it.copy(
@@ -1219,6 +1230,7 @@ class AppViewModel internal constructor(
                     current.copy(
                         llmSettingsUi = current.llmSettingsUi.copy(
                             check = current.llmSettingsUi.check?.copy(loading = false, error = message),
+                            conflict = current.llmSettingsUi.conflict || error.isConflict,
                         ),
                     )
                 }

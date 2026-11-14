@@ -918,6 +918,21 @@ class LlmSettingsModesAppTest {
         assertEquals("1", sent.getValue("input_per_1m").jsonPrimitive.content)
     }
 
+    @Test fun selectingANewModelWhenTheTableIsFullDoesNotCreateARoute() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadedLlm()
+        model.updateLlmSettingsDraft { draft ->
+            draft.copy(models = (0 until ch.lkmc.earnest.core.LLM_MAX_CONFIGURED_MODELS).map {
+                LlmModel("model-$it", provider = "openai")
+            })
+        }
+        val before = model.state.value.llmSettingsUi.draft!!
+        model.selectLlmModel(0, LlmModel("new-model", provider = "openai"), LlmTask.SUMMARY)
+        val after = model.state.value.llmSettingsUi.draft!!
+        assertEquals(before.models, after.models)
+        assertEquals(before.tasks, after.tasks)
+    }
+
     @Test fun checkModelPostsTheDraftAndPublishesTheResult() = runBlocking(Dispatchers.IO) {
         respond = { request ->
             if (request.url.encodedPath == "/v1/settings/llm/models/check") {
@@ -967,6 +982,57 @@ class LlmSettingsModesAppTest {
         // A check never writes the draft or the saved settings.
         assertNull(model.state.value.llmSettingsUi.draft)
         assertTrue(calls.none { it.method == "PUT" && it.path == "/v1/settings/llm" })
+    }
+
+    @Test fun repeatedCheckWhilePendingSendsOnlyOneRequest() = runBlocking(Dispatchers.IO) {
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val fallback = respond
+        respond = { request ->
+            if (request.url.encodedPath == "/v1/settings/llm/models/check") {
+                entered.countDown()
+                release.await(10, java.util.concurrent.TimeUnit.SECONDS)
+                200 to """{"compatible":true,"message":"checked"}"""
+            } else fallback(request)
+        }
+        val model = model()
+        model.loadedLlm()
+        val item = LlmModel("text-embedding-3-small", embeddingPer1m = "0.02", dimensions = 1024, provider = "openai")
+        try {
+            model.checkLlmModel(0, item, LlmModelCapability.EMBEDDING)
+            assertTrue(entered.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            model.checkLlmModel(0, item, LlmModelCapability.EMBEDDING)
+            delay(200)
+            assertEquals(1, calls.count { it.path == "/v1/settings/llm/models/check" })
+        } finally {
+            release.countDown()
+        }
+    }
+
+    @Test fun modelCheckConflictRequiresReload() = runBlocking(Dispatchers.IO) {
+        val fallback = respond
+        respond = { request -> if (request.url.encodedPath == "/v1/settings/llm/models/check") 409 to "{}" else fallback(request) }
+        val model = model()
+        model.loadedLlm()
+        model.checkLlmModel(0, LlmModel("text-embedding-3-small", embeddingPer1m = "0.02", dimensions = 1024, provider = "openai"), LlmModelCapability.EMBEDDING)
+        withTimeout(15_000) { model.state.first { it.llmSettingsUi.check?.error != null } }
+        assertTrue(model.state.value.llmSettingsUi.conflict)
+    }
+
+    @Test fun loadingANewerRevisionClearsThePreviousCheck() = runBlocking(Dispatchers.IO) {
+        val fallback = respond
+        respond = { request ->
+            if (request.url.encodedPath == "/v1/settings/llm/models/check") 200 to """{"compatible":true,"message":"checked"}"""
+            else fallback(request)
+        }
+        val model = model()
+        model.loadedLlm()
+        model.checkLlmModel(0, LlmModel("text-embedding-3-small", embeddingPer1m = "0.02", dimensions = 1024, provider = "openai"), LlmModelCapability.EMBEDDING)
+        withTimeout(15_000) { model.state.first { it.llmSettingsUi.check?.result != null } }
+        getBody = llmJson(revision = 4)
+        model.loadLlmSettings()
+        withTimeout(15_000) { model.state.first { it.llmSettingsUi.loadedRevision == 4L && !it.llmSettingsUi.loading } }
+        assertNull(model.state.value.llmSettingsUi.check)
     }
 
     @Test fun togglingPreservesAnExplicitRouteAndInheritsADefaultOtherwise() {

@@ -7,52 +7,43 @@ extension APILLMTask {
     var title: String {
         switch self {
         case .embed: return "Embeddings"
-        case .classify: return "Classify"
+        case .classify: return "Classification"
         case .blurb: return "Blurbs"
         case .summary: return "Summaries"
-        case .edition: return "Edition"
-        case .compileRule: return "Compile rules"
-        case .ask: return "Ask"
+        case .edition: return "Editions"
+        case .compileRule: return "Rule compilation"
+        case .ask: return "Ask my feeds"
         }
     }
 }
 
-/// Earnest > Settings > LLM Services. The configuration is server-wide: it
-/// affects every account and API keys stay on the server. Nothing is fetched
-/// or saved until the user asks, and tasks make no calls while they are
-/// disabled.
+/// Earnest > Settings > AI. The configuration is server-wide: it affects
+/// every account and API keys stay on the server. Providers are edited
+/// directly in the draft; defaults and per-task overrides choose routes, and
+/// nothing is saved until Save. Discard returns to the loaded configuration.
 @MainActor struct LLMSettingsView: View {
     @ObservedObject var settings: LLMSettingsModel
     @State private var discoveryTarget: LLMDiscoveryTarget?
 
-    /// Fetch the catalogue for a provider row and open the browser. The
-    /// request previews the provider as currently edited; nothing persists.
-    private func discover(providerID: UUID, providerName: String, task: APILLMTask? = nil) {
-        settings.fetchModels(providerID: providerID)
-        // A rejected fetch reports on the pane; the sheet opens only when
-        // there is a configuration to preview.
-        guard settings.loaded else { return }
-        discoveryTarget = LLMDiscoveryTarget(providerID: providerID, providerName: providerName, task: task)
-    }
-
     var body: some View {
         Form {
             SwiftUI.Section {
-                Text("These settings apply to the whole server and affect every account. API keys are stored only on the server, and a task makes no calls until it routes to a provider and model.")
+                Text("AI settings apply to everyone on this server. API keys are encrypted on the server.")
                     .foregroundStyle(.secondary)
                 HStack(spacing: 8) {
-                    Button("Reload") { settings.load() }
-                        .disabled(!settings.ready || settings.busy)
                     Button("Save") { settings.save() }
                         .disabled(!settings.ready || settings.busy || settings.conflict || !settings.isDirty)
+                    Button("Discard") { settings.discard() }
+                        .disabled(!settings.ready || settings.busy || !settings.canDiscard)
                     Spacer()
                 }
                 LLMSettingsStatus(settings: settings)
             }
 
+            Group {
             SwiftUI.Section {
                 if settings.draft.providers.isEmpty {
-                    Text("No providers configured. Every task stays disabled.")
+                    Text("No providers configured. Every feature stays off.")
                         .foregroundStyle(.secondary)
                 }
                 ForEach($settings.draft.providers) { $provider in
@@ -60,102 +51,167 @@ extension APILLMTask {
                         provider: $provider,
                         onRemove: { settings.removeProvider(id: provider.id) },
                         onKindChange: { kind in settings.setProviderKind(kind, id: provider.id) },
-                        onDiscover: {
+                        onNameChange: { name in settings.renameProvider(id: provider.id, name: name) },
+                        onBrowse: {
                             discover(providerID: provider.id,
-                                     providerName: provider.name.isEmpty ? "New provider" : provider.name)
+                                     providerName: provider.name.isEmpty ? "New provider" : provider.name,
+                                     selection: .add)
                         }
                     )
                 }
-                Button("Add Provider") { settings.addProvider() }
+                Menu {
+                    ForEach(LLMProviderPreset.allCases) { preset in
+                        Button(preset.title) { settings.addProvider(preset: preset) }
+                    }
+                } label: {
+                    Label("Add Provider", systemImage: "plus")
+                }
             } header: {
                 Text("Providers")
             } footer: {
-                Text("Local servers need the server's outbound allowlist; Earnest never bypasses it.")
+                Text("Choose a preset, enter an API key, and set a monthly budget. A zero budget has no limit.")
+            }
+
+            SwiftUI.Section {
+                DefaultRouteRow(
+                    title: "Text model",
+                    usage: .chat,
+                    settings: settings,
+                    providers: settings.draft.providers,
+                    models: settings.configuredModels(for:),
+                    selection: .defaultText,
+                    target: $discoveryTarget
+                )
+                DefaultRouteRow(
+                    title: "Embedding model",
+                    usage: .embedding,
+                    settings: settings,
+                    providers: settings.draft.providers,
+                    models: settings.configuredModels(for:),
+                    selection: .defaultEmbedding,
+                    target: $discoveryTarget
+                )
+            } header: {
+                Text("Defaults")
+            } footer: {
+                Text("Features use these models unless you choose a custom override. Selecting a model does not enable a feature.")
             }
 
             SwiftUI.Section {
                 ForEach($settings.draft.tasks) { $task in
-                    LLMTaskEditor(task: $task, providers: settings.draft.providers, models: settings.draft.models) {
-                        guard let providerID = settings.providerID(named: task.provider) else { return }
-                        discover(providerID: providerID, providerName: task.provider, task: task.task)
-                    }
+                    LLMTaskEditor(
+                        task: $task,
+                        settings: settings,
+                        onEnable: { enabled in settings.setTaskEnabled(task.task, enabled) },
+                        onModeChange: { mode in settings.setTaskMode(task.task, mode) },
+                        onProviderChange: { provider in settings.setTaskProvider(task.task, provider) },
+                        onModelChange: { model in settings.setTaskModel(task.task, model) },
+                        onBrowse: { providerName in
+                            guard let provider = settings.draft.providers.first(where: { $0.name == providerName }) else { return }
+                            discover(providerID: provider.id, providerName: provider.name,
+                                     selection: .task(task.task))
+                        }
+                    )
                 }
             } header: {
-                Text("Tasks")
+                Text("Features")
             } footer: {
-                Text("A task is disabled until both a provider and a model are chosen. Anthropic providers cannot embed. Fetch models browses a provider's catalogue; a route changes only on an explicit choice.")
+                Text("Enable the features you want to use. Per-feature model overrides are in Advanced.")
             }
 
             DisclosureGroup("Models and Pricing") {
-                Text("Prices are USD per million tokens. Enter the service's rates for paid models; use explicit zero prices for local models.")
+                Text("Prices are USD per million tokens. Enter the service's rates for paid models; use explicit zero prices for local models. A provider-scoped entry wins over a global entry with the same name.")
                     .foregroundStyle(.secondary)
                 if settings.draft.models.isEmpty {
-                    Text("No models configured. Every task stays disabled.")
+                    Text("No models configured. Every feature stays off.")
                         .foregroundStyle(.secondary)
                 }
                 ForEach($settings.draft.models) { $model in
-                    LLMModelEditor(model: $model) {
+                    LLMModelEditor(model: $model, providers: settings.draft.providers) {
                         settings.removeModel(id: model.id)
                     }
                 }
-                Button("Add Model") { settings.addModel() }
             }
+            }
+            .disabled(!settings.loaded || settings.busy)
         }
         .formStyle(.grouped)
         .frame(height: 560)
+        .task(id: settings.ready) { settings.loadIfNeeded() }
         .sheet(item: $discoveryTarget) { target in
             LLMDiscoveryView(settings: settings, target: target)
         }
     }
+
+    private func discover(providerID: UUID, providerName: String,
+                          selection: LLMSettingsModel.LLMModelSelection) {
+        guard settings.loaded else { return }
+        discoveryTarget = LLMDiscoveryTarget(providerID: providerID,
+                                             providerName: providerName,
+                                             selection: selection)
+    }
 }
 
-/// Saving, saved, failed or conflicting: the draft's state, with the one
-/// action that resolves it.
+/// Saving, saved, failed or conflicting: the draft's state, with the actions
+/// that resolve it.
 @MainActor struct LLMSettingsStatus: View {
     @ObservedObject var settings: LLMSettingsModel
+    @State private var confirmingReload = false
 
     var body: some View {
         HStack(spacing: 6) {
             if !settings.ready {
-                Text("Sign in to load the LLM settings.")
+                Text("Sign in to load the AI settings.")
             } else if settings.busy {
                 ProgressView().controlSize(.mini)
                 Text("Working…")
             } else if settings.conflict {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
                 Text(settings.error ?? "Settings changed elsewhere.")
-                Button("Reload") { settings.load() }.buttonStyle(.link)
+                Button("Reload") {
+                    if settings.isDirty { confirmingReload = true } else { settings.load() }
+                }.buttonStyle(.link)
             } else if let error = settings.error {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
                 Text(error).textSelection(.enabled)
                 if settings.canRetry {
-                    Button("Try Again") { settings.save() }.buttonStyle(.link)
+                    Button("Retry save") { settings.save() }.buttonStyle(.link)
+                } else if !settings.loaded {
+                    Button("Retry") { settings.load() }.buttonStyle(.link)
                 }
             } else if settings.saved {
                 Text("Saved.")
             } else if settings.loaded {
-                Text("Loaded.")
+                Text(settings.isDirty ? "Unsaved changes" : "")
             } else {
-                Text("Choose Reload to fetch the server configuration.")
+                Text("Loading AI settings…")
             }
         }
         .font(.caption)
         .foregroundStyle(.secondary)
         .accessibilityElement(children: .contain)
+        .alert("Discard edits and reload?", isPresented: $confirmingReload) {
+            Button("Reload", role: .destructive) { settings.load() }
+            Button("Keep editing", role: .cancel) {}
+        } message: {
+            Text("The current saved settings will replace your unsaved AI edits.")
+        }
     }
 }
 
 @MainActor private struct LLMProviderEditor: View {
     @Binding var provider: LLMProviderDraft
+    @State private var expanded = true
     let onRemove: () -> Void
     let onKindChange: (APILLMProviderKind) -> Void
-    let onDiscover: () -> Void
+    let onNameChange: (String) -> Void
+    let onBrowse: () -> Void
 
     var body: some View {
-        DisclosureGroup {
+        DisclosureGroup(isExpanded: $expanded) {
             VStack(alignment: .leading, spacing: 8) {
                 LabeledContent("Name") {
-                    TextField("openai", text: $provider.name)
+                    TextField("Provider name", text: Binding(get: { provider.name }, set: onNameChange))
                         .frame(width: 160)
                         .disabled(provider.hasAPIKey && provider.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !provider.clearAPIKey)
                 }
@@ -164,46 +220,56 @@ extension APILLMTask {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                LabeledContent("Kind") {
-                    Picker("Kind", selection: Binding(get: { provider.kind }, set: onKindChange)) {
-                        ForEach(APILLMProviderKind.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                    }
-                    .labelsHidden()
-                    .frame(width: 160)
-                }
                 LabeledContent("Base URL") {
                     TextField("https://", text: $provider.baseURL)
                         .frame(width: 220)
                 }
-                LabeledContent("Monthly limit (USD)") {
+                LabeledContent("Monthly budget (USD)") {
                     TextField("0", text: $provider.monthlyLimitUSD)
                         .frame(width: 90)
+                }
+                if !isValidLLMMoney(provider.monthlyLimitUSD) {
+                    Text("Enter a non-negative monthly budget with at most six decimal places.")
+                        .font(.caption)
+                        .foregroundStyle(.red)
                 }
                 Text("0 means no monthly limit. Leave the API key blank to keep the saved key.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                IntegerField("Request timeout", value: $provider.timeoutSeconds, in: 1...600, unit: "seconds")
-                LabeledContent("Token field") {
-                    Picker("Token field", selection: $provider.tokenField) {
-                        ForEach(APILLMTokenField.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                    }
-                    .labelsHidden()
-                    .frame(width: 200)
-                }
                 LabeledContent("API key") {
                     HStack(spacing: 8) {
                         Text(provider.keyStatus.title)
                             .foregroundStyle(provider.keyStatus == .none || provider.keyStatus == .removal
                                              ? Color.orange : Color.secondary)
-                        SecureField("Replace key", text: $provider.apiKey)
+                        SecureField(provider.hasAPIKey ? "Leave blank to keep the key" : "API key", text: $provider.apiKey)
                             .frame(width: 150)
                             .disabled(provider.clearAPIKey)
                     }
                 }
                 Toggle("Remove the saved key", isOn: $provider.clearAPIKey)
                     .disabled(!provider.hasAPIKey)
-                Button("Fetch models…", action: onDiscover)
-                Text("Fetching previews this provider exactly as edited; a typed key is used but never persisted.")
+                DisclosureGroup("Advanced") {
+                    VStack(alignment: .leading, spacing: 8) {
+                LabeledContent("API protocol") {
+                    Picker("API protocol", selection: Binding(get: { provider.kind }, set: onKindChange)) {
+                        ForEach(APILLMProviderKind.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }
+                    .labelsHidden()
+                    .frame(width: 160)
+                }
+                        IntegerField("Request timeout", value: $provider.timeoutSeconds, in: 1...600, unit: "seconds")
+                        LabeledContent("Token field") {
+                            Picker("Token field", selection: $provider.tokenField) {
+                                ForEach(APILLMTokenField.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                            }
+                            .labelsHidden()
+                            .frame(width: 200)
+                        }
+                    }
+                    .padding(.top, 4)
+                }
+                Button("Browse Models…", action: onBrowse)
+                Text("Browse available models or enter a model ID manually.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Button("Remove Provider", role: .destructive, action: onRemove)
@@ -223,54 +289,152 @@ extension APILLMTask {
     }
 }
 
-@MainActor private struct LLMTaskEditor: View {
-    @Binding var task: LLMTaskDraft
+/// One default route: a provider and a configured model, plus the searchable
+/// catalogue for models not configured yet.
+private struct DefaultRouteRow: View {
+    let title: String
+    let usage: LLMModelUsage
+    @ObservedObject var settings: LLMSettingsModel
     let providers: [LLMProviderDraft]
-    let models: [LLMModelDraft]
-    let onDiscover: () -> Void
+    let models: (String) -> [LLMModelDraft]
+    let selection: LLMSettingsModel.LLMModelSelection
+    @Binding var target: LLMDiscoveryTarget?
 
-    /// Anthropic has no embeddings dialect, so it is not offered for embed.
-    private var providerChoices: [LLMProviderDraft] {
-        task.task == .embed ? providers.filter { $0.kind != .anthropic } : providers
+    init(title: String, usage: LLMModelUsage, settings: LLMSettingsModel,
+         providers: [LLMProviderDraft],
+         models: @escaping (String) -> [LLMModelDraft],
+         selection: LLMSettingsModel.LLMModelSelection,
+         target: Binding<LLMDiscoveryTarget?>) {
+        self.title = title
+        self.usage = usage
+        self._settings = ObservedObject(wrappedValue: settings)
+        self.providers = providers
+        self.models = models
+        self.selection = selection
+        self._target = target
     }
 
-    private var providerSelection: Binding<String> {
-        Binding(
-            get: { task.provider },
-            set: { newValue in
-                task.provider = newValue
-                // Disabling clears the model too; both must be set together.
-                if newValue.isEmpty { task.model = "" }
-            }
-        )
+    private var route: APILLMDefaultRoute {
+        switch usage {
+        case .chat: return settings.draft.defaults?.text ?? APILLMDefaultRoute()
+        case .embedding: return settings.draft.defaults?.embedding ?? APILLMDefaultRoute()
+        }
+    }
+
+    private var providerChoices: [LLMProviderDraft] {
+        usage == .embedding ? providers.filter { $0.kind != .anthropic } : providers
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            LabeledContent(task.task.title) {
-                Picker("Provider", selection: providerSelection) {
-                    Text("Disabled").tag("")
+            LabeledContent(title) {
+                Picker("Provider", selection: Binding(
+                    get: { route.provider },
+                    set: { settings.setDefaultRoute(provider: $0, model: "", usage: usage) }
+                )) {
+                    Text("None").tag("")
                     ForEach(providerChoices) { provider in
                         Text(provider.name.isEmpty ? "New provider" : provider.name).tag(provider.name)
                     }
                 }
                 .labelsHidden()
-                .frame(width: 180)
+                .frame(width: 160)
             }
-            if !task.provider.isEmpty {
-                LabeledContent("Model") {
-                    HStack(spacing: 8) {
-                        Picker("Model", selection: $task.model) {
-                            Text("Choose a model").tag("")
-                            ForEach(models) { model in
-                                Text(model.name.isEmpty ? "New model" : model.name).tag(model.name)
+            LabeledContent("Model") {
+                HStack(spacing: 8) {
+                    Picker("Model", selection: Binding(
+                        get: { route.model },
+                        set: { settings.setDefaultRoute(provider: route.provider, model: $0, usage: usage) }
+                    )) {
+                        Text("Choose a model").tag("")
+                        ForEach(models(route.provider)) { model in
+                            Text(model.name.isEmpty ? "New model" : model.name).tag(model.name)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 180)
+                    Button("Browse…") {
+                        guard let provider = providerChoices.first(where: { $0.name == route.provider }) else { return }
+                        target = LLMDiscoveryTarget(providerID: provider.id, providerName: provider.name,
+                                                    selection: selection)
+                    }
+                    .disabled(route.provider.isEmpty)
+                }
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+@MainActor private struct LLMTaskEditor: View {
+    @Binding var task: LLMTaskDraft
+    @ObservedObject var settings: LLMSettingsModel
+    let onEnable: (Bool) -> Void
+    let onModeChange: (APILLMTaskMode) -> Void
+    let onProviderChange: (String) -> Void
+    let onModelChange: (String) -> Void
+    let onBrowse: (String) -> Void
+
+    private var providerChoices: [LLMProviderDraft] {
+        task.task == .embed
+            ? settings.draft.providers.filter { $0.kind != .anthropic }
+            : settings.draft.providers
+    }
+
+    private var route: APILLMDefaultRoute {
+        settings.effectiveTaskRoute(task)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(isOn: Binding(get: { task.isEnabled }, set: onEnable)) {
+                Text(task.task.title)
+            }
+            if task.isEnabled {
+                Text(route.model.isEmpty ? "Choose a default model or set an override in Advanced." : "\(route.provider) · \(route.model)")
+                    .font(.caption).foregroundStyle(.secondary)
+                DisclosureGroup("Advanced") {
+                LabeledContent("Route") {
+                    Picker("Route", selection: Binding(get: { task.mode }, set: onModeChange)) {
+                        Text("Default").tag(APILLMTaskMode.default)
+                        Text("Custom").tag(APILLMTaskMode.custom)
+                    }
+                    .labelsHidden()
+                    .frame(width: 140)
+                }
+                if task.mode == .default {
+                    Text(route.provider.isEmpty && route.model.isEmpty
+                         ? "No default set. Choose one in Defaults or switch to Custom."
+                         : "\(route.provider) · \(route.model)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    LabeledContent("Provider") {
+                        Picker("Provider", selection: Binding(get: { task.provider }, set: onProviderChange)) {
+                            Text("Choose a provider").tag("")
+                            ForEach(providerChoices) { provider in
+                                Text(provider.name.isEmpty ? "New provider" : provider.name).tag(provider.name)
                             }
                         }
                         .labelsHidden()
-                        .frame(width: 180)
-                        Button("Fetch models…", action: onDiscover)
-                            .disabled(!providers.contains { $0.name == task.provider })
+                        .frame(width: 170)
                     }
+                    if !task.provider.isEmpty {
+                        LabeledContent("Model") {
+                            HStack(spacing: 8) {
+                                Picker("Model", selection: Binding(get: { task.model }, set: onModelChange)) {
+                                    Text("Choose a model").tag("")
+                                    ForEach(settings.configuredModels(for: task.provider)) { model in
+                                        Text(model.name.isEmpty ? "New model" : model.name).tag(model.name)
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(width: 170)
+                                Button("Browse…") { onBrowse(task.provider) }
+                            }
+                        }
+                    }
+                }
                 }
             }
         }
@@ -280,6 +444,7 @@ extension APILLMTask {
 
 @MainActor private struct LLMModelEditor: View {
     @Binding var model: LLMModelDraft
+    let providers: [LLMProviderDraft]
     let onRemove: () -> Void
 
     var body: some View {
@@ -288,6 +453,16 @@ extension APILLMTask {
                 LabeledContent("Name") {
                     TextField("text-embedding-3-small", text: $model.name)
                         .frame(width: 220)
+                }
+                LabeledContent("Provider") {
+                    Picker("Provider", selection: $model.provider) {
+                        if model.provider.isEmpty { Text("Legacy shared pricing").tag("") }
+                        ForEach(providers.filter { !$0.name.isEmpty }) { provider in
+                            Text(provider.name).tag(provider.name)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 160)
                 }
                 LabeledContent("Input per 1M (USD)") {
                     TextField("0", text: $model.inputPer1M)
@@ -303,14 +478,20 @@ extension APILLMTask {
                 }
                 IntegerField("Dimensions", value: $model.dimensions, in: 0...65536, unit: "values")
                 Toggle("Truncatable", isOn: $model.truncatable)
+                Toggle("Supports custom dimensions", isOn: $model.supportsCustomDimensions)
                 Button("Remove Model", role: .destructive, action: onRemove)
             }
             .padding(.vertical, 4)
         } label: {
             HStack {
                 Text(model.name.isEmpty ? "New model" : model.name)
+                if !model.provider.isEmpty {
+                    Text(model.provider).foregroundStyle(.secondary)
+                }
                 Spacer()
-                Text(model.truncatable ? "truncatable" : "\(model.dimensions) dimensions")
+                Text(model.truncatable ? "truncatable"
+                     : model.supportsCustomDimensions ? "custom dimensions"
+                     : "\(model.dimensions) dimensions")
                     .foregroundStyle(.secondary)
             }
         }
