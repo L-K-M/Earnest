@@ -117,6 +117,19 @@ it('prefills saved custom rates when completing a capability', async () => {
   expect((screen.getByLabelText('dual output price per 1m tokens') as HTMLInputElement).value).toBe('8')
 })
 
+it('confirms an ambiguous legacy zero without changing the other saved text rate', async () => {
+  mockCatalogue({models: [{id: 'dual', name: 'Dual', chat: true, input_per_1m: '1', output_per_1m: '2'}]})
+  const onPick = vi.fn()
+  const configured: ModelDraft = {name: 'dual', provider: 'local', input_per_1m: '9', output_per_1m: '0', embedding_per_1m: '0', dimensions: '0', truncatable: false, supports_custom_dimensions: false}
+  render(picker({onPick, models: [configured]}))
+  fireEvent.click(await screen.findByRole('button', {name: 'Select dual'}))
+  expect(onPick).not.toHaveBeenCalled()
+  expect((screen.getByLabelText('dual input price per 1m tokens') as HTMLInputElement).value).toBe('9')
+  expect((screen.getByLabelText('dual output price per 1m tokens') as HTMLInputElement).value).toBe('2')
+  fireEvent.click(screen.getByRole('button', {name: /Add to draft/}))
+  expect(onPick).toHaveBeenCalledWith(expect.objectContaining({input_per_1m: '9', output_per_1m: '2'}), 'chat')
+})
+
 it('asks for embedding metadata before reusing a text-only model', async () => {
   mockCatalogue({models: [{id: 'dual', name: 'Dual', chat: true, embedding: true, embedding_per_1m: '0.03', dimensions: 4096, supports_custom_dimensions: true}]})
   const onPick = vi.fn()

@@ -92,6 +92,13 @@ Existing entries without these fields retain their legacy behavior; older
 clients cannot erase a saved confirmation state by omitting the fields.
 Selecting the same model for another capability may ask you to confirm that
 capability's prices and embedding dimensions before it can be used.
+Legacy zero rates are ambiguous, so browse to a model and confirm its prices
+once when selecting it for a new route. Existing routes stay unchanged.
+Update the Earnest server before installing a native client that uses these
+fields. An older server rejects the new pricing-confirmation fields when the
+native client saves AI settings or checks a model; updating the server first
+avoids that incompatibility. The web client is served by the server and is
+updated with it.
 
 `POST /v1/settings/llm/models/check` accepts a revision, draft provider, model
 metadata and `chat` or `embedding` capability. Its response describes

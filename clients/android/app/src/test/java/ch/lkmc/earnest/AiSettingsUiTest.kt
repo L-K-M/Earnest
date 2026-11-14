@@ -9,12 +9,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import ch.lkmc.earnest.core.LlmDiscoveredModel
@@ -112,6 +114,34 @@ class AiSettingsUiTest {
         // The embedding picker still offers it: the geometry is real.
         compose.onAllNodesWithText("Choose")[1].performScrollTo().performClick()
         compose.onNodeWithText("venice/vec").assertExists()
+    }
+
+    private fun editChatModelDimensions() {
+        show(models = listOf(LlmModel("chat", inputPer1m = "1", outputPer1m = "2", provider = "venice")))
+        val pricingToggle = compose.onAllNodesWithText("Edit")
+        pricingToggle[pricingToggle.fetchSemanticsNodes().lastIndex].performScrollTo().performClick()
+        val modelEdit = compose.onAllNodesWithText("Edit")
+        modelEdit[modelEdit.fetchSemanticsNodes().lastIndex].performScrollTo().performClick()
+        compose.onNodeWithText("Embedding dimensions (0-1024, wider with truncation or custom width)")
+            .performScrollTo().performTextClearance()
+    }
+
+    @Test fun editingAChatModelCanLeaveEmbeddingDimensionsBlank() {
+        editChatModelDimensions()
+        compose.onNodeWithText("Apply").assertIsEnabled().performClick()
+        compose.onNodeWithText("Edit model").assertDoesNotExist()
+    }
+
+    @Test fun editingAChatModelRejectsIncompatibleEmbeddingDimensions() {
+        editChatModelDimensions()
+        compose.onNodeWithText("Embedding dimensions (0-1024, wider with truncation or custom width)")
+            .performTextInput("4096")
+        compose.onNodeWithText("Apply").assertIsNotEnabled()
+        compose.onNodeWithText("Embedding dimensions (0-1024, wider with truncation or custom width)")
+            .performTextClearance()
+        compose.onNodeWithText("Embedding dimensions (0-1024, wider with truncation or custom width)")
+            .performTextInput("1024")
+        compose.onNodeWithText("Apply").assertIsEnabled()
     }
 
     @Test fun failedDiscoveryKeepsManualEntryAndUnknownDimensionCheckReachable() {

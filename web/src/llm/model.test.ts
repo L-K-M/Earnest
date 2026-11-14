@@ -116,6 +116,8 @@ it('retains confirmed free and missing capability prices through a settings roun
   expect(needsCapabilityPricing(draft.models[0]!, 'chat')).toBe(false)
   expect(needsCapabilityPricing(draft.models[1]!, 'embedding')).toBe(true)
   expect(needsCapabilityPricing(draft.models[2]!, 'chat')).toBe(true)
+  expect(needsCapabilityPricing({...draft.models[2]!, input_per_1m: '1'}, 'chat')).toBe(true)
+  expect(needsCapabilityPricing({...draft.models[2]!, input_per_1m: '1', output_per_1m: '2'}, 'chat')).toBe(false)
   expect(needsCapabilityPricing({...draft.models[2]!, dimensions: '1024'}, 'embedding')).toBe(true)
   const models = inputFromDraft(draft).models!
   expect(models[0]).toMatchObject({text_pricing_configured: true, embedding_pricing_configured: true})

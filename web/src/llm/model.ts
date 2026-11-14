@@ -231,7 +231,7 @@ export function needsCapabilityPricing(model: ModelDraft, capability: LLMCapabil
     return Number(model.embedding_per_1m) === 0
   }
   if (model.text_pricing_configured !== undefined) return !model.text_pricing_configured
-  return Number(model.input_per_1m) === 0 && Number(model.output_per_1m) === 0
+  return Number(model.input_per_1m) === 0 || Number(model.output_per_1m) === 0
 }
 
 // defaultRouteFor resolves the default route a feature inherits. Every task

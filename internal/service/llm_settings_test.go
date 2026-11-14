@@ -82,6 +82,7 @@ func TestLLMModelPricingApplicabilitySurvivesLegacyWrites(t *testing.T) {
 		t.Fatalf("legacy write lost applicability: %s", output)
 	}
 	legacy.Tasks[0].Task = "embed"
+	legacy.Models[0].Dimensions = 1024 // Isolate pricing from the geometry check.
 	if _, err := validateLLMSettings(legacy, cfg); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("enabled embedding with unconfirmed pricing: %v", err)
 	}

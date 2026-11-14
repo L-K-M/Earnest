@@ -249,10 +249,13 @@ class LlmDiscoveryTest {
         assertFalse(local.usableFor(LlmCapability.CHAT))
         assertFalse(local.usableFor(LlmCapability.EMBEDDING))
         assertFalse(local.copy(dimensions = 1024, embeddingPer1m = "0.000000").usableFor(LlmCapability.EMBEDDING))
+        assertFalse(local.copy(inputPer1m = "1", outputPer1m = "0").usableFor(LlmCapability.CHAT))
+        assertTrue(local.copy(inputPer1m = "1", outputPer1m = "2").usableFor(LlmCapability.CHAT))
 
-        // One real text rate is enough; the other may be an explicit zero.
+        // A legacy zero may be a placeholder even when the other rate is real.
         val mixed = LlmModel("mixed", inputPer1m = "0", outputPer1m = "2", dimensions = 1536, provider = "openai")
-        assertTrue(mixed.usableFor(LlmCapability.CHAT))
+        assertFalse(mixed.usableFor(LlmCapability.CHAT))
+        assertTrue(mixed.copy(textPricingConfigured = true).usableFor(LlmCapability.CHAT))
     }
 
     @Test

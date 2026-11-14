@@ -292,11 +292,9 @@ func llmCapabilitySummary(_ model: APIDiscoveredModel) -> String {
     }
 
     private func check(_ review: LLMModelReview) {
-        // A completion check observes geometry for the review only; the saved
-        // model must not change before the user confirms it.
+        // Observed geometry stays in the review until the user confirms it.
         settings.checkModel(providerID: target.providerID, model: review.configured(),
-                            capability: review.usage == .embedding ? .embedding : .chat,
-                            applyGeometry: review.completes == nil)
+                            capability: review.usage == .embedding ? .embedding : .chat)
     }
 }
 

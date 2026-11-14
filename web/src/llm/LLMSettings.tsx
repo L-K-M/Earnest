@@ -65,7 +65,7 @@ function selectableModels(models: ModelDraft[], provider: string, capability: LL
   // global one is not offered a second time for this provider.
   const scopedNames = new Set(scoped.map(model => model.name))
   const candidates = [...scoped, ...models.filter(model => model.provider === '' && !scopedNames.has(model.name))]
-  return candidates.filter(model => model.name === selected || !needsCapabilityPricing(model, capability))
+  return candidates.filter(model => model.name !== '' && (model.name === selected || !needsCapabilityPricing(model, capability)))
 }
 
 // LLMSettings is the server-wide AI service configuration section. The server
@@ -255,7 +255,8 @@ export function LLMSettings() {
   }
 
   // pickModel adds the selected model to the draft unless its provider+name
-  // identity is already configured; an existing record keeps its saved prices.
+  // identity is already configured. Existing prices change only when the
+  // user confirms missing metadata for that capability in the picker.
   // The picker target decides which route the model becomes.
   function pickModel(model: ModelDraft, completion?: LLMCapability) {
     if (!draft) return
@@ -433,7 +434,7 @@ export function LLMSettings() {
         onClose={() => setPicker(null)} />}
 
       <h3>Defaults</h3>
-      <p className="hint">Choose the models your enabled features will use. Existing custom routes stay unchanged.</p>
+      <p className="hint">Choose the models your enabled features will use. Existing custom routes stay unchanged. If a model is missing, browse models to confirm its prices.</p>
       <RouteSelect label="Default text model" route={draft.defaults.text} providers={draft.providers} models={draft.models} capability="chat" busy={busy} onChange={route => setDefault('text', route)} onBrowse={() => setPicker({kind: 'default', which: 'text'})} />
       <RouteSelect label="Default embedding model" route={draft.defaults.embedding} providers={draft.providers} models={draft.models} capability="embedding" busy={busy} onChange={route => setDefault('embedding', route)} onBrowse={() => setPicker({kind: 'default', which: 'embedding'})} />
       {picker?.kind === 'default' && activePicker?.provider && <ModelPicker

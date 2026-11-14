@@ -1185,7 +1185,7 @@ import EarnestKit
         try validateLLMSettings(settings.draft.input(revision: 0, opID: "check"))
     }
 
-    func testCheckModelAppliesOnlyObservedGeometry() async throws {
+    func testCheckModelDoesNotChangeTheExistingDraft() async throws {
         let (api, session) = try makeAPI([
             .init(path: "/v1/settings/llm", body: settingsJSON(revision: 2)),
             .init(method: "POST", path: "/v1/settings/llm/models/check",
@@ -1207,8 +1207,8 @@ import EarnestKit
             return false
         }
         let stored = try XCTUnwrap(settings.draft.models.first)
-        XCTAssertEqual(stored.dimensions, 4096)
-        XCTAssertTrue(stored.supportsCustomDimensions)
+        XCTAssertEqual(stored.dimensions, 1536)
+        XCTAssertFalse(stored.supportsCustomDimensions)
         XCTAssertEqual(stored.embeddingPer1M, "0.020000", "a check never changes rates")
         LLMHTTP.assertFinished()
     }
@@ -1260,9 +1260,14 @@ import EarnestKit
             if case .result = settings.checks[providerID]?.phase { return true }
             return false
         }
-        XCTAssertEqual(settings.draft.models[0].dimensions, 4096,
-                       "the observed width is applied to the draft")
-        XCTAssertTrue(settings.draft.models[0].supportsCustomDimensions)
+        XCTAssertEqual(settings.draft.models[0].dimensions, 1536,
+                       "the check leaves the existing draft unchanged")
+        XCTAssertFalse(settings.draft.models[0].supportsCustomDimensions)
+        guard case .result(let result) = settings.checks[providerID]?.phase else {
+            return XCTFail("missing model check result")
+        }
+        XCTAssertEqual(result.dimensions, 4096)
+        XCTAssertEqual(result.supportsCustomDimensions, true)
         LLMHTTP.assertFinished()
     }
 
@@ -1715,7 +1720,7 @@ import EarnestKit
                        ["incomplete", "complete"], "the current selection stays visible")
     }
 
-    func testProgrammaticRoutesRejectIncompleteModelsAndKeepLegacyNilRoutes() {
+    func testProgrammaticRoutesRejectIncompleteModelsAndKeepLegacyNilRoutes() throws {
         func makeSettings() -> LLMSettingsModel {
             let app = makeModel()
             app.loggedIn = true
@@ -1738,8 +1743,8 @@ import EarnestKit
         }
 
         let probe = makeSettings()
-        let incomplete = try! XCTUnwrap(probe.draft.models.first { $0.name == "incomplete" })
-        let legacy = try! XCTUnwrap(probe.draft.models.first { $0.name == "legacy" })
+        let incomplete = try XCTUnwrap(probe.draft.models.first { $0.name == "incomplete" })
+        let legacy = try XCTUnwrap(probe.draft.models.first { $0.name == "legacy" })
         XCTAssertTrue(needsCapabilityPricing(incomplete, usage: .chat))
         XCTAssertTrue(needsCapabilityPricing(incomplete, usage: .embedding))
         XCTAssertFalse(needsCapabilityPricing(legacy, usage: .chat))
@@ -1751,6 +1756,10 @@ import EarnestKit
         ambiguous.embeddingPer1M = "0"
         XCTAssertTrue(needsCapabilityPricing(ambiguous, usage: .chat))
         XCTAssertTrue(needsCapabilityPricing(ambiguous, usage: .embedding))
+        ambiguous.inputPer1M = "1"
+        XCTAssertTrue(needsCapabilityPricing(ambiguous, usage: .chat))
+        ambiguous.outputPer1M = "2"
+        XCTAssertFalse(needsCapabilityPricing(ambiguous, usage: .chat))
         ambiguous.textPricingConfigured = true
         ambiguous.embeddingPricingConfigured = true
         XCTAssertFalse(needsCapabilityPricing(ambiguous, usage: .chat))

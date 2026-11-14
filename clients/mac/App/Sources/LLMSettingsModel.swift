@@ -518,7 +518,7 @@ func needsCapabilityPricing(_ model: LLMModelDraft, usage: LLMModelUsage) -> Boo
         return llmMoneyIsZero(model.embeddingPer1M)
     case .chat:
         if let configured = model.textPricingConfigured { return !configured }
-        return llmMoneyIsZero(model.inputPer1M) && llmMoneyIsZero(model.outputPer1M)
+        return llmMoneyIsZero(model.inputPer1M) || llmMoneyIsZero(model.outputPer1M)
     }
 }
 
@@ -854,10 +854,8 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
     }
 
     /// Check one draft model against its provider with a fixed sample. The
-    /// sample may cost; nothing is persisted and no route changes. Observed
-    /// geometry is applied to the matching draft model only.
-    func checkModel(providerID: UUID, model: LLMModelDraft, capability: APILLMModelCapability,
-                    applyGeometry: Bool = true) {
+    /// sample may cost; nothing is persisted and no draft or route changes.
+    func checkModel(providerID: UUID, model: LLMModelDraft, capability: APILLMModelCapability) {
         if synchronizeScope() {
             error = "Account data changed. Reload the AI settings."
             return
@@ -894,7 +892,6 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
                 try Task.checkCancellation()
                 guard self.acceptsCheck(checkID: checkID, providerID: providerID,
                                         identity: identity, revision: revision, scope: scope) else { return }
-                if applyGeometry { self.applyObservedGeometry(model.identity, result) }
                 self.checks[providerID]?.phase = .result(result)
             } catch is CancellationError {
             } catch {
@@ -928,17 +925,6 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
             return false
         }
         return true
-    }
-
-    /// Only observed geometry may reach the draft; prices and routes are
-    /// never changed by a check.
-    private func applyObservedGeometry(_ identity: String, _ result: APILLMModelCheck) {
-        guard result.compatible,
-              let index = draft.models.firstIndex(where: { $0.identity == identity }) else { return }
-        if let dimensions = result.dimensions { draft.models[index].dimensions = dimensions }
-        if let supports = result.supportsCustomDimensions {
-            draft.models[index].supportsCustomDimensions = supports
-        }
     }
 
     /// The provider row a task route currently names, for task-scoped
@@ -977,7 +963,7 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
     func selectableModels(for provider: String, usage: LLMModelUsage,
                           selected: String = "") -> [LLMModelDraft] {
         configuredModels(for: provider).filter {
-            $0.name == selected || !needsCapabilityPricing($0, usage: usage)
+            (!selected.isEmpty && $0.name == selected) || (!$0.name.isEmpty && !needsCapabilityPricing($0, usage: usage))
         }
     }
 

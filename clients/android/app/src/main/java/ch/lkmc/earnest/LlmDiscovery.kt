@@ -98,7 +98,7 @@ internal fun LlmModel.usableFor(capability: LlmCapability): Boolean = when (capa
     LlmCapability.EMBEDDING -> dimensions > 0 && (embeddingPricingConfigured
         ?: ((embeddingPer1m.toBigDecimalOrNull()?.signum() ?: 0) > 0))
     LlmCapability.CHAT -> textPricingConfigured ?: (
-        (inputPer1m.toBigDecimalOrNull()?.signum() ?: 0) > 0 ||
+        (inputPer1m.toBigDecimalOrNull()?.signum() ?: 0) > 0 &&
             (outputPer1m.toBigDecimalOrNull()?.signum() ?: 0) > 0
         )
     LlmCapability.BOTH -> usableFor(LlmCapability.CHAT) && usableFor(LlmCapability.EMBEDDING)
