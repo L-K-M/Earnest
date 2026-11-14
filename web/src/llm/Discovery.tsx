@@ -7,6 +7,7 @@ import {
   geometryIncompatible,
   missingApplicableFields,
   modelKey,
+  needsCapabilityPricing,
   providerInput,
   sameDiscoveryProvider,
   sameModel,
@@ -24,6 +25,13 @@ import {
 } from './model'
 
 const message = (error: unknown, fallback: string) => error instanceof Error && error.message ? error.message : fallback
+
+function completionNotice(model: ModelDraft, capability: LLMCapability): string {
+  const saved = capability === 'embedding'
+    ? `embedding $${model.embedding_per_1m}`
+    : `input $${model.input_per_1m}, output $${model.output_per_1m}`
+  return `Saved rates per 1M: ${saved}. Confirm the prices below for this use; other saved prices stay unchanged.`
+}
 
 // Catalogue results live only in the settings session's memory, keyed by the
 // exact provider values and settings revision. They are never written to
@@ -55,7 +63,7 @@ export function ModelPicker({provider, revision, capability: requestedCapability
   models: ModelDraft[]
   room: number
   cache: Map<string, DiscoveredModel[]>
-  onPick: (model: ModelDraft) => void
+  onPick: (model: ModelDraft, completion?: LLMCapability) => void
   onGeometry?: (patch: {provider: string; name: string; dimensions?: number; supports_custom_dimensions?: boolean}) => void
   onConflict?: () => void
   onClose: () => void
@@ -78,6 +86,7 @@ export function ModelPicker({provider, revision, capability: requestedCapability
   const [notice, setNotice] = useState('')
   const [query, setQuery] = useState('')
   const [draft, setDraft] = useState<ModelDraft | null>(null)
+  const [completion, setCompletion] = useState<LLMCapability | null>(null)
   const [manualID, setManualID] = useState('')
   const [manualOpen, setManualOpen] = useState(false)
   const [browsingCapability, setBrowsingCapability] = useState<LLMCapability>('chat')
@@ -87,6 +96,7 @@ export function ModelPicker({provider, revision, capability: requestedCapability
     requestID.current = Symbol()
     setResults(null)
     setDraft(null)
+    setCompletion(null)
     setError('')
     setBusy(false)
     if (generation > 0) setNotice('The provider details or settings revision changed; the earlier results were discarded. Fetch again to browse the new destination.')
@@ -144,12 +154,29 @@ export function ModelPicker({provider, revision, capability: requestedCapability
       setError('Give this provider a name before selecting a model.')
       return
     }
+    setCompletion(null)
     const base = draftFromDiscovered(model, provider.name, capability)
     // Identity is provider+name. A legacy global record is a different entry;
     // selecting this provider's catalogue model creates its scoped record and
     // leaves the global record's saved prices untouched.
     const existing = models.find(item => sameModel(item, base))
     if (existing) {
+      if (needsCapabilityPricing(existing, capability)) {
+        setCompletion(capability)
+        setDraft(capability === 'embedding' ? {
+          ...existing,
+          embedding_per_1m: Number(existing.embedding_per_1m) > 0 ? existing.embedding_per_1m : base.embedding_per_1m,
+          dimensions: Number(existing.dimensions) > 0 ? existing.dimensions : base.dimensions,
+          truncatable: existing.truncatable || base.truncatable,
+          supports_custom_dimensions: existing.supports_custom_dimensions || base.supports_custom_dimensions,
+        } : {...existing,
+          input_per_1m: Number(existing.input_per_1m) > 0 ? existing.input_per_1m : base.input_per_1m,
+          output_per_1m: Number(existing.output_per_1m) > 0 ? existing.output_per_1m : base.output_per_1m,
+        })
+        setError('')
+        setNotice(completionNotice(existing, capability))
+        return
+      }
       onPick(existing)
       setNotice(`${model.id} is already configured; its saved prices are kept.`)
       return
@@ -158,7 +185,8 @@ export function ModelPicker({provider, revision, capability: requestedCapability
       setError(`The configured-model table is full at ${MAX_MODELS} entries; remove one before adding.`)
       return
     }
-    if (missingApplicableFields(model, capability).length > 0 || validateModel(base, new Set()).length > 0) {
+    if (missingApplicableFields(model, capability).length > 0 || validateModel(base, new Set()).length > 0 ||
+        (capability === 'embedding' && Number(base.dimensions) <= 0)) {
       setDraft(base)
       setError('')
       setNotice('')
@@ -176,9 +204,24 @@ export function ModelPicker({provider, revision, capability: requestedCapability
     const id = manualID.trim()
     if (!id) { setError('Enter a model ID to add manually.'); return }
     setError('')
+    setCompletion(null)
     const base = draftFromDiscovered({id, name: id}, provider.name, capability)
     const existing = models.find(item => sameModel(item, base))
     if (existing) {
+      if (needsCapabilityPricing(existing, capability)) {
+        setCompletion(capability)
+        setDraft(capability === 'embedding' ? {
+          ...existing, embedding_per_1m: Number(existing.embedding_per_1m) > 0 ? existing.embedding_per_1m : '',
+          dimensions: Number(existing.dimensions) > 0 ? existing.dimensions : '',
+        } : {...existing,
+          input_per_1m: Number(existing.input_per_1m) > 0 ? existing.input_per_1m : '',
+          output_per_1m: Number(existing.output_per_1m) > 0 ? existing.output_per_1m : '',
+        })
+        setManualOpen(false)
+        setManualID('')
+        setNotice(completionNotice(existing, capability))
+        return
+      }
       onPick(existing)
       setNotice(`${id} is already configured; its saved prices are kept.`)
       setManualOpen(false)
@@ -210,6 +253,7 @@ export function ModelPicker({provider, revision, capability: requestedCapability
     {!requestedCapability && <label>Use for<select aria-label="Model use" value={browsingCapability} onChange={e => {
       setBrowsingCapability(e.target.value as LLMCapability)
       setDraft(null)
+      setCompletion(null)
     }}><option value="chat">Text</option><option value="embedding">Embedding</option></select></label>}
     {busy && <p role="status" className="muted">Fetching models…</p>}
     {error && <div role="alert" className="form-error"><ul><li>{error}</li></ul></div>}
@@ -257,17 +301,19 @@ export function ModelPicker({provider, revision, capability: requestedCapability
       revision={revision}
       provider={providerInput(provider)}
       taken={new Set(models.filter(item => !sameModel(item, draft)).map(item => modelKey(item.provider, item.name)))}
-      onGeometry={onGeometry}
+      onGeometry={completion ? undefined : onGeometry}
       onAdd={values => {
         if (room < 1 && !models.some(model => sameModel(model, values))) {
           setError(`The configured-model table is full at ${MAX_MODELS} entries; remove one before adding.`)
           return
         }
-        onPick(values)
+        if (completion) onPick(values, completion)
+        else onPick(values)
         setDraft(null)
+        setCompletion(null)
         setNotice(`${values.name} added to the draft. Save to persist it.`)
       }}
-      onCancel={() => setDraft(null)} />}
+      onCancel={() => { setDraft(null); setCompletion(null) }} />}
     {!results && !busy && <div className="button-row"><button type="button" onClick={() => void fetchModels()}>Fetch again</button><button type="button" onClick={() => setManualOpen(true)}>Enter model ID manually</button><button type="button" onClick={onClose}>Close</button></div>}
     {manualOpen && <div className="llm-manual">
 
@@ -329,7 +375,11 @@ function MetadataForm({draft, capability, taskLabel, revision, provider, taken, 
     ...(embedding ? [{label: 'Embedding price per 1M tokens', field: 'embedding_per_1m' as const}] : []),
   ]
   const ratesReady = free || applicableRates.every(({field}) => validateMoney(values[field]) === '')
-  const dimensionsError = problems.length ? validateDimensions(values.dimensions, values.truncatable, values.supports_custom_dimensions) : ''
+  const dimensionsError = problems.length ? (
+    embedding && values.dimensions.trim() !== '' && Number(values.dimensions) === 0
+      ? 'Enter the native embedding width, or use Check model to detect it.'
+      : validateDimensions(values.dimensions, values.truncatable, values.supports_custom_dimensions)
+  ) : ''
 
   function set(patch: Partial<ModelDraft>) {
     setValues(current => ({...current, ...patch}))
@@ -404,6 +454,9 @@ function MetadataForm({draft, capability, taskLabel, revision, provider, taken, 
 
   function add() {
     const found = validateModel({...values, name: values.name.trim()}, taken)
+    if (embedding && Number(values.dimensions) === 0 && values.dimensions.trim() !== '') {
+      found.push('Enter the native embedding width, or use Check model to detect it.')
+    }
     setProblems(found)
     if (!found.length) onAdd({...values, name: values.name.trim()})
   }

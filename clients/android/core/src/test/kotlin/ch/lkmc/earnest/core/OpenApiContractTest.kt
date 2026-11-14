@@ -155,7 +155,7 @@ class OpenApiContractTest {
                     ),
                 ),
                 listOf(LlmTaskRoute("embed", "openai", "text-embedding-3-small", LlmTaskMode.CUSTOM)),
-                listOf(LlmModel("text-embedding-3-small", "0.000000", "0.000000", "0.020000", 1536, true, "openai", false)),
+                listOf(LlmModel("text-embedding-3-small", "0.000000", "0.000000", "0.020000", 1536, true, "openai", false, false, true)),
                 LlmSettingsDefaults(
                     LlmDefaultRoute("openai", "gpt-5"),
                     LlmDefaultRoute("openai", "text-embedding-3-small"),
@@ -185,7 +185,7 @@ class OpenApiContractTest {
         ),
         "LLMModelSettings" to encode(
             LlmModel.serializer(),
-            LlmModel("llama3", "0", "0", "0", 1024, false, "local", true),
+            LlmModel("llama3", "0", "0", "0", 1024, false, "local", true, true, false),
         ),
         "LLMSettingsInput" to encode(
             LlmSettingsInput.serializer(),
@@ -194,7 +194,7 @@ class OpenApiContractTest {
                 "op-1",
                 listOf(LlmProviderInput("openai", LlmProviderKind.OPENAI, "https://api.openai.com/v1", apiKey = "sk-test")),
                 listOf(LlmTaskRoute("embed", "openai", "text-embedding-3-small", LlmTaskMode.CUSTOM)),
-                listOf(LlmModel("text-embedding-3-small", "0.000000", "0.000000", "0.020000", 1536, true, "openai", false)),
+                listOf(LlmModel("text-embedding-3-small", "0.000000", "0.000000", "0.020000", 1536, true, "openai", false, false, true)),
                 LlmSettingsDefaults(
                     LlmDefaultRoute("openai", "gpt-5"),
                     LlmDefaultRoute("openai", "text-embedding-3-small"),

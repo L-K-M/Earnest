@@ -37,18 +37,7 @@ func (s *Service) CheckLLMModel(ctx context.Context, a Actor, in LLMModelCheckIn
 	if in.Model.Provider != "" && in.Model.Provider != in.Provider.Name {
 		return llm.ModelCheck{}, fmt.Errorf("model belongs to a different provider: %w", ErrInvalid)
 	}
-	model := in.Model
-	model.Provider = in.Provider.Name
-	// A preview must be able to examine wide models before their resize support
-	// is known. CheckModel verifies the actual response; this flag is never saved.
-	if model.Dimensions > llm.StorageDimensions {
-		model.SupportsCustomDimensions = true
-	}
-	task := llm.TaskBlurb
-	if in.Capability == "embedding" {
-		task = llm.TaskEmbed
-	}
-	cfg, err := validateLLMSettings(LLMSettingsInput{Providers: []LLMProviderInput{in.Provider}, Models: []LLMModelSettings{model}, Tasks: []LLMTaskSettings{{Task: string(task), Provider: in.Provider.Name, Model: model.Name}}}, previous)
+	cfg, err := validateLLMCheckDraft(in, previous)
 	if err != nil {
 		return llm.ModelCheck{}, err
 	}
@@ -74,6 +63,10 @@ func (s *Service) CheckLLMModel(ctx context.Context, a Actor, in LLMModelCheckIn
 	if err != nil {
 		return llm.ModelCheck{}, ErrUnavailable
 	}
+	task := llm.TaskBlurb
+	if in.Capability == "embedding" {
+		task = llm.TaskEmbed
+	}
 	ctx, cancel := context.WithTimeout(ctx, p.Timeout)
 	defer cancel()
 	result, err := checker.CheckModel(ctx, task)
@@ -81,6 +74,45 @@ func (s *Service) CheckLLMModel(ctx context.Context, a Actor, in LLMModelCheckIn
 		return llm.ModelCheck{}, fmt.Errorf("%s: %w", modelCheckError(err), ErrUnavailable)
 	}
 	return result, nil
+}
+
+// A check supplies its own explicit prices and may need to discover the width.
+// Those temporary choices must not modify the saved configuration.
+func validateLLMCheckDraft(in LLMModelCheckInput, previous llm.Config) (llm.Config, error) {
+	model := in.Model
+	model.Provider = in.Provider.Name
+	confirmed := true
+	unknownWidth := in.Capability == "embedding" && model.Dimensions == 0
+	if in.Capability == "embedding" {
+		model.EmbeddingPricingConfigured = &confirmed
+		if unknownWidth {
+			// The save validator requires known geometry for confirmed prices;
+			// use a temporary width only until validation has finished.
+			model.Dimensions = llm.StorageDimensions
+		}
+	} else {
+		model.TextPricingConfigured = &confirmed
+	}
+	// A preview must be able to examine wide models before their resize support
+	// is known. CheckModel verifies the actual response; this flag is never saved.
+	if model.Dimensions > llm.StorageDimensions {
+		model.SupportsCustomDimensions = true
+	}
+	task := llm.TaskBlurb
+	if in.Capability == "embedding" {
+		task = llm.TaskEmbed
+	}
+	cfg, err := validateLLMSettings(LLMSettingsInput{Providers: []LLMProviderInput{in.Provider}, Models: []LLMModelSettings{model}, Tasks: []LLMTaskSettings{{Task: string(task), Provider: in.Provider.Name, Model: model.Name}}}, previous)
+	if err != nil {
+		return llm.Config{}, err
+	}
+	if unknownWidth {
+		key := llm.ModelKey(in.Provider.Name, model.Name)
+		info := cfg.Models[key]
+		info.Dimensions = 0
+		cfg.Models[key] = info
+	}
+	return cfg, nil
 }
 
 // Never expose provider bodies, credential-bearing URLs or raw transport errors.

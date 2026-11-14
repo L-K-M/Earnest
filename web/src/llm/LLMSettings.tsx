@@ -15,6 +15,7 @@ import {
   effectiveTaskRoute,
   inputFromDraft,
   modelKey,
+  needsCapabilityPricing,
   sameModel,
   taskCapability,
   taskLabel,
@@ -58,14 +59,13 @@ function toggleTask(task: LLMTaskDraft, checked: boolean): Partial<LLMTaskDraft>
 // selectableModels lists the models a route may use. A provider-scoped model
 // only applies to its own provider; the legacy global record applies to every
 // provider. Embedding routes additionally need real geometry.
-function selectableModels(models: ModelDraft[], provider: string, capability: LLMCapability): ModelDraft[] {
+function selectableModels(models: ModelDraft[], provider: string, capability: LLMCapability, selected: string): ModelDraft[] {
   const scoped = models.filter(model => model.provider === provider)
   // A scoped record wins over the global record with the same name, so the
   // global one is not offered a second time for this provider.
   const scopedNames = new Set(scoped.map(model => model.name))
   const candidates = [...scoped, ...models.filter(model => model.provider === '' && !scopedNames.has(model.name))]
-  if (capability === 'chat') return candidates
-  return candidates.filter(model => Number(model.dimensions) > 0 || model.supports_custom_dimensions)
+  return candidates.filter(model => model.name === selected || !needsCapabilityPricing(model, capability))
 }
 
 // LLMSettings is the server-wide AI service configuration section. The server
@@ -257,7 +257,7 @@ export function LLMSettings() {
   // pickModel adds the selected model to the draft unless its provider+name
   // identity is already configured; an existing record keeps its saved prices.
   // The picker target decides which route the model becomes.
-  function pickModel(model: ModelDraft) {
+  function pickModel(model: ModelDraft, completion?: LLMCapability) {
     if (!draft) return
     const target = picker
     const existing = draft.models.find(item => sameModel(item, model))
@@ -268,7 +268,13 @@ export function LLMSettings() {
     setDraft(current => {
       if (!current) return current
       const found = current.models.find(item => sameModel(item, model))
-      const models = found ? current.models : [...current.models, model]
+      const models = found ? current.models.map(item => {
+        if (!sameModel(item, model) || !completion) return item
+        return completion === 'embedding' ? {
+          ...item, embedding_per_1m: model.embedding_per_1m, embedding_pricing_configured: true, dimensions: model.dimensions,
+          truncatable: model.truncatable, supports_custom_dimensions: model.supports_custom_dimensions,
+        } : {...item, text_pricing_configured: true, input_per_1m: model.input_per_1m, output_per_1m: model.output_per_1m}
+      }) : [...current.models, model]
       if (target?.kind === 'task') {
         return {...current, models, tasks: current.tasks.map((task, i) => i === target.index ? {...task, mode: 'custom', provider: model.provider, model: model.name} : task)}
       }
@@ -471,7 +477,7 @@ export function LLMSettings() {
                 <label>Model
                   <select aria-label={`${label} model`} value={task.model} disabled={busy || !task.provider} onChange={e => setTask(index, {model: e.target.value, mode: e.target.value ? 'custom' : 'default'})}>
                     <option value="">Default</option>
-                    {selectableModels(draft.models, task.provider, capability).map(item => <option key={modelKey(item.provider, item.name)} value={item.name}>{item.name}{item.provider ? '' : ' (any provider)'}</option>)}
+                    {selectableModels(draft.models, task.provider, capability, task.model).map(item => <option key={modelKey(item.provider, item.name)} value={item.name}>{item.name}{item.provider ? '' : ' (any provider)'}</option>)}
                   </select>
                 </label>
                 <div className="button-row"><button type="button" disabled={busy || !task.provider} onClick={() => setPicker({kind: 'task', index})}>Browse models</button></div>
@@ -542,7 +548,7 @@ function RouteSelect({label, route, providers, models, capability, busy, onChang
       </select>
       <select aria-label={`${label} model`} value={route.model} disabled={busy || !route.provider} onChange={e => onChange({provider: route.provider, model: e.target.value})}>
         <option value="">No model</option>
-        {selectableModels(models, route.provider, capability).map(model => <option key={modelKey(model.provider, model.name)} value={model.name}>{model.name}{model.provider ? '' : ' (any provider)'}</option>)}
+        {selectableModels(models, route.provider, capability, route.model).map(model => <option key={modelKey(model.provider, model.name)} value={model.name}>{model.name}{model.provider ? '' : ' (any provider)'}</option>)}
       </select>
       <button type="button" disabled={busy || !route.provider} onClick={onBrowse}>Browse models</button>
     </span>

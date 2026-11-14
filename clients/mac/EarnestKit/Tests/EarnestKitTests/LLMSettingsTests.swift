@@ -538,4 +538,53 @@ final class LLMHTTP: URLProtocol {
         same.providers[0].baseURL = "https://api.openai.com/v1/"
         try validateLLMSettings(same, previous: previous)
     }
+
+    @Test func pricingFlagsRoundTripAndOmitLegacyNil() throws {
+        var model = validInput().models[0]
+        model.textPricingConfigured = true
+        model.embeddingPricingConfigured = false
+        let fields = try JSONDecoder().decode(APIValue.self, from: JSONEncoder().encode(model))
+        #expect(fields["text_pricing_configured"]?.boolValue == true)
+        #expect(fields["embedding_pricing_configured"]?.boolValue == false)
+
+        var legacy = model
+        legacy.textPricingConfigured = nil
+        legacy.embeddingPricingConfigured = nil
+        let encoded = try JSONDecoder().decode(APIValue.self, from: JSONEncoder().encode(legacy))
+        #expect(encoded["text_pricing_configured"] == nil, "legacy nil must stay absent")
+        #expect(encoded["embedding_pricing_configured"] == nil)
+        let decoded = try JSONDecoder().decode(APILLMModelSettings.self,
+                                                from: JSONEncoder().encode(legacy))
+        #expect(decoded.textPricingConfigured == nil && decoded.embeddingPricingConfigured == nil)
+    }
+
+    @Test func validationRejectsPlaceholderPricingAndUnconfirmedGeometry() throws {
+        var placeholder = validInput()
+        placeholder.models[0].textPricingConfigured = false
+        placeholder.tasks[1].provider = "openai"
+        placeholder.tasks[1].model = "text-embedding-3-small"
+        #expect(throws: APILLMSettingsError.self) { try validateLLMSettings(placeholder) }
+
+        var unconfirmed = validInput()
+        unconfirmed.models[0].embeddingPricingConfigured = true
+        unconfirmed.models[0].dimensions = 0
+        #expect(throws: APILLMSettingsError.self) { try validateLLMSettings(unconfirmed) }
+
+        // An explicitly free embedding still needs a positive native width.
+        var free = validInput()
+        free.models[0].embeddingPricingConfigured = true
+        free.models[0].embeddingPer1M = "0"
+        free.models[0].dimensions = 1024
+        free.models[0].truncatable = false
+        try validateLLMSettings(free)
+    }
+
+    @Test func validationKeepsLegacyNilRoutes() throws {
+        var legacy = validInput()
+        legacy.models[0].dimensions = 0
+        legacy.models[0].truncatable = false
+        legacy.models[0].textPricingConfigured = nil
+        legacy.models[0].embeddingPricingConfigured = nil
+        try validateLLMSettings(legacy)
+    }
 }

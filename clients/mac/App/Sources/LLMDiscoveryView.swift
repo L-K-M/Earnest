@@ -203,8 +203,16 @@ func llmCapabilitySummary(_ model: APIDiscoveredModel) -> String {
             Button("Add by ID") {
                 let id = manualID.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !id.isEmpty else { return }
+                // An ID that matches this provider's configured model completes
+                // that model for the selected use instead of adding a duplicate.
+                let existing = settings.draft.models.first {
+                    $0.provider == providerName && $0.name == id
+                }
                 review = LLMModelReview(discovered: APIDiscoveredModel(id: id, name: id),
-                                        provider: providerName, usage: usage, isManual: true)
+                                        provider: providerName, usage: usage, isManual: true,
+                                        completes: existing.flatMap {
+                                            needsCapabilityPricing($0, usage: usage) ? $0 : nil
+                                        })
             }
         }
     }
@@ -226,8 +234,17 @@ func llmCapabilitySummary(_ model: APIDiscoveredModel) -> String {
                 if target.selection == .add {
                     Text("Configured").font(.caption).foregroundStyle(.secondary)
                 } else if let existing = settings.draft.models.first(where: { $0.identity == identity }) {
-                    Button(target.selection == .defaultEmbedding ? "Use for embeddings" : "Use") {
-                        useConfigured(existing)
+                    if needsCapabilityPricing(existing, usage: usage) {
+                        // A saved model used for a new capability must confirm
+                        // that capability's rates before it routes.
+                        Button("Complete") {
+                            review = LLMModelReview(discovered: model, provider: providerName,
+                                                    usage: usage, completes: existing)
+                        }
+                    } else {
+                        Button(target.selection == .defaultEmbedding ? "Use for embeddings" : "Use") {
+                            useConfigured(existing)
+                        }
                     }
                 }
             } else {
@@ -275,8 +292,11 @@ func llmCapabilitySummary(_ model: APIDiscoveredModel) -> String {
     }
 
     private func check(_ review: LLMModelReview) {
+        // A completion check observes geometry for the review only; the saved
+        // model must not change before the user confirms it.
         settings.checkModel(providerID: target.providerID, model: review.configured(),
-                            capability: review.usage == .embedding ? .embedding : .chat)
+                            capability: review.usage == .embedding ? .embedding : .chat,
+                            applyGeometry: review.completes == nil)
     }
 }
 
@@ -309,10 +329,18 @@ private struct LLMModelReviewEditor: View {
                 Button("Back", action: onBack)
             }
 
+            if let savedRates = review.savedRatesMessage {
+                Text(savedRates)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             if review.usage == .chat {
                 priceField("Input per 1M (USD)", text: $review.inputPer1M, valid: review.inputValid)
                 priceField("Output per 1M (USD)", text: $review.outputPer1M, valid: review.outputValid)
-                Text("Embedding geometry and rate are not used for chat and stay zero.")
+                Text(review.completes != nil
+                     ? "The saved embedding price and geometry stay unchanged."
+                     : "Embedding geometry and rate are not used for chat and stay zero.")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
                 priceField("Embedding per 1M (USD)", text: $review.embeddingPer1M,

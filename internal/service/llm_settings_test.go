@@ -24,6 +24,116 @@ func llmSettingsTestInput() LLMSettingsInput {
 	return LLMSettingsInput{OpID: "llm-settings", Providers: []LLMProviderInput{{Name: "local", Kind: "openai", BaseURL: "https://models.example/v1", APIKey: "sk-test-private", MonthlyLimitUSD: "20.000001", TimeoutSeconds: 60, TokenField: "max_tokens"}}, Tasks: []LLMTaskSettings{{Task: "embed", Provider: "local", Model: "local-embed"}}, Models: []LLMModelSettings{{Name: "local-embed", InputPer1M: "0", OutputPer1M: "0", EmbeddingPer1M: "0", Dimensions: 2}}}
 }
 
+func TestLLMModelPricingApplicabilitySurvivesLegacyWrites(t *testing.T) {
+	input := llmSettingsTestInput()
+	input.Tasks[0].Task = "blurb"
+	input.Models[0].Provider = "local"
+	input.Models[0].Dimensions = 0
+	raw, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	model := body["models"].([]any)[0].(map[string]any)
+	model["text_pricing_configured"] = true
+	model["embedding_pricing_configured"] = false
+	raw, err = json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &input); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := validateLLMSettings(input, llm.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := json.Marshal(redactedLLMSettings(cfg, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(output, []byte(`"text_pricing_configured":true`)) || !bytes.Contains(output, []byte(`"embedding_pricing_configured":false`)) {
+		t.Fatalf("pricing applicability was not retained: %s", output)
+	}
+	// An older client omits the new fields. Its write must not silently turn
+	// the previously inapplicable embedding zero into a confirmed free rate.
+	delete(model, "text_pricing_configured")
+	delete(model, "embedding_pricing_configured")
+	raw, err = json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacy LLMSettingsInput
+	if err := json.Unmarshal(raw, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	retained, err := validateLLMSettings(legacy, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err = json.Marshal(redactedLLMSettings(retained, 2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(output, []byte(`"embedding_pricing_configured":false`)) {
+		t.Fatalf("legacy write lost applicability: %s", output)
+	}
+	legacy.Tasks[0].Task = "embed"
+	if _, err := validateLLMSettings(legacy, cfg); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("enabled embedding with unconfirmed pricing: %v", err)
+	}
+}
+
+func TestLLMEmbeddingPricingConfirmationRequiresGeometry(t *testing.T) {
+	in := llmSettingsTestInput()
+	in.Models[0].Dimensions = 0
+	confirmed := true
+	in.Models[0].EmbeddingPricingConfigured = &confirmed
+	if _, err := validateLLMSettings(in, llm.DefaultConfig()); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("accepted confirmed embedding without a native width: %v", err)
+	}
+	// Legacy entries remain valid even if their native width was not recorded.
+	in.Models[0].EmbeddingPricingConfigured = nil
+	if _, err := validateLLMSettings(in, llm.DefaultConfig()); err != nil {
+		t.Fatalf("legacy route with unknown width: %v", err)
+	}
+	// An explicitly free model is allowed when its geometry is known.
+	in.Models[0].EmbeddingPricingConfigured = &confirmed
+	in.Models[0].Dimensions = 1024
+	if _, err := validateLLMSettings(in, llm.DefaultConfig()); err != nil {
+		t.Fatalf("confirmed free embedding: %v", err)
+	}
+}
+
+func TestLLMPricingConfirmationIsProviderScoped(t *testing.T) {
+	in := llmSettingsTestInput()
+	in.Models[0].Provider = "local"
+	in.Models[0].Dimensions = 0
+	in.Tasks[0].Task = "blurb"
+	other := in.Providers[0]
+	other.Name = "other"
+	in.Providers = append(in.Providers, other)
+	confirmed, missing := true, false
+	in.Models[0].TextPricingConfigured = &confirmed
+	second := in.Models[0]
+	second.Provider = "other"
+	second.TextPricingConfigured = &missing
+	in.Models = append(in.Models, second)
+	cfg, err := validateLLMSettings(in, llm.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateLLMRoute(cfg, llm.TaskConfig{Provider: "other", Model: second.Name}, llm.TaskBlurb); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("other provider inherited confirmation: %v", err)
+	}
+	if err := validateLLMRoute(cfg, llm.TaskConfig{Provider: "local", Model: second.Name}, llm.TaskBlurb); err != nil {
+		t.Fatalf("local provider lost confirmation: %v", err)
+	}
+}
+
 func TestLLMSettingsValidation(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

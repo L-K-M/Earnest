@@ -1462,4 +1462,392 @@ import EarnestKit
         settings.setProviderKind(.gemini, id: id)
         XCTAssertEqual(settings.draft.providers[0].baseURL, "https://proxy.example/v1")
     }
+
+    // MARK: - Cross-capability pricing
+
+    private func capabilitySettingsJSON(revision: Int64, models: String) -> String {
+        #"{"revision":\#(revision),"providers":[{"name":"openai","kind":"openai","base_url":"https://api.openai.com/v1","has_api_key":true,"monthly_limit_usd":"20.000000","timeout_seconds":60,"token_field":"max_completion_tokens"}],"tasks":[{"task":"embed","provider":"","model":""},{"task":"classify","provider":"","model":""},{"task":"blurb","provider":"","model":""},{"task":"summary","provider":"","model":""},{"task":"edition","provider":"","model":""},{"task":"compile_rule","provider":"","model":""},{"task":"ask","provider":"","model":""}],"models":[\#(models)]}"#
+    }
+
+    private func dualCatalogueJSON() -> String {
+        #"{"models":[{"id":"dual","name":"Dual","chat":true,"embedding":true,"input_per_1m":"1.000000","output_per_1m":"2.000000","embedding_per_1m":"0.030000","dimensions":4096,"supports_custom_dimensions":true}]}"#
+    }
+
+    func testNewModelReviewsMarkChosenUsageAndPlaceholderOther() {
+        let chat = LLMModelReview(discovered: APIDiscoveredModel(id: "c", name: "C"),
+                                  provider: "openai", usage: .chat)
+        XCTAssertEqual(chat.configured().textPricingConfigured, true)
+        XCTAssertEqual(chat.configured().embeddingPricingConfigured, false)
+
+        let embed = LLMModelReview(discovered: APIDiscoveredModel(id: "e", name: "E"),
+                                   provider: "openai", usage: .embedding)
+        XCTAssertEqual(embed.configured().embeddingPricingConfigured, true)
+        XCTAssertEqual(embed.configured().textPricingConfigured, false)
+    }
+
+    func testCompletingATextModelForEmbeddingPreservesTextRates() async throws {
+        let model = #"{"name":"dual","provider":"openai","input_per_1m":"9.000000","output_per_1m":"8.000000","embedding_per_1m":"0.000000","dimensions":0,"truncatable":false,"text_pricing_configured":true,"embedding_pricing_configured":false}"#
+        let (api, session) = try makeAPI([
+            .init(path: "/v1/settings/llm", body: capabilitySettingsJSON(revision: 2, models: model)),
+            .init(method: "POST", path: "/v1/settings/llm/models", body: dualCatalogueJSON()),
+        ])
+        defer { session.invalidateAndCancel() }
+        let app = makeModel(api: api)
+        app.loggedIn = true
+        let settings = LLMSettingsModel(app: app)
+        settings.load()
+        try await waitUntil { settings.loaded && !settings.busy }
+        let providerID = settings.draft.providers[0].id
+        settings.fetchModels(providerID: providerID)
+        try await waitUntil {
+            if case .loaded = settings.discoveries[providerID]?.phase { return true }
+            return false
+        }
+        let discovery = try XCTUnwrap(settings.discoveries[providerID])
+        guard case .loaded(let models) = discovery.phase else { return XCTFail("missing catalogue") }
+        let existing = try XCTUnwrap(settings.draft.models.first)
+        let before = settings.draft
+        let review = LLMModelReview(discovered: try XCTUnwrap(models.first { $0.id == "dual" }),
+                                    provider: "openai", usage: .embedding, completes: existing)
+        XCTAssertTrue(review.isReady, "the catalogue supplies the missing embedding metadata")
+        XCTAssertEqual(review.embeddingPer1M, "0.030000")
+        XCTAssertEqual(review.dimensions, "4096")
+        XCTAssertTrue(review.supportsCustomDimensions)
+        XCTAssertEqual(review.savedRatesMessage,
+                       "Saved rates per 1M: embedding $0.000000. Confirm the price below for this use; other saved prices stay unchanged.")
+        XCTAssertEqual(settings.draft, before, "opening a completion review must not change the draft")
+
+        XCTAssertTrue(settings.selectCatalogueModel(review, providerID: providerID,
+                                                    fetchID: discovery.fetchID,
+                                                    selection: .task(.embed)))
+        let stored = try XCTUnwrap(settings.draft.models.first)
+        XCTAssertEqual(stored.id, existing.id)
+        XCTAssertEqual(stored.embeddingPricingConfigured, true)
+        XCTAssertEqual(stored.embeddingPer1M, "0.030000")
+        XCTAssertEqual(stored.dimensions, 4096)
+        XCTAssertTrue(stored.supportsCustomDimensions)
+        XCTAssertEqual(stored.textPricingConfigured, true, "the opposite capability keeps its flag")
+        XCTAssertEqual(stored.inputPer1M, "9.000000")
+        XCTAssertEqual(stored.outputPer1M, "8.000000")
+        XCTAssertEqual(settings.draft.tasks.first { $0.task == .embed }?.model, "dual")
+        XCTAssertEqual(settings.draft.tasks.first { $0.task == .embed }?.mode, .custom)
+        XCTAssertEqual(settings.draft.models.count, 1)
+        LLMHTTP.assertFinished()
+    }
+
+    func testCompletingAnEmbeddingModelForTextPreservesEmbeddingRates() async throws {
+        let model = #"{"name":"dual","provider":"openai","input_per_1m":"0.000000","output_per_1m":"0.000000","embedding_per_1m":"0.030000","dimensions":1536,"truncatable":true,"text_pricing_configured":false,"embedding_pricing_configured":true}"#
+        let (api, session) = try makeAPI([
+            .init(path: "/v1/settings/llm", body: capabilitySettingsJSON(revision: 2, models: model)),
+            .init(method: "POST", path: "/v1/settings/llm/models", body: dualCatalogueJSON()),
+        ])
+        defer { session.invalidateAndCancel() }
+        let app = makeModel(api: api)
+        app.loggedIn = true
+        let settings = LLMSettingsModel(app: app)
+        settings.load()
+        try await waitUntil { settings.loaded && !settings.busy }
+        let providerID = settings.draft.providers[0].id
+        settings.fetchModels(providerID: providerID)
+        try await waitUntil {
+            if case .loaded = settings.discoveries[providerID]?.phase { return true }
+            return false
+        }
+        let discovery = try XCTUnwrap(settings.discoveries[providerID])
+        guard case .loaded(let models) = discovery.phase else { return XCTFail("missing catalogue") }
+        let existing = try XCTUnwrap(settings.draft.models.first)
+        let review = LLMModelReview(discovered: try XCTUnwrap(models.first { $0.id == "dual" }),
+                                    provider: "openai", usage: .chat, completes: existing)
+        XCTAssertEqual(review.inputPer1M, "1.000000", "the catalogue fills the missing text rates")
+        XCTAssertEqual(review.outputPer1M, "2.000000")
+        XCTAssertTrue(review.isReady)
+
+        XCTAssertTrue(settings.selectCatalogueModel(review, providerID: providerID,
+                                                    fetchID: discovery.fetchID,
+                                                    selection: .task(.blurb)))
+        let stored = try XCTUnwrap(settings.draft.models.first)
+        XCTAssertEqual(stored.textPricingConfigured, true)
+        XCTAssertEqual(stored.inputPer1M, "1.000000")
+        XCTAssertEqual(stored.outputPer1M, "2.000000")
+        XCTAssertEqual(stored.embeddingPricingConfigured, true, "the opposite capability keeps its flag")
+        XCTAssertEqual(stored.embeddingPer1M, "0.030000")
+        XCTAssertEqual(stored.dimensions, 1536)
+        XCTAssertTrue(stored.truncatable)
+        XCTAssertEqual(settings.draft.tasks.first { $0.task == .blurb }?.model, "dual")
+        LLMHTTP.assertFinished()
+    }
+
+    func testExplicitFreeFlagsSurviveCrossCapabilityCompletion() async throws {
+        let model = #"{"name":"dual","provider":"openai","input_per_1m":"0.000000","output_per_1m":"0.000000","embedding_per_1m":"0.000000","dimensions":0,"truncatable":false,"text_pricing_configured":true,"embedding_pricing_configured":false}"#
+        let (api, session) = try makeAPI([
+            .init(path: "/v1/settings/llm", body: capabilitySettingsJSON(revision: 2, models: model)),
+            .init(method: "POST", path: "/v1/settings/llm/models", body: dualCatalogueJSON()),
+        ])
+        defer { session.invalidateAndCancel() }
+        let app = makeModel(api: api)
+        app.loggedIn = true
+        let settings = LLMSettingsModel(app: app)
+        settings.load()
+        try await waitUntil { settings.loaded && !settings.busy }
+        let providerID = settings.draft.providers[0].id
+        let existing = try XCTUnwrap(settings.draft.models.first)
+        XCTAssertFalse(needsCapabilityPricing(existing, usage: .chat),
+                       "an explicit free text model needs no review for text")
+        XCTAssertTrue(settings.selectConfiguredModel(existing, providerID: providerID,
+                                                    selection: .task(.blurb)))
+        XCTAssertEqual(settings.draft.tasks.first { $0.task == .blurb }?.model, "dual")
+
+        settings.fetchModels(providerID: providerID)
+        try await waitUntil {
+            if case .loaded = settings.discoveries[providerID]?.phase { return true }
+            return false
+        }
+        let discovery = try XCTUnwrap(settings.discoveries[providerID])
+        guard case .loaded(let models) = discovery.phase else { return XCTFail("missing catalogue") }
+        var review = LLMModelReview(discovered: try XCTUnwrap(models.first { $0.id == "dual" }),
+                                    provider: "openai", usage: .embedding, completes: existing)
+        review.markFree()
+        review.dimensions = "1024"
+        XCTAssertTrue(review.isReady)
+        XCTAssertTrue(settings.selectCatalogueModel(review, providerID: providerID,
+                                                    fetchID: discovery.fetchID,
+                                                    selection: .task(.embed)))
+        let stored = try XCTUnwrap(settings.draft.models.first)
+        XCTAssertEqual(stored.embeddingPricingConfigured, true)
+        XCTAssertEqual(stored.embeddingPer1M, "0")
+        XCTAssertEqual(stored.dimensions, 1024)
+        XCTAssertEqual(stored.textPricingConfigured, true, "the free text flag survives")
+        XCTAssertEqual(stored.inputPer1M, "0.000000", "the saved text rates stay exactly as they were")
+        XCTAssertEqual(stored.outputPer1M, "0.000000")
+        LLMHTTP.assertFinished()
+    }
+
+    func testCompletingAScopedModelLeavesTheGlobalEntryUntouched() throws {
+        let app = makeModel()
+        app.loggedIn = true
+        let settings = LLMSettingsModel(app: app)
+        let providerID = settings.addProvider(preset: .openai)
+        var global = LLMModelDraft()
+        global.name = "shared"
+        global.inputPer1M = "1"
+        global.outputPer1M = "1"
+        global.textPricingConfigured = true
+        var scoped = LLMModelDraft()
+        scoped.name = "shared"
+        scoped.provider = "openai"
+        scoped.inputPer1M = "9"
+        scoped.outputPer1M = "8"
+        scoped.textPricingConfigured = true
+        scoped.embeddingPricingConfigured = false
+        settings.importModels([global, scoped])
+
+        var review = LLMModelReview(discovered: APIDiscoveredModel(id: "shared", name: "Shared"),
+                                    provider: "openai", usage: .embedding, isManual: true,
+                                    completes: scoped)
+        review.embeddingPer1M = "0.03"
+        review.dimensions = "1024"
+        XCTAssertTrue(settings.selectManualModel(review, providerID: providerID, selection: .add))
+
+        XCTAssertEqual(settings.draft.models.count, 2)
+        let globalAfter = try XCTUnwrap(settings.draft.models.first { $0.provider.isEmpty })
+        XCTAssertEqual(globalAfter, global, "the global entry is a different identity")
+        let scopedAfter = try XCTUnwrap(settings.draft.models.first { $0.provider == "openai" })
+        XCTAssertEqual(scopedAfter.embeddingPricingConfigured, true)
+        XCTAssertEqual(scopedAfter.embeddingPer1M, "0.03")
+        XCTAssertEqual(scopedAfter.dimensions, 1024)
+        XCTAssertEqual(scopedAfter.textPricingConfigured, true)
+        XCTAssertEqual(scopedAfter.inputPer1M, "9")
+        XCTAssertEqual(scopedAfter.outputPer1M, "8")
+    }
+
+    func testManualIDCompletesAnExistingIncompleteModel() throws {
+        let app = makeModel()
+        app.loggedIn = true
+        let settings = LLMSettingsModel(app: app)
+        let providerID = settings.addProvider(preset: .openai)
+        var existing = LLMModelDraft()
+        existing.name = "manual"
+        existing.provider = "openai"
+        existing.textPricingConfigured = true
+        existing.embeddingPricingConfigured = false
+        existing.inputPer1M = "1"
+        existing.outputPer1M = "2"
+        settings.importModels([existing])
+
+        var review = LLMModelReview(discovered: APIDiscoveredModel(id: "manual", name: "Manual"),
+                                    provider: "openai", usage: .embedding, isManual: true,
+                                    completes: existing)
+        XCTAssertEqual(review.embeddingPer1M, "", "the manual catalogue cannot supply a rate")
+        XCTAssertFalse(review.isReady)
+        review.embeddingPer1M = "0.03"
+        review.dimensions = "1024"
+        XCTAssertTrue(settings.selectManualModel(review, providerID: providerID, selection: .task(.embed)))
+        let stored = try XCTUnwrap(settings.draft.models.first)
+        XCTAssertEqual(stored.embeddingPricingConfigured, true)
+        XCTAssertEqual(stored.embeddingPer1M, "0.03")
+        XCTAssertEqual(stored.dimensions, 1024)
+        XCTAssertEqual(stored.textPricingConfigured, true)
+        XCTAssertEqual(stored.inputPer1M, "1")
+        XCTAssertEqual(settings.draft.tasks.first { $0.task == .embed }?.model, "manual")
+    }
+
+    func testIncompleteModelsAreHiddenFromPickersButStayVisibleWhenSelected() {
+        let app = makeModel()
+        app.loggedIn = true
+        let settings = LLMSettingsModel(app: app)
+        _ = settings.addProvider(preset: .openai)
+        var incomplete = LLMModelDraft()
+        incomplete.name = "incomplete"
+        incomplete.provider = "openai"
+        incomplete.textPricingConfigured = false
+        incomplete.embeddingPricingConfigured = false
+        var complete = LLMModelDraft()
+        complete.name = "complete"
+        complete.provider = "openai"
+        complete.textPricingConfigured = true
+        complete.embeddingPricingConfigured = true
+        complete.dimensions = 1024
+        settings.importModels([incomplete, complete])
+
+        XCTAssertEqual(settings.selectableModels(for: "openai", usage: .chat).map(\.name), ["complete"])
+        XCTAssertEqual(settings.selectableModels(for: "openai", usage: .embedding).map(\.name), ["complete"])
+        XCTAssertEqual(settings.selectableModels(for: "openai", usage: .embedding, selected: "incomplete").map(\.name),
+                       ["incomplete", "complete"], "the current selection stays visible")
+    }
+
+    func testProgrammaticRoutesRejectIncompleteModelsAndKeepLegacyNilRoutes() {
+        func makeSettings() -> LLMSettingsModel {
+            let app = makeModel()
+            app.loggedIn = true
+            let settings = LLMSettingsModel(app: app)
+            _ = settings.addProvider(preset: .openai)
+            var incomplete = LLMModelDraft()
+            incomplete.name = "incomplete"
+            incomplete.provider = "openai"
+            incomplete.textPricingConfigured = false
+            incomplete.embeddingPricingConfigured = false
+            var legacy = LLMModelDraft()
+            legacy.name = "legacy"
+            legacy.provider = "openai"
+            legacy.inputPer1M = "1"
+            legacy.outputPer1M = "1"
+            legacy.embeddingPer1M = "0.03"
+            legacy.dimensions = 1536
+            settings.importModels([incomplete, legacy])
+            return settings
+        }
+
+        let probe = makeSettings()
+        let incomplete = try! XCTUnwrap(probe.draft.models.first { $0.name == "incomplete" })
+        let legacy = try! XCTUnwrap(probe.draft.models.first { $0.name == "legacy" })
+        XCTAssertTrue(needsCapabilityPricing(incomplete, usage: .chat))
+        XCTAssertTrue(needsCapabilityPricing(incomplete, usage: .embedding))
+        XCTAssertFalse(needsCapabilityPricing(legacy, usage: .chat))
+        XCTAssertFalse(needsCapabilityPricing(legacy, usage: .embedding),
+                       "a legacy model with a known width keeps its routes")
+        var ambiguous = legacy
+        ambiguous.inputPer1M = "0.000000"
+        ambiguous.outputPer1M = "0"
+        ambiguous.embeddingPer1M = "0"
+        XCTAssertTrue(needsCapabilityPricing(ambiguous, usage: .chat))
+        XCTAssertTrue(needsCapabilityPricing(ambiguous, usage: .embedding))
+        ambiguous.textPricingConfigured = true
+        ambiguous.embeddingPricingConfigured = true
+        XCTAssertFalse(needsCapabilityPricing(ambiguous, usage: .chat))
+        XCTAssertFalse(needsCapabilityPricing(ambiguous, usage: .embedding))
+
+        let selection = makeSettings()
+        let providerID = selection.draft.providers[0].id
+        XCTAssertFalse(selection.selectConfiguredModel(incomplete, providerID: providerID,
+                                                        selection: .task(.blurb)))
+        XCTAssertEqual(selection.draft.tasks.first { $0.task == .blurb }?.model, "")
+        XCTAssertNotNil(selection.error)
+
+        let routed = makeSettings()
+        XCTAssertFalse(routed.route(task: .blurb, providerName: "openai", modelName: "incomplete"))
+        XCTAssertFalse(routed.route(task: .embed, providerName: "openai", modelName: "incomplete"))
+        XCTAssertEqual(routed.draft.tasks.first { $0.task == .blurb }?.model, "")
+        XCTAssertNotNil(routed.error)
+
+        let task = makeSettings()
+        task.setTaskProvider(.blurb, "openai")
+        task.setTaskModel(.blurb, "incomplete")
+        XCTAssertEqual(task.draft.tasks.first { $0.task == .blurb }?.model, "")
+        XCTAssertNotNil(task.error)
+
+        let defaulted = makeSettings()
+        defaulted.setDefaultRoute(provider: "openai", model: "incomplete", usage: .embedding)
+        XCTAssertNil(defaulted.draft.defaults?.embedding.model)
+        XCTAssertNotNil(defaulted.error)
+
+        // A legacy nil entry still routes; its flags are never invented here.
+        let legacySettings = makeSettings()
+        XCTAssertTrue(legacySettings.route(task: .embed, providerName: "openai", modelName: "legacy"))
+        XCTAssertEqual(legacySettings.draft.tasks.first { $0.task == .embed }?.model, "legacy")
+        XCTAssertNil(legacySettings.draft.models.first { $0.name == "legacy" }?.textPricingConfigured)
+        XCTAssertNil(legacySettings.draft.models.first { $0.name == "legacy" }?.embeddingPricingConfigured)
+    }
+
+    func testDraftInputAndServerSettingsPreservePricingFlags() throws {
+        let settings = APILLMSettings(
+            revision: 2,
+            providers: [APILLMProviderSettings(name: "openai", kind: .openai,
+                                               baseURL: "https://api.openai.com/v1", hasAPIKey: true,
+                                               monthlyLimitUSD: "0", timeoutSeconds: 60,
+                                               tokenField: .maxCompletionTokens)],
+            tasks: [],
+            models: [
+                APILLMModelSettings(name: "dual", provider: "openai",
+                                    textPricingConfigured: true, embeddingPricingConfigured: false,
+                                    inputPer1M: "1", outputPer1M: "2", embeddingPer1M: "0.03",
+                                    dimensions: 1024, truncatable: false),
+                APILLMModelSettings(name: "legacy", inputPer1M: "0", outputPer1M: "0",
+                                    embeddingPer1M: "0", dimensions: 0, truncatable: false),
+            ]
+        )
+        let draft = LLMSettingsDraft(settings: settings)
+        let input = draft.input(revision: 2, opID: "op")
+        XCTAssertEqual(input.models[0].textPricingConfigured, true)
+        XCTAssertEqual(input.models[0].embeddingPricingConfigured, false)
+        XCTAssertNil(input.models[1].textPricingConfigured)
+        XCTAssertNil(input.models[1].embeddingPricingConfigured)
+        let server = draft.serverSettings(revision: 2)
+        XCTAssertEqual(server.models[0].embeddingPricingConfigured, false)
+        XCTAssertNil(server.models[1].textPricingConfigured)
+
+        let fields = try JSONDecoder().decode(APIValue.self,
+                                               from: JSONEncoder().encode(input))
+        let models = try XCTUnwrap(fields["models"]?.arrayValue)
+        XCTAssertEqual(models[0]["text_pricing_configured"]?.boolValue, true)
+        XCTAssertEqual(models[0]["embedding_pricing_configured"]?.boolValue, false)
+        XCTAssertNil(models[1]["text_pricing_configured"], "legacy nil stays absent on the wire")
+        XCTAssertNil(models[1]["embedding_pricing_configured"])
+    }
+
+    func testLoadedPricingFlagsAreSentOnSave() async throws {
+        let model = #"{"name":"dual","provider":"openai","input_per_1m":"1.000000","output_per_1m":"2.000000","embedding_per_1m":"0.030000","dimensions":1024,"truncatable":false,"text_pricing_configured":true,"embedding_pricing_configured":false}"#
+        let (api, session) = try makeAPI([
+            .init(path: "/v1/settings/llm", body: capabilitySettingsJSON(revision: 2, models: model)),
+            .init(method: "PUT", path: "/v1/settings/llm",
+                  body: capabilitySettingsJSON(revision: 3, models: model)),
+        ])
+        defer { session.invalidateAndCancel() }
+        let app = makeModel(api: api)
+        app.loggedIn = true
+        let settings = LLMSettingsModel(app: app)
+        settings.load()
+        try await waitUntil { settings.loaded && !settings.busy }
+        let loaded = try XCTUnwrap(settings.draft.models.first)
+        XCTAssertEqual(loaded.textPricingConfigured, true)
+        XCTAssertEqual(loaded.embeddingPricingConfigured, false)
+
+        settings.draft.providers[0].timeoutSeconds = 90
+        settings.save()
+        try await waitUntil { settings.saved && !settings.busy }
+        let sent = try fields(of: XCTUnwrap(LLMHTTP.body(at: 0)))
+        let models = try XCTUnwrap(sent["models"]?.arrayValue)
+        XCTAssertEqual(models[0]["text_pricing_configured"]?.boolValue, true)
+        XCTAssertEqual(models[0]["embedding_pricing_configured"]?.boolValue, false)
+        LLMHTTP.assertFinished()
+    }
 }

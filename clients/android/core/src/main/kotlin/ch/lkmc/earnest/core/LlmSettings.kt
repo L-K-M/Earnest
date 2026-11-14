@@ -133,6 +133,9 @@ data class LlmModel(
     val provider: String = "",
     /** Whether the provider accepts a custom embedding width; distinct from [truncatable]. */
     @SerialName("supports_custom_dimensions") val supportsCustomDimensions: Boolean = false,
+    /** Null preserves legacy pricing; false identifies an unconfigured placeholder. */
+    @SerialName("text_pricing_configured") val textPricingConfigured: Boolean? = null,
+    @SerialName("embedding_pricing_configured") val embeddingPricingConfigured: Boolean? = null,
 ) {
     /** The identity a route resolves: a scoped row wins over the global one. */
     fun identity(): Pair<String, String> = provider to name
@@ -397,7 +400,10 @@ private fun validateDefaultRoute(
     require((route.provider.isEmpty()) == (route.model.isEmpty())) { "provider and model must be configured together" }
     if (route.provider.isEmpty()) return
     require(route.provider in kinds) { "provider is not configured" }
-    require(LlmModel.resolve(models, route.provider, route.model) != null) { "model is not configured" }
+    val model = requireNotNull(LlmModel.resolve(models, route.provider, route.model)) { "model is not configured" }
+    val configured = if (embedding) model.embeddingPricingConfigured else model.textPricingConfigured
+    require(configured != false) { "confirm the model's price for this feature before selecting it" }
+    require(!embedding || configured == null || model.dimensions > 0) { "enter the model's native embedding dimensions" }
     if (embedding) require(kinds.getValue(route.provider) != LlmProviderKind.ANTHROPIC) { "Anthropic cannot embed" }
 }
 

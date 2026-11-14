@@ -35,6 +35,12 @@ import EarnestKit
         let alphaID = settings.draft.providers[0].id
         settings.importModels([scopedModel("alpha-model", provider: "alpha", price: "1"),
                                scopedModel("beta-model", provider: "beta", price: "2")])
+        // The embedding default needs a known width; a legacy placeholder
+        // without geometry must be reviewed before it can be routed.
+        if let betaIndex = settings.draft.models.firstIndex(where: { $0.provider == "beta" }) {
+            settings.draft.models[betaIndex].dimensions = 1024
+            settings.draft.models[betaIndex].embeddingPer1M = "1"
+        }
         settings.route(task: .blurb, providerName: "alpha", modelName: "alpha-model")
         settings.route(task: .summary, providerName: "beta", modelName: "beta-model")
         settings.setDefaultRoute(provider: "alpha", model: "alpha-model", usage: .chat)

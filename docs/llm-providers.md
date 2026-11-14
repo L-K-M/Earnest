@@ -85,6 +85,13 @@ provider/model pairs), and task `mode` (`off`, `default` or `custom`). Task
 provider/model fields always expose effective routes for existing readers.
 Writes without modes remain explicit legacy routes. Models optionally name
 `provider` and `supports_custom_dimensions` alongside their existing fields.
+The optional `text_pricing_configured` and `embedding_pricing_configured`
+fields distinguish an explicitly supplied rate, including zero for a free
+model, from a placeholder for a capability that has not been configured.
+Existing entries without these fields retain their legacy behavior; older
+clients cannot erase a saved confirmation state by omitting the fields.
+Selecting the same model for another capability may ask you to confirm that
+capability's prices and embedding dimensions before it can be used.
 
 `POST /v1/settings/llm/models/check` accepts a revision, draft provider, model
 metadata and `chat` or `embedding` capability. Its response describes

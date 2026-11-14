@@ -98,6 +98,85 @@ it('selects an already configured model without changing its prices', async () =
   expect(screen.getByText(/saved prices are kept/)).toBeTruthy()
 })
 
+it('reuses an explicitly free text model after loading saved applicability', async () => {
+  mockCatalogue({models})
+  const onPick = vi.fn()
+  const configured: ModelDraft = {name: 'first', provider: 'local', input_per_1m: '0', output_per_1m: '0', embedding_per_1m: '1', dimensions: '1024', truncatable: false, supports_custom_dimensions: false, text_pricing_configured: true, embedding_pricing_configured: true}
+  render(picker({onPick, models: [configured]}))
+  fireEvent.click(await screen.findByRole('button', {name: 'Select first'}))
+  expect(onPick).toHaveBeenCalledWith(configured)
+  expect(screen.queryByLabelText('first input price per 1m tokens')).toBeNull()
+})
+
+it('prefills saved custom rates when completing a capability', async () => {
+  mockCatalogue({models: [{id: 'dual', name: 'Dual', chat: true, input_per_1m: '1', output_per_1m: '2'}]})
+  const configured: ModelDraft = {name: 'dual', provider: 'local', input_per_1m: '9', output_per_1m: '8', embedding_per_1m: '3', dimensions: '1024', truncatable: false, supports_custom_dimensions: false, text_pricing_configured: false, embedding_pricing_configured: true}
+  render(picker({models: [configured]}))
+  fireEvent.click(await screen.findByRole('button', {name: 'Select dual'}))
+  expect((screen.getByLabelText('dual input price per 1m tokens') as HTMLInputElement).value).toBe('9')
+  expect((screen.getByLabelText('dual output price per 1m tokens') as HTMLInputElement).value).toBe('8')
+})
+
+it('asks for embedding metadata before reusing a text-only model', async () => {
+  mockCatalogue({models: [{id: 'dual', name: 'Dual', chat: true, embedding: true, embedding_per_1m: '0.03', dimensions: 4096, supports_custom_dimensions: true}]})
+  const onPick = vi.fn()
+  const configured: ModelDraft = {name: 'dual', provider: 'local', input_per_1m: '9', output_per_1m: '8', embedding_per_1m: '0', dimensions: '0', truncatable: false, supports_custom_dimensions: false}
+  render(picker({onPick, models: [configured], capability: 'embedding', taskLabel: 'Embeddings'}))
+  await screen.findByText('Dual (dual)')
+  fireEvent.click(screen.getByRole('button', {name: 'Select dual'}))
+  expect(onPick).not.toHaveBeenCalled()
+  expect((screen.getByLabelText('dual embedding price per 1m tokens') as HTMLInputElement).value).toBe('0.03')
+  expect((screen.getByLabelText('dual dimensions') as HTMLInputElement).value).toBe('4096')
+  fireEvent.click(screen.getByRole('button', {name: /Add to draft/}))
+  expect(onPick).toHaveBeenCalledWith(expect.objectContaining({name: 'dual', input_per_1m: '9', output_per_1m: '8', embedding_per_1m: '0.03', dimensions: '4096'}), 'embedding')
+})
+
+it('asks for text rates before reusing an embedding-only model', async () => {
+  mockCatalogue({models: [{id: 'dual', name: 'Dual', chat: true, embedding: true, input_per_1m: '1', output_per_1m: '2', embedding_per_1m: '0.03', dimensions: 4096, supports_custom_dimensions: true}]})
+  const onPick = vi.fn()
+  const configured: ModelDraft = {name: 'dual', provider: 'local', input_per_1m: '0', output_per_1m: '0', embedding_per_1m: '0.03', dimensions: '4096', truncatable: false, supports_custom_dimensions: true}
+  render(picker({onPick, models: [configured]}))
+  await screen.findByText('Dual (dual)')
+  fireEvent.click(screen.getByRole('button', {name: 'Select dual'}))
+  expect(onPick).not.toHaveBeenCalled()
+  expect((screen.getByLabelText('dual input price per 1m tokens') as HTMLInputElement).value).toBe('1')
+  expect((screen.getByLabelText('dual output price per 1m tokens') as HTMLInputElement).value).toBe('2')
+  fireEvent.click(screen.getByRole('button', {name: /Add to draft/}))
+  expect(onPick).toHaveBeenCalledWith(expect.objectContaining({name: 'dual', input_per_1m: '1', output_per_1m: '2', embedding_per_1m: '0.03', dimensions: '4096'}), 'chat')
+})
+
+it('does not update an existing model when a completion check is cancelled', async () => {
+  vi.mocked(request).mockImplementation(async (path: string) => {
+    if (path === '/v1/settings/llm/models') return {models: [{id: 'dual', name: 'Dual', embedding: true, embedding_per_1m: '0.03', dimensions: 4096, supports_custom_dimensions: true}]}
+    if (path === '/v1/settings/llm/models/check') return {compatible: true, dimensions: 4096, supports_custom_dimensions: true, message: 'Compatible.'}
+    throw new Error(`unexpected ${path}`)
+  })
+  const onGeometry = vi.fn()
+  const configured: ModelDraft = {name: 'dual', provider: 'local', input_per_1m: '9', output_per_1m: '8', embedding_per_1m: '0', dimensions: '0', truncatable: false, supports_custom_dimensions: false}
+  render(picker({onGeometry, models: [configured], capability: 'embedding'}))
+  fireEvent.click(await screen.findByRole('button', {name: 'Select dual'}))
+  fireEvent.click(screen.getByRole('button', {name: 'Check model'}))
+  await screen.findByText('Compatible.')
+  expect(onGeometry).not.toHaveBeenCalled()
+})
+
+it('requires real geometry and an explicit free choice for missing embedding metadata', async () => {
+  mockCatalogue({models: [{id: 'dual', name: 'Dual', embedding: true}]})
+  const onPick = vi.fn()
+  const configured: ModelDraft = {name: 'dual', provider: 'local', input_per_1m: '9', output_per_1m: '8', embedding_per_1m: '0', dimensions: '0', truncatable: false, supports_custom_dimensions: false}
+  render(picker({onPick, models: [configured], capability: 'embedding'}))
+  fireEvent.click(await screen.findByRole('button', {name: 'Select dual, missing embedding price, dimensions'}))
+  expect((screen.getByLabelText('dual embedding price per 1m tokens') as HTMLInputElement).value).toBe('')
+  fireEvent.click(screen.getByLabelText('This model is free'))
+  fireEvent.change(screen.getByLabelText('dual dimensions'), {target: {value: '0'}})
+  fireEvent.click(screen.getByRole('button', {name: /Add to draft/}))
+  expect(onPick).not.toHaveBeenCalled()
+  expect(screen.getAllByText(/Enter the native embedding width/).length).toBeGreaterThan(0)
+  fireEvent.change(screen.getByLabelText('dual dimensions'), {target: {value: '1024'}})
+  fireEvent.click(screen.getByRole('button', {name: /Add to draft/}))
+  expect(onPick).toHaveBeenCalledWith(expect.objectContaining({input_per_1m: '9', output_per_1m: '8', embedding_per_1m: '0', dimensions: '1024'}), 'embedding')
+})
+
 it('opens the inline metadata form for missing applicable fields', async () => {
   mockCatalogue({models})
   render(picker({capability: 'embedding', taskLabel: 'Embeddings'}))

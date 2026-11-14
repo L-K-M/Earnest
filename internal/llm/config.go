@@ -133,6 +133,10 @@ type ModelInfo struct {
 	InputPer1M     USD
 	OutputPer1M    USD
 	EmbeddingPer1M USD
+	// Nil means legacy pricing whose applicability was not recorded. False
+	// identifies an inapplicable wire zero that must not be used for billing.
+	TextPricingConfigured      *bool `json:",omitempty"`
+	EmbeddingPricingConfigured *bool `json:",omitempty"`
 	// Dimensions is the model's native embedding width, or zero when
 	// unknown.
 	Dimensions int

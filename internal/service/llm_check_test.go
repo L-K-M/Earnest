@@ -16,6 +16,28 @@ import (
 	"github.com/L-K-M/Earnest/internal/store/storetest"
 )
 
+func TestLLMCheckDraftAllowsUnknownWidthAndUnconfirmedSavedPrice(t *testing.T) {
+	settings := llmSettingsTestInput()
+	model := settings.Models[0]
+	model.Provider = "local"
+	model.Dimensions = 0
+	model.EmbeddingPer1M = "1"
+	previous := llm.DefaultConfig()
+	unconfirmed := false
+	previous.Models[llm.ModelKey("local", model.Name)] = llm.ModelInfo{EmbeddingPricingConfigured: &unconfirmed}
+	cfg, err := validateLLMCheckDraft(LLMModelCheckInput{Provider: settings.Providers[0], Model: model, Capability: "embedding"}, previous)
+	if err != nil {
+		t.Fatalf("checking explicitly priced model with unknown dimensions: %v", err)
+	}
+	if got := cfg.Models[llm.ModelKey("local", model.Name)].Dimensions; got != 0 {
+		t.Fatalf("check must observe native dimensions, got %d", got)
+	}
+	model.EmbeddingPer1M = ""
+	if _, err := validateLLMCheckDraft(LLMModelCheckInput{Provider: settings.Providers[0], Model: model, Capability: "embedding"}, previous); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unpriced check: %v", err)
+	}
+}
+
 func TestCheckLLMModelIsolation(t *testing.T) {
 	f := newCoreFixture(t, storetest.NewTemplate(t))
 	var calls atomic.Int64
@@ -52,6 +74,8 @@ func TestCheckLLMModelIsolation(t *testing.T) {
 	model := settings.Models[0]
 	model.Dimensions = 0
 	model.EmbeddingPer1M = "1"
+	confirmed := true
+	model.EmbeddingPricingConfigured = &confirmed
 	in := LLMModelCheckInput{Provider: settings.Providers[0], Model: model, Capability: "embedding"}
 	got, err := f.s.CheckLLMModel(t.Context(), f.a, in)
 	if err != nil || !got.Compatible || got.Dimensions != 4096 || !got.SupportsCustomDimensions || calls.Load() != 2 {

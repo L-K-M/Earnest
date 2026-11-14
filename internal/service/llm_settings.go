@@ -63,14 +63,16 @@ type LLMTaskSettings struct {
 
 // Prices are decimal strings, not floating point, matching the budget layer.
 type LLMModelSettings struct {
-	Name                     string `json:"name"`
-	Provider                 string `json:"provider,omitempty"`
-	SupportsCustomDimensions bool   `json:"supports_custom_dimensions,omitempty"`
-	InputPer1M               string `json:"input_per_1m"`
-	OutputPer1M              string `json:"output_per_1m"`
-	EmbeddingPer1M           string `json:"embedding_per_1m"`
-	Dimensions               int    `json:"dimensions"`
-	Truncatable              bool   `json:"truncatable"`
+	Name                       string `json:"name"`
+	Provider                   string `json:"provider,omitempty"`
+	SupportsCustomDimensions   bool   `json:"supports_custom_dimensions,omitempty"`
+	TextPricingConfigured      *bool  `json:"text_pricing_configured,omitempty"`
+	EmbeddingPricingConfigured *bool  `json:"embedding_pricing_configured,omitempty"`
+	InputPer1M                 string `json:"input_per_1m"`
+	OutputPer1M                string `json:"output_per_1m"`
+	EmbeddingPer1M             string `json:"embedding_per_1m"`
+	Dimensions                 int    `json:"dimensions"`
+	Truncatable                bool   `json:"truncatable"`
 }
 
 type LLMSettingsInput struct {
@@ -207,7 +209,7 @@ func redactedLLMSettings(cfg llm.Config, revision int64) LLMSettings {
 	}
 	for key, m := range cfg.Models {
 		provider, name := llm.SplitModelKey(key)
-		out.Models = append(out.Models, LLMModelSettings{Provider: provider, SupportsCustomDimensions: m.SupportsCustomDimensions, Name: name, InputPer1M: m.InputPer1M.String(), OutputPer1M: m.OutputPer1M.String(), EmbeddingPer1M: m.EmbeddingPer1M.String(), Dimensions: m.Dimensions, Truncatable: m.Truncatable})
+		out.Models = append(out.Models, LLMModelSettings{Provider: provider, SupportsCustomDimensions: m.SupportsCustomDimensions, TextPricingConfigured: m.TextPricingConfigured, EmbeddingPricingConfigured: m.EmbeddingPricingConfigured, Name: name, InputPer1M: m.InputPer1M.String(), OutputPer1M: m.OutputPer1M.String(), EmbeddingPer1M: m.EmbeddingPer1M.String(), Dimensions: m.Dimensions, Truncatable: m.Truncatable})
 	}
 	slices.SortFunc(out.Models, func(a, b LLMModelSettings) int {
 		return strings.Compare(llm.ModelKey(a.Provider, a.Name), llm.ModelKey(b.Provider, b.Name))
@@ -296,7 +298,18 @@ func validateLLMSettings(in LLMSettingsInput, previous llm.Config) (llm.Config, 
 		if m.Dimensions < 0 || m.Dimensions > 65536 || (m.Dimensions > llm.StorageDimensions && !m.Truncatable && !m.SupportsCustomDimensions) {
 			return cfg, fmt.Errorf("model embedding dimensions require a supported width or truncation: %w", ErrInvalid)
 		}
-		cfg.Models[key] = llm.ModelInfo{SupportsCustomDimensions: m.SupportsCustomDimensions, InputPer1M: input, OutputPer1M: output, EmbeddingPer1M: embedding, Dimensions: m.Dimensions, Truncatable: m.Truncatable}
+		textConfigured, embeddingConfigured := m.TextPricingConfigured, m.EmbeddingPricingConfigured
+		if previousModel, exists := previous.Models[key]; exists {
+			// Older clients do not know these fields. Their full-replacement
+			// writes must not turn an unconfigured placeholder into free pricing.
+			if textConfigured == nil {
+				textConfigured = previousModel.TextPricingConfigured
+			}
+			if embeddingConfigured == nil {
+				embeddingConfigured = previousModel.EmbeddingPricingConfigured
+			}
+		}
+		cfg.Models[key] = llm.ModelInfo{SupportsCustomDimensions: m.SupportsCustomDimensions, TextPricingConfigured: textConfigured, EmbeddingPricingConfigured: embeddingConfigured, InputPer1M: input, OutputPer1M: output, EmbeddingPer1M: embedding, Dimensions: m.Dimensions, Truncatable: m.Truncatable}
 	}
 	if in.Defaults != nil {
 		for _, def := range []struct {
@@ -357,8 +370,19 @@ func validateLLMRoute(cfg llm.Config, route llm.TaskConfig, task llm.Task) error
 	if !exists || route.Model == "" {
 		return fmt.Errorf("each enabled feature needs a configured provider and model: %w", ErrInvalid)
 	}
-	if _, exists := llm.LookupModel(cfg.Models, route.Provider, route.Model); !exists {
+	model, exists := llm.LookupModel(cfg.Models, route.Provider, route.Model)
+	if !exists {
 		return fmt.Errorf("model needs explicit price configuration (zero for free models): %w", ErrInvalid)
+	}
+	configured := model.TextPricingConfigured
+	if task == llm.TaskEmbed {
+		configured = model.EmbeddingPricingConfigured
+	}
+	if configured != nil && !*configured {
+		return fmt.Errorf("configure prices for this model and feature before selecting it: %w", ErrInvalid)
+	}
+	if task == llm.TaskEmbed && configured != nil && model.Dimensions == 0 {
+		return fmt.Errorf("enter the model's native embedding dimensions before selecting it: %w", ErrInvalid)
 	}
 	if task == llm.TaskEmbed && p.Kind == llm.KindAnthropic {
 		return fmt.Errorf("Anthropic does not support embeddings: %w", ErrInvalid)

@@ -36,6 +36,7 @@ import EarnestKit
         var scoped = LLMModelDraft()
         scoped.provider = "venice"
         scoped.name = "shared-id"
+        scoped.textPricingConfigured = true
         var global = LLMModelDraft()
         global.name = "shared-id"
         settings.importModels([scoped, global])
