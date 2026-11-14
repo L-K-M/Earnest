@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import ch.lkmc.earnest.core.CachedEntry
 import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.core.SyncObject
+import ch.lkmc.earnest.core.UnreadCounts
 
 /** Secondary shelves remain in the drawer, not seven tiny phone tabs. */
 internal val primaryDestinations = listOf(View.FRONT, View.ALL, View.KEPT, View.FEEDS)
@@ -158,6 +159,7 @@ internal fun ReaderDrawer(
     onView: (View) -> Unit,
     onFeed: (FeedSelection) -> Unit,
     onSettings: () -> Unit,
+    unreadCounts: UnreadCounts? = null,
     onClose: () -> Unit = {},
 ) {
     val groups = remember(objects) { navigationFeedGroups(objects) }
@@ -178,6 +180,7 @@ internal fun ReaderDrawer(
                     label = { Text(destination.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     selected = view == destination && selection == FeedSelection.All,
                     icon = { Icon(destination.icon, contentDescription = null) },
+                    badge = { unreadCounts?.let { Text("${it.total} unread") } },
                     onClick = { onFeed(FeedSelection.All) },
                     modifier = Modifier.padding(horizontal = 12.dp),
                 )
@@ -208,7 +211,10 @@ internal fun ReaderDrawer(
                             Column {
                                 Text(group.title.orEmpty(), maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text(
-                                    "${group.subscriptions.size} ${if (group.subscriptions.size == 1) "feed" else "feeds"}",
+                                    "${group.subscriptions.size} ${if (group.subscriptions.size == 1) "feed" else "feeds"}" +
+                                        (unreadCounts?.let { counts ->
+                                            " · ${group.subscriptions.sumOf { counts.bySubscription[it.id] ?: 0L }} unread"
+                                        } ?: ""),
                                     style = MaterialTheme.typography.labelSmall,
                                 )
                             }
@@ -235,6 +241,7 @@ internal fun ReaderDrawer(
                             label = { Text(subscription.name, maxLines = 2, overflow = TextOverflow.Ellipsis) },
                             selected = view == View.ALL && selection == FeedSelection.Subscription(subscription.id),
                             icon = { Icon(FeedIcon, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                            badge = { unreadCounts?.let { Text("${it.bySubscription[subscription.id] ?: 0L} unread") } },
                             onClick = { onFeed(FeedSelection.Subscription(subscription.id)) },
                             modifier = Modifier.padding(start = 28.dp, end = 12.dp),
                         )

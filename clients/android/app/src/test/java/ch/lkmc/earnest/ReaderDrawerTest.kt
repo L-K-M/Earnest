@@ -12,6 +12,7 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performClick
 import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.core.SyncObject
+import ch.lkmc.earnest.core.UnreadCounts
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -44,6 +45,31 @@ class ReaderDrawerTest {
         compose.onNodeWithTag("reader-drawer").performScrollToNode(hasText("Systems journal"))
         compose.onNodeWithText("Systems journal").performClick()
         assertEquals(listOf(FeedSelection.Folder(7), FeedSelection.Subscription(3)), selections)
+    }
+
+    @Test fun unreadCountsShowForAllFoldersAndFeedsAndUpdate() {
+        val counts = mutableStateOf<UnreadCounts?>(null)
+        val objects = listOf(
+            SyncObject(SyncEngine.OBJECT_FOLDER, 7, name = "Engineering", rev = 1),
+            SyncObject(SyncEngine.OBJECT_SUBSCRIPTION, 3, folderId = 7, name = "Systems journal", rev = 1),
+            SyncObject(SyncEngine.OBJECT_SUBSCRIPTION, 4, folderId = 7, name = "Other feed", rev = 1),
+            SyncObject(SyncEngine.OBJECT_SUBSCRIPTION, 5, name = "Unfiled feed", rev = 1),
+        )
+        compose.setContent {
+            EarnestTheme(ThemeSetting.LIGHT) {
+                ReaderDrawer(View.ALL, FeedSelection.All, objects, unreadCounts = counts.value, onView = {}, onFeed = {}, onSettings = {})
+            }
+        }
+        compose.onNodeWithText("9 unread").assertDoesNotExist()
+        compose.runOnIdle { counts.value = UnreadCounts(bySubscription = mapOf(3L to 4L, 4L to 2L, 5L to 3L), total = 9L) }
+        compose.onNodeWithText("9 unread").assertExists()
+        compose.onNodeWithText("2 feeds · 6 unread").assertExists()
+        compose.onNodeWithText("1 feed · 3 unread").assertExists()
+        compose.onNodeWithContentDescription("Expand Engineering").performClick()
+        compose.onNodeWithText("4 unread").assertExists()
+        compose.runOnIdle { counts.value = UnreadCounts(bySubscription = mapOf(4L to 2L), total = 2L) }
+        compose.onNodeWithText("2 feeds · 2 unread").assertExists()
+        compose.onNodeWithText("0 unread").assertExists()
     }
 
     @Test fun secondaryShelvesRemainReachableFromTheDrawer() {

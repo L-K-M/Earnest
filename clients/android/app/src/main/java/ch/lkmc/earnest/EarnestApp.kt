@@ -456,6 +456,7 @@ internal fun MainScaffold(
                     view = section.view,
                     selection = feedSelection,
                     objects = state.snapshot.objects,
+                    unreadCounts = state.unreadCounts.takeIf { state.readerSettings.readingMode == ch.lkmc.earnest.core.ReadingMode.UNREAD_COUNTS },
                     onView = ::selectView,
                     onFeed = ::selectFeed,
                     onClose = { scope.launch { drawerState.close() } },
