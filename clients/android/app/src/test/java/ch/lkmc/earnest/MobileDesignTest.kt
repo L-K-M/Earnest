@@ -98,7 +98,7 @@ class MobileDesignTest {
             )
         }
         compose.onNodeWithTag("reader-settings-save").assertIsDisplayed()
-        compose.onNodeWithText("LLM services").performScrollTo()
+        compose.onNodeWithText("Preview").performScrollTo()
         compose.onNodeWithTag("reader-settings-save").assertIsDisplayed()
     }
 
@@ -190,18 +190,19 @@ class MobileDesignTest {
         filters.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Expanded"))
     }
 
-    @Test fun settingsLoadsCannotDiscardAnInFlightSave() {
+    @Test fun settingsActionsCannotDiscardAnInFlightSave() {
         content {
             SettingsScreen(viewModel(), UiState(snapshot = SyncSnapshot(Revision("generation", 1)), readerSettingsUi = ReaderSettingsUi(loaded = ReaderSettings(), saving = true)), {})
         }
-        compose.onAllNodesWithText("Load")[0].assertIsNotEnabled()
-        compose.onAllNodesWithText("Reload")[0].assertIsNotEnabled()
+        compose.onNodeWithTag("reader-settings-save").assertIsNotEnabled()
+        compose.onNodeWithText("Discard").assertIsNotEnabled()
     }
 
     @Test fun importCheckboxCanBeToggledThroughItsLabel() {
         content {
             SettingsScreen(viewModel(), UiState(snapshot = SyncSnapshot(Revision("generation", 1)), readerSettingsUi = ReaderSettingsUi(loaded = ReaderSettings())), {})
         }
+        compose.onNodeWithText("Import & export").performClick()
         compose.onNodeWithText("Also subscribe to feeds you don't follow").performScrollTo().performClick().assertIsOn().assertHeightIsAtLeast(48.dp)
     }
 
@@ -213,7 +214,7 @@ class MobileDesignTest {
         compose.runOnIdle { assertEquals(9L, opened) }
     }
 
-    @Test fun reloadingAFailedSaveRequiresAnExplicitDiscard() {
+    @Test fun switchingAwayFromAFailedSaveRequiresAnExplicitDiscard() {
         val settings = ReaderSettings()
         content {
             SettingsScreen(
@@ -225,13 +226,13 @@ class MobileDesignTest {
                 onBack = {},
             )
         }
-        compose.onAllNodesWithText("Reload")[0].performClick()
-        compose.onNodeWithText("Reload settings?").assertIsDisplayed()
+        compose.onNodeWithText("AI").performClick()
+        compose.onNodeWithText("Discard unsaved changes?").assertIsDisplayed()
         compose.onNodeWithText("Keep editing").performClick()
-        compose.onAllNodesWithText("Retry")[0].assertIsDisplayed()
-        compose.onAllNodesWithText("Reload")[0].performClick()
-        compose.onNodeWithText("Discard draft").performClick()
-        compose.onNodeWithText("Reload settings?").assertDoesNotExist()
+        compose.onNodeWithText("Retry save").assertIsDisplayed()
+        compose.onNodeWithText("AI").performClick()
+        compose.onAllNodesWithText("Discard")[1].performClick()
+        compose.onNodeWithText("Discard unsaved changes?").assertDoesNotExist()
     }
 
     @Test fun closingSettingsStillShowsAnIncomingArticle() {

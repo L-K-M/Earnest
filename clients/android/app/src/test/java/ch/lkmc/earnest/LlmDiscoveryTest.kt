@@ -12,6 +12,19 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LlmDiscoveryTest {
+    @Test
+    fun undoingFreeChoiceRestoresPublishedPrices() {
+        val original = LlmModelReview(name = "chat", input = "1.25", output = "2.5", embedding = "0.1")
+        val free = original.freePriceChoice(LlmCapability.CHAT, true, null)
+        assertEquals("0", free.input)
+        assertEquals("0", free.output)
+        assertEquals(original, free.freePriceChoice(LlmCapability.CHAT, false, original))
+        val embeddingFree = original.freePriceChoice(LlmCapability.EMBEDDING, true, null)
+        assertEquals("0", embeddingFree.embedding)
+        assertEquals("1.25", embeddingFree.input)
+        assertEquals("0.1", embeddingFree.copy(dimensions = "4096")
+            .freePriceChoice(LlmCapability.EMBEDDING, false, original).embedding)
+    }
     private fun provider(
         hasApiKey: Boolean = false,
         apiKeyInput: String = "",
@@ -24,6 +37,8 @@ class LlmDiscoveryTest {
         clearApiKey = clearApiKey,
         hasApiKey = hasApiKey,
     )
+
+    private val taken = setOf("" to "other-model")
 
     @Test
     fun theKeyBadgeReadsSavedEnteredRemovalAndNone() {
@@ -88,10 +103,28 @@ class LlmDiscoveryTest {
     }
 
     @Test
-    fun importingPricesDoesNotImplicitlyRouteATask() {
-        val selected = listOf(LlmModel("chosen"))
-        assertEquals(null, LlmImportIntent.IMPORT_ONLY.routedModel(selected))
-        assertEquals("chosen", LlmImportIntent.USE_FOR_TASK.routedModel(selected))
+    fun importingDoesNotOverwriteSavedPricingAndScopedIdentityWins() {
+        val existing = LlmModel("shared", inputPer1m = "9", outputPer1m = "9", embeddingPer1m = "9", dimensions = 99)
+        val imports = listOf(
+            LlmModel("shared", inputPer1m = "1", outputPer1m = "1", embeddingPer1m = "1", dimensions = 1),
+            LlmModel("fresh", inputPer1m = "0", outputPer1m = "0", embeddingPer1m = "0", dimensions = 0),
+        )
+        val merged = importReviewedModels(listOf(existing), imports)
+        assertEquals(listOf(existing, imports[1]), merged)
+
+        // A scoped row and a global row are different identities.
+        val scoped = LlmModel("shared", provider = "openai", inputPer1m = "2")
+        val withScoped = importReviewedModels(listOf(existing), listOf(scoped))
+        assertEquals(listOf(existing, scoped), withScoped)
+        assertEquals("openai/shared", scoped.identityLabel())
+        assertEquals("fresh", imports[1].identityLabel())
+    }
+
+    @Test
+    fun importingCapsTheTable() {
+        val full = (1..128).map { LlmModel("m$it") }
+        assertEquals(128, importReviewedModels(full, listOf(LlmModel("overflow"))).size)
+        assertEquals(full, importReviewedModels(full, listOf(LlmModel("overflow"))))
     }
 
     @Test
@@ -139,41 +172,111 @@ class LlmDiscoveryTest {
         // Published fields prefill.
         val priced = LlmDiscoveredModel("p", chat = true, inputPer1m = "1.5", outputPer1m = "6", dimensions = 1536, truncatable = true)
         assertEquals(LlmModelReview("p", "1.5", "6", "", "1536", true), priced.reviewPrefill())
+        // The provider scope and a chosen capability travel with the review.
+        assertEquals("openai", chatOnly.reviewPrefill(provider = "openai").provider)
+        assertEquals(
+            LlmModelReview("eo", "0", "0", "0.02", "", false, provider = "openai"),
+            embedOnly.reviewPrefill(provider = "openai", capability = LlmCapability.EMBEDDING),
+        )
+    }
+
+    @Test
+    fun chatSelectionZeroesNonapplicableEmbeddingFields() {
+        val entry = LlmDiscoveredModel(
+            "co",
+            chat = true,
+            inputPer1m = "1.5",
+            outputPer1m = "6",
+            embeddingPer1m = "0.02",
+            dimensions = 1536,
+            truncatable = true,
+            supportsCustomDimensions = true,
+        )
+        val configured = entry.reviewPrefill("openai", LlmCapability.CHAT).toConfiguredModel(LlmCapability.CHAT)
+        assertEquals("1.5", configured.inputPer1m)
+        assertEquals("6", configured.outputPer1m)
+        assertEquals("0", configured.embeddingPer1m)
+        assertEquals(0, configured.dimensions)
+        assertFalse(configured.truncatable)
+        assertFalse(configured.supportsCustomDimensions)
+        assertEquals("openai", configured.provider)
+        assertTrue(entry.reviewProblems(entry.reviewPrefill("openai", LlmCapability.CHAT), taken, LlmCapability.CHAT).isEmpty())
+    }
+
+    @Test
+    fun embeddingSelectionZeroesChatRatesAndKeepsGeometry() {
+        val entry = LlmDiscoveredModel("eo", embedding = true, embeddingPer1m = "0.02", dimensions = 1536, truncatable = true)
+        val configured = entry.reviewPrefill("openai", LlmCapability.EMBEDDING).toConfiguredModel(LlmCapability.EMBEDDING)
+        assertEquals("0", configured.inputPer1m)
+        assertEquals("0", configured.outputPer1m)
+        assertEquals("0.02", configured.embeddingPer1m)
+        assertEquals(1536, configured.dimensions)
+        assertTrue(configured.truncatable)
+        assertEquals("openai", configured.provider)
     }
 
     @Test
     fun reviewProblemsRequireApplicablePricesAndGeometry() {
-        val taken = setOf("other-model")
         // A fully blank review for an unknown model reports every gap.
         val unknown = LlmDiscoveredModel("u")
-        val gaps = unknown.reviewProblems(LlmModelReview("u", "", "", "", "", false), taken)
+        val gaps = unknown.reviewProblems(LlmModelReview("u"), taken)
         assertTrue(gaps.any { it.contains("input price") })
         assertTrue(gaps.any { it.contains("output price") })
-        assertTrue(gaps.any { it.contains("embedding price") })
-        assertTrue(gaps.any { it.contains("dimensions") })
+        // A blank embedding dimension is missing, not a malformed integer.
+        assertTrue(
+            unknown.reviewProblems(LlmModelReview("u", "0", "0", "", ""), taken, LlmCapability.EMBEDDING)
+                .any { it.contains("dimensions are missing") },
+        )
+        assertFalse(
+            unknown.reviewProblems(LlmModelReview("u", "0", "0", "", ""), taken, LlmCapability.EMBEDDING)
+                .any { it.contains("whole number") },
+        )
+        assertTrue(
+            unknown.reviewProblems(LlmModelReview("u", "0", "0", "", "wide"), taken, LlmCapability.EMBEDDING)
+                .any { it.contains("whole number") },
+        )
         // A known embedding model must carry real geometry.
         val embedder = LlmDiscoveredModel("e", embedding = true)
         assertTrue(
-            embedder.reviewProblems(LlmModelReview("e", "0", "0", "0.02", "0", false), taken)
-                .any { it.contains("dimensions are required") },
+            embedder.reviewProblems(LlmModelReview("e", "0", "0", "0.02", "0"), taken, LlmCapability.EMBEDDING)
+                .any { it.contains("dimensions must be greater than zero") },
         )
-        assertTrue(embedder.reviewProblems(LlmModelReview("e", "0", "0", "0.02", "1536", true), taken).isEmpty())
+        assertTrue(
+            embedder.reviewProblems(LlmModelReview("e", "0", "0", "0.02", "1536", true), taken, LlmCapability.EMBEDDING).isEmpty(),
+        )
         // A chat-only model needs no geometry, but its chat prices are
         // still required input: the prefill alone does not pass.
         val chatOnly = LlmDiscoveredModel("co", chat = true, embedding = false)
         assertTrue(chatOnly.reviewProblems(chatOnly.reviewPrefill(), taken).any { it.contains("input price") })
         assertTrue(chatOnly.reviewProblems(LlmModelReview("co", "1", "0.5", "0", "0", false), taken).isEmpty())
         // Names are unique against the table and sibling imports.
-        assertTrue(unknown.reviewProblems(LlmModelReview("other-model", "0", "0", "0", "0", false), taken).any { it.contains("already used") })
-        assertTrue(unknown.reviewProblems(LlmModelReview("bad name", "0", "0", "0", "0", false), taken).any { it.contains("whitespace") })
-        // A malformed price is not a price at all.
-        assertTrue(unknown.reviewProblems(LlmModelReview("u", "abc", "0", "0", "0", false), taken).any { it.contains("input price") })
-        // Wide geometry needs the truncatable flag.
         assertTrue(
-            embedder.reviewProblems(LlmModelReview("e", "0", "0", "0.02", "3072", false), taken)
-                .any { it.contains("truncatable") },
+            unknown.reviewProblems(LlmModelReview("other-model", "0", "0", "0", "0"), taken)
+                .any { it.contains("already configured") },
         )
-        assertTrue(embedder.reviewProblems(LlmModelReview("e", "0", "0", "0.02", "3072", true), taken).isEmpty())
+        assertTrue(unknown.reviewProblems(LlmModelReview("bad name", "0", "0", "0", "0"), taken).any { it.contains("whitespace") })
+        // A malformed price is not a price at all.
+        assertTrue(unknown.reviewProblems(LlmModelReview("u", "abc", "0", "0", "0"), taken).any { it.contains("input price") })
+    }
+
+    @Test
+    fun wideGeometryAcceptsTruncationOrCustomWidth() {
+        val embedder = LlmDiscoveredModel("e", embedding = true)
+        val wide = LlmModelReview("e", "0", "0", "0.02", "3072", truncatable = false)
+        assertTrue(
+            embedder.reviewProblems(wide, taken, LlmCapability.EMBEDDING).any { it.contains("truncatable") || it.contains("custom width") },
+        )
+        assertTrue(
+            embedder.reviewProblems(wide.copy(truncatable = true), taken, LlmCapability.EMBEDDING).isEmpty(),
+        )
+        assertTrue(
+            embedder.reviewProblems(wide.copy(supportsCustomDimensions = true), taken, LlmCapability.EMBEDDING).isEmpty(),
+        )
+        // The two flags are not interchangeable with the dimension ceiling.
+        assertTrue(
+            embedder.reviewProblems(wide.copy(dimensions = "65537", truncatable = true), taken, LlmCapability.EMBEDDING)
+                .any { it.contains("at most") },
+        )
     }
 
     @Test

@@ -13,9 +13,16 @@ import ch.lkmc.earnest.core.FrontPage
 import ch.lkmc.earnest.core.FrontPagePeriod
 import ch.lkmc.earnest.core.KeptImportReport
 import ch.lkmc.earnest.core.LlmDiscoveredModel
+import ch.lkmc.earnest.core.LlmModel
+import ch.lkmc.earnest.core.LlmModelCapability
+import ch.lkmc.earnest.core.LlmModelCheck
+import ch.lkmc.earnest.core.LlmModelCheckInput
 import ch.lkmc.earnest.core.LlmModelsInput
 import ch.lkmc.earnest.core.LlmSettings
 import ch.lkmc.earnest.core.LlmSettingsInput
+import ch.lkmc.earnest.core.LlmTask
+import ch.lkmc.earnest.core.LlmTaskMode
+import ch.lkmc.earnest.core.LlmTaskRoute
 import ch.lkmc.earnest.core.MAX_KEPT_IMPORT_BYTES
 import ch.lkmc.earnest.core.MAX_OPML_IMPORT_BYTES
 import ch.lkmc.earnest.core.OpmlSummary
@@ -152,9 +159,12 @@ data class LlmSettingsUi(
     val conflict: Boolean = false,
     val frozen: FrozenLlmSettings? = null,
     val discovery: LlmDiscoveryUi? = null,
+    val catalogues: Map<Pair<Long, String>, List<LlmDiscoveredModel>> = emptyMap(),
+    val check: LlmModelCheckUi? = null,
     val epoch: Long = 0,
     val loadRequest: Long = 0,
     val saveRequest: Long = 0,
+    val checkRequest: Long = 0,
 )
 
 /**
@@ -168,9 +178,29 @@ data class LlmSettingsUi(
 data class LlmDiscoveryUi(
     val providerIndex: Int,
     val providerKey: String,
+    val revision: Long,
     val request: Long,
     val loading: Boolean = false,
     val models: List<LlmDiscoveredModel>? = null,
+    val error: String? = null,
+)
+
+/**
+ * One explicit model check. The result is memory-only and bound to the
+ * provider draft, loaded revision and account epoch it was requested under;
+ * a provider edit, reload, sign-out or account change drops it. Observed
+ * geometry is applied to the draft by an explicit action, never persisted by
+ * the check itself.
+ */
+data class LlmModelCheckUi(
+    val providerIndex: Int,
+    val providerKey: String,
+    val revision: Long,
+    val modelId: String,
+    val capability: LlmModelCapability,
+    val request: Long,
+    val loading: Boolean = false,
+    val result: LlmModelCheck? = null,
     val error: String? = null,
 )
 
@@ -252,6 +282,7 @@ class AppViewModel internal constructor(
     private val llmLoadId = AtomicLong()
     private val llmSaveId = AtomicLong()
     private val llmDiscoveryId = AtomicLong()
+    private val llmCheckId = AtomicLong()
 
     // Front-page requests bind to the account and an ownership epoch stamped
     // by a login, logout or session expiry, so a response cannot publish into
@@ -625,6 +656,21 @@ class AppViewModel internal constructor(
         _state.update { it.copy(readerSettingsUi = it.readerSettingsUi.copy(conflict = null)) }
     }
 
+    /** Discards the reader draft and returns to the loaded baseline. */
+    fun discardReaderSettingsDraft() {
+        _state.update { current ->
+            current.copy(
+                readerSettingsUi = current.readerSettingsUi.copy(
+                    draft = null,
+                    frozen = null,
+                    conflict = null,
+                    error = null,
+                    success = false,
+                ),
+            )
+        }
+    }
+
     /** Discards the draft and loads the newest known settings (reload, not overwrite). */
     fun reloadReaderSettings() {
         val intent = _state.value
@@ -825,7 +871,7 @@ class AppViewModel internal constructor(
     fun loadLlmSettings() {
         val intent = _state.value
         val expected = intent.llmSettingsUi.epoch
-        val (cache, session) = activeAccount("Still signing in; LLM services did not load.") ?: return
+        val (cache, session) = activeAccount("Still signing in; AI settings did not load.") ?: return
         loadLlmSettings(expected, session, cache, reset = false)
     }
 
@@ -833,12 +879,13 @@ class AppViewModel internal constructor(
     fun reloadLlmSettings() {
         val intent = _state.value
         val expected = intent.llmSettingsUi.epoch
-        val (cache, session) = activeAccount("Still signing in; LLM services did not load.") ?: return
+        val (cache, session) = activeAccount("Still signing in; AI settings did not load.") ?: return
         loadLlmSettings(expected, session, cache, reset = true)
     }
 
     private fun loadLlmSettings(expected: Long, session: AuthenticatedSession, cache: SessionCache, reset: Boolean) {
         val request = llmLoadId.incrementAndGet()
+        val draftToDiscard = _state.value.llmSettingsUi.draft
         // Reload must not erase a frozen save or race its returned revision.
         publishLlm(expected, session, cache, { !it.saving }) {
             it.copy(llmSettingsUi = it.llmSettingsUi.copy(
@@ -846,9 +893,8 @@ class AppViewModel internal constructor(
                 error = null,
                 success = if (reset) false else it.llmSettingsUi.success,
                 loadRequest = request,
-                draft = if (reset) null else it.llmSettingsUi.draft,
-                frozen = if (reset) null else it.llmSettingsUi.frozen,
                 discovery = if (reset) null else it.llmSettingsUi.discovery,
+                check = if (reset) null else it.llmSettingsUi.check,
             ))
         }
         viewModelScope.launch(readerDispatcher) {
@@ -860,13 +906,20 @@ class AppViewModel internal constructor(
                     val ui = current.llmSettingsUi
                     val canonical = if (settings.revision > ui.loadedRevision) settings else ui.loaded ?: settings
                     val canonicalRevision = maxOf(settings.revision, ui.loadedRevision)
+                    val replaceDraft = reset && ui.draft == draftToDiscard
+                    val replaceBaseline = ui.draft == null || replaceDraft
                     current.copy(
                         llmSettingsUi = ui.copy(
                             loading = false,
                             // A dirty draft keeps the baseline it was edited on.
-                            loaded = if (ui.draft == null) canonical else ui.loaded,
-                            loadedRevision = if (ui.draft == null) canonicalRevision else ui.loadedRevision,
-                            conflict = if (ui.draft == null) false else ui.conflict,
+                            loaded = if (replaceBaseline) canonical else ui.loaded,
+                            loadedRevision = if (replaceBaseline) canonicalRevision else ui.loadedRevision,
+                            catalogues = if (replaceBaseline) emptyMap() else ui.catalogues,
+                            discovery = if (replaceBaseline && canonicalRevision != ui.loadedRevision) null else ui.discovery,
+                            check = if (replaceBaseline && canonicalRevision != ui.loadedRevision) null else ui.check,
+                            draft = if (replaceDraft) null else ui.draft,
+                            frozen = if (replaceDraft) null else ui.frozen,
+                            conflict = if (replaceBaseline) false else ui.conflict,
                             success = false,
                         ),
                     )
@@ -875,14 +928,14 @@ class AppViewModel internal constructor(
                 if (!loadLlmOwner(session, cache, expected, request)) return@launch
                 if (error.isUnauthorized && sessions.current() == session) expireSessionIfCurrent(session)
                 publishLlm(expected, session, cache, { it.loadRequest == request }) {
-                    it.copy(llmSettingsUi = it.llmSettingsUi.copy(loading = false, error = failureText("Could not load LLM services", error)))
+                    it.copy(llmSettingsUi = it.llmSettingsUi.copy(loading = false, error = failureText("Could not load AI settings", error)))
                 }
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
             } catch (error: Exception) {
                 if (loadLlmOwner(session, cache, expected, request)) {
                     publishLlm(expected, session, cache, { it.loadRequest == request }) {
-                        it.copy(llmSettingsUi = it.llmSettingsUi.copy(loading = false, error = failureText("Could not load LLM services", error)))
+                        it.copy(llmSettingsUi = it.llmSettingsUi.copy(loading = false, error = failureText("Could not load AI settings", error)))
                     }
                 }
             }
@@ -907,8 +960,41 @@ class AppViewModel internal constructor(
                     error = null,
                     success = false,
                     discovery = ui.discovery?.takeIf { it.stillValidFor(next.providers) },
+                    catalogues = ui.catalogues.filterKeys { key ->
+                        key.first == ui.loadedRevision && next.providers.any { it.discoveryFingerprint() == key.second }
+                    },
+                    check = ui.check?.takeIf { it.stillValidFor(next.providers, ui.loadedRevision) },
                 ),
             )
+        }
+    }
+
+    /**
+     * Applies one catalogue selection to the draft. A model identity that is
+     * already configured keeps its saved prices; a task context also routes
+     * that task to the selection as a custom route. Nothing is persisted
+     * until an explicit Save.
+     */
+    fun selectLlmModel(providerIndex: Int, addition: LlmModel, task: LlmTask?, defaultKey: String? = null) {
+        updateLlmSettingsDraft { draft ->
+            val provider = draft.providers.getOrNull(providerIndex) ?: return@updateLlmSettingsDraft draft
+            val providerName = provider.routedName
+            if (providerName.isEmpty() || provider.name != providerName ||
+                (addition.provider.isNotEmpty() && addition.provider != providerName)) return@updateLlmSettingsDraft draft
+            val scoped = if (addition.provider.isEmpty()) addition.copy(provider = providerName) else addition
+            val merged = importReviewedModels(draft.models, listOf(scoped))
+            if (merged.none { it.identity() == scoped.identity() }) return@updateLlmSettingsDraft draft
+            val tasks = task?.let { selected ->
+                draft.tasks.map {
+                    if (it.task == selected.wireName) {
+                        LlmTaskRoute(selected.wireName, scoped.provider, scoped.name, LlmTaskMode.CUSTOM)
+                    } else {
+                        it
+                    }
+                }
+            } ?: draft.tasks
+            val next = draft.copy(models = merged, tasks = tasks)
+            if (defaultKey == null) next else next.withDefaultModel(defaultKey, scoped)
         }
     }
 
@@ -916,14 +1002,23 @@ class AppViewModel internal constructor(
     private fun LlmDiscoveryUi.stillValidFor(providers: List<LlmProviderDraft>): Boolean =
         providers.getOrNull(providerIndex)?.discoveryFingerprint() == providerKey
 
+    /** A check is stale when the provider draft or loaded revision changed. */
+    private fun LlmModelCheckUi.stillValidFor(providers: List<LlmProviderDraft>, revision: Long): Boolean =
+        providers.getOrNull(providerIndex)?.discoveryFingerprint() == providerKey && this.revision == revision
+
     /**
-     * The discovery entry still owns its provider's fingerprint: the request
-     * identity inside [publishLlm]'s owns-check plus this keeps a late reply
-     * from publishing against an edited or replaced draft.
+     * The discovery entry still owns its provider's fingerprint and revision:
+     * the request identity inside [publishLlm]'s owns-check plus this keeps a
+     * late reply from publishing against an edited or replaced draft.
      */
     private fun LlmSettingsUi.discoveryCurrent(): Boolean {
         val entry = discovery ?: return false
-        return entry.stillValidFor((draft ?: loaded?.toDraft())?.providers.orEmpty())
+        return entry.revision == loadedRevision && entry.stillValidFor((draft ?: loaded?.toDraft())?.providers.orEmpty())
+    }
+
+    private fun LlmSettingsUi.checkCurrent(): Boolean {
+        val entry = check ?: return false
+        return entry.request == checkRequest && entry.stillValidFor((draft ?: loaded?.toDraft())?.providers.orEmpty(), loadedRevision)
     }
 
     /**
@@ -935,7 +1030,7 @@ class AppViewModel internal constructor(
      * account change drops them. A 404 means the server predates discovery
      * and manual entry remains the fallback.
      */
-    fun fetchLlmModels(providerIndex: Int) {
+    fun fetchLlmModels(providerIndex: Int, refresh: Boolean = false) {
         val intent = _state.value
         val ui = intent.llmSettingsUi
         val expected = ui.epoch
@@ -945,15 +1040,28 @@ class AppViewModel internal constructor(
         val provider = draft?.providers?.getOrNull(providerIndex)
         if (loaded == null || provider == null) {
             publishLlm(expected, session, cache) {
-                it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = "Load the LLM services settings before fetching models."))
+                it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = "Load the AI settings before fetching models."))
             }
             return
         }
+        val cached = ui.discovery
+        if (!refresh && cached?.providerIndex == providerIndex && ui.discoveryCurrent() &&
+            (cached.loading || cached.models != null && cached.error == null)) return
         val request = llmDiscoveryId.incrementAndGet()
+        val catalogueKey = loaded.revision to provider.discoveryFingerprint()
+        val cachedModels = ui.catalogues[catalogueKey]
+        if (!refresh && cachedModels != null) {
+            publishLlm(expected, session, cache) {
+                it.copy(llmSettingsUi = it.llmSettingsUi.copy(
+                    discovery = LlmDiscoveryUi(providerIndex, provider.discoveryFingerprint(), loaded.revision, request, models = cachedModels),
+                ))
+            }
+            return
+        }
         publishLlm(expected, session, cache) {
             it.copy(
                 llmSettingsUi = it.llmSettingsUi.copy(
-                    discovery = LlmDiscoveryUi(providerIndex, provider.discoveryFingerprint(), request, loading = true),
+                    discovery = LlmDiscoveryUi(providerIndex, provider.discoveryFingerprint(), loaded.revision, request, loading = true),
                 ),
             )
         }
@@ -967,6 +1075,7 @@ class AppViewModel internal constructor(
                     current.copy(
                         llmSettingsUi = current.llmSettingsUi.copy(
                             discovery = entry?.copy(loading = false, models = results.models.orEmpty(), error = null),
+                            catalogues = current.llmSettingsUi.catalogues + (catalogueKey to results.models.orEmpty()),
                         ),
                     )
                 }
@@ -981,17 +1090,18 @@ class AppViewModel internal constructor(
                     error.isConflict -> "The saved settings changed on the server. Reload them, then fetch again."
                     else -> failureText("Could not fetch the model catalogue", error)
                 }
-                publishLlm(expected, session, cache, { it.discovery?.request == request }) { current ->
+                publishLlm(expected, session, cache, { it.discovery?.request == request && it.discoveryCurrent() }) { current ->
                     current.copy(
                         llmSettingsUi = current.llmSettingsUi.copy(
                             discovery = current.llmSettingsUi.discovery?.copy(loading = false, error = message),
+                            conflict = current.llmSettingsUi.conflict || error.isConflict,
                         ),
                     )
                 }
             } catch (error: IllegalArgumentException) {
                 // Deterministic client-side validation: report, never retry.
                 if (!discoveryLlmOwner(session, cache, expected, request)) return@launch
-                publishLlm(expected, session, cache, { it.discovery?.request == request }) { current ->
+                publishLlm(expected, session, cache, { it.discovery?.request == request && it.discoveryCurrent() }) { current ->
                     current.copy(
                         llmSettingsUi = current.llmSettingsUi.copy(
                             discovery = current.llmSettingsUi.discovery?.copy(
@@ -1005,7 +1115,7 @@ class AppViewModel internal constructor(
                 throw error
             } catch (error: Exception) {
                 if (!discoveryLlmOwner(session, cache, expected, request)) return@launch
-                publishLlm(expected, session, cache, { it.discovery?.request == request }) { current ->
+                publishLlm(expected, session, cache, { it.discovery?.request == request && it.discoveryCurrent() }) { current ->
                     current.copy(
                         llmSettingsUi = current.llmSettingsUi.copy(
                             discovery = current.llmSettingsUi.discovery?.copy(
@@ -1022,7 +1132,142 @@ class AppViewModel internal constructor(
     /** Dismisses the catalogue; a late reply finds no owning request and is dropped. */
     fun dismissLlmDiscovery() {
         _state.update { current ->
-            current.copy(llmSettingsUi = current.llmSettingsUi.copy(discovery = null))
+            current.copy(llmSettingsUi = current.llmSettingsUi.copy(
+                discovery = current.llmSettingsUi.discovery?.takeIf { !it.loading && it.error == null },
+            ))
+        }
+    }
+
+    /**
+     * Discards the LLM draft, its typed key material, the frozen retry and
+     * the memory-only catalogue and check results, returning to the loaded
+     * baseline.
+     */
+    fun discardLlmSettingsDraft() {
+        if (_state.value.llmSettingsUi.conflict) {
+            reloadLlmSettings()
+            return
+        }
+        _state.update { current ->
+            current.copy(
+                llmSettingsUi = current.llmSettingsUi.copy(
+                    draft = null,
+                    frozen = null,
+                    conflict = false,
+                    error = null,
+                    success = false,
+                    discovery = null,
+                    catalogues = emptyMap(),
+                    check = null,
+                ),
+            )
+        }
+    }
+
+    /**
+     * Explicitly checks one draft model against its provider. The provider
+     * may bill a fixed sample. The result stays in memory, bound to the
+     * provider draft and loaded revision; observed geometry is applied to the
+     * draft only by an explicit action. A 409 asks for a reload; a 404 means
+     * an older server without checks.
+     */
+    @Synchronized
+    fun checkLlmModel(providerIndex: Int, model: LlmModel, capability: LlmModelCapability) {
+        val intent = _state.value
+        val ui = intent.llmSettingsUi
+        val expected = ui.epoch
+        val (cache, session) = activeAccount("Still signing in; the model check did not run.") ?: return
+        val loaded = ui.loaded
+        val draft = ui.draft ?: loaded?.toDraft()
+        val provider = draft?.providers?.getOrNull(providerIndex)
+        if (loaded == null || provider == null) {
+            publishLlm(expected, session, cache) {
+                it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = "Load the AI settings before checking a model."))
+            }
+            return
+        }
+        if (ui.conflict) return
+        if (ui.check?.let {
+            it.loading && it.providerIndex == providerIndex && it.providerKey == provider.discoveryFingerprint() &&
+                it.revision == loaded.revision && it.modelId == model.name && it.capability == capability
+        } == true) return
+        val request = llmCheckId.incrementAndGet()
+        publishLlm(expected, session, cache) {
+            it.copy(
+                llmSettingsUi = it.llmSettingsUi.copy(
+                    check = LlmModelCheckUi(
+                        providerIndex,
+                        provider.discoveryFingerprint(),
+                        loaded.revision,
+                        model.name,
+                        capability,
+                        request,
+                        loading = true,
+                    ),
+                    checkRequest = request,
+                ),
+            )
+        }
+        viewModelScope.launch(readerDispatcher) {
+            if (!checkLlmOwner(session, cache, expected, request)) return@launch
+            try {
+                val input = LlmModelCheckInput(loaded.revision, provider.toInput(), model, capability)
+                val result = apiFactory(session).checkLlmModel(input, loaded)
+                if (!checkLlmOwner(session, cache, expected, request)) return@launch
+                publishLlm(expected, session, cache, { it.checkRequest == request && it.checkCurrent() }) { current ->
+                    current.copy(
+                        llmSettingsUi = current.llmSettingsUi.copy(
+                            check = current.llmSettingsUi.check?.copy(loading = false, result = result, error = null),
+                        ),
+                    )
+                }
+            } catch (error: ApiException) {
+                if (!checkLlmOwner(session, cache, expected, request)) return@launch
+                if (error.isUnauthorized && sessions.current() == session) {
+                    expireSessionIfCurrent(session)
+                    return@launch
+                }
+                val message = when {
+                    error.status == 404 -> "This server does not support model checks; configure the model manually."
+                    error.isConflict -> "The saved settings changed on the server. Reload them, then check again."
+                    else -> failureText("Could not check the model", error)
+                }
+                publishLlm(expected, session, cache, { it.checkRequest == request && it.checkCurrent() }) { current ->
+                    current.copy(
+                        llmSettingsUi = current.llmSettingsUi.copy(
+                            check = current.llmSettingsUi.check?.copy(loading = false, error = message),
+                            conflict = current.llmSettingsUi.conflict || error.isConflict,
+                        ),
+                    )
+                }
+            } catch (error: IllegalArgumentException) {
+                // Deterministic client-side validation: report, never retry.
+                if (!checkLlmOwner(session, cache, expected, request)) return@launch
+                publishLlm(expected, session, cache, { it.checkRequest == request && it.checkCurrent() }) { current ->
+                    current.copy(
+                        llmSettingsUi = current.llmSettingsUi.copy(
+                            check = current.llmSettingsUi.check?.copy(
+                                loading = false,
+                                error = error.message ?: "The model is not valid.",
+                            ),
+                        ),
+                    )
+                }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (!checkLlmOwner(session, cache, expected, request)) return@launch
+                publishLlm(expected, session, cache, { it.checkRequest == request && it.checkCurrent() }) { current ->
+                    current.copy(
+                        llmSettingsUi = current.llmSettingsUi.copy(
+                            check = current.llmSettingsUi.check?.copy(
+                                loading = false,
+                                error = failureText("Could not check the model", error),
+                            ),
+                        ),
+                    )
+                }
+            }
         }
     }
 
@@ -1038,17 +1283,17 @@ class AppViewModel internal constructor(
         val intent = _state.value
         val ui = intent.llmSettingsUi
         val expected = ui.epoch
-        val (cache, session) = activeAccount("Still signing in; LLM services did not save.") ?: return
+        val (cache, session) = activeAccount("Still signing in; AI settings did not save.") ?: return
         val loaded = ui.loaded
         if (loaded == null) {
             publishLlm(expected, session, cache) {
-                it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = "Load the LLM services settings before saving."))
+                it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = "Load the AI settings before saving."))
             }
             return
         }
         if (ui.conflict) {
             publishLlm(expected, session, cache) {
-                it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = "Reload the LLM services settings before saving again."))
+                it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = "Reload the AI settings before saving again."))
             }
             return
         }
@@ -1058,7 +1303,7 @@ class AppViewModel internal constructor(
             draft.toInput(frozen?.input?.opId ?: newLlmOpId())
         } catch (error: IllegalArgumentException) {
             publishLlm(expected, session, cache) {
-                it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = error.message ?: "The LLM services settings are invalid."))
+                it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = error.message ?: "The AI settings are invalid."))
             }
             return
         }
@@ -1080,7 +1325,7 @@ class AppViewModel internal constructor(
         val frozen = ui.frozen ?: return
         val loaded = ui.loaded ?: return
         val expected = ui.epoch
-        val (cache, session) = activeAccount("Still signing in; LLM services did not save.") ?: return
+        val (cache, session) = activeAccount("Still signing in; AI settings did not save.") ?: return
         publishLlm(expected, session, cache) {
             it.copy(llmSettingsUi = it.llmSettingsUi.copy(error = null, success = false))
         }
@@ -1132,6 +1377,7 @@ class AppViewModel internal constructor(
                             error = if (editedDraft != null) "Your edits were made during the save. Reload before saving them." else null,
                             loaded = updated,
                             loadedRevision = updated.revision,
+                            catalogues = emptyMap(),
                             draft = editedDraft,
                             conflict = editedDraft != null,
                             frozen = null,
@@ -1139,6 +1385,9 @@ class AppViewModel internal constructor(
                             // changed (a typed key is consumed), which
                             // discards the catalogue bound to the old draft.
                             discovery = ui.discovery?.takeIf { it.stillValidFor((editedDraft ?: updated.toDraft()).providers) },
+                            check = ui.check?.takeIf {
+                                it.stillValidFor((editedDraft ?: updated.toDraft()).providers, updated.revision)
+                            },
                         ),
                     )
                 }
@@ -1147,7 +1396,7 @@ class AppViewModel internal constructor(
                 // A 401 invalidates the token: never replay or publish the save.
                 if (error.isUnauthorized) {
                     publishLlm(expected, session, cache, { it.saveRequest == request }) {
-                        it.copy(llmSettingsUi = it.llmSettingsUi.copy(saving = false, frozen = null, error = failureText("Could not save LLM services", error)))
+                        it.copy(llmSettingsUi = it.llmSettingsUi.copy(saving = false, frozen = null, error = failureText("Could not save AI settings", error)))
                     }
                     expireSessionIfCurrent(session)
                     return@launch
@@ -1170,7 +1419,7 @@ class AppViewModel internal constructor(
                     it.copy(llmSettingsUi = it.llmSettingsUi.copy(
                         saving = false,
                         frozen = if (deterministic) null else it.llmSettingsUi.frozen,
-                        error = failureText("Could not save LLM services", error),
+                        error = failureText("Could not save AI settings", error),
                     ))
                 }
             } catch (error: IllegalArgumentException) {
@@ -1180,7 +1429,7 @@ class AppViewModel internal constructor(
                     it.copy(llmSettingsUi = it.llmSettingsUi.copy(
                         saving = false,
                         frozen = null,
-                        error = "Could not save LLM services: ${error.message ?: "invalid settings"}",
+                        error = "Could not save AI settings: ${error.message ?: "invalid settings"}",
                     ))
                 }
             } catch (error: kotlinx.coroutines.CancellationException) {
@@ -1191,7 +1440,7 @@ class AppViewModel internal constructor(
                         it.copy(llmSettingsUi = it.llmSettingsUi.copy(
                             saving = false,
                             frozen = it.llmSettingsUi.frozen,
-                            error = failureText("Could not save LLM services", error),
+                            error = failureText("Could not save AI settings", error),
                         ))
                     }
                 }
@@ -1998,7 +2247,11 @@ class AppViewModel internal constructor(
 
     /** [llmCurrent] plus ownership of the in-flight catalogue request. */
     private fun discoveryLlmOwner(session: AuthenticatedSession, cache: SessionCache, expected: Long, request: Long): Boolean =
-        llmCurrent(session, cache, expected) && _state.value.llmSettingsUi.discovery?.request == request
+        llmCurrent(session, cache, expected) && _state.value.llmSettingsUi.let { it.discovery?.request == request && it.discoveryCurrent() }
+
+    /** [llmCurrent] plus ownership of the in-flight model check. */
+    private fun checkLlmOwner(session: AuthenticatedSession, cache: SessionCache, expected: Long, request: Long): Boolean =
+        llmCurrent(session, cache, expected) && _state.value.llmSettingsUi.let { it.checkRequest == request && it.checkCurrent() }
 
     /**
      * Applies [transform] only while the captured epoch and account still own

@@ -317,41 +317,38 @@ are skipped unless you ask Earnest to subscribe to those feeds first, and the
 report names what was added, what was already there, what was left out and
 what could not be imported.
 
-## LLM services
+## AI settings
 
-Settings carries the server-managed LLM services configuration in its own
-section. These settings are shared for the whole server: changing them affects
-all accounts. API keys are stored encrypted on the server and are never
-returned to the app; the section shows only whether a provider has a saved key.
-The app never caches, syncs or persists this configuration. Choose Load to
-fetch it with GET; Save replaces the whole provider, task and model
-configuration with PUT. Typed keys exist only in the in-memory draft, are
-masked, and are dropped on a successful save, on Reload, on sign-out and on
-identity change. They are never written to preferences, Room, saved instance
-state or logs, and no screen uses `rememberSaveable` for them.
+Settings has dedicated Reading & appearance, AI, and Import & export sections.
+Each section loads when opened. Navigation protects unsaved edits; AI has
+explicit Save and Discard actions.
 
-Providers can be added, edited and removed. A typed key replaces the saved
-one, a blank field keeps it, and an explicit control removes it. Changing the
-URL or kind of a provider that has a saved key requires a replacement key or
-an explicit clear, so a stored secret cannot silently move to a different
-destination. Task routing covers all seven tasks (embed, classify, blurb,
-summary, edition, compile_rule, ask); a task is enabled only when both
-provider and model are set, and Anthropic cannot embed. The advanced model
-editor lists named models with their three per-1M prices, embedding dimensions
-and the truncatable toggle. Prices are decimal strings, never floating point,
-and local models need explicit zero prices.
+AI configuration applies to the whole server. Add Venice, OpenAI, Anthropic,
+Gemini, or a custom OpenAI-compatible provider, then choose default text and
+embedding models. Opening a provider picker fetches its searchable catalogue.
+Manual model IDs remain available when discovery fails or is unsupported.
+Published prices fill automatically; missing applicable prices require an
+explicit amount or “This model is free”. Pricing belongs to the provider and
+model ID. Existing shared prices remain legacy fallbacks.
 
-Load preserves an edited draft; Reload discards it and loads the newest
-settings. Saving sends the loaded revision and a fresh operation ID. An
-ambiguous failure freezes the exact body so Retry resends it unchanged, while
-a 409 keeps the draft and requires an explicit Reload before saving again;
-the screen never claims a save that did not happen. Saving is refused without
-a loaded baseline, and a stale request cannot publish under a different
-account. Local model servers need `EARNEST_OUTBOUND_ALLOW_PRIVATE`
-allowlisting on the server. Load, Reload and Retry are disabled while a save
-is in progress, so a reload cannot discard an in-flight request.
+Choose each feature separately. Selecting a default never enables a feature;
+existing custom routes stay unchanged. Advanced offers per-feature overrides,
+provider protocol, timeouts, and token compatibility. Venice Qwen3 models can
+use their published 4096 native dimensions with provider resizing to 1024,
+without granting permission for local truncation. Check model sends fixed
+sample text and may incur usage charges; Save never sends inference requests.
 
-For a layout check on a narrow phone, add several named providers and open
-Route. Confirm that the provider choices wrap and remain reachable. Open a
-model's price editor, show the keyboard and scroll to its dimensions and
-truncation controls before applying the edit.
+Keys stay masked in memory until Save and are encrypted on the server. A blank
+field keeps the stored key, while an explicit control removes it. Changing a
+saved credential's destination requires a replacement key or removal. Drafts,
+keys, catalogue results, and checks are not persisted to preferences or Room,
+and account changes invalidate pending results.
+
+Saving uses the loaded revision and an operation ID. A retry after an ambiguous
+failure reuses the identical request. Conflicts keep the draft and offer Reload;
+edits are replaced only after that reload succeeds. Local model servers still
+require server-side `EARNEST_OUTBOUND_ALLOW_PRIVATE` allowlisting.
+
+For a narrow-layout check, open AI, choose a default, browse a provider, and use
+manual entry. With the keyboard open, scroll through price and dimension fields
+to the selection actions. Navigation and failed saves must preserve the draft.
