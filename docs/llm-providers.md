@@ -11,7 +11,7 @@ rules it enforces. The product rationale is in
 Every task is disabled unless both its provider and model are configured.
 With no saved configuration or `EARNEST_LLM_*` variables, every task reports
 `llm.ErrDisabled` and no model request leaves the process. Settings always
-shows the LLM services editor, including when every task is disabled.
+shows the AI editor, including when every task is disabled.
 
 ## Provider kinds
 
@@ -28,22 +28,41 @@ Gemini).
 
 ## Configure in Settings
 
-Open **Settings > LLM services** in the web, Mac or Android client. These
-settings apply to the whole server, not just your account or device:
+Open **Settings > AI** in the web, Mac or Android client. These settings
+apply to the whole server:
 
-1. Add a named provider, choose OpenAI-compatible, Anthropic or Gemini, and
-   enter its API base URL. Supply a key if the service needs one. Set a
-   monthly USD cap, timeout and, for older compatible servers, `max_tokens`.
-2. Review the model price table. Add your model ID and its input, output and
-   embedding prices per million tokens. Local models can have explicit zero
-   prices. Embedding models also need the correct dimensions and truncation
-   setting. Unknown models are never silently treated as free.
-3. Choose a provider and model for each task you want to enable. Leave a
-   task's provider and model empty to disable it.
+1. Add a provider. Choose Venice, OpenAI, Anthropic, Gemini or a custom
+   OpenAI-compatible server, then enter its key and optional monthly budget.
+   Presets fill in the protocol and URL. Timeout and token-field options are
+   under Advanced.
+2. Choose default text and embedding models. Opening a model selector loads
+   that provider's searchable catalogue. Selecting a model adds it directly
+   to the draft; there is no separate catalogue import step. Manual IDs remain
+   available when discovery is unsupported.
+3. Enable the features you want. Each enabled feature can use its default or
+   an explicit override under Advanced. Choosing a default does not enable
+   features, and existing routes are preserved as custom choices.
 4. Save. New HTTP requests and worker passes use the saved configuration
    without restarting. Work already in progress finishes with its original
-   configuration. Saving validates configuration but does not call a provider
-   or verify its credentials.
+   configuration. Saving does not call the provider.
+
+Published prices and embedding metadata prefill the model fields. Enter only
+missing applicable rates, or explicitly mark a model as free. Missing prices
+are never treated as zero. New metadata is scoped to provider and model ID;
+legacy unscoped entries remain fallbacks. Existing custom rates are preserved.
+
+**Check model** is optional and sends fixed sample text, never articles. The
+provider may charge for the check. It uses the normal budget ledger and
+outbound restrictions, makes at most two embedding requests, and does not
+save settings or enable features. Unknown native dimensions are measured;
+models wider than 1024 are checked for provider-side resizing. A successful
+check does not grant permission to truncate vectors locally. Text checks
+verify generation; feature-specific output is validated when used.
+
+Venice discovery reads `model_spec.embeddingDimensions` and
+`supportsCustomDimensions`. Provider-side resizing and safe local truncation
+are separate capabilities. A model with 4096 native dimensions can produce
+1024 dimensions at the provider without enabling local truncation.
 
 Keys are write-only. A blank key field preserves the existing key; use the
 explicit clear control to remove it. Changing a keyed provider's URL or
@@ -61,6 +80,18 @@ Environment changes no longer override a saved configuration.
 Reads and writes use `GET` and `PUT /v1/settings/llm`. They require a human
 principal with the `admin` scope, which normal sessions and native app tokens
 hold. Agent and Google Reader credentials cannot manage this configuration.
+The settings document optionally includes `defaults` (`text` and `embedding`
+provider/model pairs), and task `mode` (`off`, `default` or `custom`). Task
+provider/model fields always expose effective routes for existing readers.
+Writes without modes remain explicit legacy routes. Models optionally name
+`provider` and `supports_custom_dimensions` alongside their existing fields.
+
+`POST /v1/settings/llm/models/check` accepts a revision, draft provider, model
+metadata and `chat` or `embedding` capability. Its response describes
+compatibility and observed geometry. Like discovery, it requires a human
+administrator and uses `Cache-Control: no-store`. Checks require explicit
+prices and cannot raise a saved provider's spending cap through a draft.
+
 Writes include a revision and an `op_id`; a stale revision returns 409 rather
 than overwriting another client's changes. Reload and review before saving
 again. Only redacted responses enter the operation log; provider keys never
@@ -168,8 +199,9 @@ names:
 | `input_per_1m` | USD per million input (prompt) tokens. |
 | `output_per_1m` | USD per million output (completion) tokens. |
 | `embedding_per_1m` | USD per million embedding tokens. |
-| `dimensions` | The model's native embedding width. At most 1024 unless `truncatable` is set. |
+| `dimensions` | The model's native embedding width. At most 1024 unless provider resizing or safe truncation is configured. |
 | `truncatable` | Whether vectors longer than 1024 may be cut to fit. |
+| `supports_custom_dimensions` | Whether the provider supports requesting smaller output vectors; does not permit local truncation. |
 
 The built-in table carries the prices from the research cost section
 (`text-embedding-3-small`, `claude-haiku-5-5`, `claude-sonnet-5-5`) and the
@@ -300,3 +332,7 @@ the outbound allowlist and timeout, does not follow redirects, and bounds
 pagination and response size. Results are kept only in client memory and are
 invalidated when provider or session state changes. Provider error bodies and
 credentials are not returned or written to the operation log.
+
+A task with `mode: "off"` always clears its effective provider and model, even
+if a client sends a previously selected route. Turning a feature off must
+never leave it enabled through an old route.

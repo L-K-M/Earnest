@@ -1,11 +1,19 @@
 // @vitest-environment jsdom
 import {afterEach, expect, it, vi} from 'vitest'
-import {cleanup, fireEvent, render, screen, waitFor, within} from '@testing-library/react'
-import {QueryClient, QueryClientProvider} from '@tanstack/react-query'
+import {act, cleanup, fireEvent, render, screen, waitFor, within} from '@testing-library/react'
+import {QueryClient, QueryClientProvider, useQuery} from '@tanstack/react-query'
 import {Push, Tokens, Webhooks} from './Account'
 import {request} from '../request'
+import {navigate} from '../router'
 vi.mock('../request', () => ({request:vi.fn()}))
 function mount(node:React.ReactNode) {return render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}>{node}</QueryClientProvider>)}
+const browserZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+function SavedRev() {
+  const settings = useQuery({queryKey:['push-settings'], queryFn:({signal}) => request<{rev:number}>('/v1/push-settings', {signal})})
+  return <span data-testid="saved-rev">{settings.data?.rev}</span>
+}
+// leave simulates picking another settings section, which unmounts this pane.
+const leave = () => act(() => {navigate('/settings#push')})
 afterEach(() => {cleanup();vi.resetAllMocks();history.replaceState(null, '', '/')})
 it('offers only agent scopes, creates a token and shows its secret once', async () => {
   vi.mocked(request).mockImplementation(async (_path, options) => options?.method === 'POST' ? {secret:'earnest_agent_secret'} : [])
@@ -117,6 +125,239 @@ it('shows empty states for tokens and webhooks', async () => {
   mount(<Webhooks />)
   expect(await screen.findByText('No webhooks yet.')).toBeTruthy()
 })
+it('keeps token drafts and a generated secret when a section change is cancelled', async () => {
+  vi.mocked(request).mockImplementation(async (_path, options) => options?.method === 'POST' ? {secret:'earnest_agent_secret'} : [])
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  mount(<Tokens />)
+  fireEvent.change(screen.getByLabelText('Name'), {target:{value:'Scout'}})
+  fireEvent.click(screen.getByLabelText(/entries:read/))
+  leave()
+  expect(confirm).toHaveBeenCalledTimes(1)
+  expect(location.pathname).toBe('/')
+  expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Scout')
+  expect((screen.getByLabelText(/entries:read/) as HTMLInputElement).checked).toBe(true)
+  fireEvent.click(screen.getByRole('button',{name:'Create agent token'}))
+  await screen.findByText('earnest_agent_secret')
+  leave()
+  expect(confirm).toHaveBeenCalledTimes(2)
+  expect(screen.getByText('earnest_agent_secret')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button',{name:'Done'}))
+  confirm.mockClear()
+  leave()
+  expect(confirm).not.toHaveBeenCalled()
+  expect(location.pathname).toBe('/settings')
+  expect(location.hash).toBe('#push')
+})
+
+it('releases the token draft guard after the form is cleared again', async () => {
+  vi.mocked(request).mockImplementation(async (_path, options) => options?.method === 'POST' ? {secret:'earnest_agent_secret'} : [])
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  mount(<Tokens />)
+  fireEvent.change(screen.getByLabelText('Name'), {target:{value:'Scout'}})
+  fireEvent.click(screen.getByLabelText(/entries:read/))
+  fireEvent.change(screen.getByLabelText('Audience'), {target:{value:'api'}})
+  fireEvent.change(screen.getByLabelText('Daily notification budget'), {target:{value:'9'}})
+  fireEvent.change(screen.getByLabelText('Expiry (optional)'), {target:{value:'2030-01-01T10:00'}})
+  leave()
+  expect(confirm).toHaveBeenCalledTimes(1)
+  fireEvent.change(screen.getByLabelText('Name'), {target:{value:''}})
+  fireEvent.click(screen.getByLabelText(/entries:read/))
+  fireEvent.change(screen.getByLabelText('Audience'), {target:{value:'mcp'}})
+  fireEvent.change(screen.getByLabelText('Daily notification budget'), {target:{value:'3'}})
+  fireEvent.change(screen.getByLabelText('Expiry (optional)'), {target:{value:''}})
+  confirm.mockClear()
+  leave()
+  expect(confirm).not.toHaveBeenCalled()
+  expect(location.pathname).toBe('/settings')
+  expect(location.hash).toBe('#push')
+})
+
+it('ignores a URL-prefilled device code but guards edits to it', async () => {
+  history.replaceState(null, '', '/device?user_code=ABCD-1234')
+  vi.mocked(request).mockImplementation(async (_path, options) => options?.method ? {} : [])
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  mount(<Tokens />)
+  expect((screen.getByLabelText('Device code') as HTMLInputElement).value).toBe('ABCD-1234')
+  leave()
+  expect(confirm).not.toHaveBeenCalled()
+  expect(location.pathname).toBe('/settings')
+  fireEvent.change(screen.getByLabelText('Device code'), {target:{value:'ABCD-5678'}})
+  confirm.mockClear()
+  act(() => {navigate('/settings#reading')})
+  expect(confirm).toHaveBeenCalledTimes(1)
+  expect(location.hash).toBe('#push')
+  expect((screen.getByLabelText('Device code') as HTMLInputElement).value).toBe('ABCD-5678')
+})
+
+it('releases the device guard when an edited prefilled code is cleared', async () => {
+  history.replaceState(null, '', '/device?user_code=ABCD-1234')
+  vi.mocked(request).mockImplementation(async (_path, options) => options?.method ? {} : [])
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  mount(<Tokens />)
+  expect((screen.getByLabelText('Device code') as HTMLInputElement).value).toBe('ABCD-1234')
+  fireEvent.change(screen.getByLabelText('Device code'), {target:{value:'ABCD-5678'}})
+  leave()
+  expect(confirm).toHaveBeenCalledTimes(1)
+  expect((screen.getByLabelText('Device code') as HTMLInputElement).value).toBe('ABCD-5678')
+  fireEvent.change(screen.getByLabelText('Device code'), {target:{value:''}})
+  confirm.mockClear()
+  leave()
+  expect(confirm).not.toHaveBeenCalled()
+  expect(location.pathname).toBe('/settings')
+  expect(location.hash).toBe('#push')
+})
+
+it('keeps token edits guarded after a failed create', async () => {
+  vi.mocked(request).mockImplementation(async (_path, options) => options?.method === 'POST' ? Promise.reject(new Error('token service unavailable')) : [])
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  mount(<Tokens />)
+  fireEvent.change(screen.getByLabelText('Name'), {target:{value:'Scout'}})
+  fireEvent.click(screen.getByRole('button',{name:'Create agent token'}))
+  await screen.findByText('token service unavailable')
+  leave()
+  expect(confirm).toHaveBeenCalledTimes(1)
+  expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Scout')
+})
+
+it('guards a token request while it is pending', async () => {
+  let resolveCreate: (value: {secret: string}) => void = () => {}
+  vi.mocked(request).mockImplementation(async (_path, options) => options?.method === 'POST' ? new Promise(resolve => {resolveCreate = resolve}) : [])
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  mount(<Tokens />)
+  fireEvent.change(screen.getByLabelText('Name'), {target:{value:'Scout'}})
+  fireEvent.click(screen.getByRole('button',{name:'Create agent token'}))
+  await waitFor(() => expect((screen.getByRole('button',{name:'Create agent token'}) as HTMLButtonElement).disabled).toBe(true))
+  leave()
+  expect(confirm).toHaveBeenCalledTimes(1)
+  expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Scout')
+  await act(async () => {resolveCreate({secret:'late_secret'})})
+})
+
+it('keeps webhook drafts and a generated secret when a section change is cancelled', async () => {
+  vi.mocked(request).mockImplementation(async (_path, options) => options?.method === 'POST' ? {secret:'whsec_secret'} : [])
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  mount(<Webhooks />)
+  fireEvent.change(screen.getByLabelText('URL'), {target:{value:'https://example.test/new'}})
+  fireEvent.click(screen.getByLabelText('entry.matched'))
+  leave()
+  expect(confirm).toHaveBeenCalledTimes(1)
+  expect((screen.getByLabelText('URL') as HTMLInputElement).value).toBe('https://example.test/new')
+  expect((screen.getByLabelText('entry.matched') as HTMLInputElement).checked).toBe(true)
+  fireEvent.click(screen.getByRole('button',{name:'Create webhook'}))
+  await screen.findByText('whsec_secret')
+  leave()
+  expect(confirm).toHaveBeenCalledTimes(2)
+  expect(screen.getByText('whsec_secret')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button',{name:'Done'}))
+  confirm.mockClear()
+  leave()
+  expect(confirm).not.toHaveBeenCalled()
+  expect(location.pathname).toBe('/settings')
+  expect(location.hash).toBe('#push')
+})
+
+it('releases the webhook draft guard after the form is cleared again', async () => {
+  vi.mocked(request).mockImplementation(async (_path, options) => options?.method === 'POST' ? {secret:'whsec_secret'} : [])
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  mount(<Webhooks />)
+  fireEvent.change(screen.getByLabelText('URL'), {target:{value:'https://example.test/new'}})
+  fireEvent.click(screen.getByLabelText('entry.matched'))
+  leave()
+  expect(confirm).toHaveBeenCalledTimes(1)
+  fireEvent.change(screen.getByLabelText('URL'), {target:{value:''}})
+  fireEvent.click(screen.getByLabelText('entry.matched'))
+  confirm.mockClear()
+  leave()
+  expect(confirm).not.toHaveBeenCalled()
+  expect(location.pathname).toBe('/settings')
+  expect(location.hash).toBe('#push')
+})
+
+it('keeps webhook edits guarded after a failed create', async () => {
+  vi.mocked(request).mockImplementation(async (_path, options) => options?.method === 'POST' ? Promise.reject(new Error('webhook service unavailable')) : [])
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  mount(<Webhooks />)
+  fireEvent.change(screen.getByLabelText('URL'), {target:{value:'https://example.test/new'}})
+  fireEvent.click(screen.getByLabelText('entry.matched'))
+  fireEvent.click(screen.getByRole('button',{name:'Create webhook'}))
+  await screen.findByText('webhook service unavailable')
+  leave()
+  expect(confirm).toHaveBeenCalledTimes(1)
+  expect((screen.getByLabelText('URL') as HTMLInputElement).value).toBe('https://example.test/new')
+})
+
+it('keeps push edits guarded after a failed save and permits leaving after a successful one', async () => {
+  let fail = true
+  vi.mocked(request).mockImplementation(async (path, options) => {
+    if (options?.method === 'PUT') return fail ? Promise.reject(new Error('push service unavailable')) : {}
+    return path === '/v1/push-settings' ? {timezone: browserZone(), show_text:false, token_set:false, rev:1} : []
+  })
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  mount(<Push />)
+  await screen.findByLabelText('Timezone')
+  fireEvent.change(screen.getByLabelText('ntfy topic'), {target:{value:'news'}})
+  leave()
+  expect(confirm).toHaveBeenCalledTimes(1)
+  expect((screen.getByLabelText('ntfy topic') as HTMLInputElement).value).toBe('news')
+  fireEvent.click(screen.getByText('Save push settings'))
+  await screen.findByText('push service unavailable')
+  leave()
+  expect(confirm).toHaveBeenCalledTimes(2)
+  expect((screen.getByLabelText('ntfy topic') as HTMLInputElement).value).toBe('news')
+  fail = false
+  fireEvent.click(screen.getByText('Save push settings'))
+  await screen.findByText('Push settings saved.')
+  confirm.mockClear()
+  leave()
+  expect(confirm).not.toHaveBeenCalled()
+  expect(location.pathname).toBe('/settings')
+})
+
+it('counts the browser timezone shortcut as an edit', async () => {
+  const zone = browserZone()
+  vi.mocked(request).mockImplementation(async (path, options) => options?.method ? {} : path === '/v1/push-settings' ? {timezone: zone, show_text:false, token_set:false, rev:1} : [])
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  mount(<Push />)
+  await screen.findByLabelText('Timezone')
+  fireEvent.click(screen.getByRole('button',{name:`Use ${zone}`}))
+  leave()
+  expect(confirm).toHaveBeenCalledTimes(1)
+  expect(location.pathname).toBe('/')
+})
+
+it('keeps push edits when the saved settings are refetched with a new revision', async () => {
+  const client = new QueryClient({defaultOptions:{queries:{retry:false}}})
+  let rev = 1
+  vi.mocked(request).mockImplementation(async (path, options) => options?.method ? {} : path === '/v1/push-settings' ? {timezone: browserZone(), ntfy_topic: rev === 1 ? 'saved-topic' : 'other-topic', show_text:false, token_set:false, rev} : [])
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  render(<QueryClientProvider client={client}><Push /><SavedRev /></QueryClientProvider>)
+  await screen.findByLabelText('Timezone')
+  fireEvent.change(screen.getByLabelText('ntfy topic'), {target:{value:'news'}})
+  await act(async () => {rev = 2; await client.refetchQueries({queryKey:['push-settings']})})
+  await waitFor(() => expect(screen.getByTestId('saved-rev').textContent).toBe('2'))
+  expect((screen.getByLabelText('ntfy topic') as HTMLInputElement).value).toBe('news')
+  leave()
+  expect(confirm).toHaveBeenCalledTimes(1)
+})
+
+it('guards push settings while a save is pending', async () => {
+  let finishSave: () => void = () => {}
+  vi.mocked(request).mockImplementation(async (path, options) => {
+    if (options?.method === 'PUT') return new Promise(resolve => {finishSave = () => resolve({})})
+    return path === '/v1/push-settings' ? {timezone: browserZone(), show_text:false, token_set:false, rev:1} : []
+  })
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  mount(<Push />)
+  await screen.findByLabelText('Timezone')
+  fireEvent.change(screen.getByLabelText('ntfy topic'), {target:{value:'news'}})
+  fireEvent.click(screen.getByText('Save push settings'))
+  await waitFor(() => expect((screen.getByRole('button',{name:'Save push settings'}) as HTMLButtonElement).disabled).toBe(true))
+  leave()
+  expect(confirm).toHaveBeenCalledTimes(1)
+  expect((screen.getByLabelText('ntfy topic') as HTMLInputElement).value).toBe('news')
+  await act(async () => {finishSave()})
+})
+
 it('announces the copy confirmation as a status', async () => {
   const writeText = vi.fn().mockResolvedValue(undefined)
   Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText}})

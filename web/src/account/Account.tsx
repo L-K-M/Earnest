@@ -2,6 +2,7 @@ import {useRef, useState} from 'react'
 import {useQuery, useQueryClient} from '@tanstack/react-query'
 import type {components} from '../api.generated'
 import {request} from '../request'
+import {useBlocker} from '../router'
 
 type Schema = components['schemas']
 const scopes = [
@@ -37,6 +38,23 @@ function formatTimestamp(value: string | null | undefined): string {
   return Number.isNaN(at.getTime()) ? 'never' : at.toLocaleString()
 }
 
+// Drafts count as unfinished only while their fields differ from the form's
+// initial defaults, so clearing every field releases the navigation guard.
+// Reading the live form avoids depending on React's batched checkbox state.
+function tokenDraftDirty(form: HTMLFormElement): boolean {
+  const data = new FormData(form)
+  return String(data.get('name')) !== ''
+    || String(data.get('audience')) !== 'mcp'
+    || scopes.some(([scope]) => data.getAll(scope).length > 0)
+    || String(data.get('daily_budget')) !== '3'
+    || String(data.get('expires_at')) !== ''
+}
+
+function webhookDraftDirty(form: HTMLFormElement): boolean {
+  const data = new FormData(form)
+  return String(data.get('url')) !== '' || events.some(event => data.getAll(event).length > 0)
+}
+
 function Secret({secret, onClose}: {secret:string; onClose:()=>void}) {
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
@@ -58,9 +76,16 @@ export function Tokens() {
   const [selected, setSelected] = useState<string[]>([])
   const [secret, setSecret] = useState('')
   const [error, setError] = useState('')
-  const [code, setCode] = useState(() => new URLSearchParams(location.search).get('user_code') ?? '')
+  const [initialCode] = useState(() => new URLSearchParams(location.search).get('user_code') ?? '')
+  const [code, setCode] = useState(initialCode)
   const [approved, setApproved] = useState(false)
   const [pending, setPending] = useState(false)
+  const [draftDirty, setDraftDirty] = useState(false)
+  const [deviceDirty, setDeviceDirty] = useState(false)
+  // A code prefilled by the URL is not an edit. The one-time secret stays
+  // guarded until Secret is dismissed, and an in-flight request keeps its
+  // result from being lost to an unmount.
+  useBlocker(draftDirty || (deviceDirty && !approved) || pending || Boolean(secret), secret ? 'Leave this screen? This token will not be shown again.' : 'Leave without saving your tokens or device approval?')
   async function run(action:()=>Promise<void>) {setPending(true); setError(''); try {await action()} catch(e) {setError(message(e))} finally {setPending(false)}}
   async function create(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -75,6 +100,7 @@ export function Tokens() {
       // Clear the form so the next token starts from a clean slate.
       form.reset()
       setSelected([])
+      setDraftDirty(false)
     })
   }
   return <section>
@@ -92,13 +118,13 @@ export function Tokens() {
       </li>)}
       {list.isSuccess && !list.data?.length && <li className="empty-state">No agent tokens yet.</li>}
     </ul>
-    <form onSubmit={e => {void create(e)}}>
+    <form onSubmit={e => {void create(e)}} onChange={e => setDraftDirty(tokenDraftDirty(e.currentTarget))}>
       <h3>Create an agent token</h3>
       <p>Agents can read everything you subscribe to, including private feeds and full text.</p>
       <label>Name<input name="name" required aria-describedby="token-name-hint" /></label>
       <p id="token-name-hint" className="hint">Shown in Activity next to everything this agent does.</p>
       <label>Audience<select name="audience"><option value="mcp">MCP</option><option value="api">REST</option></select></label>
-      <fieldset><legend>Agent scopes</legend>{scopes.map(([scope, description]) => <label key={scope}><input type="checkbox" checked={selected.includes(scope)} onChange={e => setSelected(e.target.checked ? [...selected, scope] : selected.filter(item => item !== scope))} /> {scope}: {description}</label>)}</fieldset>
+      <fieldset><legend>Agent scopes</legend>{scopes.map(([scope, description]) => <label key={scope}><input type="checkbox" name={scope} checked={selected.includes(scope)} onChange={e => setSelected(e.target.checked ? [...selected, scope] : selected.filter(item => item !== scope))} /> {scope}: {description}</label>)}</fieldset>
       <label>Daily notification budget<input name="daily_budget" type="number" min="0" defaultValue="3" required aria-describedby="daily-budget-hint" /></label>
       <p id="daily-budget-hint" className="hint">0 means the agent cannot notify you.</p>
       <label>Expiry (optional)<input name="expires_at" type="datetime-local" aria-describedby="token-expiry-hint" /></label>
@@ -109,7 +135,7 @@ export function Tokens() {
     <form id="device" onSubmit={e => {e.preventDefault(); void run(async () => {await request('/v1/devices/approve', json({user_code:code.trim().toUpperCase()})); setApproved(true)})}}>
       <h3>Approve an app or CLI</h3>
       <p>Only approve a code shown by a device you are signing in.</p>
-      <label>Device code<input id="device-code" value={code} onChange={e => {setCode(e.target.value); setApproved(false)}} required autoComplete="one-time-code" autoCapitalize="characters" spellCheck={false} placeholder="ABCD-EFGH" aria-describedby="device-code-hint" /></label>
+      <label>Device code<input id="device-code" value={code} onChange={e => {const value = e.target.value; setCode(value); setApproved(false); setDeviceDirty(value.trim() !== '' && value !== initialCode)}} required autoComplete="one-time-code" autoCapitalize="characters" spellCheck={false} placeholder="ABCD-EFGH" aria-describedby="device-code-hint" /></label>
       <p id="device-code-hint" className="hint">The code appears in the app or terminal that asked to sign in.</p>
       <button disabled={pending}>Approve device</button>
       {approved && <p role="status">Device approved.</p>}
@@ -124,6 +150,8 @@ export function Webhooks() {
   const [secret, setSecret] = useState('')
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
+  const [draftDirty, setDraftDirty] = useState(false)
+  useBlocker(draftDirty || pending || Boolean(secret), secret ? 'Leave this screen? This webhook secret will not be shown again.' : 'Leave without saving this webhook?')
   async function run(action:()=>Promise<void>) {setPending(true);setError('');try {await action(); await client.invalidateQueries({queryKey:['webhooks']})} catch(e) {setError(message(e))} finally {setPending(false)}}
   return <section>
     <h2>Webhooks</h2>
@@ -140,10 +168,10 @@ export function Webhooks() {
       </li>)}
       {list.isSuccess && !list.data?.length && <li className="empty-state">No webhooks yet.</li>}
     </ul>
-    <form onSubmit={e => {e.preventDefault(); const form = e.currentTarget; void run(async () => {const data = new FormData(form); const result = await request<Schema['WebhookSecret']>('/v1/webhooks', json({url:String(data.get('url')), events:chosen, op_id:op()}));setSecret(result.secret); form.reset(); setChosen([])})}}>
+    <form onSubmit={e => {e.preventDefault(); const form = e.currentTarget; void run(async () => {const data = new FormData(form); const result = await request<Schema['WebhookSecret']>('/v1/webhooks', json({url:String(data.get('url')), events:chosen, op_id:op()}));setSecret(result.secret); form.reset(); setChosen([]); setDraftDirty(false)})}} onChange={e => setDraftDirty(webhookDraftDirty(e.currentTarget))}>
       <h3>Create webhook</h3>
       <label>URL<input name="url" type="url" inputMode="url" spellCheck={false} required /></label>
-      <fieldset><legend>Events</legend>{events.map(event => <label key={event}><input type="checkbox" checked={chosen.includes(event)} onChange={e => setChosen(e.target.checked ? [...chosen,event] : chosen.filter(item => item !== event))} /> {event}</label>)}</fieldset>
+      <fieldset><legend>Events</legend>{events.map(event => <label key={event}><input type="checkbox" name={event} checked={chosen.includes(event)} onChange={e => setChosen(e.target.checked ? [...chosen,event] : chosen.filter(item => item !== event))} /> {event}</label>)}</fieldset>
       <button disabled={pending || Boolean(secret) || chosen.length === 0}>Create webhook</button>
     </form>
     {secret && <Secret secret={secret} onClose={() => setSecret('')} />}
@@ -162,13 +190,20 @@ export function Push() {
   const [status, setStatus] = useState('')
   const [pending, setPending] = useState(false)
   const [timezoneError, setTimezoneError] = useState('')
+  const [dirty, setDirty] = useState(false)
+  const [adoptedRev, setAdoptedRev] = useState<number | null>(null)
   const timezoneRef = useRef<HTMLInputElement>(null)
+  useBlocker(dirty || pending, 'Leave without saving your notification settings?')
+  // Adopt settings saved elsewhere unless this form has unsaved edits, so a
+  // refetch cannot silently discard them.
+  const rev = settings.data?.rev ?? null
+  if (rev !== null && !dirty && adoptedRev !== rev) setAdoptedRev(rev)
   async function run(action:()=>Promise<void>) {setPending(true); setError(''); setStatus(''); try {await action()} catch(e) {setError(message(e))} finally {setPending(false)}}
   return <section>
     <h2>Push notifications</h2>
     {(error || settings.error || devices.error) && <p role="alert">{error || settings.error?.message || devices.error?.message}</p>}
     {status && <p role="status">{status}</p>}
-    {settings.data && <form key={settings.data.rev} onSubmit={e => {
+    {settings.data && <form key={adoptedRev} onChange={() => setDirty(true)} onSubmit={e => {
       e.preventDefault()
       const form = new FormData(e.currentTarget)
       const problem = zoneError(String(form.get('timezone')))
@@ -181,6 +216,8 @@ export function Push() {
         await request('/v1/push-settings', json({ntfy_server:String(form.get('ntfy_server')),ntfy_topic:String(form.get('ntfy_topic')), ...(form.has('clear_token') ? {ntfy_token:''} : token ? {ntfy_token:token} : {}), show_text:form.has('show_text'),quiet_start:String(form.get('quiet_start')),quiet_end:String(form.get('quiet_end')),timezone:String(form.get('timezone')),op_id:op()}, 'PUT'))
         await client.invalidateQueries({queryKey:['push-settings']})
         setStatus('Push settings saved.')
+        // A failed save keeps the draft dirty; only success releases the guard.
+        setDirty(false)
       })
     }}>
       <h3>ntfy and quiet hours</h3>
@@ -195,7 +232,7 @@ export function Push() {
       <label>Quiet hours end<input name="quiet_end" type="time" defaultValue={settings.data.quiet_end ?? ''} /></label>
       <label>Timezone<input ref={timezoneRef} name="timezone" list="timezone-options" defaultValue={settings.data.timezone} required aria-invalid={timezoneError ? true : undefined} aria-describedby={timezoneError ? 'timezone-hint timezone-error' : 'timezone-hint'} onBlur={e => setTimezoneError(zoneError(e.target.value))} onChange={e => {if (!zoneError(e.target.value)) setTimezoneError('')}} /></label>
       <datalist id="timezone-options">{timeZones.map(zone => <option key={zone} value={zone} />)}</datalist>
-      <p id="timezone-hint" className="hint">This browser reports {browserZone}. <button type="button" className="quiet small" onClick={() => {if (timezoneRef.current) timezoneRef.current.value = browserZone; setTimezoneError('')}}>Use {browserZone}</button></p>
+      <p id="timezone-hint" className="hint">This browser reports {browserZone}. <button type="button" className="quiet small" onClick={() => {if (timezoneRef.current) timezoneRef.current.value = browserZone; setTimezoneError(''); setDirty(true)}}>Use {browserZone}</button></p>
       {timezoneError && <p role="alert" id="timezone-error" className="form-error">{timezoneError}</p>}
       <button disabled={pending}>Save push settings</button>
     </form>}

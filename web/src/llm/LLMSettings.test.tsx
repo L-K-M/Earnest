@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import {afterEach, expect, it, vi} from 'vitest'
-import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react'
+import {cleanup, fireEvent, render, screen, waitFor, within} from '@testing-library/react'
 import {QueryClient, QueryClientProvider, useQuery} from '@tanstack/react-query'
 import {request, RequestError} from '../request'
-import {LLM_TASKS, type DiscoveredModel, type LLMProviderInput, type LLMSettings} from './model'
+import {type DiscoveredModel, type LLMProviderInput, type LLMSettings} from './model'
 import {LLMSettings as LLMSettingsSection} from './LLMSettings'
 
 vi.mock('../request', async importOriginal => {
@@ -32,20 +32,26 @@ const fixture: LLMSettings = {
   ],
 }
 
-type Task = {task: string; provider: string; model: string}
 type ProviderBody = LLMProviderInput & {has_api_key?: boolean}
-type Body = {revision: number; op_id: string; providers: ProviderBody[]; tasks: Task[]; models: Record<string, unknown>[]}
+type Body = {
+  revision: number
+  op_id: string
+  defaults?: {text: {provider: string; model: string}; embedding: {provider: string; model: string}}
+  providers: ProviderBody[]
+  tasks: Array<{task: string; provider: string; model: string; mode?: string}>
+  models: Array<Record<string, unknown>>
+}
 
 const putCalls = () => vi.mocked(request).mock.calls.filter(([path, options]) => path === '/v1/settings/llm' && options?.method === 'PUT')
 const getCalls = () => vi.mocked(request).mock.calls.filter(([path, options]) => path === '/v1/settings/llm' && !options?.method)
-const modelCalls = () => vi.mocked(request).mock.calls.filter(([path]) => path === '/v1/settings/llm/models')
-const lastDiscovery = () => JSON.parse(String(modelCalls().at(-1)?.[1]?.body)) as {revision: number; provider: ProviderBody}
 const lastPut = () => JSON.parse(String(putCalls().at(-1)?.[1]?.body)) as Body
 const providerOf = (body: Body, name: string): ProviderBody => {
   const found = body.providers.find(provider => provider.name === name)
   if (!found) throw new Error(`the saved body has no provider ${name}`)
   return found
 }
+const valueOf = (label: string) => (screen.getByLabelText(label) as HTMLSelectElement).value
+const confirm = (value = true) => vi.spyOn(window, 'confirm').mockReturnValue(value)
 
 function renderSection(pipeline = false) {
   const client = new QueryClient({defaultOptions: {queries: {retry: false}}})
@@ -64,40 +70,39 @@ function PipelineStatus() {
   return <p>Ask {status.data?.ask ?? 'loading'}</p>
 }
 
-function mount(server: LLMSettings = fixture) {
+function mount(server: LLMSettings = fixture, catalogue: DiscoveredModel[] = []) {
   vi.mocked(request).mockImplementation(async (path: string, options?: RequestInit) => {
+    if (path === '/v1/settings/llm/models') return {models: catalogue}
     if (path === '/v1/settings/llm' && !options?.method) return server
-    return {...server, revision: server.revision + 1}
+    if (path === '/v1/settings/llm' && options?.method === 'PUT') return {...server, revision: server.revision + 1}
+    throw new Error(`Unexpected request: ${path}`)
   })
   renderSection()
 }
 
-const confirm = (value = true) => vi.spyOn(window, 'confirm').mockReturnValue(value)
-const valueOf = (label: string) => (screen.getByLabelText(label) as HTMLSelectElement).value
-
 afterEach(() => {cleanup(); vi.restoreAllMocks(); vi.resetAllMocks()})
 
-it('loads the shared settings, lists all seven tasks and issues no mutations on load', async () => {
+it('loads the shared settings and lists all seven features with readable labels', async () => {
   mount()
-  expect(await screen.findByText(/https:\/\/api\.openai\.com\/v1/)).toBeTruthy()
-  expect(screen.getByText(/http:\/\/ollama:11434\/v1/)).toBeTruthy()
-  expect(screen.getByText(/shared by the whole server/)).toBeTruthy()
-  expect(screen.getByText(/never sent back to the browser/)).toBeTruthy()
-  for (const task of LLM_TASKS) expect(screen.getByText(task, {exact: true})).toBeTruthy()
+  expect(await screen.findByText(/Server-wide settings/)).toBeTruthy()
+  await screen.findByText(/API keys are stored encrypted/)
+  for (const label of ['Embeddings', 'Classification', 'Blurbs', 'Summaries', 'Editions', 'Rule compilation', 'Ask my feeds']) {
+    expect(screen.getByText(label, {exact: true, selector: 'strong'})).toBeTruthy()
+  }
   expect(getCalls()).toHaveLength(1)
   expect(putCalls()).toHaveLength(0)
 })
 
-it('shows an error and a Load button when the settings cannot load', async () => {
+it('shows an error and a retry button when the settings cannot load', async () => {
   vi.mocked(request).mockRejectedValue(new Error('offline'))
   renderSection()
   expect(await screen.findByRole('alert')).toBeTruthy()
   expect(screen.getByText(/offline/)).toBeTruthy()
-  expect(screen.getByRole('button', {name: 'Load'})).toBeTruthy()
+  expect(screen.getByRole('button', {name: 'Retry loading'})).toBeTruthy()
   expect(putCalls()).toHaveLength(0)
 })
 
-it('shows the draft key status: saved, entered-unsaved, removal pending and none', async () => {
+it('shows the draft key status live while a provider is edited', async () => {
   mount()
   await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
   expect(screen.getByText('API key saved')).toBeTruthy()
@@ -105,14 +110,10 @@ it('shows the draft key status: saved, entered-unsaved, removal pending and none
 
   fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
   fireEvent.change(screen.getByLabelText('API key'), {target: {value: 'sk-unsaved'}})
-  fireEvent.click(screen.getByRole('button', {name: 'Apply provider'}))
   expect(screen.getByText('API key entered · unsaved')).toBeTruthy()
-  expect(screen.queryByText('API key saved')).toBeNull()
 
-  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
   fireEvent.change(screen.getByLabelText('API key'), {target: {value: ''}})
   fireEvent.click(screen.getByLabelText('Clear the saved API key'))
-  fireEvent.click(screen.getByRole('button', {name: 'Apply provider'}))
   expect(screen.getByText('Key removal pending')).toBeTruthy()
 })
 
@@ -120,10 +121,11 @@ it('keeps a saved key when the replacement field is blank and omits has_api_key'
   mount()
   await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
   fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
+  const form = screen.getByLabelText('Name').closest('li')!
+  fireEvent.click(within(form).getByText('Advanced'))
   fireEvent.change(screen.getByLabelText('Timeout (seconds)'), {target: {value: '90'}})
-  fireEvent.click(screen.getByRole('button', {name: 'Apply provider'}))
   fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-  await screen.findByText(/LLM services saved/)
+  await screen.findByText(/AI settings saved/)
   const body = lastPut()
   const openai = providerOf(body, 'openai')
   expect(openai.api_key).toBeUndefined()
@@ -135,13 +137,454 @@ it('keeps a saved key when the replacement field is blank and omits has_api_key'
   expect(body.tasks).toHaveLength(7)
 })
 
-it.each([true, false])('refreshes cached task availability after setting Ask enabled=%s', async enabled => {
+it('keeps a replacement key visibly unsaved through failure and clears it after a successful retry', async () => {
+  let fail = true
+  let revision = fixture.revision
+  vi.mocked(request).mockImplementation(async (path, options) => {
+    if (path !== '/v1/settings/llm') throw new Error(`Unexpected request: ${path}`)
+    if (options?.method === 'PUT') {
+      if (fail) throw new Error('Save failed')
+      revision++
+    }
+    return {...fixture, revision}
+  })
+  renderSection()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
+  fireEvent.change(screen.getByLabelText('API key'), {target: {value: 'test-replacement-key'}})
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText('Save failed')
+  expect(screen.getByText('API key entered · unsaved')).toBeTruthy()
+  expect((screen.getByLabelText('API key') as HTMLInputElement).value).toBe('test-replacement-key')
+  const first = lastPut()
+  fail = false
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText('AI settings saved.')
+  expect(lastPut().op_id).toBe(first.op_id)
+  expect(providerOf(lastPut(), 'openai').api_key).toBe('test-replacement-key')
+  expect(screen.queryByText('API key entered · unsaved')).toBeNull()
+  expect(screen.getByText('API key saved')).toBeTruthy()
+  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
+  expect((screen.getByLabelText('API key') as HTMLInputElement).value).toBe('')
+  fireEvent.change(screen.getByLabelText('Name'), {target: {value: 'temporary'}})
+  confirm()
+  fireEvent.click(screen.getByRole('button', {name: 'Discard'}))
+  await screen.findByText('AI settings reloaded.')
+  expect(screen.getByText('API key saved')).toBeTruthy()
+  expect(screen.queryByText('API key entered · unsaved')).toBeNull()
+})
+
+it('edits providers directly in the draft without an apply step', async () => {
+  mount()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  expect(screen.queryByRole('button', {name: 'Apply provider'})).toBeNull()
+  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
+  fireEvent.change(screen.getByLabelText('Monthly limit (USD)'), {target: {value: '30'}})
+  expect((screen.getByRole('button', {name: 'Save'}) as HTMLButtonElement).disabled).toBe(false)
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText(/AI settings saved/)
+  expect(providerOf(lastPut(), 'openai').monthly_limit_usd).toBe('30')
+})
+
+it('keeps budget and key visible while timeout and token field stay advanced', async () => {
+  mount()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
+  expect(screen.getByLabelText('Monthly limit (USD)')).toBeTruthy()
+  expect(screen.getByLabelText('API key')).toBeTruthy()
+  const form = screen.getByLabelText('Name').closest('li')!
+  const advanced = within(form).getByText('Advanced').closest('details')!
+  expect(within(advanced).getByLabelText('Timeout (seconds)')).toBeTruthy()
+  expect(within(advanced).getByLabelText('Token field')).toBeTruthy()
+})
+
+it('adds preset providers with unique editable names', async () => {
+  mount()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(screen.getByRole('button', {name: 'Add Venice'}))
+  expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('venice')
+  expect((screen.getByLabelText('Kind') as HTMLSelectElement).value).toBe('openai')
+  expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('https://api.venice.ai/api/v1')
+
+  fireEvent.click(screen.getByRole('button', {name: 'Add Venice'}))
+  expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('venice-2')
+
+  fireEvent.click(screen.getByRole('button', {name: 'Add Custom'}))
+  expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('custom')
+  expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('')
+  fireEvent.change(screen.getByLabelText('Name'), {target: {value: 'my-server'}})
+  fireEvent.change(screen.getByLabelText('Base URL'), {target: {value: 'https://example.test/v1'}})
+  fireEvent.change(screen.getByLabelText('API key'), {target: {value: 'sk-new'}})
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText(/AI settings saved/)
+  expect(providerOf(lastPut(), 'my-server')).toMatchObject({kind: 'openai', base_url: 'https://example.test/v1', api_key: 'sk-new'})
+})
+
+it('renames a provider and moves its task routes and scoped models', async () => {
+  const catalogue = [{id: 'scoped-chat', name: 'Scoped Chat', chat: true, embedding: false, input_per_1m: '1', output_per_1m: '1'}]
+  mount(fixture, catalogue)
+  await screen.findByText(/http:\/\/ollama:11434\/v1/)
+  const row = screen.getByText('Blurbs', {selector: 'strong'}).closest('li')!
+  fireEvent.click(within(row).getByRole('button', {name: 'Browse models'}))
+  fireEvent.click(await within(row).findByRole('button', {name: 'Select scoped-chat'}))
+
+  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[1])
+  fireEvent.change(screen.getByLabelText('Name'), {target: {value: 'renamed-local'}})
+  expect((within(row).getByLabelText('Blurbs provider') as HTMLSelectElement).value).toBe('renamed-local')
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText(/AI settings saved/)
+  const body = lastPut()
+  expect(body.providers.map(provider => provider.name)).toContain('renamed-local')
+  expect(body.tasks.find(task => task.task === 'blurb')).toEqual({task: 'blurb', mode: 'custom', provider: 'renamed-local', model: 'scoped-chat'})
+  expect(body.models.find(model => model.name === 'scoped-chat')).toMatchObject({provider: 'renamed-local'})
+})
+
+it('sends default selections and preserves legacy routes as custom', async () => {
+  mount()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.change(screen.getByLabelText('Default text model provider'), {target: {value: 'openai'}})
+  fireEvent.change(screen.getByLabelText('Default text model model'), {target: {value: 'local-chat'}})
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText(/AI settings saved/)
+  const body = lastPut()
+  expect(body.defaults).toEqual({text: {provider: 'openai', model: 'local-chat'}, embedding: {provider: '', model: ''}})
+  expect(body.tasks.find(task => task.task === 'embed')).toEqual({task: 'embed', mode: 'custom', provider: 'openai', model: 'text-embedding-3-small'})
+  expect(body.tasks.find(task => task.task === 'blurb')).toEqual({task: 'blurb', mode: 'custom', provider: 'local', model: 'local-chat'})
+  expect(body.tasks.find(task => task.task === 'classify')).toEqual({task: 'classify', mode: 'off', provider: '', model: ''})
+})
+
+it('does not enable an off feature when a default is chosen', async () => {
+  mount({...fixture, defaults: {text: {provider: 'openai', model: 'local-chat'}, embedding: {provider: '', model: ''}}})
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  const row = screen.getByText('Classification', {selector: 'strong'}).closest('li')!
+  const toggle = within(row).getByLabelText('Classification') as HTMLInputElement
+  expect(toggle.checked).toBe(false)
+  fireEvent.change(screen.getByLabelText('Default text model model'), {target: {value: 'text-embedding-3-small'}})
+  expect(toggle.checked).toBe(false)
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText(/AI settings saved/)
+  expect(lastPut().tasks.find(task => task.task === 'classify')).toEqual({task: 'classify', mode: 'off', provider: '', model: ''})
+})
+
+it('resolves a default feature through the text default and shows the route', async () => {
+  const server: LLMSettings = {
+    ...fixture,
+    defaults: {text: {provider: 'openai', model: 'local-chat'}, embedding: {provider: 'local', model: 'text-embedding-3-small'}},
+    tasks: fixture.tasks!.map(task => task.task === 'classify' ? {task: task.task, provider: '', model: '', mode: 'default'} : task),
+  }
+  mount(server)
+  await screen.findByText(/Uses openai · local-chat/)
+  const row = screen.getByText('Classification', {selector: 'strong'}).closest('li')!
+  expect((within(row).getByLabelText('Classification') as HTMLInputElement).checked).toBe(true)
+})
+
+it('adds a ready model from the provider picker and routes the feature to it', async () => {
+  const catalogue = [{id: 'new-chat', name: 'New Chat', chat: true, embedding: false, input_per_1m: '1', output_per_1m: '2'}]
+  mount(fixture, catalogue)
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  const row = screen.getByText('Blurbs', {selector: 'strong'}).closest('li')!
+  fireEvent.click(within(row).getByRole('button', {name: 'Browse models'}))
+  expect(await within(row).findByText('New Chat (new-chat)')).toBeTruthy()
+  fireEvent.click(within(row).getByRole('button', {name: 'Select new-chat'}))
+  expect(valueOf('Blurbs model')).toBe('new-chat')
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText(/AI settings saved/)
+  const body = lastPut()
+  expect(body.tasks.find(task => task.task === 'blurb')).toEqual({task: 'blurb', mode: 'custom', provider: 'local', model: 'new-chat'})
+  expect(body.models.find(model => model.name === 'new-chat')).toMatchObject({provider: 'local', input_per_1m: '1', output_per_1m: '2', embedding_per_1m: '0', dimensions: 0})
+})
+
+it('adds a provider-scoped model and keeps the global record', async () => {
+  const catalogue = [{id: 'shared', name: 'Shared', chat: true, embedding: false, input_per_1m: '5', output_per_1m: '5'}]
+  const server: LLMSettings = {
+    ...fixture,
+    models: [...fixture.models!, {name: 'shared', input_per_1m: '1', output_per_1m: '1', embedding_per_1m: '1', dimensions: 0, truncatable: false}],
+  }
+  mount(server, catalogue)
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  const row = screen.getByText('Blurbs', {selector: 'strong'}).closest('li')!
+  fireEvent.click(within(row).getByRole('button', {name: 'Browse models'}))
+  await within(row).findByText('Shared (shared)')
+  fireEvent.click(within(row).getByRole('button', {name: 'Select shared'}))
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText(/AI settings saved/)
+  const body = lastPut()
+  expect(body.models.find(model => model.name === 'shared' && model.provider === 'local')).toMatchObject({input_per_1m: '5', output_per_1m: '5'})
+  expect(body.models.find(model => model.name === 'shared' && !model.provider)).toMatchObject({input_per_1m: '1', output_per_1m: '1'})
+})
+
+it('accepts Venice embedding geometry with provider resizing above 1024', async () => {
+  const venice = {name: 'venice', kind: 'openai', base_url: 'https://api.venice.ai/api/v1', has_api_key: false, monthly_limit_usd: '0', timeout_seconds: 60, token_field: 'max_completion_tokens'}
+  const server: LLMSettings = {
+    ...fixture,
+    providers: [venice, fixture.providers![1]!],
+    tasks: fixture.tasks!.map(task => task.task === 'embed' ? {task: 'embed', provider: 'venice', model: ''} : task),
+  }
+  const catalogue = [{id: 'text-embedding-qwen3-8b', name: 'Qwen3 8B', embedding: true, embedding_per_1m: '0.0125', dimensions: 4096, supports_custom_dimensions: true}]
+  mount(server, catalogue)
+  await screen.findByText(/https:\/\/api\.venice\.ai\/api\/v1/)
+  const row = screen.getByText('Embeddings', {selector: 'strong'}).closest('li')!
+  fireEvent.click(within(row).getByRole('button', {name: 'Browse models'}))
+  await within(row).findByText('Qwen3 8B (text-embedding-qwen3-8b)')
+  fireEvent.click(within(row).getByRole('button', {name: 'Select text-embedding-qwen3-8b'}))
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText(/AI settings saved/)
+  const body = lastPut()
+  expect(body.models.find(model => model.name === 'text-embedding-qwen3-8b')).toMatchObject({provider: 'venice', dimensions: 4096, supports_custom_dimensions: true, embedding_per_1m: '0.0125'})
+  expect(body.tasks.find(task => task.task === 'embed')).toEqual({task: 'embed', mode: 'custom', provider: 'venice', model: 'text-embedding-qwen3-8b'})
+})
+
+it('reports missing dimensions inline instead of an invalid integer', async () => {
+  const catalogue = [{id: 'emb-no-dims', name: 'Emb No Dims', embedding: true, embedding_per_1m: '0.1'}]
+  mount(fixture, catalogue)
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  const row = screen.getByText('Embeddings', {selector: 'strong'}).closest('li')!
+  fireEvent.click(within(row).getByRole('button', {name: 'Browse models'}))
+  fireEvent.click(await within(row).findByRole('button', {name: 'Select emb-no-dims, missing dimensions'}))
+  fireEvent.click(within(row).getByRole('button', {name: 'Add to draft and use for Embeddings'}))
+  expect(await within(row).findByText(/dimensions are required/)).toBeTruthy()
+  expect(within(row).queryByText(/must be a whole number/)).toBeNull()
+  expect(putCalls()).toHaveLength(0)
+  fireEvent.change(within(row).getByLabelText('emb-no-dims dimensions'), {target: {value: '512'}})
+  fireEvent.click(within(row).getByRole('button', {name: 'Add to draft and use for Embeddings'}))
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText(/AI settings saved/)
+})
+
+it('applies observed geometry from a model check to the selection only', async () => {
+  const catalogue = [{id: 'emb-check', name: 'Emb Check', embedding: true, embedding_per_1m: '0.1'}]
+  vi.mocked(request).mockImplementation(async (path: string, options?: RequestInit) => {
+    if (path === '/v1/settings/llm/models') return {models: catalogue}
+    if (path === '/v1/settings/llm/models/check') return {compatible: true, dimensions: 2048, supports_custom_dimensions: true, message: 'compatible'}
+    if (path === '/v1/settings/llm' && !options?.method) return fixture
+    return {...fixture, revision: fixture.revision + 1}
+  })
+  renderSection()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  const row = screen.getByText('Embeddings', {selector: 'strong'}).closest('li')!
+  fireEvent.click(within(row).getByRole('button', {name: 'Browse models'}))
+  fireEvent.click(await within(row).findByRole('button', {name: 'Select emb-check, missing dimensions'}))
+  fireEvent.change(within(row).getByLabelText('emb-check dimensions'), {target: {value: '4096'}})
+  fireEvent.click(within(row).getByRole('button', {name: 'Check model'}))
+  await within(row).findByText('compatible')
+  expect((within(row).getByLabelText('emb-check dimensions') as HTMLInputElement).value).toBe('2048')
+  expect((within(row).getByLabelText('emb-check embedding price per 1m tokens') as HTMLInputElement).value).toBe('0.1')
+  fireEvent.click(within(row).getByRole('button', {name: 'Add to draft and use for Embeddings'}))
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText(/AI settings saved/)
+  expect(lastPut().models.find(model => model.name === 'emb-check')).toMatchObject({dimensions: 2048, supports_custom_dimensions: true, embedding_per_1m: '0.1'})
+})
+
+it('turns a feature off with its switch', async () => {
+  mount()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(screen.getByLabelText('Embeddings'))
+  expect((screen.getByLabelText('Embeddings') as HTMLInputElement).checked).toBe(false)
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText(/AI settings saved/)
+  expect(lastPut().tasks.find(task => task.task === 'embed')).toEqual({task: 'embed', mode: 'off', provider: '', model: ''})
+})
+
+it.each(['disable', 'default'])('closes a feature picker when its route is set to %s', async action => {
+  mount(fixture, [{id: 'new-chat', name: 'New Chat', chat: true, embedding: false, input_per_1m: '1', output_per_1m: '2'}])
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  const row = screen.getByText('Blurbs', {selector: 'strong'}).closest('li')!
+  fireEvent.click(within(row).getByRole('button', {name: 'Browse models'}))
+  await within(row).findByRole('button', {name: 'Select new-chat'})
+  if (action === 'disable') fireEvent.click(within(row).getByLabelText('Blurbs'))
+  else fireEvent.change(within(row).getByLabelText('Blurbs provider'), {target: {value: ''}})
+  expect(within(row).queryByRole('button', {name: 'Select new-chat'})).toBeNull()
+  expect(within(row).queryByRole('button', {name: 'Enter model ID manually'})).toBeNull()
+})
+
+it('requires an explicit model selection after a feature changes provider', async () => {
+  mount()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.change(screen.getByLabelText('Blurbs provider'), {target: {value: 'openai'}})
+  expect(valueOf('Blurbs model')).toBe('')
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  expect(await screen.findByText(/Blurbs needs both a provider and a model/)).toBeTruthy()
+  expect(putCalls()).toHaveLength(0)
+})
+
+it('refuses to save a half-configured custom route', async () => {
+  mount()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(screen.getByLabelText('Classification'))
+  fireEvent.change(screen.getByLabelText('Classification provider'), {target: {value: 'openai'}})
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  expect(await screen.findByText(/Classification needs both a provider and a model/)).toBeTruthy()
+  expect(putCalls()).toHaveLength(0)
+})
+
+it('blocks a Default feature when no default is configured', async () => {
+  mount()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(screen.getByLabelText('Classification'))
+  expect(screen.getByText(/Choose a default model/)).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  expect(await screen.findByText(/no default text model is configured/)).toBeTruthy()
+  expect(putCalls()).toHaveLength(0)
+})
+
+it('keeps the draft and asks for a reload on a revision conflict', async () => {
+  confirm()
+  mount()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  vi.mocked(request).mockImplementation(async (path: string, options?: RequestInit) => {
+    if (options?.method === 'PUT') throw new RequestError(409, 'revision conflict')
+    return fixture
+  })
+  fireEvent.click(screen.getByLabelText('Embeddings'))
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  expect(await screen.findByText(/changed after you loaded/)).toBeTruthy()
+  expect((screen.getByLabelText('Embeddings') as HTMLInputElement).checked).toBe(false)
+  expect(getCalls()).toHaveLength(1)
+  fireEvent.click(screen.getByRole('button', {name: 'Discard'}))
+  await screen.findByText(/AI settings reloaded/)
+  expect((screen.getByLabelText('Embeddings') as HTMLInputElement).checked).toBe(true)
+})
+
+it('keeps the draft and reuses the op_id when a save fails and is retried', async () => {
+  mount()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  vi.mocked(request).mockImplementation(async (path: string, options?: RequestInit) => {
+    if (options?.method === 'PUT') throw new Error('server exploded')
+    return fixture
+  })
+  fireEvent.click(screen.getByLabelText('Embeddings'))
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  expect(await screen.findByText(/server exploded/)).toBeTruthy()
+  expect((screen.getByLabelText('Embeddings') as HTMLInputElement).checked).toBe(false)
+  const first = lastPut().op_id
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await waitFor(() => expect(putCalls()).toHaveLength(2))
+  expect(lastPut().op_id).toBe(first)
+})
+
+it('discards unsaved changes after confirmation', async () => {
+  confirm()
+  mount()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  expect((screen.getByRole('button', {name: 'Save'}) as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.change(screen.getByLabelText('Default text model provider'), {target: {value: 'openai'}})
+  expect((screen.getByRole('button', {name: 'Save'}) as HTMLButtonElement).disabled).toBe(false)
+  fireEvent.click(screen.getByRole('button', {name: 'Discard'}))
+  await screen.findByText(/AI settings reloaded/)
+  expect(valueOf('Default text model provider')).toBe('')
+})
+
+it('keeps an open provider editor attached when another provider is removed', async () => {
+  confirm()
+  mount()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[1])
+  fireEvent.change(screen.getByLabelText('Name'), {target: {value: 'edited-local'}})
+  fireEvent.click(screen.getAllByRole('button', {name: 'Remove'})[0])
+  expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('edited-local')
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText(/AI settings saved/)
+  expect(lastPut().providers.map(provider => provider.name)).toEqual(['edited-local'])
+  expect(lastPut().tasks.find(task => task.task === 'blurb')).toEqual({task: 'blurb', mode: 'custom', provider: 'edited-local', model: 'local-chat'})
+  expect(lastPut().tasks.find(task => task.task === 'embed')).toEqual({task: 'embed', mode: 'off', provider: '', model: ''})
+})
+
+it('removes a provider whose name field is temporarily empty', async () => {
+  confirm()
+  mount()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
+  fireEvent.change(screen.getByLabelText('Name'), {target: {value: ''}})
+  fireEvent.click(screen.getByRole('button', {name: 'Remove provider'}))
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText(/AI settings saved/)
+  expect(lastPut().providers.map(provider => provider.name)).toEqual(['local'])
+  expect(lastPut().tasks.find(task => task.task === 'embed')).toEqual({task: 'embed', mode: 'off', provider: '', model: ''})
+})
+
+it('removes a provider and turns off the features that used it', async () => {
+  const answer = confirm()
+  mount()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(screen.getAllByRole('button', {name: 'Remove'})[1])
+  expect(answer).toHaveBeenCalledWith(expect.stringMatching(/Blurbs/))
+  expect(screen.queryByText(/http:\/\/ollama:11434\/v1/)).toBeNull()
+  expect((screen.getByLabelText('Blurbs') as HTMLInputElement).checked).toBe(false)
+})
+
+it('refuses to route embeddings to Anthropic', async () => {
+  mount()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(screen.getByRole('button', {name: 'Add Anthropic'}))
+  fireEvent.change(screen.getByLabelText('Name'), {target: {value: 'claude'}})
+  fireEvent.change(screen.getByLabelText('Embeddings provider'), {target: {value: 'claude'}})
+  fireEvent.change(screen.getByLabelText('Embeddings model'), {target: {value: 'text-embedding-3-small'}})
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  expect(await screen.findByText(/Task Embeddings cannot use Anthropic/)).toBeTruthy()
+  expect(putCalls()).toHaveLength(0)
+})
+
+it('round-trips scoped model pricing and accepts provider resizing above 1024', async () => {
+  mount()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(screen.getByText('Model pricing'))
+  fireEvent.change(screen.getByLabelText('text-embedding-3-small embedding price'), {target: {value: '0.03'}})
+  fireEvent.change(screen.getByLabelText('Default embedding model provider'), {target: {value: 'openai'}})
+  const route = screen.getByLabelText('Default embedding model provider').parentElement!
+  fireEvent.click(within(route).getByRole('button', {name:'Browse models'}))
+  await screen.findByText(/No catalogue entries match/)
+  fireEvent.click(screen.getByRole('button', {name:'Enter model ID manually'}))
+  fireEvent.change(screen.getByLabelText('Manual model ID'), {target:{value:'big-embed'}})
+  fireEvent.click(screen.getByRole('button',{name:'Add model ID'}))
+  fireEvent.change(screen.getByLabelText('big-embed embedding price per 1m tokens'), {target:{value:'0.1'}})
+  fireEvent.change(screen.getByLabelText('big-embed dimensions'), {target:{value:'4096'}})
+  fireEvent.click(screen.getByLabelText('big-embed supports custom dimensions'))
+  fireEvent.click(screen.getByRole('button', {name: 'Add to draft and use for the default embedding model'}))
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText(/AI settings saved/)
+  const body = lastPut()
+  expect(body.models.find(model => model.name === 'text-embedding-3-small')).toMatchObject({embedding_per_1m: '0.03'})
+  expect(body.models.find(model => model.name === 'big-embed')).toMatchObject({provider: 'openai', dimensions: 4096, supports_custom_dimensions: true, embedding_per_1m: '0.1'})
+})
+
+it('reports blank model dimensions as missing', async () => {
+  mount()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(screen.getByText('Model pricing'))
+  fireEvent.change(screen.getByLabelText('text-embedding-3-small dimensions'), {target: {value: ''}})
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  expect(await screen.findByText(/dimensions are required/)).toBeTruthy()
+  expect(screen.queryByText(/dimensions must be a whole number/)).toBeNull()
+})
+
+it('rejects an invalid price without saving', async () => {
+  mount()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(screen.getByText('Model pricing'))
+  fireEvent.change(screen.getByLabelText('text-embedding-3-small embedding price'), {target: {value: '0.0000001'}})
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  expect(await screen.findByText(/at most six decimals/)).toBeTruthy()
+  expect(putCalls()).toHaveLength(0)
+})
+
+it('keeps typed keys in component state only', async () => {
+  mount()
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
+  fireEvent.change(screen.getByLabelText('API key'), {target: {value: 'sk-secret-value'}})
+  for (const store of [localStorage, sessionStorage]) {
+    for (let i = 0; i < store.length; i++) expect(store.getItem(store.key(i) ?? '') ?? '').not.toContain('sk-secret-value')
+  }
+})
+
+it.each([true, false])('refreshes cached task availability after changing Ask', async enabled => {
   let active = !enabled
   const settings = (revision: number): LLMSettings => ({
     ...fixture,
     revision,
-    tasks: (fixture.tasks ?? []).map(task => task.task === 'ask'
-      ? {...task, provider: active ? 'local' : '', model: active ? 'local-chat' : ''}
+    defaults: {text: {provider: 'local', model: 'local-chat'}, embedding: {provider: '', model: ''}},
+    tasks: fixture.tasks!.map(task => task.task === 'ask'
+      ? {...task, provider: active ? 'local' : '', model: active ? 'local-chat' : '', mode: active ? 'custom' : 'off'}
       : task),
   })
   vi.mocked(request).mockImplementation(async (path: string, options?: RequestInit) => {
@@ -156,523 +599,22 @@ it.each([true, false])('refreshes cached task availability after setting Ask ena
   await screen.findByText(`Ask ${enabled ? 'disabled' : 'enabled'}`)
   await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
 
-  fireEvent.change(screen.getByLabelText('ask provider'), {target: {value: enabled ? 'local' : ''}})
-  if (enabled) fireEvent.change(screen.getByLabelText('ask model'), {target: {value: 'local-chat'}})
+  fireEvent.click(screen.getByLabelText('Ask my feeds'))
   fireEvent.click(screen.getByRole('button', {name: 'Save'}))
 
-  await screen.findByText(/LLM services saved/)
+  await screen.findByText(/AI settings saved/)
   expect(await screen.findByText(`Ask ${enabled ? 'enabled' : 'disabled'}`)).toBeTruthy()
   expect(vi.mocked(request).mock.calls.filter(([path]) => path === '/v1/pipeline')).toHaveLength(2)
 })
 
-it('does not mark the draft dirty when a saved key is left blank', async () => {
-  mount()
+it('ignores stale picker responses after a provider edit', async () => {
+  mount(fixture, [{id: 'late', name: 'Late', chat: true, embedding: false, input_per_1m: '1', output_per_1m: '1'}])
   await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
-  fireEvent.change(screen.getByLabelText('API key'), {target: {value: 'sk-typed-then-cleared'}})
-  fireEvent.change(screen.getByLabelText('API key'), {target: {value: ''}})
-  fireEvent.click(screen.getByRole('button', {name: 'Apply provider'}))
-  expect(screen.getByText('No unsaved changes')).toBeTruthy()
-  expect(putCalls()).toHaveLength(0)
-})
-
-it('sends a typed replacement key and clears only when the clear box is checked', async () => {
-  mount()
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
-  fireEvent.change(screen.getByLabelText('API key'), {target: {value: 'sk-replacement'}})
-  fireEvent.click(screen.getByRole('button', {name: 'Apply provider'}))
-  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-  await screen.findByText(/LLM services saved/)
-  const replaced = providerOf(lastPut(), 'openai')
-  expect(replaced.api_key).toBe('sk-replacement')
-  expect(replaced.clear_api_key).toBe(false)
-
-  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
-  fireEvent.click(screen.getByLabelText('Clear the saved API key'))
-  fireEvent.click(screen.getByRole('button', {name: 'Apply provider'}))
-  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-  await waitFor(() => expect(putCalls()).toHaveLength(2))
-  const cleared = providerOf(lastPut(), 'openai')
-  expect(cleared.api_key).toBeUndefined()
-  expect(cleared.clear_api_key).toBe(true)
-})
-
-it('adds a provider with the kind default base URL and its key', async () => {
-  mount()
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(screen.getByRole('button', {name: 'Add provider'}))
-  fireEvent.change(screen.getByLabelText('Name'), {target: {value: 'claude'}})
-  fireEvent.change(screen.getByLabelText('Kind'), {target: {value: 'anthropic'}})
-  expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('https://api.anthropic.com')
-  fireEvent.change(screen.getByLabelText('API key'), {target: {value: 'sk-ant'}})
-  fireEvent.click(screen.getByRole('button', {name: 'Apply provider'}))
-  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-  await screen.findByText(/LLM services saved/)
-  const claude = providerOf(lastPut(), 'claude')
-  expect(claude).toMatchObject({kind: 'anthropic', base_url: 'https://api.anthropic.com', api_key: 'sk-ant', clear_api_key: false})
-  expect(claude.has_api_key).toBeUndefined()
-})
-
-it('keeps task routes on an unkeyed provider when it is renamed', async () => {
-  mount()
-  await screen.findByText(/http:\/\/ollama:11434\/v1/)
-  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[1])
-  fireEvent.change(screen.getByLabelText('Name'), {target: {value: 'renamed-local'}})
-  fireEvent.click(screen.getByRole('button', {name: 'Apply provider'}))
-
-  expect(valueOf('blurb provider')).toBe('renamed-local')
-  expect(valueOf('blurb model')).toBe('local-chat')
-  expect(valueOf('ask provider')).toBe('')
-  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-  await screen.findByText(/LLM services saved/)
-  expect(lastPut().tasks.find(task => task.task === 'blurb')).toEqual({task: 'blurb', provider: 'renamed-local', model: 'local-chat'})
-})
-
-it('requires a new key or an explicit clear when a keyed provider moves', async () => {
-  mount()
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
-  fireEvent.change(screen.getByLabelText('Base URL'), {target: {value: 'https://elsewhere.example/v1'}})
-  fireEvent.click(screen.getByRole('button', {name: 'Apply provider'}))
-  expect(await screen.findByText(/keeps its saved API key/)).toBeTruthy()
-  expect(putCalls()).toHaveLength(0)
-})
-
-it('round-trips model prices and adds a model with explicit rates', async () => {
-  mount()
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(screen.getByText('Model pricing'))
-  fireEvent.change(screen.getByLabelText('text-embedding-3-small embedding price'), {target: {value: '0.03'}})
-  fireEvent.click(screen.getByRole('button', {name: 'Add model'}))
-  fireEvent.change(screen.getByLabelText('New model name'), {target: {value: 'new-model'}})
-  fireEvent.change(screen.getByLabelText('New model input price'), {target: {value: '1.5'}})
-  fireEvent.change(screen.getByLabelText('New model output price'), {target: {value: '3'}})
-  fireEvent.change(screen.getByLabelText('New model embedding price'), {target: {value: '0'}})
-  fireEvent.click(screen.getByRole('button', {name: 'Apply model'}))
-  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-  await screen.findByText(/LLM services saved/)
-  const body = lastPut()
-  const priced = body.models.find(model => model.name === 'text-embedding-3-small')
-  expect(priced).toMatchObject({input_per_1m: '0', output_per_1m: '0', embedding_per_1m: '0.03', dimensions: 1536, truncatable: true})
-  const added = body.models.find(model => model.name === 'new-model')
-  expect(added).toMatchObject({input_per_1m: '1.5', output_per_1m: '3', embedding_per_1m: '0', dimensions: 0, truncatable: false})
-})
-
-it('rejects an invalid price without saving', async () => {
-  mount()
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(screen.getByText('Model pricing'))
-  fireEvent.change(screen.getByLabelText('text-embedding-3-small embedding price'), {target: {value: '0.0000001'}})
-  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-  expect(await screen.findByText(/at most six decimals/)).toBeTruthy()
-  expect(putCalls()).toHaveLength(0)
-})
-
-it('turns a task off by clearing its provider and its model', async () => {
-  mount()
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.change(screen.getByLabelText('embed provider'), {target: {value: ''}})
-  expect(valueOf('embed model')).toBe('')
-  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-  await screen.findByText(/LLM services saved/)
-  expect(lastPut().tasks.find(task => task.task === 'embed')).toEqual({task: 'embed', provider: '', model: ''})
-})
-
-it('refuses to save a half-configured task', async () => {
-  mount()
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.change(screen.getByLabelText('classify provider'), {target: {value: 'openai'}})
-  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-  expect(await screen.findByText(/Task classify needs both a provider and a model/)).toBeTruthy()
-  expect(putCalls()).toHaveLength(0)
-})
-
-it('keeps the draft and asks for a reload on a revision conflict', async () => {
-  confirm()
-  mount()
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  vi.mocked(request).mockImplementation(async (path: string, options?: RequestInit) => {
-    if (options?.method === 'PUT') throw new RequestError(409, 'revision conflict')
-    return fixture
-  })
-  fireEvent.change(screen.getByLabelText('embed provider'), {target: {value: ''}})
-  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-  expect(await screen.findByText(/changed after you loaded/)).toBeTruthy()
-  expect(valueOf('embed provider')).toBe('')
-  expect(getCalls()).toHaveLength(1)
-  fireEvent.click(screen.getByRole('button', {name: 'Reload'}))
-  await screen.findByText(/reloaded/)
-  expect(valueOf('embed provider')).toBe('openai')
-})
-
-it('keeps the draft and reuses the op_id when a save fails and is retried', async () => {
-  mount()
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  vi.mocked(request).mockImplementation(async (path: string, options?: RequestInit) => {
-    if (options?.method === 'PUT') throw new Error('server exploded')
-    return fixture
-  })
-  fireEvent.change(screen.getByLabelText('embed provider'), {target: {value: ''}})
-  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-  expect(await screen.findByText(/server exploded/)).toBeTruthy()
-  expect(valueOf('embed provider')).toBe('')
-  const first = lastPut().op_id
-  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-  await waitFor(() => expect(putCalls()).toHaveLength(2))
-  expect(lastPut().op_id).toBe(first)
-})
-
-it('removes a provider and turns off the tasks that used it', async () => {
-  const answer = confirm()
-  mount()
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(screen.getAllByRole('button', {name: 'Remove'})[1])
-  expect(answer).toHaveBeenCalledWith(expect.stringMatching(/blurb/))
-  expect(screen.queryByText(/http:\/\/ollama:11434\/v1/)).toBeNull()
-  expect(valueOf('blurb provider')).toBe('')
-})
-
-it('refuses to route embed to Anthropic', async () => {
-  mount()
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(screen.getByRole('button', {name: 'Add provider'}))
-  fireEvent.change(screen.getByLabelText('Name'), {target: {value: 'claude'}})
-  fireEvent.change(screen.getByLabelText('Kind'), {target: {value: 'anthropic'}})
-  fireEvent.click(screen.getByRole('button', {name: 'Apply provider'}))
-  fireEvent.change(screen.getByLabelText('embed provider'), {target: {value: 'claude'}})
-  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-  expect(await screen.findByText(/Task embed cannot use Anthropic/)).toBeTruthy()
-  expect(putCalls()).toHaveLength(0)
-})
-
-it('rejects dimensions above 1024 when the model is not truncatable', async () => {
-  mount()
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(screen.getByText('Model pricing'))
-  fireEvent.click(screen.getByLabelText('text-embedding-3-small truncatable'))
-  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-  expect(await screen.findByText(/dimensions above 1024 need truncatable vectors/)).toBeTruthy()
-  expect(putCalls()).toHaveLength(0)
-})
-
-it('rejects a base URL with a query or fragment', async () => {
-  mount()
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
-  fireEvent.change(screen.getByLabelText('Base URL'), {target: {value: 'https://api.openai.com/v1?x=1'}})
-  fireEvent.click(screen.getByRole('button', {name: 'Apply provider'}))
-  expect(await screen.findByText(/must not contain a query or fragment/)).toBeTruthy()
-  expect(putCalls()).toHaveLength(0)
-})
-
-it('rejects a provider name that is not lowercase letters, digits and single dashes', async () => {
-  mount()
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(screen.getByRole('button', {name: 'Add provider'}))
-  fireEvent.change(screen.getByLabelText('Name'), {target: {value: 'OpenAI Prod'}})
-  fireEvent.click(screen.getByRole('button', {name: 'Apply provider'}))
-  expect(await screen.findByText(/lowercase letters, digits and single dashes/)).toBeTruthy()
-  expect(putCalls()).toHaveLength(0)
-})
-
-it('rejects a model name with whitespace', async () => {
-  mount()
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(screen.getByText('Model pricing'))
-  fireEvent.click(screen.getByRole('button', {name: 'Add model'}))
-  fireEvent.change(screen.getByLabelText('New model name'), {target: {value: 'my model'}})
-  fireEvent.change(screen.getByLabelText('New model input price'), {target: {value: '0'}})
-  fireEvent.change(screen.getByLabelText('New model output price'), {target: {value: '0'}})
-  fireEvent.change(screen.getByLabelText('New model embedding price'), {target: {value: '0'}})
-  fireEvent.click(screen.getByRole('button', {name: 'Apply model'}))
-  expect(await screen.findByText(/must not contain whitespace/)).toBeTruthy()
-  expect(putCalls()).toHaveLength(0)
-})
-
-it('rejects a key containing control characters', async () => {
-  mount()
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
-  fireEvent.change(screen.getByLabelText('API key'), {target: {value: 'sk-secret\u0001'}})
-  fireEvent.click(screen.getByRole('button', {name: 'Apply provider'}))
-  expect(await screen.findByText(/control characters/)).toBeTruthy()
-  expect(putCalls()).toHaveLength(0)
-})
-
-it.each([2, 3])('keeps an open provider editor attached when there are %i providers', async count => {
-  const providers = [...fixture.providers!, {...fixture.providers![1], name: 'third', base_url: 'https://third.example/v1'}].slice(0, count)
-  mount({...fixture, providers, tasks: LLM_TASKS.map(task => ({task, provider: '', model: ''}))})
-  confirm()
-  await screen.findByText(/http:\/\/ollama:11434\/v1/)
-  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[1])
-  fireEvent.change(screen.getByLabelText('Name'), {target: {value: 'edited-local'}})
-  const remove = screen.getAllByRole('button', {name: 'Remove'})[0]
-  expect((remove as HTMLButtonElement).disabled).toBe(true)
-  fireEvent.click(remove)
-  expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('edited-local')
-  fireEvent.click(screen.getByRole('button', {name: 'Apply provider'}))
-  fireEvent.click(screen.getAllByRole('button', {name: 'Remove'})[0])
-  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-  await screen.findByText(/LLM services saved/)
-  expect(lastPut().providers.map(provider => provider.name)).toEqual(count === 2 ? ['edited-local'] : ['edited-local', 'third'])
-})
-
-it('labels the server canonical zero cap as unlimited', async () => {
-  mount({...fixture, providers: fixture.providers!.map(provider => ({...provider, monthly_limit_usd: '0.000000'}))})
-  await screen.findByText(/http:\/\/ollama:11434\/v1/)
-  expect(screen.getAllByText(/no monthly limit/)).toHaveLength(2)
-})
-
-it('requires applying provider edits before saving the whole configuration', async () => {
-  mount()
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.change(screen.getByLabelText('ask provider'), {target: {value: 'local'}})
-  fireEvent.change(screen.getByLabelText('ask model'), {target: {value: 'local-chat'}})
-  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
-  fireEvent.change(screen.getByLabelText('API key'), {target: {value: 'sk-not-yet-applied'}})
-  expect((screen.getByRole('button', {name: 'Save'}) as HTMLButtonElement).disabled).toBe(true)
-  fireEvent.click(screen.getByRole('button', {name: 'Apply provider'}))
-  expect((screen.getByRole('button', {name: 'Save'}) as HTMLButtonElement).disabled).toBe(false)
-  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-  await screen.findByText(/LLM services saved/)
-  expect(providerOf(lastPut(), 'openai').api_key).toBe('sk-not-yet-applied')
-})
-
-it('keeps typed keys in component state only', async () => {
-  mount()
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
-  fireEvent.change(screen.getByLabelText('API key'), {target: {value: 'sk-secret-value'}})
-  fireEvent.click(screen.getByRole('button', {name: 'Apply provider'}))
-  for (const store of [localStorage, sessionStorage]) {
-    for (let i = 0; i < store.length; i++) expect(store.getItem(store.key(i) ?? '') ?? '').not.toContain('sk-secret-value')
-  }
-})
-
-const catalogue: DiscoveredModel[] = [
-  {id: 'gpt-5', name: 'GPT-5', chat: true, embedding: false, input_per_1m: '1.25', output_per_1m: '10'},
-  {id: 'embed-one', name: 'Embed One', chat: false, embedding: true, embedding_per_1m: '0.1', dimensions: 512},
-  {id: 'dual-use', name: 'Dual Use', chat: true, embedding: true, input_per_1m: '2', output_per_1m: '4', embedding_per_1m: '0.5', dimensions: 768},
-  {id: 'text-embedding-3-small', name: 'Embedding Small', embedding: true, embedding_per_1m: '0.04', dimensions: 512},
-  {id: 'mystery', name: 'Mystery'},
-]
-
-function mountCatalogue(answer: {models: DiscoveredModel[]} | (() => never), server: LLMSettings = fixture) {
-  vi.mocked(request).mockImplementation(async (path: string, options?: RequestInit) => {
-    if (path === '/v1/settings/llm/models') {
-      if (typeof answer === 'function') answer()
-      return answer as {models: DiscoveredModel[]}
-    }
-    if (path === '/v1/settings/llm' && !options?.method) return server
-    return {...server, revision: server.revision + 1}
-  })
-  renderSection()
-}
-
-const fetchButtons = () => screen.getAllByRole('button', {name: 'Fetch models'})
-
-it('fetches the catalogue with the draft provider and lets the server inherit a blank key', async () => {
-  mountCatalogue({models: catalogue})
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(fetchButtons()[0])
-  expect(await screen.findByText('GPT-5 (gpt-5)')).toBeTruthy()
-  const sent = lastDiscovery()
-  expect(sent.revision).toBe(3)
-  expect(sent.provider.name).toBe('openai')
-  expect(sent.provider.api_key).toBeUndefined()
-  expect(sent.provider.clear_api_key).toBe(false)
-  expect(sent.provider.has_api_key).toBeUndefined()
-  expect(putCalls()).toHaveLength(0)
-})
-
-it('sends a replacement key typed in the editor without applying it', async () => {
-  mountCatalogue({models: catalogue})
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
-  fireEvent.change(screen.getByLabelText('API key'), {target: {value: 'sk-editor-only'}})
-  // The editor's Fetch models button renders before the other rows' buttons.
-  fireEvent.click(fetchButtons()[0])
-  expect(await screen.findByText('Mystery (mystery)')).toBeTruthy()
-  expect(lastDiscovery().provider.api_key).toBe('sk-editor-only')
-  expect(screen.getByText(/Apply provider writes these edits to the draft/)).toBeTruthy()
-  expect(putCalls()).toHaveLength(0)
-})
-
-it('filters known-incompatible models for a task and labels unknown capabilities', async () => {
-  mountCatalogue({models: catalogue})
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  // Providers occupy the first two Fetch models buttons; embed's is third.
-  fireEvent.click(fetchButtons()[2])
-  expect(await screen.findByText('Embed One (embed-one)')).toBeTruthy()
-  expect(screen.queryByText('GPT-5 (gpt-5)')).toBeNull()
-  expect(screen.getByText(/cannot do embedding work/)).toBeTruthy()
-  expect(screen.getByText('capabilities unknown')).toBeTruthy()
-  expect(screen.getByText('Embedding Small (text-embedding-3-small)')).toBeTruthy()
-})
-
-it('searches the catalogue without changing the task route', async () => {
-  mountCatalogue({models: catalogue})
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(fetchButtons()[3])
-  expect(await screen.findByText('GPT-5 (gpt-5)')).toBeTruthy()
-  fireEvent.change(screen.getByLabelText('Search catalogue'), {target: {value: 'dual'}})
-  expect(screen.queryByText('GPT-5 (gpt-5)')).toBeNull()
-  expect(screen.getByText('Dual Use (dual-use)')).toBeTruthy()
-  expect(valueOf('blurb provider')).toBe('local')
-  expect(valueOf('blurb model')).toBe('local-chat')
-})
-
-it('imports a configured catalogue ID without touching its prices', async () => {
-  mountCatalogue({models: catalogue})
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(fetchButtons()[0])
-  await screen.findByText('Embedding Small (text-embedding-3-small)')
-  fireEvent.click(screen.getByLabelText('Select text-embedding-3-small'))
-  fireEvent.click(screen.getByLabelText('Select mystery'))
-  fireEvent.click(screen.getByRole('button', {name: /Import selected/}))
-  expect(await screen.findByText(/rates are suggestions/i)).toBeTruthy()
-  // The already-configured ID keeps its prices and never reaches the review.
-  expect(screen.queryByLabelText('text-embedding-3-small configured name')).toBeNull()
-  expect(screen.getByLabelText('mystery configured name')).toBeTruthy()
-  fireEvent.click(screen.getByRole('button', {name: 'Back to catalogue'}))
-  expect(screen.getByLabelText('Select text-embedding-3-small')).toBeTruthy()
-})
-
-it('requires missing applicable prices and geometry in the price review', async () => {
-  mountCatalogue({models: catalogue})
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(fetchButtons()[0])
-  await screen.findByText('Mystery (mystery)')
-  fireEvent.click(screen.getByLabelText('Select mystery'))
-  fireEvent.click(screen.getByRole('button', {name: /Import selected/}))
-  fireEvent.click(await screen.findByRole('button', {name: 'Import model to draft'}))
-  expect(await screen.findByRole('alert')).toBeTruthy()
-  expect(screen.getAllByText(/non-negative amount/)).toHaveLength(3)
-  expect(screen.getByText(/must be a whole number/)).toBeTruthy()
-  expect(putCalls()).toHaveLength(0)
-})
-
-it('defaults only the inapplicable side for a known embedding-only model', async () => {
-  mountCatalogue({models: catalogue})
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(fetchButtons()[0])
-  await screen.findByText('Embed One (embed-one)')
-  fireEvent.click(screen.getByLabelText('Select embed-one'))
-  fireEvent.click(screen.getByRole('button', {name: /Import selected/}))
-  expect((await screen.findByLabelText('embed-one input price') as HTMLInputElement).value).toBe('0')
-  expect((screen.getByLabelText('embed-one output price') as HTMLInputElement).value).toBe('0')
-  expect((screen.getByLabelText('embed-one embedding price') as HTMLInputElement).value).toBe('0.1')
-  expect((screen.getByLabelText('embed-one dimensions') as HTMLInputElement).value).toBe('512')
-  fireEvent.click(screen.getByRole('button', {name: 'Import model to draft'}))
-  await screen.findByText(/added to the draft/)
-  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-  await screen.findByText(/LLM services saved/)
-  expect(lastPut().models.find(model => model.name === 'embed-one')).toMatchObject({input_per_1m: '0', output_per_1m: '0', embedding_per_1m: '0.1', dimensions: 512})
-})
-
-it('defaults embedding price and geometry to zero for a known chat-only model', async () => {
-  mountCatalogue({models: catalogue})
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(fetchButtons()[0])
-  await screen.findByText('GPT-5 (gpt-5)')
-  fireEvent.click(screen.getByLabelText('Select gpt-5'))
-  fireEvent.click(screen.getByRole('button', {name: /Import selected/}))
-  expect((await screen.findByLabelText('gpt-5 embedding price') as HTMLInputElement).value).toBe('0')
-  expect((screen.getByLabelText('gpt-5 dimensions') as HTMLInputElement).value).toBe('0')
-  expect((screen.getByLabelText('gpt-5 input price') as HTMLInputElement).value).toBe('1.25')
-})
-
-it('routes a task only after an explicit selection and review', async () => {
-  mountCatalogue({models: catalogue})
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(fetchButtons()[2])
-  expect(await screen.findByText('Embed One (embed-one)')).toBeTruthy()
-  expect(valueOf('embed model')).toBe('text-embedding-3-small')
-  fireEvent.click(screen.getAllByRole('button', {name: 'Use for embed'})[0])
-  fireEvent.click(await screen.findByRole('button', {name: 'Import model to draft'}))
-  await screen.findByText(/added to the draft/)
-  expect(valueOf('embed model')).toBe('embed-one')
-  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-  await screen.findByText(/LLM services saved/)
-  expect(lastPut().tasks.find(task => task.task === 'embed')).toEqual({task: 'embed', provider: 'openai', model: 'embed-one'})
-})
-
-it('discards catalogue results when the provider draft changes', async () => {
-  mountCatalogue({models: catalogue})
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(fetchButtons()[2])
-  expect(await screen.findByText('Embed One (embed-one)')).toBeTruthy()
-  fireEvent.change(screen.getByLabelText('embed provider'), {target: {value: 'local'}})
-  expect(await screen.findByText(/results were discarded/)).toBeTruthy()
-  expect(screen.queryByText('Embed One (embed-one)')).toBeNull()
-})
-
-it('keeps configured selections usable when discovery fails', async () => {
-  mountCatalogue(() => { throw new RequestError(503, 'provider returned no model catalogue') })
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(fetchButtons()[2])
-  expect(await screen.findByRole('alert')).toBeTruthy()
-  expect(screen.getByText(/no model catalogue/)).toBeTruthy()
-  expect(valueOf('embed model')).toBe('text-embedding-3-small')
-  // Configured models remain the fallback when the catalogue is unavailable.
-  fireEvent.change(screen.getByLabelText('embed model'), {target: {value: 'local-chat'}})
-  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-  await screen.findByText(/LLM services saved/)
-  expect(lastPut().tasks.find(task => task.task === 'embed')).toEqual({task: 'embed', provider: 'openai', model: 'local-chat'})
-})
-
-it('falls back to manual entry when the server cannot discover', async () => {
-  mountCatalogue(() => { throw new RequestError(404, 'not found') })
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(fetchButtons()[0])
-  expect(await screen.findByText(/does not support model discovery; add models manually/)).toBeTruthy()
-})
-
-it('asks for a reload when the settings revision is stale', async () => {
-  mountCatalogue(() => { throw new RequestError(409, 'revision conflict') })
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(fetchButtons()[0])
-  expect(await screen.findByText(/Reload, then fetch again/)).toBeTruthy()
-  expect(putCalls()).toHaveLength(0)
-})
-
-it('refuses catalogue imports beyond the free configured-model slots', async () => {
-  const models = Array.from({length: 127}, (_, i) => ({name: `m${i}`, input_per_1m: '0', output_per_1m: '0', embedding_per_1m: '0', dimensions: 0, truncatable: false}))
-  mountCatalogue({models: catalogue}, {...fixture, models})
-  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
-  fireEvent.click(fetchButtons()[0])
-  await screen.findByText('GPT-5 (gpt-5)')
-  fireEvent.click(screen.getByLabelText('Select gpt-5'))
-  fireEvent.click(screen.getByLabelText('Select mystery'))
-  fireEvent.click(screen.getByRole('button', {name: /Import selected/}))
-  expect(await screen.findByText(/1 slot is free/)).toBeTruthy()
-  expect(putCalls()).toHaveLength(0)
-})
-
-it('keeps an entered key visibly unsaved after failure, then shows saved after retry and reload', async () => {
-  let fail = true
-  vi.mocked(request).mockImplementation(async (_path, options) => {
-    if (options?.method === 'PUT') {
-      if (fail) throw new RequestError(503, 'Try again')
-      return {...fixture, revision: 4}
-    }
-    return fixture
-  })
-  renderSection()
-  await screen.findByText('API key saved')
-  fireEvent.click(screen.getAllByRole('button', {name: 'Edit'})[0])
-  fireEvent.change(screen.getByLabelText('API key'), {target: {value: 'replacement-key'}})
-  fireEvent.click(screen.getByRole('button', {name: 'Apply provider'}))
-  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-  await screen.findByText('Try again')
-  expect(screen.getByText('API key entered · unsaved')).toBeTruthy()
-  fail = false
-  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
-  await screen.findByText('LLM services saved.')
-  expect(screen.getByText('API key saved')).toBeTruthy()
-  expect(screen.queryByText('API key entered · unsaved')).toBeNull()
-  fireEvent.click(screen.getByRole('button', {name: 'Reload'}))
-  await screen.findByText('LLM services reloaded.')
-  expect(screen.getByText('API key saved')).toBeTruthy()
+  const row = screen.getByText('Blurbs', {selector: 'strong'}).closest('li')!
+  fireEvent.click(within(row).getByRole('button', {name: 'Browse models'}))
+  await within(row).findByText(/Fetching models/)
+  // Editing the task provider discards the in-flight catalogue.
+  fireEvent.change(within(row).getByLabelText('Blurbs provider'), {target: {value: 'openai'}})
+  expect(await within(row).findByText(/results were discarded/)).toBeTruthy()
+  expect(within(row).queryByText('Late (late)')).toBeNull()
 })
