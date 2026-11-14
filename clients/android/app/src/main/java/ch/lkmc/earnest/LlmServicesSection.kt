@@ -268,8 +268,14 @@ internal fun LlmServicesSection(
                 state = state,
                 providerIndex = providerIndex,
                 task = task,
-                onSelect = { addition ->
-                    model.selectLlmModel(providerIndex, addition, if (discoveryDefault == null) task else null, discoveryDefault)
+                onSelect = { addition, confirmed ->
+                    model.selectLlmModel(
+                        providerIndex,
+                        addition,
+                        if (discoveryDefault == null) task else null,
+                        discoveryDefault,
+                        confirmed,
+                    )
                 },
                 onDismiss = {
                     discoveryTarget = null
@@ -556,8 +562,9 @@ private fun DefaultModelPickerDialog(
     onDismiss: () -> Unit,
 ) {
     val providerNames = draft.providers.map { it.routedName.ifEmpty { it.name } }.filter { it.isNotEmpty() }.toSet()
-    val options = draft.models.filter { it.provider.isNotEmpty() && it.provider in providerNames &&
-        (capability != LlmCapability.EMBEDDING || it.dimensions > 0) }
+    val options = draft.models.filter {
+        it.provider.isNotEmpty() && it.provider in providerNames && it.usableFor(capability)
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
@@ -704,7 +711,10 @@ private fun RouteTaskDialog(
                     if (provider.isNotEmpty()) {
                         Text("Model", style = MaterialTheme.typography.bodySmall)
                         Column {
-                            draft.models.filter { it.provider == provider || it.provider.isEmpty() }.forEach { option ->
+                            draft.models.filter {
+                                (it.provider == provider || it.provider.isEmpty()) &&
+                                    it.usableFor(task.requiredCapability())
+                            }.forEach { option ->
                                 FilterChip(
                                     selected = model == option.name,
                                     onClick = { model = option.name },
@@ -916,7 +926,7 @@ private fun CatalogueDialog(
     state: UiState,
     providerIndex: Int,
     task: LlmTask?,
-    onSelect: (LlmModel) -> Unit,
+    onSelect: (LlmModel, Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val ui = state.llmSettingsUi
@@ -1035,26 +1045,30 @@ private fun CatalogueDialog(
                             items(shown, key = { it.id }) { entry ->
                                 val prefill = entry.reviewPrefill(providerName, capability)
                                 val identity = prefill.provider to prefill.name
-                                val alreadyConfigured = identity in configured
+                                val existing = draft.models.firstOrNull { it.identity() == identity }
+                                val alreadyConfigured = existing != null
                                 val problems = entry.reviewProblems(
                                     prefill,
                                     configured - identity,
                                     capability,
                                 )
-                                val ready = alreadyConfigured || problems.isEmpty()
+                                // A configured row is reusable only when its saved
+                                // metadata serves this capability; otherwise the
+                                // row opens the pane for explicit completion.
+                                val ready = existing?.usableFor(capability) ?: problems.isEmpty()
                                 CatalogueRow(
                                     entry = entry,
                                     configured = alreadyConfigured,
                                     ready = ready,
                                     selected = selection?.review?.name == entry.id,
                                     onConfigure = {
-                                        selection = ModelSelection(entry, prefill)
+                                        selection = ModelSelection(entry, prefill.prefillSaved(existing, capability))
                                         free = false
                                         previousPrices = null
                                     },
                                     onUse = if (ready && (alreadyConfigured || room > 0)) {
                                         {
-                                            onSelect(draft.models.firstOrNull { it.identity() == identity } ?: prefill.toConfiguredModel(capability))
+                                            onSelect(existing ?: prefill.toConfiguredModel(capability), false)
                                             onDismiss()
                                         }
                                     } else {
@@ -1086,7 +1100,8 @@ private fun CatalogueDialog(
                                 onClick = {
                                     val id = manualId.trim()
                                     if (id.isNotEmpty()) {
-                                        selection = ModelSelection(null, LlmModelReview(name = id, provider = providerName))
+                                        val existing = draft.models.firstOrNull { it.identity() == (providerName to id) }
+                                        selection = ModelSelection(null, LlmModelReview(name = id, provider = providerName).prefillSaved(existing, capability))
                                         manualId = ""
                                         free = false
                                         previousPrices = null
@@ -1097,6 +1112,14 @@ private fun CatalogueDialog(
                         }
 
                 selection?.let { current ->
+                    draft.models.firstOrNull { it.identity() == (current.review.provider to current.review.name) }?.let { existing ->
+                        val rates = if (capability == LlmCapability.EMBEDDING) {
+                            "embedding $${existing.embeddingPer1m}"
+                        } else {
+                            "input $${existing.inputPer1m}, output $${existing.outputPer1m}"
+                        }
+                        Text("Saved rates per 1M: $rates. Confirm prices for this use; other saved prices stay unchanged.", style = MaterialTheme.typography.bodySmall)
+                    }
                     SelectionPane(
                         model = model,
                         state = state,
@@ -1119,8 +1142,11 @@ private fun CatalogueDialog(
                             selection = current.copy(review = review)
                         },
                         onApply = {
-                            onSelect(draft.models.firstOrNull { it.identity() == (current.review.provider.trim() to current.review.name.trim()) }
-                                ?: current.review.toConfiguredModel(capability))
+                            // The pane is the explicit confirmation: its
+                            // completed review may fill a capability the saved
+                            // row lacks, while the view model preserves the
+                            // other side's saved rates.
+                            onSelect(current.review.toConfiguredModel(capability), true)
                             onDismiss()
                         },
                         onDismiss = {
@@ -1370,22 +1396,7 @@ private fun SelectionPane(
                                     supportsCustomDimensions = result.supportsCustomDimensions ?: review.supportsCustomDimensions,
                                 )
                                 onReviewChange(next)
-                                model.updateLlmSettingsDraft { draft ->
-                                    draft.copy(
-                                        models = draft.models.map {
-                                            if (it.identity() == identity) {
-                                                it.copy(
-                                                    dimensions = result.dimensions ?: it.dimensions,
-                                                    supportsCustomDimensions = result.supportsCustomDimensions
-                                                        ?: it.supportsCustomDimensions,
-                                                )
-                                            } else {
-                                                it
-                                            }
-                                        },
-                                    )
-                                }
-                            }) { Text("Apply observed geometry to draft") }
+                            }) { Text("Use observed geometry") }
                         }
                     }
                 }

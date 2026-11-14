@@ -60,11 +60,13 @@ internal fun LlmModelReview.freePriceChoice(capability: LlmCapability, enabled: 
     )
 
 /**
- * Seeds the selection from a catalogue entry. Published fields prefill;
- * only a model known to be chat-only may default embedding price and geometry
- * to zero, and only a known embedding-only model may default chat prices to
- * zero. Everything else stays blank so a missing applicable price or
- * embedding geometry demands explicit input: unknown is never free.
+ * Seeds the selection from a catalogue entry. Published fields prefill.
+ * A side is only defaulted to zero when the chosen capability makes it
+ * inapplicable: a chat selection may zero embedding price and geometry for
+ * a known chat-only model, and an embedding selection may zero chat prices
+ * for a known embedding-only model. An applicable side with no published
+ * value stays blank so the pane demands explicit input or an explicit free
+ * choice; unknown is never free.
  */
 internal fun LlmDiscoveredModel.reviewPrefill(
     provider: String = "",
@@ -72,16 +74,71 @@ internal fun LlmDiscoveredModel.reviewPrefill(
 ): LlmModelReview {
     val chatOnly = chat == true && embedding == false
     val embeddingOnly = embedding == true && chat == false
+    val chatApplicable = capability != LlmCapability.EMBEDDING
+    val embeddingApplicable = capability != LlmCapability.CHAT
     return LlmModelReview(
         name = id,
-        input = inputPer1m ?: (if (embeddingOnly) "0" else ""),
-        output = outputPer1m ?: (if (embeddingOnly) "0" else ""),
-        embedding = embeddingPer1m ?: (if (chatOnly) "0" else ""),
-        dimensions = dimensions?.toString() ?: (if (chatOnly) "0" else ""),
+        input = inputPer1m ?: (if (embeddingOnly && !chatApplicable) "0" else ""),
+        output = outputPer1m ?: (if (embeddingOnly && !chatApplicable) "0" else ""),
+        embedding = embeddingPer1m ?: (if (chatOnly && !embeddingApplicable) "0" else ""),
+        dimensions = dimensions?.toString() ?: (if (chatOnly && !embeddingApplicable) "0" else ""),
         truncatable = truncatable ?: false,
         supportsCustomDimensions = supportsCustomDimensions ?: false,
         provider = provider,
     )
+}
+
+/**
+ * Whether a saved model's metadata is complete enough to route [capability]
+ * work to it. The legacy wire format does not distinguish a zero placeholder
+ * from an explicitly free price, so ambiguous cross-capability choices need
+ * confirmation. Existing routes are left alone.
+ */
+internal fun LlmModel.usableFor(capability: LlmCapability): Boolean = when (capability) {
+    LlmCapability.EMBEDDING -> dimensions > 0 && (embeddingPer1m.toBigDecimalOrNull()?.signum() ?: 0) > 0
+    LlmCapability.CHAT -> (inputPer1m.toBigDecimalOrNull()?.signum() ?: 0) > 0 ||
+        (outputPer1m.toBigDecimalOrNull()?.signum() ?: 0) > 0
+    LlmCapability.BOTH -> usableFor(LlmCapability.CHAT) && usableFor(LlmCapability.EMBEDDING)
+}
+
+/** Keep existing custom prices while asking about a second capability. */
+internal fun LlmModelReview.prefillSaved(existing: LlmModel?, capability: LlmCapability): LlmModelReview {
+    if (existing == null) return this
+    fun savedOrPublished(saved: String, published: String): String =
+        if ((saved.toBigDecimalOrNull()?.signum() ?: 0) > 0) saved else published
+    return when (capability) {
+        LlmCapability.CHAT -> copy(
+            input = savedOrPublished(existing.inputPer1m, input),
+            output = savedOrPublished(existing.outputPer1m, output),
+        )
+        LlmCapability.EMBEDDING -> copy(
+            embedding = savedOrPublished(existing.embeddingPer1m, embedding),
+            dimensions = if (existing.dimensions > 0) existing.dimensions.toString() else dimensions,
+            truncatable = existing.truncatable || truncatable,
+            supportsCustomDimensions = existing.supportsCustomDimensions || supportsCustomDimensions,
+        )
+        LlmCapability.BOTH -> this
+    }
+}
+
+/**
+ * Completes a saved model for [capability] from an explicitly confirmed
+ * selection. Only the requested side changes: the other capability's saved
+ * rates and geometry are preserved, and the truncation flags stay
+ * independent. The caller is responsible for having confirmed the edit.
+ */
+internal fun LlmModel.completedFor(capability: LlmCapability, addition: LlmModel): LlmModel = when (capability) {
+    LlmCapability.EMBEDDING -> copy(
+        embeddingPer1m = addition.embeddingPer1m,
+        dimensions = addition.dimensions,
+        truncatable = addition.truncatable,
+        supportsCustomDimensions = addition.supportsCustomDimensions,
+    )
+    LlmCapability.CHAT -> copy(
+        inputPer1m = addition.inputPer1m,
+        outputPer1m = addition.outputPer1m,
+    )
+    LlmCapability.BOTH -> addition
 }
 
 /**

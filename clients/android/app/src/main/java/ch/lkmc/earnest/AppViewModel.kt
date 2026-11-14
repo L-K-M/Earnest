@@ -18,6 +18,7 @@ import ch.lkmc.earnest.core.LlmModelCapability
 import ch.lkmc.earnest.core.LlmModelCheck
 import ch.lkmc.earnest.core.LlmModelCheckInput
 import ch.lkmc.earnest.core.LlmModelsInput
+import ch.lkmc.earnest.core.LLM_MAX_CONFIGURED_MODELS
 import ch.lkmc.earnest.core.LlmSettings
 import ch.lkmc.earnest.core.LlmSettingsInput
 import ch.lkmc.earnest.core.LlmTask
@@ -972,29 +973,76 @@ class AppViewModel internal constructor(
     /**
      * Applies one catalogue selection to the draft. A model identity that is
      * already configured keeps its saved prices; a task context also routes
-     * that task to the selection as a custom route. Nothing is persisted
-     * until an explicit Save.
+     * that task to the selection as a custom route. A configured row whose
+     * saved metadata cannot serve the requested capability is only
+     * completed from the explicit selection pane ([confirmCrossCapability]):
+     * a quick selection leaves the draft untouched rather than silently
+     * reusing unknown embedding geometry or inapplicable text prices as zero.
+     * Nothing is persisted until an explicit Save.
      */
-    fun selectLlmModel(providerIndex: Int, addition: LlmModel, task: LlmTask?, defaultKey: String? = null) {
+    fun selectLlmModel(
+        providerIndex: Int,
+        addition: LlmModel,
+        task: LlmTask?,
+        defaultKey: String? = null,
+        confirmCrossCapability: Boolean = false,
+    ) {
         updateLlmSettingsDraft { draft ->
             val provider = draft.providers.getOrNull(providerIndex) ?: return@updateLlmSettingsDraft draft
             val providerName = provider.routedName
             if (providerName.isEmpty() || provider.name != providerName ||
                 (addition.provider.isNotEmpty() && addition.provider != providerName)) return@updateLlmSettingsDraft draft
             val scoped = if (addition.provider.isEmpty()) addition.copy(provider = providerName) else addition
-            val merged = importReviewedModels(draft.models, listOf(scoped))
-            if (merged.none { it.identity() == scoped.identity() }) return@updateLlmSettingsDraft draft
+            val capability = task?.requiredCapability()
+                ?: defaultKey?.let { if (it == "embedding") LlmCapability.EMBEDDING else LlmCapability.CHAT }
+                ?: if (scoped.dimensions > 0 || scoped.embeddingPer1m != "0") LlmCapability.EMBEDDING else LlmCapability.CHAT
+            val identity = scoped.identity()
+            val existing = draft.models.firstOrNull { it.identity() == identity }
+            val merged: LlmModel
+            val models: List<LlmModel>
+            when {
+                existing == null -> {
+                    if (draft.models.size >= LLM_MAX_CONFIGURED_MODELS) return@updateLlmSettingsDraft draft
+                    merged = scoped
+                    models = draft.models + merged
+                }
+                // Saved rates are preserved: a selection never edits them.
+                existing.usableFor(capability) -> {
+                    merged = existing
+                    models = draft.models
+                }
+                confirmCrossCapability -> {
+                    merged = existing.completedFor(capability, scoped)
+                    models = draft.models.map { if (it.identity() == identity) merged else it }
+                }
+                else -> return@updateLlmSettingsDraft draft
+            }
+            if (task == null && defaultKey == null) {
+                return@updateLlmSettingsDraft draft.copy(models = models)
+            }
+            // A route or default is only written when the resolved row can
+            // serve the capability; missing geometry is never free.
+            val explicitlyConfirmed = (confirmCrossCapability || existing == null) && modelSettingsProblems(
+                name = merged.name, input = merged.inputPer1m, output = merged.outputPer1m,
+                embedding = merged.embeddingPer1m, dimensions = merged.dimensions.toString(),
+                truncatable = merged.truncatable, supportsCustomDimensions = merged.supportsCustomDimensions,
+                provider = merged.provider, knownEmbedding = null, taken = emptySet(), capability = capability,
+            ).isEmpty()
+            if (existing != null && !existing.usableFor(capability) && !explicitlyConfirmed) {
+                return@updateLlmSettingsDraft draft
+            }
+            if (!merged.usableFor(capability) && !explicitlyConfirmed) return@updateLlmSettingsDraft draft
             val tasks = task?.let { selected ->
                 draft.tasks.map {
                     if (it.task == selected.wireName) {
-                        LlmTaskRoute(selected.wireName, scoped.provider, scoped.name, LlmTaskMode.CUSTOM)
+                        LlmTaskRoute(selected.wireName, merged.provider, merged.name, LlmTaskMode.CUSTOM)
                     } else {
                         it
                     }
                 }
             } ?: draft.tasks
-            val next = draft.copy(models = merged, tasks = tasks)
-            if (defaultKey == null) next else next.withDefaultModel(defaultKey, scoped)
+            val next = draft.copy(models = models, tasks = tasks)
+            if (defaultKey == null) next else next.withDefaultModel(defaultKey, merged)
         }
     }
 

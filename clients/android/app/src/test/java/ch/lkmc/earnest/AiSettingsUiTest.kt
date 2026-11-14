@@ -18,6 +18,7 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import ch.lkmc.earnest.core.LlmDiscoveredModel
+import ch.lkmc.earnest.core.LlmModel
 import ch.lkmc.earnest.core.LlmProvider
 import ch.lkmc.earnest.core.LlmProviderKind
 import ch.lkmc.earnest.core.LlmSettings
@@ -34,7 +35,10 @@ import org.robolectric.annotation.GraphicsMode
 class AiSettingsUiTest {
     @get:Rule val compose = createComposeRule()
 
-    private fun show(discoveryError: String? = null) {
+    private fun show(
+        discoveryError: String? = null,
+        models: List<LlmModel> = emptyList(),
+    ): AppViewModel {
         // Network/state transitions have separate AppViewModel tests. This
         // fixture exercises the actual Compose picker at a phone-sized width.
         val sessions = object : SessionStore {
@@ -47,7 +51,7 @@ class AiSettingsUiTest {
         }
         val loaded = LlmSettings(revision = 3, providers = listOf(
             LlmProvider("venice", LlmProviderKind.OPENAI, "https://api.venice.ai/api/v1"),
-        ))
+        ), models = models)
         val discovery = LlmDiscoveryUi(
             0, loaded.toDraft().providers[0].discoveryFingerprint(), 3, 1,
             models = if (discoveryError == null) listOf(LlmDiscoveredModel(
@@ -64,6 +68,7 @@ class AiSettingsUiTest {
                 }
             }
         }
+        return model
     }
 
     private fun openEmbeddingPicker() {
@@ -77,6 +82,36 @@ class AiSettingsUiTest {
         compose.onNodeWithText("Qwen3 (text-embedding-qwen3-8b)").assertIsDisplayed()
         compose.onNodeWithText("Use").assertIsEnabled().performClick()
         compose.onNodeWithText("Default embedding model").assertExists()
+    }
+
+    @Test fun anExistingTextOnlyModelRequiresInlineCompletionForAnEmbeddingDefault() {
+        show(models = listOf(
+            LlmModel("text-embedding-qwen3-8b", inputPer1m = "1", outputPer1m = "2", provider = "venice"),
+        ))
+        openEmbeddingPicker()
+        compose.onNodeWithText("Qwen3 (text-embedding-qwen3-8b)").assertIsDisplayed()
+        // The saved row has no embedding geometry, so it cannot be reused
+        // silently: the row opens the pane instead of offering a quick Use.
+        compose.onNodeWithText("Configure").performScrollTo().performClick()
+        compose.onNodeWithText("Saved rates per 1M:", substring = true).assertExists()
+        compose.onNodeWithText("Use for Embed").performScrollTo().assertIsEnabled().performClick()
+        compose.onNodeWithText("Default embedding model").assertExists()
+    }
+
+    @Test fun theDefaultTextPickerHidesAnEmbeddingOnlyModel() {
+        show(models = listOf(
+            LlmModel(
+                "vec", inputPer1m = "0", outputPer1m = "0", embeddingPer1m = "0.02",
+                dimensions = 1536, truncatable = true, provider = "venice",
+            ),
+        ))
+        compose.onAllNodesWithText("Choose")[0].performScrollTo().performClick()
+        compose.onNodeWithText("None").assertExists()
+        compose.onNodeWithText("venice/vec").assertDoesNotExist()
+        compose.onNodeWithText("Close").performClick()
+        // The embedding picker still offers it: the geometry is real.
+        compose.onAllNodesWithText("Choose")[1].performScrollTo().performClick()
+        compose.onNodeWithText("venice/vec").assertExists()
     }
 
     @Test fun failedDiscoveryKeepsManualEntryAndUnknownDimensionCheckReachable() {

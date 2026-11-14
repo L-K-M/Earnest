@@ -933,6 +933,161 @@ class LlmSettingsModesAppTest {
         assertEquals(before.tasks, after.tasks)
     }
 
+    @Test fun selectingAnExistingTextModelForEmbeddingDoesNotReuseZeroGeometrySilently() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadedLlm()
+        model.updateLlmSettingsDraft { draft ->
+            draft.copy(models = listOf(LlmModel("shared", inputPer1m = "1", outputPer1m = "2", provider = "openai")))
+        }
+        val before = model.state.value.llmSettingsUi.draft!!
+        model.selectLlmModel(
+            0,
+            LlmModel("shared", embeddingPer1m = "0.03", dimensions = 4096, supportsCustomDimensions = true, provider = "openai"),
+            LlmTask.EMBED,
+        )
+        val after = model.state.value.llmSettingsUi.draft!!
+        assertEquals(before.models, after.models)
+        assertEquals(before.tasks, after.tasks)
+    }
+
+    @Test fun confirmingAnExistingTextModelForEmbeddingCompletesItsEmbeddingMetadata() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadedLlm()
+        model.updateLlmSettingsDraft { draft ->
+            draft.copy(models = listOf(LlmModel("shared", inputPer1m = "1", outputPer1m = "2", provider = "openai")))
+        }
+        model.selectLlmModel(
+            0,
+            LlmModel("shared", embeddingPer1m = "0.03", dimensions = 4096, supportsCustomDimensions = true, provider = "openai"),
+            LlmTask.EMBED,
+            confirmCrossCapability = true,
+        )
+        val draft = model.state.value.llmSettingsUi.draft!!
+        val selected = draft.models.single()
+        assertEquals("1", selected.inputPer1m)
+        assertEquals("2", selected.outputPer1m)
+        assertEquals("0.03", selected.embeddingPer1m)
+        assertEquals(4096, selected.dimensions)
+        assertTrue(selected.supportsCustomDimensions)
+        val embed = draft.tasks.first { it.task == "embed" }
+        assertEquals(LlmTaskMode.CUSTOM, embed.mode)
+        assertEquals("shared", embed.model)
+    }
+
+    @Test fun selectingAnEmbeddingOnlyModelForTextDoesNotReuseZeroPricesSilently() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadedLlm()
+        model.updateLlmSettingsDraft { draft ->
+            draft.copy(models = listOf(
+                LlmModel(
+                    "vec", inputPer1m = "0", outputPer1m = "0", embeddingPer1m = "0.02",
+                    dimensions = 1536, truncatable = true, provider = "openai",
+                ),
+            ))
+        }
+        val before = model.state.value.llmSettingsUi.draft!!
+        model.selectLlmModel(
+            0,
+            LlmModel("vec", inputPer1m = "1", outputPer1m = "2", provider = "openai"),
+            LlmTask.SUMMARY,
+        )
+        val after = model.state.value.llmSettingsUi.draft!!
+        assertEquals(before.models, after.models)
+        assertEquals(before.tasks, after.tasks)
+    }
+
+    @Test fun confirmingAnEmbeddingOnlyModelForTextCompletesItsTextRates() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadedLlm()
+        model.updateLlmSettingsDraft { draft ->
+            draft.copy(models = listOf(
+                LlmModel(
+                    "vec", inputPer1m = "0", outputPer1m = "0", embeddingPer1m = "0.02",
+                    dimensions = 1536, truncatable = true, provider = "openai",
+                ),
+            ))
+        }
+        model.selectLlmModel(
+            0,
+            LlmModel("vec", inputPer1m = "1", outputPer1m = "2", provider = "openai"),
+            LlmTask.SUMMARY,
+            confirmCrossCapability = true,
+        )
+        val draft = model.state.value.llmSettingsUi.draft!!
+        val selected = draft.models.single()
+        assertEquals("1", selected.inputPer1m)
+        assertEquals("2", selected.outputPer1m)
+        assertEquals("0.02", selected.embeddingPer1m)
+        assertEquals(1536, selected.dimensions)
+        assertTrue(selected.truncatable)
+        val summary = draft.tasks.first { it.task == "summary" }
+        assertEquals(LlmTaskMode.CUSTOM, summary.mode)
+        assertEquals("vec", summary.model)
+    }
+
+    @Test fun explicitlyFreeTextCanBeAddedToAnEmbeddingModel() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadedLlm()
+        model.updateLlmSettingsDraft { draft ->
+            draft.copy(models = listOf(LlmModel("vec", embeddingPer1m = "0.02", dimensions = 1024, provider = "openai")))
+        }
+        model.selectLlmModel(0, LlmModel("vec", provider = "openai"), LlmTask.SUMMARY, confirmCrossCapability = true)
+        val draft = model.state.value.llmSettingsUi.draft!!
+        assertEquals("vec", draft.tasks.first { it.task == "summary" }.model)
+        assertEquals("0.02", draft.models.single().embeddingPer1m)
+        assertEquals(1024, draft.models.single().dimensions)
+    }
+
+    @Test fun confirmationDoesNotAcceptAnUnpricedEmbedding() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadedLlm()
+        model.updateLlmSettingsDraft { draft ->
+            draft.copy(models = listOf(LlmModel("shared", inputPer1m = "1", outputPer1m = "2", provider = "openai")))
+        }
+        val before = model.state.value.llmSettingsUi.draft!!
+        model.selectLlmModel(0, LlmModel("shared", embeddingPer1m = "", dimensions = 1024, provider = "openai"), LlmTask.EMBED, confirmCrossCapability = true)
+        assertEquals(before, model.state.value.llmSettingsUi.draft)
+    }
+
+    @Test fun choosingADefaultEmbeddingModelWithUnknownGeometryNeedsConfirmation() = runBlocking(Dispatchers.IO) {
+        val model = model()
+        model.loadedLlm()
+        model.updateLlmSettingsDraft { draft ->
+            draft.copy(models = listOf(LlmModel("shared", inputPer1m = "1", outputPer1m = "2", provider = "openai")))
+        }
+        model.selectLlmModel(
+            0,
+            LlmModel("shared", embeddingPer1m = "0.03", dimensions = 4096, supportsCustomDimensions = true, provider = "openai"),
+            null,
+            "embedding",
+        )
+        assertEquals(LlmDefaultRoute(), model.state.value.llmSettingsUi.draft!!.defaults.embedding)
+        model.selectLlmModel(
+            0,
+            LlmModel("shared", embeddingPer1m = "0.03", dimensions = 4096, supportsCustomDimensions = true, provider = "openai"),
+            null,
+            "embedding",
+            confirmCrossCapability = true,
+        )
+        assertEquals(LlmDefaultRoute("openai", "shared"), model.state.value.llmSettingsUi.draft!!.defaults.embedding)
+    }
+
+    @Test fun loadingAndSavingKeepsAnActiveRouteWithUnknownEmbeddingGeometry() = runBlocking(Dispatchers.IO) {
+        getBody = llmJson(
+            models = """[{"name":"text-embedding-3-small","input_per_1m":"1","output_per_1m":"2","embedding_per_1m":"0","dimensions":0,"truncatable":false,"provider":"openai"}]""",
+        )
+        val model = model()
+        model.loadedLlm()
+        val loadedEmbed = model.state.value.llmSettingsUi.loaded!!.tasks.first { it.task == "embed" }
+        model.saveLlmSettings()
+        withTimeout(15_000) { model.state.first { it.llmSettingsUi.success } }
+        val body = Json.parseToJsonElement(calls.single { it.method == "PUT" && it.path == "/v1/settings/llm" }.body).jsonObject
+        val sent = body.getValue("tasks").jsonArray.map { it.jsonObject }
+            .first { it.getValue("task").jsonPrimitive.content == "embed" }
+        assertEquals(loadedEmbed.provider, sent.getValue("provider").jsonPrimitive.content)
+        assertEquals(loadedEmbed.model, sent.getValue("model").jsonPrimitive.content)
+    }
+
     @Test fun checkModelPostsTheDraftAndPublishesTheResult() = runBlocking(Dispatchers.IO) {
         respond = { request ->
             if (request.url.encodedPath == "/v1/settings/llm/models/check") {

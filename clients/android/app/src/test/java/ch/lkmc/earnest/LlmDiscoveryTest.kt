@@ -12,6 +12,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LlmDiscoveryTest {
+    @Test fun completionKeepsSavedCustomRatesAndTreatsDecimalZeroAsZero() {
+        val existing = LlmModel("dual", inputPer1m = "0.000000", outputPer1m = "0.000000", embeddingPer1m = "3", dimensions = 1024)
+        assertFalse(existing.usableFor(LlmCapability.CHAT))
+        val review = LlmModelReview(name = "dual", input = "1", output = "2", embedding = "4", dimensions = "4096")
+        val embedding = review.prefillSaved(existing, LlmCapability.EMBEDDING)
+        assertEquals("3", embedding.embedding)
+        assertEquals("1024", embedding.dimensions)
+        val text = review.prefillSaved(existing.copy(inputPer1m = "9", outputPer1m = "8"), LlmCapability.CHAT)
+        assertEquals("9", text.input)
+        assertEquals("8", text.output)
+    }
+
     @Test
     fun undoingFreeChoiceRestoresPublishedPrices() {
         val original = LlmModelReview(name = "chat", input = "1.25", output = "2.5", embedding = "0.1")
@@ -159,25 +171,102 @@ class LlmDiscoveryTest {
     }
 
     @Test
-    fun reviewPrefillDefaultsOnlyKnownCapabilities() {
-        // Chat-only: embedding price and geometry may default to zero.
+    fun reviewPrefillDefaultsOnlyInapplicableSides() {
+        // Chat-only: embedding price and geometry are inapplicable for a
+        // chat selection and may default to zero.
         val chatOnly = LlmDiscoveredModel("co", chat = true, embedding = false)
-        assertEquals(LlmModelReview("co", "", "", "0", "0", false), chatOnly.reviewPrefill())
-        // Embedding-only: chat prices may default to zero.
+        assertEquals(LlmModelReview("co", "", "", "0", "0", false), chatOnly.reviewPrefill(capability = LlmCapability.CHAT))
+        // Embedding-only: chat prices are inapplicable for an embedding
+        // selection and may default to zero.
         val embedOnly = LlmDiscoveredModel("eo", chat = false, embedding = true, embeddingPer1m = "0.02")
-        assertEquals(LlmModelReview("eo", "0", "0", "0.02", "", false), embedOnly.reviewPrefill())
+        assertEquals(LlmModelReview("eo", "0", "0", "0.02", "", false), embedOnly.reviewPrefill(capability = LlmCapability.EMBEDDING))
         // Unknown stays blank: an absent field is never read as free.
         val unknown = LlmDiscoveredModel("u")
         assertEquals(LlmModelReview("u", "", "", "", "", false), unknown.reviewPrefill())
         // Published fields prefill.
         val priced = LlmDiscoveredModel("p", chat = true, inputPer1m = "1.5", outputPer1m = "6", dimensions = 1536, truncatable = true)
-        assertEquals(LlmModelReview("p", "1.5", "6", "", "1536", true), priced.reviewPrefill())
-        // The provider scope and a chosen capability travel with the review.
+        assertEquals(LlmModelReview("p", "1.5", "6", "", "1536", true), priced.reviewPrefill(capability = LlmCapability.CHAT))
+        // The provider scope travels with the review.
         assertEquals("openai", chatOnly.reviewPrefill(provider = "openai").provider)
-        assertEquals(
-            LlmModelReview("eo", "0", "0", "0.02", "", false, provider = "openai"),
-            embedOnly.reviewPrefill(provider = "openai", capability = LlmCapability.EMBEDDING),
+        // An unspecified capability leaves both sides open: neither may be
+        // read as free.
+        assertEquals(LlmModelReview("co", "", "", "", "", false), chatOnly.reviewPrefill())
+        assertEquals(LlmModelReview("eo", "", "", "0.02", "", false), embedOnly.reviewPrefill())
+    }
+
+    @Test
+    fun chatSelectionNeverTreatsMissingTextPricesAsFree() {
+        // A provider-known embedding-only entry has no published chat
+        // prices. Selecting it for text must leave them blank, so the pane
+        // demands explicit input or an explicit free choice.
+        val embedOnly = LlmDiscoveredModel("eo", chat = false, embedding = true, embeddingPer1m = "0.02", dimensions = 1536)
+        val review = embedOnly.reviewPrefill("openai", LlmCapability.CHAT)
+        assertEquals("", review.input)
+        assertEquals("", review.output)
+        val problems = embedOnly.reviewProblems(review, taken, LlmCapability.CHAT)
+        assertTrue(problems.any { it.contains("input price") })
+        assertTrue(problems.any { it.contains("output price") })
+        // Published chat prices are still used verbatim.
+        val published = LlmDiscoveredModel(
+            "eo", chat = false, embedding = true,
+            inputPer1m = "1", outputPer1m = "2", embeddingPer1m = "0.02", dimensions = 1536,
         )
+        assertEquals("1", published.reviewPrefill("openai", LlmCapability.CHAT).input)
+        assertEquals("2", published.reviewPrefill("openai", LlmCapability.CHAT).output)
+    }
+
+    @Test
+    fun savedGeometryGatesEmbeddingReadinessButTextRatesGateChatReadiness() {
+        val textOnly = LlmModel("shared", inputPer1m = "1", outputPer1m = "2", provider = "openai")
+        assertFalse(textOnly.usableFor(LlmCapability.EMBEDDING))
+        assertTrue(textOnly.usableFor(LlmCapability.CHAT))
+
+        val embedOnly = LlmModel(
+            "vec", inputPer1m = "0", outputPer1m = "0", embeddingPer1m = "0.02",
+            dimensions = 1536, truncatable = true, provider = "openai",
+        )
+        assertTrue(embedOnly.usableFor(LlmCapability.EMBEDDING))
+        assertFalse(embedOnly.usableFor(LlmCapability.CHAT))
+
+        // Legacy zero prices may be explicit free or placeholders. Ask before
+        // using them for a new route; existing routes remain untouched.
+        val local = LlmModel("local", provider = "openai")
+        assertFalse(local.usableFor(LlmCapability.CHAT))
+        assertFalse(local.usableFor(LlmCapability.EMBEDDING))
+        assertFalse(local.copy(dimensions = 1024, embeddingPer1m = "0.000000").usableFor(LlmCapability.EMBEDDING))
+
+        // One real text rate is enough; the other may be an explicit zero.
+        val mixed = LlmModel("mixed", inputPer1m = "0", outputPer1m = "2", dimensions = 1536, provider = "openai")
+        assertTrue(mixed.usableFor(LlmCapability.CHAT))
+    }
+
+    @Test
+    fun confirmedCompletionKeepsTheOtherCapabilityAndFillsOnlyTheRequestedSide() {
+        val textOnly = LlmModel("shared", inputPer1m = "1", outputPer1m = "2", provider = "openai")
+        val embedded = textOnly.completedFor(
+            LlmCapability.EMBEDDING,
+            LlmModel("shared", embeddingPer1m = "0.03", dimensions = 4096, supportsCustomDimensions = true, provider = "openai"),
+        )
+        assertEquals("1", embedded.inputPer1m)
+        assertEquals("2", embedded.outputPer1m)
+        assertEquals("0.03", embedded.embeddingPer1m)
+        assertEquals(4096, embedded.dimensions)
+        assertTrue(embedded.supportsCustomDimensions)
+        assertFalse(embedded.truncatable)
+
+        val embedOnly = LlmModel(
+            "vec", inputPer1m = "0", outputPer1m = "0", embeddingPer1m = "0.02",
+            dimensions = 1536, truncatable = true, provider = "openai",
+        )
+        val chat = embedOnly.completedFor(
+            LlmCapability.CHAT,
+            LlmModel("vec", inputPer1m = "1", outputPer1m = "2", provider = "openai"),
+        )
+        assertEquals("1", chat.inputPer1m)
+        assertEquals("2", chat.outputPer1m)
+        assertEquals("0.02", chat.embeddingPer1m)
+        assertEquals(1536, chat.dimensions)
+        assertTrue(chat.truncatable)
     }
 
     @Test
