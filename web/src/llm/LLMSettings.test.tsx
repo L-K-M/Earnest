@@ -240,7 +240,7 @@ it('renames a provider and moves its task routes and scoped models', async () =>
 })
 
 it('sends default selections and preserves legacy routes as custom', async () => {
-  mount()
+  mount({...fixture, models: fixture.models!.map(model => model.name === 'local-chat' ? {...model, text_pricing_configured: true} : model)})
   await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
   fireEvent.change(screen.getByLabelText('Default text model provider'), {target: {value: 'openai'}})
   fireEvent.change(screen.getByLabelText('Default text model model'), {target: {value: 'local-chat'}})
@@ -254,16 +254,37 @@ it('sends default selections and preserves legacy routes as custom', async () =>
 })
 
 it('does not enable an off feature when a default is chosen', async () => {
-  mount({...fixture, defaults: {text: {provider: 'openai', model: 'local-chat'}, embedding: {provider: '', model: ''}}})
+  mount({...fixture, models: [...(fixture.models ?? []), {name: 'another-chat', input_per_1m: '1', output_per_1m: '1', embedding_per_1m: '0', dimensions: 0, truncatable: false}], defaults: {text: {provider: 'openai', model: 'local-chat'}, embedding: {provider: '', model: ''}}})
   await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
   const row = screen.getByText('Classification', {selector: 'strong'}).closest('li')!
   const toggle = within(row).getByLabelText('Classification') as HTMLInputElement
   expect(toggle.checked).toBe(false)
-  fireEvent.change(screen.getByLabelText('Default text model model'), {target: {value: 'text-embedding-3-small'}})
+  fireEvent.change(screen.getByLabelText('Default text model model'), {target: {value: 'another-chat'}})
   expect(toggle.checked).toBe(false)
   fireEvent.click(screen.getByRole('button', {name: 'Save'}))
   await screen.findByText(/AI settings saved/)
   expect(lastPut().tasks.find(task => task.task === 'classify')).toEqual({task: 'classify', mode: 'off', provider: '', model: ''})
+})
+
+it('completes embedding metadata without changing saved text rates', async () => {
+  const dual = {name: 'dual', provider: 'openai', input_per_1m: '9', output_per_1m: '8', embedding_per_1m: '0', dimensions: 0, truncatable: false}
+  const catalogue = [{id: 'dual', name: 'Dual', chat: true, embedding: true, embedding_per_1m: '0.03', dimensions: 4096, supports_custom_dimensions: true}]
+  mount({...fixture, models: [...(fixture.models ?? []), dual]}, catalogue)
+  await screen.findByText(/https:\/\/api\.openai\.com\/v1/)
+  fireEvent.change(screen.getByLabelText('Default embedding model provider'), {target: {value: 'openai'}})
+  const selector = screen.getByLabelText('Default embedding model provider').parentElement!
+  fireEvent.click(within(selector).getByRole('button', {name: 'Browse models'}))
+  await screen.findByText('Dual (dual)')
+  fireEvent.click(screen.getByRole('button', {name: 'Select dual'}))
+  expect(screen.getByText(/Saved rates per 1M: embedding \$0/)).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', {name: /Add to draft/}))
+  fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+  await screen.findByText(/AI settings saved/)
+  expect(lastPut().models.find(model => model.name === 'dual')).toMatchObject({
+    provider: 'openai', input_per_1m: '9', output_per_1m: '8', embedding_per_1m: '0.03',
+    dimensions: 4096, supports_custom_dimensions: true, truncatable: false, embedding_pricing_configured: true,
+  })
+  expect(lastPut().defaults?.embedding).toEqual({provider: 'openai', model: 'dual'})
 })
 
 it('resolves a default feature through the text default and shows the route', async () => {
@@ -291,7 +312,7 @@ it('adds a ready model from the provider picker and routes the feature to it', a
   await screen.findByText(/AI settings saved/)
   const body = lastPut()
   expect(body.tasks.find(task => task.task === 'blurb')).toEqual({task: 'blurb', mode: 'custom', provider: 'local', model: 'new-chat'})
-  expect(body.models.find(model => model.name === 'new-chat')).toMatchObject({provider: 'local', input_per_1m: '1', output_per_1m: '2', embedding_per_1m: '0', dimensions: 0})
+  expect(body.models.find(model => model.name === 'new-chat')).toMatchObject({provider: 'local', input_per_1m: '1', output_per_1m: '2', embedding_per_1m: '0', dimensions: 0, text_pricing_configured: true, embedding_pricing_configured: false})
 })
 
 it('adds a provider-scoped model and keeps the global record', async () => {

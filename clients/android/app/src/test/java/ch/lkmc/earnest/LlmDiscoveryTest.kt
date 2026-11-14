@@ -5,6 +5,8 @@ import ch.lkmc.earnest.core.LlmModel
 import ch.lkmc.earnest.core.LlmProviderKind
 import ch.lkmc.earnest.core.LlmTask
 import ch.lkmc.earnest.core.LlmTokenField
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -22,6 +24,19 @@ class LlmDiscoveryTest {
         val text = review.prefillSaved(existing.copy(inputPer1m = "9", outputPer1m = "8"), LlmCapability.CHAT)
         assertEquals("9", text.input)
         assertEquals("8", text.output)
+    }
+
+    @Test fun explicitFreeRemainsUsableAfterPricingFlagsRoundTrip() {
+        val original = LlmModel("dual", dimensions = 1024, textPricingConfigured = true, embeddingPricingConfigured = true)
+        val saved = Json.decodeFromString<LlmModel>(Json.encodeToString(original))
+        assertTrue(saved.usableFor(LlmCapability.CHAT))
+        assertTrue(saved.usableFor(LlmCapability.EMBEDDING))
+        assertFalse(saved.copy(textPricingConfigured = false).usableFor(LlmCapability.CHAT))
+        assertFalse(saved.copy(embeddingPricingConfigured = false).usableFor(LlmCapability.EMBEDDING))
+        assertFalse(saved.copy(dimensions = 0).usableFor(LlmCapability.EMBEDDING))
+        val text = LlmModelReview(name = "new", input = "0", output = "0").toConfiguredModel(LlmCapability.CHAT)
+        assertEquals(true, text.textPricingConfigured)
+        assertEquals(false, text.embeddingPricingConfigured)
     }
 
     @Test
@@ -234,10 +249,13 @@ class LlmDiscoveryTest {
         assertFalse(local.usableFor(LlmCapability.CHAT))
         assertFalse(local.usableFor(LlmCapability.EMBEDDING))
         assertFalse(local.copy(dimensions = 1024, embeddingPer1m = "0.000000").usableFor(LlmCapability.EMBEDDING))
+        assertFalse(local.copy(inputPer1m = "1", outputPer1m = "0").usableFor(LlmCapability.CHAT))
+        assertTrue(local.copy(inputPer1m = "1", outputPer1m = "2").usableFor(LlmCapability.CHAT))
 
-        // One real text rate is enough; the other may be an explicit zero.
+        // A legacy zero may be a placeholder even when the other rate is real.
         val mixed = LlmModel("mixed", inputPer1m = "0", outputPer1m = "2", dimensions = 1536, provider = "openai")
-        assertTrue(mixed.usableFor(LlmCapability.CHAT))
+        assertFalse(mixed.usableFor(LlmCapability.CHAT))
+        assertTrue(mixed.copy(textPricingConfigured = true).usableFor(LlmCapability.CHAT))
     }
 
     @Test

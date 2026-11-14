@@ -1619,6 +1619,9 @@
           "embedding_per_1m": {
             "type": "string"
           },
+          "embedding_pricing_configured": {
+            "type": "boolean"
+          },
           "input_per_1m": {
             "type": "string"
           },
@@ -1632,6 +1635,9 @@
             "type": "string"
           },
           "supports_custom_dimensions": {
+            "type": "boolean"
+          },
+          "text_pricing_configured": {
             "type": "boolean"
           },
           "truncatable": {

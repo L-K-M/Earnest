@@ -1036,6 +1036,7 @@ class LlmSettingsModesAppTest {
         assertEquals("vec", draft.tasks.first { it.task == "summary" }.model)
         assertEquals("0.02", draft.models.single().embeddingPer1m)
         assertEquals(1024, draft.models.single().dimensions)
+        assertEquals(true, draft.models.single().textPricingConfigured)
     }
 
     @Test fun confirmationDoesNotAcceptAnUnpricedEmbedding() = runBlocking(Dispatchers.IO) {

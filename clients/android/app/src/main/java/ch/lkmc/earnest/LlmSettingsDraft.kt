@@ -225,6 +225,13 @@ internal fun LlmSettingsDraft.withoutProvider(index: Int): LlmSettingsDraft {
     )
 }
 
+/** Models a route actually resolves for this provider, with scoped rows first. */
+internal fun LlmSettingsDraft.modelsForProvider(provider: String): List<LlmModel> {
+    val scoped = models.filter { it.provider == provider }
+    val names = scoped.mapTo(HashSet()) { it.name }
+    return scoped + models.filter { it.provider.isEmpty() && it.name !in names }
+}
+
 /** Resolve scoped metadata before falling back to a legacy shared entry. */
 internal fun LlmSettingsDraft.withoutModel(target: LlmModel): LlmSettingsDraft {
     fun uses(route: LlmDefaultRoute?): Boolean {

@@ -27,7 +27,9 @@ it('protects a new label until it is successfully created', async () => {
   expect((screen.getByLabelText('New label') as HTMLInputElement).value).toBe('Research')
   fireEvent.click(screen.getByRole('button',{name:'Create label'}))
   await waitFor(() => expect((screen.getByLabelText('New label') as HTMLInputElement).value).toBe(''))
-  expect(navigate('/settings#reading')).toBe(true)
+  // The input and the navigation guard are released by separate React
+  // updates; wait for both before asserting that navigation is unblocked.
+  await waitFor(() => expect(navigate('/settings#reading')).toBe(true))
 })
 it('protects a failed label rename until it is cancelled', async () => {
   prepare()

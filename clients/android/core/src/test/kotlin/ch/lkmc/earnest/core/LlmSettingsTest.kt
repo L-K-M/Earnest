@@ -25,6 +25,32 @@ import java.util.concurrent.CopyOnWriteArrayList
 class LlmSettingsTest {
     private val json = Json { ignoreUnknownKeys = true }
 
+    @Test fun modelPricingApplicabilityRoundTripsIncludingExplicitFree() {
+        val model = LlmModel("dual", textPricingConfigured = true, embeddingPricingConfigured = false)
+        val encoded = json.encodeToString(model)
+        assertTrue(encoded.contains("\"text_pricing_configured\":true"))
+        assertTrue(encoded.contains("\"embedding_pricing_configured\":false"))
+        assertEquals(model, json.decodeFromString<LlmModel>(encoded))
+        val legacy = json.decodeFromString<LlmModel>("""{"name":"legacy"}""")
+        assertNull(legacy.textPricingConfigured)
+        assertNull(legacy.embeddingPricingConfigured)
+    }
+
+    @Test fun unconfirmedPriceCannotBeRoutedButLegacyAndExplicitFreeCan() {
+        val provider = LlmProviderInput("openai", LlmProviderKind.OPENAI, "https://api.openai.com/v1")
+        val base = input(
+            providers = listOf(provider),
+            tasks = tasks(route("embed", "openai", "dual")),
+            models = listOf(LlmModel("dual", dimensions = 1024, embeddingPricingConfigured = false)),
+        )
+        assertFailsWith<IllegalArgumentException> { validateLlmSettingsInput(base, null) }
+        validateLlmSettingsInput(base.copy(models = listOf(base.models.single().copy(embeddingPricingConfigured = null))), null)
+        validateLlmSettingsInput(base.copy(models = listOf(base.models.single().copy(embeddingPricingConfigured = true))), null)
+        assertFailsWith<IllegalArgumentException> {
+            validateLlmSettingsInput(base.copy(models = listOf(base.models.single().copy(embeddingPricingConfigured = true, dimensions = 0))), null)
+        }
+    }
+
     private fun client(respond: (Request) -> Response): Pair<EarnestApi, List<Request>> {
         val requests = CopyOnWriteArrayList<Request>()
         val http = OkHttpClient.Builder().addInterceptor { chain ->

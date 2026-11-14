@@ -14,6 +14,17 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class LlmSettingsDraftTest {
+    @Test fun providerModelsHideShadowedLegacyRates() {
+        val global = LlmModel("shared", inputPer1m = "1")
+        val local = LlmModel("shared", provider = "local", inputPer1m = "2")
+        val other = LlmModel("shared", provider = "other", inputPer1m = "3")
+        val fallback = LlmModel("fallback", inputPer1m = "4")
+        val draft = LlmSettingsDraft(3, models = listOf(global, local, other, fallback))
+        assertEquals(listOf(local, fallback), draft.modelsForProvider("local"))
+        assertEquals(listOf(other, fallback), draft.modelsForProvider("other"))
+        assertEquals(listOf(global, fallback), draft.modelsForProvider("third"))
+    }
+
     private val tasks = listOf(
         LlmTaskRoute("blurb", "local", "local-chat"),
         LlmTaskRoute("summary", "other", "other-chat"),

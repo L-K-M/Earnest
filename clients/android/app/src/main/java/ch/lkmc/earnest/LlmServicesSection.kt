@@ -194,6 +194,7 @@ internal fun LlmServicesSection(
             draft = current ?: return,
             title = title,
             capability = if (key == "embedding") LlmCapability.EMBEDDING else LlmCapability.CHAT,
+            selected = if (key == "embedding") current.defaults.embedding else current.defaults.text,
             onBrowse = { index ->
                 defaultsPicker = null
                 discoveryDefault = key
@@ -557,13 +558,15 @@ private fun DefaultModelPickerDialog(
     draft: LlmSettingsDraft,
     title: String,
     capability: LlmCapability,
+    selected: LlmDefaultRoute,
     onBrowse: (Int) -> Unit,
     onChoose: (LlmDefaultRoute) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val providerNames = draft.providers.map { it.routedName.ifEmpty { it.name } }.filter { it.isNotEmpty() }.toSet()
-    val options = draft.models.filter {
-        it.provider.isNotEmpty() && it.provider in providerNames && it.usableFor(capability)
+    val options = draft.providers.filter { it.name.isNotEmpty() && it.name == it.routedName }.flatMap { provider ->
+        draft.modelsForProvider(provider.name).filter {
+            it.name.isNotEmpty() && ((provider.name == selected.provider && it.name == selected.model) || it.usableFor(capability))
+        }.map { provider.name to it }
     }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -575,12 +578,12 @@ private fun DefaultModelPickerDialog(
                     onClick = { onChoose(LlmDefaultRoute()) },
                     label = { Text("None") },
                 )
-                options.forEach { option ->
-                    val route = LlmDefaultRoute(option.provider, option.name)
+                options.forEach { (provider, option) ->
+                    val route = LlmDefaultRoute(provider, option.name)
                     FilterChip(
                         selected = false,
                         onClick = { onChoose(route) },
-                        label = { Text(option.identityLabel()) },
+                        label = { Text("$provider/${option.name}" + if (option.provider.isEmpty()) " (global)" else "") },
                     )
                 }
                 draft.providers.forEachIndexed { index, provider ->
@@ -711,9 +714,8 @@ private fun RouteTaskDialog(
                     if (provider.isNotEmpty()) {
                         Text("Model", style = MaterialTheme.typography.bodySmall)
                         Column {
-                            draft.models.filter {
-                                (it.provider == provider || it.provider.isEmpty()) &&
-                                    it.usableFor(task.requiredCapability())
+                            draft.modelsForProvider(provider).filter {
+                                it.name.isNotEmpty() && (it.name == model || it.usableFor(task.requiredCapability()))
                             }.forEach { option ->
                                 FilterChip(
                                     selected = model == option.name,
@@ -724,9 +726,11 @@ private fun RouteTaskDialog(
                                     modifier = Modifier.padding(vertical = 2.dp),
                                 )
                             }
-                            if (draft.models.none { it.provider == provider || it.provider.isEmpty() }) {
+                            if (draft.modelsForProvider(provider).none {
+                                    it.name.isNotEmpty() && (it.name == model || it.usableFor(task.requiredCapability()))
+                                }) {
                                 Text(
-                                    "No models are configured for this provider yet.",
+                                    "No models are ready for this feature. Browse models to confirm their prices.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -820,6 +824,14 @@ private fun ModelDialog(
     var dimensions by remember { mutableStateOf(model.dimensions.toString()) }
     var truncatable by remember { mutableStateOf(model.truncatable) }
     var supportsCustom by remember { mutableStateOf(model.supportsCustomDimensions) }
+    // An empty width means no embedding geometry only for a text-only row.
+    val dimensionValue = if (dimensions.isBlank() && model.dimensions == 0L) 0L else dimensions.trim().toLongOrNull()
+    val editingEmbedding = model.dimensions > 0 || (dimensionValue ?: 0) > 0
+    val dimensionsProblem = if (!editingEmbedding && (dimensionValue == null || dimensionValue < 0)) {
+        "Enter a whole number of embedding dimensions, or leave it blank when they do not apply."
+    } else {
+        null
+    }
     val problems = modelSettingsProblems(
         name = name,
         input = input,
@@ -831,15 +843,18 @@ private fun ModelDialog(
         provider = provider,
         knownEmbedding = null,
         taken = taken,
-        capability = if (model.dimensions > 0) LlmCapability.EMBEDDING else LlmCapability.CHAT,
+        capability = if (editingEmbedding) LlmCapability.EMBEDDING else LlmCapability.CHAT,
         requireAllPrices = true,
-    )
+    ) + listOfNotNull(dimensionsProblem)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(model.identityLabel(), style = MaterialTheme.typography.bodyMedium)
+                if (model.textPricingConfigured == false || model.embeddingPricingConfigured == false) {
+                    Text("To use an unconfigured capability, browse models and confirm its prices.", style = MaterialTheme.typography.bodySmall)
+                }
                 OutlinedTextField(
                     value = input,
                     onValueChange = { input = it },
@@ -870,7 +885,7 @@ private fun ModelDialog(
                     label = { Text("Embedding dimensions (0-1024, wider with truncation or custom width)") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    isError = dimensions.isBlank() || dimensions.trim().toLongOrNull() == null,
+                    isError = dimensionsProblem != null || (editingEmbedding && (dimensionValue == null || dimensionValue <= 0)),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -893,10 +908,12 @@ private fun ModelDialog(
                             inputPer1m = input.trim(),
                             outputPer1m = output.trim(),
                             embeddingPer1m = embedding.trim(),
-                            dimensions = dimensions.trim().toLong(),
+                            dimensions = dimensionValue ?: return@TextButton,
                             truncatable = truncatable,
                             provider = provider.trim(),
                             supportsCustomDimensions = supportsCustom,
+                            textPricingConfigured = model.textPricingConfigured,
+                            embeddingPricingConfigured = model.embeddingPricingConfigured,
                         ),
                     )
                 },

@@ -95,9 +95,12 @@ internal fun LlmDiscoveredModel.reviewPrefill(
  * confirmation. Existing routes are left alone.
  */
 internal fun LlmModel.usableFor(capability: LlmCapability): Boolean = when (capability) {
-    LlmCapability.EMBEDDING -> dimensions > 0 && (embeddingPer1m.toBigDecimalOrNull()?.signum() ?: 0) > 0
-    LlmCapability.CHAT -> (inputPer1m.toBigDecimalOrNull()?.signum() ?: 0) > 0 ||
-        (outputPer1m.toBigDecimalOrNull()?.signum() ?: 0) > 0
+    LlmCapability.EMBEDDING -> dimensions > 0 && (embeddingPricingConfigured
+        ?: ((embeddingPer1m.toBigDecimalOrNull()?.signum() ?: 0) > 0))
+    LlmCapability.CHAT -> textPricingConfigured ?: (
+        (inputPer1m.toBigDecimalOrNull()?.signum() ?: 0) > 0 &&
+            (outputPer1m.toBigDecimalOrNull()?.signum() ?: 0) > 0
+        )
     LlmCapability.BOTH -> usableFor(LlmCapability.CHAT) && usableFor(LlmCapability.EMBEDDING)
 }
 
@@ -130,6 +133,7 @@ internal fun LlmModelReview.prefillSaved(existing: LlmModel?, capability: LlmCap
 internal fun LlmModel.completedFor(capability: LlmCapability, addition: LlmModel): LlmModel = when (capability) {
     LlmCapability.EMBEDDING -> copy(
         embeddingPer1m = addition.embeddingPer1m,
+        embeddingPricingConfigured = true,
         dimensions = addition.dimensions,
         truncatable = addition.truncatable,
         supportsCustomDimensions = addition.supportsCustomDimensions,
@@ -137,6 +141,7 @@ internal fun LlmModel.completedFor(capability: LlmCapability, addition: LlmModel
     LlmCapability.CHAT -> copy(
         inputPer1m = addition.inputPer1m,
         outputPer1m = addition.outputPer1m,
+        textPricingConfigured = true,
     )
     LlmCapability.BOTH -> addition
 }
@@ -156,6 +161,8 @@ internal fun LlmModelReview.toConfiguredModel(capability: LlmCapability): LlmMod
     truncatable = if (capability == LlmCapability.CHAT) false else truncatable,
     provider = provider.trim(),
     supportsCustomDimensions = if (capability == LlmCapability.CHAT) false else supportsCustomDimensions,
+    textPricingConfigured = capability != LlmCapability.EMBEDDING,
+    embeddingPricingConfigured = capability != LlmCapability.CHAT,
 )
 
 private const val MAX_MODEL_NAME_CHARS = 256

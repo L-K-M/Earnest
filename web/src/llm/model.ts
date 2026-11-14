@@ -222,6 +222,18 @@ export function sameModel(a: Pick<ModelDraft, 'provider' | 'name'>, b: Pick<Mode
   return a.provider === b.provider && a.name === b.name
 }
 
+// A zero in an inapplicable price field is a wire placeholder. When a model
+// is first used for another capability, require its rates to be confirmed.
+export function needsCapabilityPricing(model: ModelDraft, capability: LLMCapability): boolean {
+  if (capability === 'embedding') {
+    if (Number(model.dimensions) <= 0) return true
+    if (model.embedding_pricing_configured !== undefined) return !model.embedding_pricing_configured
+    return Number(model.embedding_per_1m) === 0
+  }
+  if (model.text_pricing_configured !== undefined) return !model.text_pricing_configured
+  return Number(model.input_per_1m) === 0 || Number(model.output_per_1m) === 0
+}
+
 // defaultRouteFor resolves the default route a feature inherits. Every task
 // uses the text default except embeddings.
 export function defaultRouteFor(task: string, defaults: LLMDefaults): LLMRoute {
@@ -252,6 +264,8 @@ export function draftFromDiscovered(model: DiscoveredModel, provider: string, ca
   return {
     name: model.id,
     provider,
+    text_pricing_configured: chat,
+    embedding_pricing_configured: embedding,
     input_per_1m: chat ? (model.input_per_1m ?? '') : '0',
     output_per_1m: chat ? (model.output_per_1m ?? '') : '0',
     embedding_per_1m: embedding ? (model.embedding_per_1m ?? '') : '0',
@@ -318,6 +332,8 @@ export function inputFromDraft(draft: LLMSettingsDraft): LLMSettingsPayload {
       dimensions: Number(model.dimensions),
       truncatable: model.truncatable,
       supports_custom_dimensions: model.supports_custom_dimensions,
+      ...(model.text_pricing_configured !== undefined ? {text_pricing_configured: model.text_pricing_configured} : {}),
+      ...(model.embedding_pricing_configured !== undefined ? {embedding_pricing_configured: model.embedding_pricing_configured} : {}),
       ...(model.provider ? {provider: model.provider} : {}),
     })),
   }

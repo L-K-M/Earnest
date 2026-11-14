@@ -133,10 +133,14 @@ struct LLMTaskDraft: Identifiable, Equatable {
 /// provider is the legacy global entry; a nonempty one scopes the model to a
 /// provider, and a scoped entry wins over a global one with the same name.
 struct LLMModelDraft: Identifiable, Equatable {
-    let id = UUID()
+    var id = UUID()
     var name = ""
     var provider = ""
     var supportsCustomDimensions = false
+    /// Nil preserves a legacy entry whose applicability was never recorded;
+    /// false is a placeholder and true an explicit price or free model.
+    var textPricingConfigured: Bool?
+    var embeddingPricingConfigured: Bool?
     var inputPer1M = "0"
     var outputPer1M = "0"
     var embeddingPer1M = "0"
@@ -146,6 +150,8 @@ struct LLMModelDraft: Identifiable, Equatable {
     static func == (lhs: LLMModelDraft, rhs: LLMModelDraft) -> Bool {
         lhs.name == rhs.name && lhs.provider == rhs.provider
             && lhs.supportsCustomDimensions == rhs.supportsCustomDimensions
+            && lhs.textPricingConfigured == rhs.textPricingConfigured
+            && lhs.embeddingPricingConfigured == rhs.embeddingPricingConfigured
             && lhs.inputPer1M == rhs.inputPer1M && lhs.outputPer1M == rhs.outputPer1M
             && lhs.embeddingPer1M == rhs.embeddingPer1M && lhs.dimensions == rhs.dimensions
             && lhs.truncatable == rhs.truncatable
@@ -157,6 +163,8 @@ struct LLMModelDraft: Identifiable, Equatable {
         name = settings.name
         provider = settings.provider
         supportsCustomDimensions = settings.supportsCustomDimensions
+        textPricingConfigured = settings.textPricingConfigured
+        embeddingPricingConfigured = settings.embeddingPricingConfigured
         inputPer1M = settings.inputPer1M
         outputPer1M = settings.outputPer1M
         embeddingPer1M = settings.embeddingPer1M
@@ -170,6 +178,8 @@ struct LLMModelDraft: Identifiable, Equatable {
     var settings: APILLMModelSettings {
         APILLMModelSettings(name: name, provider: provider,
                             supportsCustomDimensions: supportsCustomDimensions,
+                            textPricingConfigured: textPricingConfigured,
+                            embeddingPricingConfigured: embeddingPricingConfigured,
                             inputPer1M: inputPer1M, outputPer1M: outputPer1M,
                             embeddingPer1M: embeddingPer1M, dimensions: dimensions,
                             truncatable: truncatable)
@@ -238,6 +248,8 @@ struct LLMSettingsDraft: Equatable {
             models: models.map { model in
                 APILLMModelSettings(name: model.name, provider: model.provider,
                                     supportsCustomDimensions: model.supportsCustomDimensions,
+                                    textPricingConfigured: model.textPricingConfigured,
+                                    embeddingPricingConfigured: model.embeddingPricingConfigured,
                                     inputPer1M: model.inputPer1M,
                                     outputPer1M: model.outputPer1M, embeddingPer1M: model.embeddingPer1M,
                                     dimensions: model.dimensions, truncatable: model.truncatable)
@@ -264,6 +276,8 @@ struct LLMSettingsDraft: Equatable {
             models: models.map {
                 APILLMModelSettings(name: $0.name, provider: $0.provider,
                                     supportsCustomDimensions: $0.supportsCustomDimensions,
+                                    textPricingConfigured: $0.textPricingConfigured,
+                                    embeddingPricingConfigured: $0.embeddingPricingConfigured,
                                     inputPer1M: $0.inputPer1M, outputPer1M: $0.outputPer1M,
                                     embeddingPer1M: $0.embeddingPer1M, dimensions: $0.dimensions,
                                     truncatable: $0.truncatable)
@@ -345,14 +359,21 @@ struct LLMModelReview: Identifiable, Equatable {
     var isFree = false
     /// True for the manual-ID fallback, which the catalogue cannot vouch for.
     var isManual = false
+    /// The configured model this review completes for another capability. Nil
+    /// for a new model; set only after the user confirms, never before.
+    var completes: LLMModelDraft?
+    /// The saved rates shown while completing a capability, so the user can
+    /// confirm them without the other capability's values changing.
+    var savedRatesMessage: String?
     var id: String { discovered.id }
 
     init(discovered: APIDiscoveredModel, provider: String, usage: LLMModelUsage,
-         isManual: Bool = false) {
+         isManual: Bool = false, completes: LLMModelDraft? = nil) {
         self.discovered = discovered
         self.provider = provider
         self.usage = usage
         self.isManual = isManual
+        self.completes = completes
         if usage == .chat {
             inputPer1M = discovered.inputPer1M ?? ""
             outputPer1M = discovered.outputPer1M ?? ""
@@ -367,6 +388,26 @@ struct LLMModelReview: Identifiable, Equatable {
             dimensions = discovered.dimensions.map(String.init) ?? ""
             truncatable = discovered.truncatable ?? false
             supportsCustomDimensions = discovered.supportsCustomDimensions ?? false
+        }
+        if let completes {
+            adoptSavedRates(from: completes)
+            savedRatesMessage = usage == .chat
+                ? "Saved rates per 1M: input $\(completes.inputPer1M), output $\(completes.outputPer1M). Confirm the prices below for this use; other saved prices stay unchanged."
+                : "Saved rates per 1M: embedding $\(completes.embeddingPer1M). Confirm the price below for this use; other saved prices stay unchanged."
+        }
+    }
+
+    /// A completion starts from the saved rates when they are real, falling
+    /// back to the catalogue; the saved values stay visible either way.
+    private mutating func adoptSavedRates(from model: LLMModelDraft) {
+        if usage == .chat {
+            if llmMoneyIsPositive(model.inputPer1M) { inputPer1M = model.inputPer1M }
+            if llmMoneyIsPositive(model.outputPer1M) { outputPer1M = model.outputPer1M }
+        } else {
+            if llmMoneyIsPositive(model.embeddingPer1M) { embeddingPer1M = model.embeddingPer1M }
+            if model.dimensions > 0 { dimensions = String(model.dimensions) }
+            truncatable = truncatable || model.truncatable
+            supportsCustomDimensions = supportsCustomDimensions || model.supportsCustomDimensions
         }
     }
 
@@ -432,17 +473,64 @@ struct LLMModelReview: Identifiable, Equatable {
     }
 
     /// The configured model this review becomes. Call only when `isReady`.
+    /// A completion changes only the reviewed capability's metadata and flag;
+    /// the opposite capability and the model's identity stay untouched.
     func configured() -> LLMModelDraft {
+        if let completes {
+            var draft = completes
+            switch usage {
+            case .chat:
+                draft.inputPer1M = inputPer1M
+                draft.outputPer1M = outputPer1M
+                draft.textPricingConfigured = true
+            case .embedding:
+                draft.embeddingPer1M = embeddingPer1M
+                draft.dimensions = dimensionsValue ?? 0
+                draft.truncatable = truncatable
+                draft.supportsCustomDimensions = supportsCustomDimensions
+                draft.embeddingPricingConfigured = true
+            }
+            return draft
+        }
         var draft = LLMModelDraft()
         draft.name = discovered.id
         draft.provider = provider
         draft.supportsCustomDimensions = supportsCustomDimensions
+        draft.textPricingConfigured = usage == .chat
+        draft.embeddingPricingConfigured = usage == .embedding
         draft.inputPer1M = inputPer1M
         draft.outputPer1M = outputPer1M
         draft.embeddingPer1M = embeddingPer1M
         draft.dimensions = dimensionsValue ?? 0
         draft.truncatable = truncatable
         return draft
+    }
+}
+
+/// A model that cannot serve a capability without confirmed pricing must be
+/// reviewed before it is selected for that use. Legacy zero rates are
+/// ambiguous because they may be placeholders or explicitly free prices.
+func needsCapabilityPricing(_ model: LLMModelDraft, usage: LLMModelUsage) -> Bool {
+    switch usage {
+    case .embedding:
+        if model.dimensions <= 0 { return true }
+        if let configured = model.embeddingPricingConfigured { return !configured }
+        return llmMoneyIsZero(model.embeddingPer1M)
+    case .chat:
+        if let configured = model.textPricingConfigured { return !configured }
+        return llmMoneyIsZero(model.inputPer1M) || llmMoneyIsZero(model.outputPer1M)
+    }
+}
+
+extension LLMSettingsModel.LLMModelSelection {
+    /// The capability a selection needs, or nil when it only adds a model.
+    var usage: LLMModelUsage? {
+        switch self {
+        case .add: return nil
+        case .task(let task): return task == .embed ? .embedding : .chat
+        case .defaultText: return .chat
+        case .defaultEmbedding: return .embedding
+        }
     }
 }
 
@@ -766,8 +854,7 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
     }
 
     /// Check one draft model against its provider with a fixed sample. The
-    /// sample may cost; nothing is persisted and no route changes. Observed
-    /// geometry is applied to the matching draft model only.
+    /// sample may cost; nothing is persisted and no draft or route changes.
     func checkModel(providerID: UUID, model: LLMModelDraft, capability: APILLMModelCapability) {
         if synchronizeScope() {
             error = "Account data changed. Reload the AI settings."
@@ -805,7 +892,6 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
                 try Task.checkCancellation()
                 guard self.acceptsCheck(checkID: checkID, providerID: providerID,
                                         identity: identity, revision: revision, scope: scope) else { return }
-                self.applyObservedGeometry(model.identity, result)
                 self.checks[providerID]?.phase = .result(result)
             } catch is CancellationError {
             } catch {
@@ -841,17 +927,6 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
         return true
     }
 
-    /// Only observed geometry may reach the draft; prices and routes are
-    /// never changed by a check.
-    private func applyObservedGeometry(_ identity: String, _ result: APILLMModelCheck) {
-        guard result.compatible,
-              let index = draft.models.firstIndex(where: { $0.identity == identity }) else { return }
-        if let dimensions = result.dimensions { draft.models[index].dimensions = dimensions }
-        if let supports = result.supportsCustomDimensions {
-            draft.models[index].supportsCustomDimensions = supports
-        }
-    }
-
     /// The provider row a task route currently names, for task-scoped
     /// fetching. A route by another name means the provider is gone.
     func providerID(named name: String) -> UUID? {
@@ -880,6 +955,16 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
         case task(APILLMTask)
         case defaultText
         case defaultEmbedding
+    }
+
+    /// Configured models a picker may newly select for one capability. An
+    /// incomplete model is hidden, except the one the route already names so
+    /// the current selection stays visible.
+    func selectableModels(for provider: String, usage: LLMModelUsage,
+                          selected: String = "") -> [LLMModelDraft] {
+        configuredModels(for: provider).filter {
+            (!selected.isEmpty && $0.name == selected) || (!$0.name.isEmpty && !needsCapabilityPricing($0, usage: usage))
+        }
     }
 
     /// Select one reviewed catalogue model. A ready model updates the draft
@@ -941,7 +1026,18 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
         // the provider was renamed must not scope the model to the old name.
         var configured = review.configured()
         configured.provider = provider.name
-        if !draft.models.contains(where: { $0.identity == configured.identity }) {
+        if let index = draft.models.firstIndex(where: { $0.identity == configured.identity }) {
+            // A completion replaces the saved entry with only the reviewed
+            // capability changed; an ordinary selection keeps its prices.
+            if review.completes != nil {
+                configured.id = draft.models[index].id
+                draft.models[index] = configured
+            }
+        } else {
+            guard review.completes == nil else {
+                error = "This model is no longer configured for this provider. Choose it from the catalogue again."
+                return false
+            }
             guard draft.models.count < llmModelLimit else {
                 error = "At most \(llmModelLimit) configured models are allowed. Remove a model before adding this one."
                 return false
@@ -952,6 +1048,8 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
     }
 
     /// Use a model that is already configured, without changing its prices.
+    /// A model that still needs pricing for the selection is refused here; the
+    /// discovery sheet completes it first.
     @discardableResult
     func selectConfiguredModel(_ model: LLMModelDraft, providerID: UUID,
                                 selection: LLMModelSelection) -> Bool {
@@ -968,6 +1066,10 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
             error = "This model is no longer configured for this provider. Choose a current model."
             return false
         }
+        if let usage = selection.usage, needsCapabilityPricing(model, usage: usage) {
+            error = "This model needs confirmed pricing for that use. Choose it from the catalogue to review its rates."
+            return false
+        }
         return applyRoute(providerName: provider.name, modelName: model.name, selection: selection)
     }
 
@@ -977,13 +1079,11 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
         case .add:
             break
         case .task(let task):
-            route(task: task, providerName: providerName, modelName: modelName)
+            guard route(task: task, providerName: providerName, modelName: modelName) else { return false }
         case .defaultText:
-            if draft.defaults == nil { draft.defaults = APILLMDefaults() }
-            draft.defaults?.text = APILLMDefaultRoute(provider: providerName, model: modelName)
+            guard setDefaultRoute(provider: providerName, model: modelName, usage: .chat) else { return false }
         case .defaultEmbedding:
-            if draft.defaults == nil { draft.defaults = APILLMDefaults() }
-            draft.defaults?.embedding = APILLMDefaultRoute(provider: providerName, model: modelName)
+            guard setDefaultRoute(provider: providerName, model: modelName, usage: .embedding) else { return false }
         }
         error = nil
         return true
@@ -991,17 +1091,27 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
 
     /// Route one task to a provider and model. A selection is an advanced
     /// override, so it makes the task custom; clearing the route disables it.
-    func route(task: APILLMTask, providerName: String, modelName: String) {
-        guard let index = draft.tasks.firstIndex(where: { $0.task == task }) else { return }
+    /// A model that still needs pricing for the feature is refused; routes
+    /// already in the draft are untouched.
+    @discardableResult
+    func route(task: APILLMTask, providerName: String, modelName: String) -> Bool {
+        guard let index = draft.tasks.firstIndex(where: { $0.task == task }) else { return false }
         if providerName.isEmpty || modelName.isEmpty {
             draft.tasks[index].mode = .off
             draft.tasks[index].provider = ""
             draft.tasks[index].model = ""
-        } else {
-            draft.tasks[index].provider = providerName
-            draft.tasks[index].model = modelName
-            draft.tasks[index].mode = .custom
+            return true
         }
+        let usage: LLMModelUsage = task == .embed ? .embedding : .chat
+        if let model = draft.model(provider: providerName, name: modelName),
+           needsCapabilityPricing(model, usage: usage) {
+            error = "This model needs confirmed pricing for that feature before it can be selected."
+            return false
+        }
+        draft.tasks[index].provider = providerName
+        draft.tasks[index].model = modelName
+        draft.tasks[index].mode = .custom
+        return true
     }
 
     /// The route a task resolves to, including default inheritance. Used when
@@ -1071,6 +1181,13 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
 
     func setTaskModel(_ task: APILLMTask, _ model: String) {
         guard let index = draft.tasks.firstIndex(where: { $0.task == task }) else { return }
+        let usage: LLMModelUsage = task == .embed ? .embedding : .chat
+        if !model.isEmpty,
+           let configured = draft.model(provider: draft.tasks[index].provider, name: model),
+           needsCapabilityPricing(configured, usage: usage) {
+            error = "This model needs confirmed pricing for that feature before it can be selected."
+            return
+        }
         draft.tasks[index].model = model
     }
 
@@ -1090,8 +1207,10 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
     }
 
     /// Set or clear a default route directly from a configured provider and
-    /// model. It never changes a task's mode.
-    func setDefaultRoute(provider: String, model: String, usage: LLMModelUsage) {
+    /// model. It never changes a task's mode. A model that still needs
+    /// pricing for the use is refused.
+    @discardableResult
+    func setDefaultRoute(provider: String, model: String, usage: LLMModelUsage) -> Bool {
         if provider.isEmpty, model.isEmpty {
             if var defaults = draft.defaults {
                 switch usage {
@@ -1100,7 +1219,13 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
                 }
                 draft.defaults = defaults.isEmpty ? nil : defaults
             }
-            return
+            return true
+        }
+        if !model.isEmpty,
+           let configured = draft.model(provider: provider, name: model),
+           needsCapabilityPricing(configured, usage: usage) {
+            error = "This model needs confirmed pricing for that use before it can be selected."
+            return false
         }
         if draft.defaults == nil { draft.defaults = APILLMDefaults() }
         let route = APILLMDefaultRoute(provider: provider, model: model)
@@ -1108,6 +1233,7 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
         case .chat: draft.defaults?.text = route
         case .embedding: draft.defaults?.embedding = route
         }
+        return true
     }
 
     // MARK: - Editing

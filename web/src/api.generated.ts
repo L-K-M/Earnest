@@ -1818,11 +1818,13 @@ export interface components {
             /** Format: int64 */
             dimensions: number;
             embedding_per_1m: string;
+            embedding_pricing_configured?: boolean;
             input_per_1m: string;
             name: string;
             output_per_1m: string;
             provider?: string;
             supports_custom_dimensions?: boolean;
+            text_pricing_configured?: boolean;
             truncatable: boolean;
         };
         LLMModels: {

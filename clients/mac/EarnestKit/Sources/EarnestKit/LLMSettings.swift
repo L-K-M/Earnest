@@ -167,6 +167,11 @@ public struct APILLMModelSettings: Codable, Sendable, Equatable {
     /// Provider-side resizing, never local truncation. A width above the
     /// storage limit is valid when either this or `truncatable` is set.
     public var supportsCustomDimensions: Bool
+    /// Nil is a legacy entry whose applicability was never recorded. False is
+    /// a wire placeholder that must not be billed or routed; true is an
+    /// explicit price, including an explicit free model.
+    public var textPricingConfigured: Bool?
+    public var embeddingPricingConfigured: Bool?
     public var inputPer1M: String
     public var outputPer1M: String
     public var embeddingPer1M: String
@@ -175,6 +180,8 @@ public struct APILLMModelSettings: Codable, Sendable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case name, provider, supportsCustomDimensions = "supports_custom_dimensions"
+        case textPricingConfigured = "text_pricing_configured"
+        case embeddingPricingConfigured = "embedding_pricing_configured"
         case inputPer1M = "input_per_1m"
         case outputPer1M = "output_per_1m"
         case embeddingPer1M = "embedding_per_1m"
@@ -182,11 +189,14 @@ public struct APILLMModelSettings: Codable, Sendable, Equatable {
     }
 
     public init(name: String, provider: String = "", supportsCustomDimensions: Bool = false,
+                textPricingConfigured: Bool? = nil, embeddingPricingConfigured: Bool? = nil,
                 inputPer1M: String, outputPer1M: String, embeddingPer1M: String,
                 dimensions: Int64, truncatable: Bool) {
         self.name = name
         self.provider = provider
         self.supportsCustomDimensions = supportsCustomDimensions
+        self.textPricingConfigured = textPricingConfigured
+        self.embeddingPricingConfigured = embeddingPricingConfigured
         self.inputPer1M = inputPer1M
         self.outputPer1M = outputPer1M
         self.embeddingPer1M = embeddingPer1M
@@ -199,6 +209,8 @@ public struct APILLMModelSettings: Codable, Sendable, Equatable {
         name = try container.decode(String.self, forKey: .name)
         provider = try container.decodeIfPresent(String.self, forKey: .provider) ?? ""
         supportsCustomDimensions = try container.decodeIfPresent(Bool.self, forKey: .supportsCustomDimensions) ?? false
+        textPricingConfigured = try container.decodeIfPresent(Bool.self, forKey: .textPricingConfigured)
+        embeddingPricingConfigured = try container.decodeIfPresent(Bool.self, forKey: .embeddingPricingConfigured)
         inputPer1M = try container.decode(String.self, forKey: .inputPer1M)
         outputPer1M = try container.decode(String.self, forKey: .outputPer1M)
         embeddingPer1M = try container.decode(String.self, forKey: .embeddingPer1M)
@@ -486,7 +498,14 @@ private func validateLLMRoute(_ provider: String, _ model: String,
                               embed: Bool, field: String) throws {
     guard !provider.isEmpty, !model.isEmpty,
           providers.contains(where: { $0.name == provider }),
-          llmScopedModel(models, provider: provider, name: model) != nil else {
+          let resolved = llmScopedModel(models, provider: provider, name: model) else {
+        throw APILLMSettingsError(field: field)
+    }
+    let configured = embed ? resolved.embeddingPricingConfigured : resolved.textPricingConfigured
+    if configured == false {
+        throw APILLMSettingsError(field: field)
+    }
+    if embed, configured != nil, resolved.dimensions <= 0 {
         throw APILLMSettingsError(field: field)
     }
     if embed, providers.first(where: { $0.name == provider })?.kind == .anthropic {
@@ -517,18 +536,33 @@ func isValidLLMModelName(_ name: String) -> Bool {
 /// bound. The digits are parsed as an integer count of millionths, so no
 /// floating-point rounding can occur.
 public func isValidLLMMoney(_ text: String) -> Bool {
+    llmMoneyMicros(text) != nil
+}
+
+/// True only for a valid amount of exactly zero.
+public func llmMoneyIsZero(_ text: String) -> Bool {
+    llmMoneyMicros(text) == 0
+}
+
+/// True only for a valid amount greater than zero.
+public func llmMoneyIsPositive(_ text: String) -> Bool {
+    (llmMoneyMicros(text) ?? 0) > 0
+}
+
+/// The amount in millionths, or nil when the text is not a valid amount.
+private func llmMoneyMicros(_ text: String) -> Int64? {
     let trimmed = text.trimmingCharacters(in: .whitespaces)
-    guard !trimmed.isEmpty, !trimmed.hasPrefix("-") else { return false }
+    guard !trimmed.isEmpty, !trimmed.hasPrefix("-") else { return nil }
     let body = trimmed.hasPrefix("+") ? String(trimmed.dropFirst()) : trimmed
     let parts = body.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false)
     let whole = parts.count > 0 ? String(parts[0]) : ""
     let fraction = parts.count > 1 ? String(parts[1]) : ""
-    guard !whole.isEmpty || !fraction.isEmpty, fraction.count <= 6 else { return false }
+    guard !whole.isEmpty || !fraction.isEmpty, fraction.count <= 6 else { return nil }
     let digits = whole + fraction
-    guard digits.unicodeScalars.allSatisfy({ $0.value >= 48 && $0.value <= 57 }) else { return false }
+    guard digits.unicodeScalars.allSatisfy({ $0.value >= 48 && $0.value <= 57 }) else { return nil }
     let padded = fraction + String(repeating: "0", count: max(0, 6 - fraction.count))
-    guard let micros = Int64(whole + padded) else { return false }
-    return micros <= llmSettingsMaxMoneyMicros
+    guard let micros = Int64(whole + padded) else { return nil }
+    return micros <= llmSettingsMaxMoneyMicros ? micros : nil
 }
 
 /// HTTP(S) with a host and no credentials, query or fragment. Trailing slashes

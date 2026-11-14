@@ -9,6 +9,7 @@ import {
   findModel,
   inputFromDraft,
   missingApplicableFields,
+  needsCapabilityPricing,
   sameDiscoveryProvider,
   taskCapability,
   uniqueProviderName,
@@ -101,6 +102,27 @@ it('zeroes only the nonapplicable side of a catalogue selection', () => {
   expect(embedder).toMatchObject({provider: 'venice', input_per_1m: '0', output_per_1m: '0', embedding_per_1m: '0.1', dimensions: '512'})
   const both = draftFromDiscovered({id: 'both', name: 'Both', chat: true, embedding: true}, 'openai', null)
   expect(both).toMatchObject({input_per_1m: '', output_per_1m: '', embedding_per_1m: '', dimensions: ''})
+})
+
+it('retains confirmed free and missing capability prices through a settings round trip', () => {
+  const settings: LLMSettings = {
+    revision: 1, providers: [], tasks: [], models: [
+      {name: 'dual', provider: 'local', input_per_1m: '0', output_per_1m: '0', embedding_per_1m: '2', dimensions: 1024, truncatable: false, text_pricing_configured: true, embedding_pricing_configured: true},
+      {name: 'pending', provider: 'local', input_per_1m: '1', output_per_1m: '1', embedding_per_1m: '0', dimensions: 0, truncatable: false, text_pricing_configured: true, embedding_pricing_configured: false},
+      {name: 'legacy', input_per_1m: '0', output_per_1m: '0', embedding_per_1m: '0', dimensions: 0, truncatable: false},
+    ],
+  }
+  const draft = draftFromSettings(settings)
+  expect(needsCapabilityPricing(draft.models[0]!, 'chat')).toBe(false)
+  expect(needsCapabilityPricing(draft.models[1]!, 'embedding')).toBe(true)
+  expect(needsCapabilityPricing(draft.models[2]!, 'chat')).toBe(true)
+  expect(needsCapabilityPricing({...draft.models[2]!, input_per_1m: '1'}, 'chat')).toBe(true)
+  expect(needsCapabilityPricing({...draft.models[2]!, input_per_1m: '1', output_per_1m: '2'}, 'chat')).toBe(false)
+  expect(needsCapabilityPricing({...draft.models[2]!, dimensions: '1024'}, 'embedding')).toBe(true)
+  const models = inputFromDraft(draft).models!
+  expect(models[0]).toMatchObject({text_pricing_configured: true, embedding_pricing_configured: true})
+  expect(models[1]).toMatchObject({text_pricing_configured: true, embedding_pricing_configured: false})
+  expect(models[2]).not.toHaveProperty('text_pricing_configured')
 })
 
 it('names only the metadata a selection still needs', () => {

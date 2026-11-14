@@ -78,7 +78,6 @@ extension APILLMTask {
                     usage: .chat,
                     settings: settings,
                     providers: settings.draft.providers,
-                    models: settings.configuredModels(for:),
                     selection: .defaultText,
                     target: $discoveryTarget
                 )
@@ -87,7 +86,6 @@ extension APILLMTask {
                     usage: .embedding,
                     settings: settings,
                     providers: settings.draft.providers,
-                    models: settings.configuredModels(for:),
                     selection: .defaultEmbedding,
                     target: $discoveryTarget
                 )
@@ -297,20 +295,17 @@ private struct DefaultRouteRow: View {
     let usage: LLMModelUsage
     @ObservedObject var settings: LLMSettingsModel
     let providers: [LLMProviderDraft]
-    let models: (String) -> [LLMModelDraft]
     let selection: LLMSettingsModel.LLMModelSelection
     @Binding var target: LLMDiscoveryTarget?
 
     init(title: String, usage: LLMModelUsage, settings: LLMSettingsModel,
          providers: [LLMProviderDraft],
-         models: @escaping (String) -> [LLMModelDraft],
          selection: LLMSettingsModel.LLMModelSelection,
          target: Binding<LLMDiscoveryTarget?>) {
         self.title = title
         self.usage = usage
         self._settings = ObservedObject(wrappedValue: settings)
         self.providers = providers
-        self.models = models
         self.selection = selection
         self._target = target
     }
@@ -348,7 +343,8 @@ private struct DefaultRouteRow: View {
                         set: { settings.setDefaultRoute(provider: route.provider, model: $0, usage: usage) }
                     )) {
                         Text("Choose a model").tag("")
-                        ForEach(models(route.provider)) { model in
+                        ForEach(settings.selectableModels(for: route.provider, usage: usage,
+                                                           selected: route.model)) { model in
                             Text(model.name.isEmpty ? "New model" : model.name).tag(model.name)
                         }
                     }
@@ -425,7 +421,9 @@ private struct DefaultRouteRow: View {
                             HStack(spacing: 8) {
                                 Picker("Model", selection: Binding(get: { task.model }, set: onModelChange)) {
                                     Text("Choose a model").tag("")
-                                    ForEach(settings.configuredModels(for: task.provider)) { model in
+                                    let usage: LLMModelUsage = task.task == .embed ? .embedding : .chat
+                                    ForEach(settings.selectableModels(for: task.provider, usage: usage,
+                                                                       selected: task.model)) { model in
                                         Text(model.name.isEmpty ? "New model" : model.name).tag(model.name)
                                     }
                                 }
