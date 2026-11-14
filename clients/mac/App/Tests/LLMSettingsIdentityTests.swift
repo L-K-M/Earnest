@@ -4,8 +4,8 @@ import EarnestKit
 @testable import Earnest
 
 /// Provider identity: a provider's name and its routed name are both
-/// reserved. Renaming one provider onto a sibling's identity must be rejected
-/// whole, and clearing a name is a transient edit that keeps the routed name
+/// reserved. A conflicting name stays editable without moving the identity,
+/// and clearing a name is a transient edit that keeps the routed name
 /// reserved for the provider that still uses it.
 @MainActor final class LLMSettingsIdentityTests: XCTestCase {
     private func settings() -> LLMSettingsModel {
@@ -29,7 +29,7 @@ import EarnestKit
         return model
     }
 
-    func testRenamingOntoASiblingNameIsRejectedAndRewritesNothing() {
+    func testRenamingOntoASiblingNameDoesNotMoveRoutes() {
         let settings = settings()
         settings.draft.providers = [provider("alpha"), provider("beta")]
         let alphaID = settings.draft.providers[0].id
@@ -39,13 +39,11 @@ import EarnestKit
         settings.route(task: .summary, providerName: "beta", modelName: "beta-model")
         settings.setDefaultRoute(provider: "alpha", model: "alpha-model", usage: .chat)
         settings.setDefaultRoute(provider: "beta", model: "beta-model", usage: .embedding)
-        let before = settings.draft
 
         settings.renameProvider(id: alphaID, name: "beta")
 
-        XCTAssertNotNil(settings.error, "a colliding rename is reported, not applied")
-        XCTAssertEqual(settings.draft, before, "a colliding rename leaves the whole draft unchanged")
-        XCTAssertEqual(settings.draft.providers[0].name, "alpha")
+        XCTAssertNotNil(settings.error, "a colliding rename is reported")
+        XCTAssertEqual(settings.draft.providers[0].name, "beta")
         XCTAssertEqual(settings.draft.providers[0].routedName, "alpha")
         XCTAssertEqual(settings.draft.tasks.first { $0.task == .blurb }?.provider, "alpha")
         XCTAssertEqual(settings.draft.tasks.first { $0.task == .summary }?.provider, "beta")
@@ -61,7 +59,7 @@ import EarnestKit
         XCTAssertEqual(settings.draft.tasks.first { $0.task == .summary }?.provider, "beta")
     }
 
-    func testRenamingOntoASiblingRoutedNameIsRejected() {
+    func testRenamingOntoASiblingRoutedNameDoesNotMoveRoutes() {
         let settings = settings()
         settings.draft.providers = [provider("alpha"), provider("beta")]
         let alphaID = settings.draft.providers[0].id
@@ -73,13 +71,12 @@ import EarnestKit
         settings.importModels([scopedModel("beta-model", provider: "beta", price: "2")])
         settings.route(task: .blurb, providerName: "beta", modelName: "beta-model")
         settings.setDefaultRoute(provider: "beta", model: "beta-model", usage: .chat)
-        let before = settings.draft
 
         settings.renameProvider(id: alphaID, name: "beta")
 
         XCTAssertNotNil(settings.error)
-        XCTAssertEqual(settings.draft, before)
-        XCTAssertEqual(settings.draft.providers[0].name, "alpha")
+        XCTAssertEqual(settings.draft.providers[0].name, "beta")
+        XCTAssertEqual(settings.draft.providers[0].routedName, "alpha")
         XCTAssertEqual(settings.draft.model(provider: "beta", name: "beta-model")?.inputPer1M, "2",
                        "the routed sibling's scoped price is untouched")
         XCTAssertEqual(settings.draft.tasks.first { $0.task == .blurb }?.provider, "beta")
@@ -113,6 +110,25 @@ import EarnestKit
         XCTAssertEqual(settings.draft.model(provider: "openai", name: "openai-model")?.inputPer1M, "1")
         XCTAssertEqual(settings.draft.tasks.first { $0.task == .blurb }?.provider, "openai")
         XCTAssertEqual(settings.draft.defaults?.text.provider, "openai")
+    }
+
+    func testTypingANameWithASiblingPrefixKeepsEveryCharacterAndItsRoutes() {
+        let settings = settings()
+        settings.draft.providers = [provider("local"), provider("openai")]
+        let id = settings.draft.providers[0].id
+        settings.importModels([scopedModel("local-model", provider: "local", price: "1"),
+                               scopedModel("openai-model", provider: "openai", price: "2")])
+        settings.route(task: .blurb, providerName: "local", modelName: "local-model")
+        settings.setDefaultRoute(provider: "openai", model: "openai-model", usage: .chat)
+
+        for name in ["", "o", "op", "ope", "open", "opena", "openai", "openai-", "openai-b", "openai-backup"] {
+            settings.renameProvider(id: id, name: name)
+            XCTAssertEqual(settings.draft.providers[0].name, name)
+            XCTAssertEqual(settings.draft.defaults?.text.provider, "openai")
+            XCTAssertEqual(settings.draft.model(provider: "openai", name: "openai-model")?.inputPer1M, "2")
+        }
+        XCTAssertEqual(settings.draft.tasks.first { $0.task == .blurb }?.provider, "openai-backup")
+        XCTAssertEqual(settings.draft.model(provider: "openai-backup", name: "local-model")?.inputPer1M, "1")
     }
 
     func testRenamingToAFreshNameStillRewritesRoutesDefaultsAndScopedPrices() {

@@ -918,8 +918,8 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
 
     private func applySelection(_ review: LLMModelReview, provider: LLMProviderDraft,
                                 selection: LLMModelSelection) -> Bool {
-        guard !provider.name.isEmpty else {
-            error = "Name this provider before choosing a model."
+        guard !provider.name.isEmpty, provider.name == provider.routedName else {
+            error = "Choose a unique provider name before choosing a model."
             return false
         }
         guard review.isReady else {
@@ -960,8 +960,8 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
             error = "The provider is no longer current. Fetch models again before selecting this model."
             return false
         }
-        guard !provider.name.isEmpty else {
-            error = "Name this provider before choosing a model."
+        guard !provider.name.isEmpty, provider.name == provider.routedName else {
+            error = "Choose a unique provider name before choosing a model."
             return false
         }
         guard draft.model(provider: provider.name, name: model.name)?.id == model.id else {
@@ -1144,12 +1144,14 @@ func llmModelSuits(_ model: APIDiscoveredModel, task: APILLMTask) -> Bool {
     // An empty name is a transient edit, never the identity of global models.
     func renameProvider(id: UUID, name: String) {
         guard let index = draft.providers.firstIndex(where: { $0.id == id }) else { return }
-        // A name is an identity routes, defaults and scoped models already
-        // use. A sibling's name or routed name is spoken for, so taking it
-        // would merge two providers' routes; reject the edit whole.
-        if !name.isEmpty, draft.providers.contains(where: {
+        // A name identifies routes, defaults and scoped models. A colliding
+        // value remains editable, but cannot take the sibling's
+        // identity or move any routes while the user finishes typing.
+        let collision = !name.isEmpty && draft.providers.contains(where: {
             $0.id != id && ($0.name == name || $0.routedName == name)
-        }) {
+        })
+        if collision {
+            draft.providers[index].name = name
             error = Self.providerNameConflict
             return
         }

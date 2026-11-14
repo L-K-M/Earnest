@@ -2,6 +2,7 @@ import {useState} from 'react'
 import {useQuery, useQueryClient} from '@tanstack/react-query'
 import type {components} from '../api.generated'
 import {request} from '../request'
+import {useBlocker} from '../router'
 
 type Label = components['schemas']['Label']
 const newOp = () => crypto.randomUUID()
@@ -23,6 +24,8 @@ export function LabelSettings() {
   const [field, setField] = useState<'new' | 'rename' | null>(null)
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
+  const labels = (list.data ?? []).filter(label => !label.deleted)
+  useBlocker(busy || name !== '' || (editing !== null && draft !== labels.find(label => label.id === editing)?.name), 'Leave without saving your label changes?')
 
   async function act(work: () => Promise<unknown>, note: string): Promise<boolean> {
     setBusy(true)
@@ -52,7 +55,6 @@ export function LabelSettings() {
     if (await act(() => request<Label>('/v1/labels', json({name: trimmed, op_id: newOp()}, 'POST')), 'Label created.')) setName('')
   }
 
-  const labels = (list.data ?? []).filter(label => !label.deleted)
   return <section aria-labelledby="native-labels-heading">
     <h2 id="native-labels-heading">Native labels</h2>
     <p>Labels collect articles without changing their shelves. Deleting a label removes its memberships; the articles themselves are kept.</p>
