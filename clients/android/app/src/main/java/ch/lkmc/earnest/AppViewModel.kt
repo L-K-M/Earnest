@@ -915,6 +915,7 @@ class AppViewModel internal constructor(
                             loaded = if (replaceBaseline) canonical else ui.loaded,
                             loadedRevision = if (replaceBaseline) canonicalRevision else ui.loadedRevision,
                             catalogues = if (replaceBaseline) emptyMap() else ui.catalogues,
+                            discovery = if (replaceBaseline && canonicalRevision != ui.loadedRevision) null else ui.discovery,
                             check = if (replaceBaseline && canonicalRevision != ui.loadedRevision) null else ui.check,
                             draft = if (replaceDraft) null else ui.draft,
                             frozen = if (replaceDraft) null else ui.frozen,
@@ -1015,6 +1016,11 @@ class AppViewModel internal constructor(
         return entry.revision == loadedRevision && entry.stillValidFor((draft ?: loaded?.toDraft())?.providers.orEmpty())
     }
 
+    private fun LlmSettingsUi.checkCurrent(): Boolean {
+        val entry = check ?: return false
+        return entry.request == checkRequest && entry.stillValidFor((draft ?: loaded?.toDraft())?.providers.orEmpty(), loadedRevision)
+    }
+
     /**
      * Fetches one draft provider's model catalogue through the admin
      * no-store preview. The draft provider goes verbatim; including an
@@ -1084,7 +1090,7 @@ class AppViewModel internal constructor(
                     error.isConflict -> "The saved settings changed on the server. Reload them, then fetch again."
                     else -> failureText("Could not fetch the model catalogue", error)
                 }
-                publishLlm(expected, session, cache, { it.discovery?.request == request }) { current ->
+                publishLlm(expected, session, cache, { it.discovery?.request == request && it.discoveryCurrent() }) { current ->
                     current.copy(
                         llmSettingsUi = current.llmSettingsUi.copy(
                             discovery = current.llmSettingsUi.discovery?.copy(loading = false, error = message),
@@ -1095,7 +1101,7 @@ class AppViewModel internal constructor(
             } catch (error: IllegalArgumentException) {
                 // Deterministic client-side validation: report, never retry.
                 if (!discoveryLlmOwner(session, cache, expected, request)) return@launch
-                publishLlm(expected, session, cache, { it.discovery?.request == request }) { current ->
+                publishLlm(expected, session, cache, { it.discovery?.request == request && it.discoveryCurrent() }) { current ->
                     current.copy(
                         llmSettingsUi = current.llmSettingsUi.copy(
                             discovery = current.llmSettingsUi.discovery?.copy(
@@ -1109,7 +1115,7 @@ class AppViewModel internal constructor(
                 throw error
             } catch (error: Exception) {
                 if (!discoveryLlmOwner(session, cache, expected, request)) return@launch
-                publishLlm(expected, session, cache, { it.discovery?.request == request }) { current ->
+                publishLlm(expected, session, cache, { it.discovery?.request == request && it.discoveryCurrent() }) { current ->
                     current.copy(
                         llmSettingsUi = current.llmSettingsUi.copy(
                             discovery = current.llmSettingsUi.discovery?.copy(
@@ -1208,7 +1214,7 @@ class AppViewModel internal constructor(
                 val input = LlmModelCheckInput(loaded.revision, provider.toInput(), model, capability)
                 val result = apiFactory(session).checkLlmModel(input, loaded)
                 if (!checkLlmOwner(session, cache, expected, request)) return@launch
-                publishLlm(expected, session, cache, { it.checkRequest == request }) { current ->
+                publishLlm(expected, session, cache, { it.checkRequest == request && it.checkCurrent() }) { current ->
                     current.copy(
                         llmSettingsUi = current.llmSettingsUi.copy(
                             check = current.llmSettingsUi.check?.copy(loading = false, result = result, error = null),
@@ -1226,7 +1232,7 @@ class AppViewModel internal constructor(
                     error.isConflict -> "The saved settings changed on the server. Reload them, then check again."
                     else -> failureText("Could not check the model", error)
                 }
-                publishLlm(expected, session, cache, { it.checkRequest == request }) { current ->
+                publishLlm(expected, session, cache, { it.checkRequest == request && it.checkCurrent() }) { current ->
                     current.copy(
                         llmSettingsUi = current.llmSettingsUi.copy(
                             check = current.llmSettingsUi.check?.copy(loading = false, error = message),
@@ -1237,7 +1243,7 @@ class AppViewModel internal constructor(
             } catch (error: IllegalArgumentException) {
                 // Deterministic client-side validation: report, never retry.
                 if (!checkLlmOwner(session, cache, expected, request)) return@launch
-                publishLlm(expected, session, cache, { it.checkRequest == request }) { current ->
+                publishLlm(expected, session, cache, { it.checkRequest == request && it.checkCurrent() }) { current ->
                     current.copy(
                         llmSettingsUi = current.llmSettingsUi.copy(
                             check = current.llmSettingsUi.check?.copy(
@@ -1251,7 +1257,7 @@ class AppViewModel internal constructor(
                 throw error
             } catch (error: Exception) {
                 if (!checkLlmOwner(session, cache, expected, request)) return@launch
-                publishLlm(expected, session, cache, { it.checkRequest == request }) { current ->
+                publishLlm(expected, session, cache, { it.checkRequest == request && it.checkCurrent() }) { current ->
                     current.copy(
                         llmSettingsUi = current.llmSettingsUi.copy(
                             check = current.llmSettingsUi.check?.copy(
@@ -2241,11 +2247,11 @@ class AppViewModel internal constructor(
 
     /** [llmCurrent] plus ownership of the in-flight catalogue request. */
     private fun discoveryLlmOwner(session: AuthenticatedSession, cache: SessionCache, expected: Long, request: Long): Boolean =
-        llmCurrent(session, cache, expected) && _state.value.llmSettingsUi.discovery?.request == request
+        llmCurrent(session, cache, expected) && _state.value.llmSettingsUi.let { it.discovery?.request == request && it.discoveryCurrent() }
 
     /** [llmCurrent] plus ownership of the in-flight model check. */
     private fun checkLlmOwner(session: AuthenticatedSession, cache: SessionCache, expected: Long, request: Long): Boolean =
-        llmCurrent(session, cache, expected) && _state.value.llmSettingsUi.checkRequest == request
+        llmCurrent(session, cache, expected) && _state.value.llmSettingsUi.let { it.checkRequest == request && it.checkCurrent() }
 
     /**
      * Applies [transform] only while the captured epoch and account still own

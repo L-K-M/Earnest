@@ -1019,6 +1019,59 @@ class LlmSettingsModesAppTest {
         assertTrue(model.state.value.llmSettingsUi.conflict)
     }
 
+    @Test fun staleModelCheckConflictCannotBlockAnEditedProvider() = runBlocking(Dispatchers.IO) {
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val fallback = respond
+        respond = { request ->
+            if (request.url.encodedPath == "/v1/settings/llm/models/check") {
+                entered.countDown()
+                release.await(10, java.util.concurrent.TimeUnit.SECONDS)
+                409 to "{}"
+            } else fallback(request)
+        }
+        val model = model()
+        model.loadedLlm()
+        try {
+            model.checkLlmModel(0, LlmModel("text-embedding-3-small", embeddingPer1m = "0.02", dimensions = 1024, provider = "openai"), LlmModelCapability.EMBEDDING)
+            assertTrue(entered.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            model.updateLlmSettingsDraft { draft ->
+                draft.editProvider(0, draft.providers[0].copy(baseUrl = "https://other.example/v1", apiKeyInput = "replacement"))
+            }
+            assertNull(model.state.value.llmSettingsUi.check)
+            release.countDown()
+            assertNull(withTimeoutOrNull(1_500) { model.state.first { it.llmSettingsUi.conflict } })
+        } finally {
+            release.countDown()
+        }
+    }
+
+    @Test fun staleCatalogueConflictCannotBlockANewerRevision() = runBlocking(Dispatchers.IO) {
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val fallback = respond
+        respond = { request ->
+            if (request.url.encodedPath == "/v1/settings/llm/models") {
+                entered.countDown()
+                release.await(10, java.util.concurrent.TimeUnit.SECONDS)
+                409 to "{}"
+            } else fallback(request)
+        }
+        val model = model()
+        model.loadedLlm()
+        try {
+            model.fetchLlmModels(0)
+            assertTrue(entered.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            getBody = llmJson(revision = 4)
+            model.loadLlmSettings()
+            withTimeout(15_000) { model.state.first { it.llmSettingsUi.loadedRevision == 4L && !it.llmSettingsUi.loading } }
+            release.countDown()
+            assertNull(withTimeoutOrNull(1_500) { model.state.first { it.llmSettingsUi.conflict } })
+        } finally {
+            release.countDown()
+        }
+    }
+
     @Test fun loadingANewerRevisionClearsThePreviousCheck() = runBlocking(Dispatchers.IO) {
         val fallback = respond
         respond = { request ->
