@@ -8,6 +8,8 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import ch.lkmc.earnest.core.EarnestApi
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
@@ -39,6 +41,7 @@ class LoginScreenTest {
         val polls = CopyOnWriteArrayList<String>()
         val apiCalls = CopyOnWriteArrayList<Pair<String, String?>>()
         var startCount = 0
+        var startGate: CountDownLatch? = null
         var transportFailure: IOException? = null
         var poll: (Int) -> Pair<Int, String> = { 200 to """{"access_token":"tok","token_type":"Bearer"}""" }
 
@@ -50,6 +53,7 @@ class LoginScreenTest {
                     "/v1/devices/start" -> {
                         starts += path
                         startCount += 1
+                        startGate?.await(5, TimeUnit.SECONDS)
                         val code = "CODE-$startCount"
                         respond(chain, 200, """{"device_code":"dev-$code","user_code":"$code","verification_uri":"https://nas.test/device","interval":1,"expires_in":600}""")
                     }
@@ -100,6 +104,19 @@ class LoginScreenTest {
         return steps
     }
 
+    @Test fun aPendingStartDisablesDuplicateRequestsAndServerEdits() {
+        val gate = CountDownLatch(1)
+        val fake = FakeApi().apply { startGate = gate }
+        compose.setContent { LoginScreen(onLoggedIn = {}, apiFactory = fake.factory) }
+        try {
+            start(fake)
+            compose.onNodeWithText("Start device sign in").assertIsNotEnabled()
+            compose.onNodeWithText(SERVER).assertIsNotEnabled()
+        } finally {
+            gate.countDown()
+        }
+    }
+
     @Test fun expiredTokenKeepsTheErrorAndRestoresTheForm() {
         val fake = FakeApi()
         fake.poll = { 400 to """{"error":"expired_token"}""" }
@@ -125,7 +142,7 @@ class LoginScreenTest {
 
         compose.onNodeWithText("Start device sign in").performClick()
         compose.waitUntil(TIMEOUT) { fake.starts.size == 2 }
-        waitForText("Enter code CODE-2 at https://nas.test/device")
+        waitForText("CODE-2")
         compose.onNodeWithText("Start device sign in").assertIsNotEnabled()
     }
 
@@ -168,13 +185,13 @@ class LoginScreenTest {
 
         advance(1)
         awaitPolls(fake, 1)
-        compose.onNodeWithText("Enter code CODE-1 at https://nas.test/device").assertExists()
+        compose.onNodeWithText("CODE-1").assertExists()
         compose.onNodeWithText("Start device sign in").assertIsNotEnabled()
 
         // slow_down raised the interval from 1s to 6s, so the next poll is slow.
         val steps = awaitPolls(fake, 2)
         check(steps >= 5) { "slow_down did not raise the interval (next poll after ${steps}s)" }
-        compose.onNodeWithText("Enter code CODE-1 at https://nas.test/device").assertExists()
+        compose.onNodeWithText("CODE-1").assertExists()
         compose.onNodeWithText("Start device sign in").assertIsNotEnabled()
 
         awaitPolls(fake, 3)

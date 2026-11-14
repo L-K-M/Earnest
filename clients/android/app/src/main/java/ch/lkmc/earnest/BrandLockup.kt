@@ -16,6 +16,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
 /** The wordmark's own teal, for light surfaces. */
@@ -38,7 +40,7 @@ internal fun brandInk(scheme: ColorScheme): Color = when {
 @Composable
 internal fun BrandLockup(modifier: Modifier = Modifier) {
     val wordmark = painterResource(R.drawable.brand_wordmark)
-    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+    Row(modifier = modifier.semantics { contentDescription = "Earnest" }, verticalAlignment = Alignment.CenterVertically) {
         Image(
             painter = painterResource(R.drawable.brand_icon),
             contentDescription = null,

@@ -92,7 +92,9 @@ The bottom bar has four destinations: Front page, Articles, Kept and Feeds.
 Open **Folders and feeds** at the top left to browse your folders. Tap a
 folder to read its articles, or expand its arrow to choose a single feed.
 Empty folders stay visible. **No folder** includes feeds whose folder was removed.
-The drawer also contains Later, Done and Activity. Your folder selection
+The drawer also contains Later, Done and Activity. Focused search, settings and
+phone-reader screens hide the main navigation. Back from search restores the
+previous destination and its folder/feed selection. Your folder selection
 survives recreation and resets when you switch accounts. Feeds remains the
 subscription-management screen; its folder headings and feed names also open
 article lists.
@@ -100,16 +102,19 @@ article lists.
 On a narrow screen, Articles and the saved shelves offer **Headlines** and
 **Read in feed**. Read in feed is the default: tap a headline to expand its
 article in the same scrolling list. Only the article you expand loads reader
-content and reader images, and only one article is expanded at a time. Collapse it to return
-to headlines, or choose Open reader for the dedicated reading tools. Very long
+content and reader images, and only one article is expanded at a time. Opening
+another article keeps its headline in place instead of carrying over the previous
+article's scroll offset. Collapse or Back returns you to the expanded headline
+when you are inside its body. Choose Open reader for the dedicated reading tools. Very long
 articles have a bounded inline preview with a notice to continue in the reader.
 The layout choice is remembered on your device. Wide screens keep the existing
 side-by-side list and reader.
 
-Article cards share consistent gutters and keep their source, time, headline
+Article rows share consistent gutters and keep their source, time, headline
 and read indicator together. Use the article's overflow menu for Keep, Unkeep,
-Later, Done and Mark unread. The front page has one heading, separate story
-cards and a date/window header that scrolls away with the stories.
+Later, Done and Mark unread. The front page emphasizes its lead story and uses
+quieter secondary stories, with a date/window header that scrolls away with
+the stories. See [Android design](android-design.md) for the visual system.
 
 ## Reading offline
 
@@ -216,7 +221,9 @@ articles. Notes and snippets remain plain text.
 ## Feeds and activity
 
 Feeds subscribes by URL, changes a subscription's cadence (Now, Today, This
-week) and unsubscribes. The current cadence is selected in the row. A saved
+week) and unsubscribes. The current cadence is selected in the row. Cadence
+choices wrap on narrow screens. Unsubscribe is in the feed's overflow menu
+and asks for confirmation. A saved
 cadence change offers an undo snackbar that restores the previous cadence.
 Feeds groups subscriptions by folder and shows a failing feed's fetch error
 with the time of its last attempt. Import OPML brings in a subscription

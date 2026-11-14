@@ -1,22 +1,28 @@
 package ch.lkmc.earnest
 
-import android.content.Intent
-import android.net.Uri
-import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -31,13 +37,16 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import ch.lkmc.earnest.core.ApiException
@@ -58,6 +67,9 @@ internal fun LoginScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var server by remember { mutableStateOf("") }
+    var starting by remember { mutableStateOf(false) }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focus = LocalFocusManager.current
     var authorization by remember { mutableStateOf<DeviceResult?>(null) }
     var intervalSeconds by remember { mutableLongStateOf(5L) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -104,127 +116,90 @@ internal fun LoginScreen(
         }
     }
 
-    val scheme = MaterialTheme.colorScheme
-    // E-ink and true black stay monochrome, so neither gets the glow; the
-    // ribbon is hidden in e-ink alone.
-    val eInk = scheme.primary == Color.Black
-    val glow = when {
-        eInk || scheme.background == Color.Black -> null
-        barIcons(scheme) == BarIcons.LIGHT -> GlowOrange.copy(alpha = 0.12f)
-        else -> GlowCream.copy(alpha = 0.60f)
-    }
-
-    Box(Modifier.fillMaxSize()) {
-        // The glow only draws, so it never intercepts a touch meant for the form.
-        // It spreads from the top edge and reaches transparent at the box's
-        // bottom, so the box never shows an edge.
-        glow?.let { color ->
-            Box(
-                Modifier
-                    .align(Alignment.TopCenter)
-                    .fillMaxWidth()
-                    .height(320.dp)
-                    .drawBehind {
-                        drawRect(
-                            Brush.radialGradient(
-                                colors = listOf(color, Color.Transparent),
-                                center = Offset(size.width / 2f, 0f),
-                                radius = size.height,
-                            ),
-                        )
-                    },
-            )
-        }
-        // The activity draws edge to edge, so keep the form clear of the status bar and keyboard.
-        Column(
-            modifier = Modifier.safeDrawingPadding().padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            // The ribbon takes the lockup's width, which only the lockup's
-            // intrinsic size knows.
-            Column(Modifier.width(IntrinsicSize.Min)) {
-                BrandLockup()
-                if (!eInk) {
-                    BrandRibbon(Modifier.fillMaxWidth())
+    val startSignIn: () -> Unit = {
+        if (!starting && authorization == null && server.isNotBlank()) {
+            starting = true
+            error = null
+            server = server.trim()
+            keyboard?.hide()
+            focus.clearFocus()
+            scope.launch {
+                try {
+                    authorization = apiFactory(server, null).deviceStart("Earnest Android")
+                } catch (failure: CancellationException) {
+                    throw failure
+                } catch (failure: Exception) {
+                    error = failure.message ?: SIGN_IN_FAILED_MESSAGE
+                } finally {
+                    starting = false
                 }
             }
-            Text("Connect to Earnest", style = MaterialTheme.typography.headlineSmall)
-            notice?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        }
+    }
+
+    Box(Modifier.fillMaxSize().safeDrawingPadding().imePadding(), contentAlignment = Alignment.TopCenter) {
+        Column(
+            Modifier.widthIn(max = ReaderSpace.formWidth).fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = ReaderSpace.lg, vertical = ReaderSpace.xl),
+            verticalArrangement = Arrangement.spacedBy(ReaderSpace.md),
+        ) {
+            Spacer(Modifier.height(ReaderSpace.md))
+            BrandLockup()
+            Spacer(Modifier.height(ReaderSpace.sm))
+            ScreenIntro("Connect to Earnest", "Your feeds, your pace. Sign in to your private server to pick up where you left off.")
+            notice?.let { NoticeBanner(it, tone = NoticeTone.ERROR) }
             OutlinedTextField(
                 value = server,
-                onValueChange = { server = it },
+                onValueChange = { server = it; error = null },
                 label = { Text("HTTPS server origin") },
+                placeholder = { Text("https://reader.example.com") },
+                supportingText = { Text("Use the address of your Earnest server.") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
+                keyboardActions = KeyboardActions(onGo = { startSignIn() }),
                 singleLine = true,
-                enabled = authorization == null,
+                enabled = authorization == null && !starting,
                 modifier = Modifier.fillMaxWidth(),
             )
             Button(
-                onClick = {
-                    scope.launch {
-                        error = null
-                        try {
-                            val api = apiFactory(server, null)
-                            authorization = api.deviceStart("Earnest Android")
-                        } catch (failure: CancellationException) {
-                            throw failure
-                        } catch (failure: Exception) {
-                            error = failure.message ?: SIGN_IN_FAILED_MESSAGE
-                        }
-                    }
-                },
-                enabled = server.isNotBlank() && authorization == null,
+                onClick = startSignIn,
+                enabled = server.isNotBlank() && authorization == null && !starting,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
             ) {
+                if (starting) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.size(ReaderSpace.xs))
+                }
                 Text("Start device sign in")
             }
+            if (starting) Text("Connecting to your server…", style = MaterialTheme.typography.bodySmall, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
             authorization?.let { current ->
-                Text("Enter code ${current.userCode} at ${current.verificationUri}")
-                TextButton(
-                    onClick = {
-                        val uri = current.verificationUri.toUri()
-                        if (uri.scheme == "https") runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, uri)) }
-                    },
-                ) {
-                    Text("Open approval page")
+                Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surfaceContainerLowest) {
+                    Column(Modifier.fillMaxWidth().padding(ReaderSpace.gutter), verticalArrangement = Arrangement.spacedBy(ReaderSpace.md)) {
+                        Text("Approve this device", style = MaterialTheme.typography.titleLarge)
+                        Text("Enter this code in your browser to finish signing in.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        SelectionContainer {
+                            Text(current.userCode, style = MaterialTheme.typography.headlineLarge.copy(fontFamily = FontFamily.Monospace, letterSpacing = 2.sp))
+                        }
+                        Text(current.verificationUri, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                        TextButton(onClick = {
+                            val uri = current.verificationUri.toUri()
+                            error = when {
+                                uri.scheme != "https" -> "The server returned an unsupported approval address. Open your server's device page in a browser."
+                                !openOriginal(context, uri.toString()) -> "No browser could open the approval page. Open the address above on another device."
+                                else -> null
+                            }
+                        }) { Text("Open approval page") }
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ReaderSpace.sm)) {
+                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                            Text("Waiting for your approval…", style = MaterialTheme.typography.bodySmall, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                        }
+                        TextButton(onClick = { authorization = null; error = null }) { Text("Cancel sign in") }
+                    }
                 }
             }
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        }
-    }
-}
-
-/** The icon's cream, the light-theme glow behind the sign-in form. */
-private val GlowCream = Color(0xFFFEDFC1)
-
-/** The icon's orange, the dark-theme glow behind the sign-in form. */
-private val GlowOrange = Color(0xFFEA5F12)
-
-/** The spec's ribbon order: the icon's own colours as equal hard segments. */
-private val BrandRibbonColors = listOf(
-    Color(0xFFFFA01C),
-    Color(0xFFEA5F12),
-    Color(0xFFC9481E),
-    Color(0xFF8E3B68),
-    Color(0xFF916E9D),
-    Color(0xFF408CAD),
-    Color(0xFF5DA8A1),
-)
-
-/** A thin decorative band of the icon's colours under the lockup. */
-@Composable
-private fun BrandRibbon(modifier: Modifier = Modifier) {
-    Row(
-        modifier
-            .height(4.dp)
-            .clip(RoundedCornerShape(percent = 50))
-            .clearAndSetSemantics {},
-    ) {
-        BrandRibbonColors.forEach { color ->
-            Box(
-                Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .background(color),
-            )
+            error?.let { NoticeBanner(it, tone = NoticeTone.ERROR) }
+            if (authorization == null) Text("Sign-in approval happens in your browser. Your password never passes through this app.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

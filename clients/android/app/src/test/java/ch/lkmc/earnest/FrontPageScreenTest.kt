@@ -374,14 +374,14 @@ class FrontPageScreenTest {
         compose.onNodeWithText("Covered by 12 feeds").assertExists()
     }
 
-    @Test fun storyCardsSitOnTheSixteenDpGutter() {
+    @Test fun storiesUseTheSharedTwentyDpGutter() {
         setContent(FrontPageUi(page = page(listOf(story("story-lead", 2, imageUrl = null)))))
         val card = compose.onNodeWithTag("story-lead").fetchSemanticsNode()
-        val gutter = with(compose.density) { 16.dp.toPx() }
-        assertEquals("story cards must sit on the 16dp content gutter", gutter, card.positionInRoot.x, 1f)
+        val gutter = with(compose.density) { 20.dp.toPx() }
+        assertEquals("stories must sit on the 20dp content gutter", gutter, card.positionInRoot.x, 1f)
     }
 
-    @Test fun storyCardsAreChunkedByATwelveDpGap() {
+    @Test fun storiesHaveASixteenDpBreathingSpace() {
         setContent(
             FrontPageUi(
                 page = page(
@@ -395,8 +395,8 @@ class FrontPageScreenTest {
         val lead = compose.onNodeWithTag("story-lead").fetchSemanticsNode()
         val secondary = compose.onNodeWithTag("story-secondary").fetchSemanticsNode()
         val gap = secondary.positionInRoot.y - (lead.positionInRoot.y + lead.size.height)
-        val expected = with(compose.density) { 12.dp.toPx() }
-        assertEquals("stories must be chunked with a 12dp gap", expected, gap, 1f)
+        val expected = with(compose.density) { 16.dp.toPx() }
+        assertEquals("stories must be separated by a 16dp gap", expected, gap, 1f)
     }
 
     @Test fun aMissingPictureDoesNotReserveAPictureHeight() {
@@ -438,8 +438,8 @@ class FrontPageScreenTest {
         )
         compose.onNodeWithText("While you were out").assertExists()
         val title = compose.onNodeWithText("While you were out").fetchSemanticsNode()
-        val gutter = with(compose.density) { 32.dp.toPx() }
-        assertEquals("notices must align with the content inside story cards", gutter, title.positionInRoot.x, 1f)
+        val gutter = with(compose.density) { 40.dp.toPx() }
+        assertEquals("notices must align with the lead story's content", gutter, title.positionInRoot.x, 1f)
     }
 
     @Test fun theMastheadScrollsWithTheFrontPage() {
