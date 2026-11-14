@@ -36,7 +36,7 @@ export function SettingsPage({device, settings, onSaved}: {device: boolean; sett
   // #integrations is the old link to the merged Connections pane.
   const hash = location.hash.slice(1)
   const requested = device ? 'tokens' : (hash === 'integrations' ? 'webhooks' : hash)
-  const active = panes[requested] ? requested : 'reading'
+  const active = Object.hasOwn(panes, requested) ? requested : 'reading'
   useEffect(() => {
     if (!device) return
     return whenPresent(() => document.getElementById('device-code'), field => {

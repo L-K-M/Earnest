@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import {afterEach, expect, it, vi} from 'vitest'
-import {cleanup, fireEvent, render, screen} from '@testing-library/react'
+import {cleanup, fireEvent, render, screen, within} from '@testing-library/react'
 import {QueryClient, QueryClientProvider} from '@tanstack/react-query'
 import {request} from '../request'
 import {type LLMProviderInput, type LLMSettings} from './model'
@@ -77,6 +77,7 @@ it('preserves every character when a name temporarily matches a sibling', async 
     expect(input.value).toBe(name)
     if (name === 'openai') expect(screen.getByText(/already used by another provider/)).toBeTruthy()
   }
+  expect(within(screen.getByLabelText('Default text model provider')).getByRole('option', {name: 'openai-backup (openai)'})).toBeTruthy()
   fireEvent.click(screen.getByRole('button', {name: 'Save'}))
   await screen.findByText(/AI settings saved/)
   const body = lastPut()

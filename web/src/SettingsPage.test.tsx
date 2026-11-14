@@ -51,6 +51,13 @@ it('falls back to reading settings for an unknown section link', () => {
   expect(screen.getByRole('link', {name: 'Reading & appearance'}).getAttribute('aria-current')).toBe('page')
 })
 
+it.each(['constructor', 'toString', '__proto__'])('falls back for inherited property section %s', hash => {
+  resetLocation(`/settings#${hash}`)
+  render(<SettingsPage device={false} settings={defaultSettings} onSaved={vi.fn()} />)
+  expect(screen.getByRole('heading', {name: 'Reading preferences panel'})).toBeTruthy()
+  expect(screen.getByRole('link', {name: 'Reading & appearance'}).getAttribute('aria-current')).toBe('page')
+})
+
 it('keeps every settings pane reachable through its existing hash deep link', () => {
   for (const [title, id, heading] of PANES) {
     resetLocation(`/settings#${id}`)
