@@ -449,20 +449,22 @@ internal fun MainScaffold(
     ModalNavigationDrawer(
         drawerState = drawerState,
         // Closed-drawer edge gestures must not compete with article swipes.
-        gesturesEnabled = drawerState.isOpen,
+        gesturesEnabled = drawerState.isOpen && !showSettings,
         drawerContent = {
-            ReaderDrawer(
-                view = section.view,
-                selection = feedSelection,
-                objects = state.snapshot.objects,
-                onView = ::selectView,
-                onFeed = ::selectFeed,
-                onClose = { scope.launch { drawerState.close() } },
-                onSettings = {
-                    showSettings = true
-                    scope.launch { drawerState.close() }
-                },
-            )
+            Box(if (showSettings) Modifier.clearAndSetSemantics {} else Modifier) {
+                ReaderDrawer(
+                    view = section.view,
+                    selection = feedSelection,
+                    objects = state.snapshot.objects,
+                    onView = ::selectView,
+                    onFeed = ::selectFeed,
+                    onClose = { scope.launch { drawerState.close() } },
+                    onSettings = {
+                        showSettings = true
+                        scope.launch { drawerState.close() }
+                    },
+                )
+            }
         },
     ) {
     NavigationSuiteScaffold(
@@ -489,41 +491,41 @@ internal fun MainScaffold(
     ) {
         Scaffold(
             topBar = {
-                EarnestTopBar(
-                    when {
-                        showSettings -> "Settings"
-                        detailOnly -> "Article"
-                        section.view == View.ALL -> feedSelection.title(state.snapshot.objects)
-                        else -> section.view.label
-                    },
-                    state.loading,
-                    model,
-                    theme,
-                    onThemeChange,
-                    notificationsDenied,
-                    onRequestNotifications,
-                    onSearch = {
-                        searchReturn = section
-                        searchDetail = false
-                        section = section.copy(view = View.SEARCH)
-                    },
-                    onSettings = { showSettings = true },
-                    onRefresh = {
-                        if (section.view == View.FRONT) model.refreshFrontPage() else model.reloadList()
-                    },
-                    focused = showSettings || detailOnly || section.view == View.SEARCH,
-                    showRefresh = section.view != View.FRONT && !showSettings && !detailOnly && section.view != View.SEARCH,
-                    navigationIcon = if (showSettings || detailOnly || section.view == View.SEARCH) Icons.AutoMirrored.Filled.ArrowBack else Icons.Filled.Menu,
-                    navigationDescription = if (showSettings || detailOnly || section.view == View.SEARCH) "Back" else "Folders and feeds",
-                    onNavigation = {
+                if (!showSettings) {
+                    EarnestTopBar(
                         when {
-                            showSettings -> showSettings = false
-                            detailOnly -> scope.launch { navigator.navigateBack() }
-                            section.view == View.SEARCH -> section = searchReturn
-                            else -> scope.launch { drawerState.open() }
-                        }
-                    },
-                )
+                            detailOnly -> "Article"
+                            section.view == View.ALL -> feedSelection.title(state.snapshot.objects)
+                            else -> section.view.label
+                        },
+                        state.loading,
+                        model,
+                        theme,
+                        onThemeChange,
+                        notificationsDenied,
+                        onRequestNotifications,
+                        onSearch = {
+                            searchReturn = section
+                            searchDetail = false
+                            section = section.copy(view = View.SEARCH)
+                        },
+                        onSettings = { showSettings = true },
+                        onRefresh = {
+                            if (section.view == View.FRONT) model.refreshFrontPage() else model.reloadList()
+                        },
+                        focused = detailOnly || section.view == View.SEARCH,
+                        showRefresh = section.view != View.FRONT && !detailOnly && section.view != View.SEARCH,
+                        navigationIcon = if (detailOnly || section.view == View.SEARCH) Icons.AutoMirrored.Filled.ArrowBack else Icons.Filled.Menu,
+                        navigationDescription = if (detailOnly || section.view == View.SEARCH) "Back" else "Folders and feeds",
+                        onNavigation = {
+                            when {
+                                detailOnly -> scope.launch { navigator.navigateBack() }
+                                section.view == View.SEARCH -> section = searchReturn
+                                else -> scope.launch { drawerState.open() }
+                            }
+                        },
+                    )
+                }
             },
             snackbarHost = { SnackbarHost(snackbar) },
         ) { padding ->
@@ -759,13 +761,7 @@ internal fun MainScaffold(
                     },
                 )
                 if (showSettings) {
-                    BackHandler { showSettings = false }
-                    SettingsScreen(
-                        model = model,
-                        state = state,
-                        onBack = { showSettings = false },
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                    SettingsScreen(model = model, state = state, onBack = { showSettings = false }, modifier = Modifier.fillMaxSize())
                 } else if (compactSearch) {
                     SearchContent()
                 }
