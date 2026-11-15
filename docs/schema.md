@@ -17,7 +17,7 @@ must encrypt before writing them and never log secrets.
 | `schema_migrations` | Applied version, filename, SHA-256 checksum and time. |
 | `users` | Unique username, Argon2id password hash and JSON settings. |
 | `principals` | Human, agent or internal pipeline belonging to one user. One human per user; agent state remains separate. |
-| `sessions` | SHA-256 session ID, random CSRF secret and expiry. No plaintext cookie ID. |
+| `sessions` | SHA-256 session ID, random CSRF secret, expiry and whether the browser asked to be remembered, which selects longer idle and absolute limits. No plaintext cookie ID. |
 | `tokens` | SHA-256 token, app/agent/compat kind, audience, scopes, daily notification budget, expiry, last use, revocation and revision. No feed allowlist. |
 | `device_codes` | Hashed device and user codes, requested scopes/audience, approval/consumption state, expiry and polling interval/last poll for RFC 8628. |
 | `feeds` | URL, language, cache validators, adaptive schedule/backoff, detailed health, item counts, a fetch lease, posting rate and extraction policy/status. Public URLs deduplicate globally; private URLs only within the owner. Credentials require an owner; ownership is immutable. |

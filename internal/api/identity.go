@@ -14,6 +14,7 @@ import (
 type loginBody struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+	Remember bool   `json:"remember,omitempty" doc:"Keep this browser signed in across restarts and up to 30 days without use"`
 }
 type loginResult struct {
 	CSRFToken string    `json:"csrf_token"`
@@ -70,13 +71,24 @@ func (s *server) identityRoutes() {
 		if err != nil {
 			return loginResult{}, err
 		}
-		session, err := s.auth.CreateSession(ctx, a)
+		persistence := service.SessionStandard
+		if in.Body.Remember {
+			persistence = service.SessionRemembered
+		}
+		session, err := s.auth.CreateSession(ctx, a, persistence)
 		if err != nil {
 			return loginResult{}, err
 		}
+		// The cookie is not reissued as use extends the session, so a
+		// remembered one lasts until the absolute limit and the server
+		// enforces the idle limit. A standard one keeps its first expiry.
+		cookieExpires := session.ExpiresAt
+		if persistence == service.SessionRemembered {
+			cookieExpires = session.AbsoluteExpiresAt
+		}
 		w := ctx.Value(responseKey{}).(http.ResponseWriter)
 		w.Header().Set("Cache-Control", "no-store")
-		http.SetCookie(w, s.cookie(session.ID, session.ExpiresAt))
+		http.SetCookie(w, s.cookie(session.ID, cookieExpires))
 		return loginResult{CSRFToken: session.CSRF, ExpiresAt: session.ExpiresAt}, nil
 	})
 	route(s, http.MethodPost, "/v1/session/logout", "session-logout", func(ctx context.Context, in *empty) (empty, error) {

@@ -34,7 +34,10 @@ its direct feeds unfiled. Folder nesting is preserved in sync and OPML exports.
 ## Reader workflow
 
 1. Sign in. The browser shares the session's CSRF token between tabs and restores
-   a valid session when you return.
+   a valid session when you return. A session normally ends a day after sign-in.
+   Check **Remember me on this computer** to stay signed in through browser
+   restarts: the session then ends after 30 days without use, and 90 days after
+   sign-in at the latest. Leave it unchecked on shared computers.
 2. On first run, import OPML or start empty, then choose an ending river or unread
    counts. The import report lists individual failures. Earnest checks feed health
    for firehoses and offers one action to put them in This week. Deferred fetches

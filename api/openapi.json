@@ -1955,6 +1955,10 @@
           "password": {
             "type": "string"
           },
+          "remember": {
+            "description": "Keep this browser signed in across restarts and up to 30 days without use",
+            "type": "boolean"
+          },
           "username": {
             "type": "string"
           }

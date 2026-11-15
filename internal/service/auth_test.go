@@ -123,7 +123,7 @@ func TestSessionAndDevice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := a.CreateSession(ctx, actor)
+	session, err := a.CreateSession(ctx, actor, SessionStandard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestSessionAndDevice(t *testing.T) {
 	if _, err := a.ResolveSession(ctx, session.ID); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("revoked session: %v", err)
 	}
-	session, err = a.CreateSession(ctx, actor)
+	session, err = a.CreateSession(ctx, actor, SessionStandard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,5 +221,69 @@ func TestDeviceStartRateLimited(t *testing.T) {
 	now = now.Add(deviceStartWindow + time.Second)
 	if _, err := a.StartDeviceAuth(ctx, "phone", "client-flood"); err != nil {
 		t.Fatalf("window reset: %v", err)
+	}
+}
+
+func TestRememberedSessionLimits(t *testing.T) {
+	db := storetest.NewTemplate(t).New(t)
+	ctx := context.Background()
+	start := time.Now().UTC()
+	now := start
+	a := NewAuth(db, func() time.Time { return now }, nil)
+	actor, err := a.CreateUser(ctx, "web", "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	standard, err := a.CreateSession(ctx, actor, SessionStandard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remembered, err := a.CreateSession(ctx, actor, SessionRemembered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !remembered.ExpiresAt.Equal(start.Add(rememberedSessionIdle)) || !remembered.AbsoluteExpiresAt.Equal(start.Add(rememberedSessionMaxAge)) {
+		t.Fatalf("remembered expiry=%v absolute=%v", remembered.ExpiresAt, remembered.AbsoluteExpiresAt)
+	}
+	if !standard.ExpiresAt.Equal(start.Add(sessionIdle)) || !standard.AbsoluteExpiresAt.Equal(start.Add(sessionAbsolute)) {
+		t.Fatalf("standard expiry=%v absolute=%v", standard.ExpiresAt, standard.AbsoluteExpiresAt)
+	}
+
+	// Two idle days end a standard session but not a remembered one.
+	now = start.Add(2 * sessionIdle)
+	if _, err := a.ResolveSession(ctx, standard.ID); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("idle standard session: %v", err)
+	}
+	if _, err := a.ResolveSession(ctx, remembered.ID); err != nil {
+		t.Fatalf("idle remembered session: %v", err)
+	}
+
+	// Regular use keeps a remembered session past the standard absolute
+	// limit, for writes too, until its own absolute limit.
+	for now.Before(start.Add(rememberedSessionMaxAge - rememberedSessionIdle/2)) {
+		now = now.Add(rememberedSessionIdle / 2)
+		if _, err := a.ResolveSession(ctx, remembered.ID); err != nil {
+			t.Fatalf("remembered session at %v: %v", now.Sub(start), err)
+		}
+		if err := a.VerifyCSRF(ctx, remembered.ID, remembered.CSRF); err != nil {
+			t.Fatalf("remembered CSRF at %v: %v", now.Sub(start), err)
+		}
+	}
+	now = start.Add(rememberedSessionMaxAge)
+	if _, err := a.ResolveSession(ctx, remembered.ID); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("remembered session past its absolute limit: %v", err)
+	}
+	if err := a.VerifyCSRF(ctx, remembered.ID, remembered.CSRF); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("remembered CSRF past its absolute limit: %v", err)
+	}
+
+	// A remembered session still ends after a month without use.
+	idle, err := a.CreateSession(ctx, actor, SessionRemembered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(rememberedSessionIdle)
+	if _, err := a.ResolveSession(ctx, idle.ID); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("idle remembered session: %v", err)
 	}
 }
