@@ -19,6 +19,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.Text
@@ -43,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import ch.lkmc.earnest.core.CachedEntry
 import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.core.SyncObject
+import ch.lkmc.earnest.core.UnreadCounts
 
 /** Secondary shelves remain in the drawer, not seven tiny phone tabs. */
 internal val primaryDestinations = listOf(View.FRONT, View.ALL, View.KEPT, View.FEEDS)
@@ -129,6 +131,29 @@ internal fun navigationFeedGroups(objects: List<SyncObject>): List<FeedGroup> {
     }
 }
 
+/**
+ * A folder's unread total is the sum of its feeds' exact counts, as on the
+ * web sidebar. Feeds missing from [counts] contribute nothing.
+ */
+internal fun FeedGroup.unreadCount(counts: UnreadCounts): Long =
+    subscriptions.sumOf { counts.bySubscription[it.id] ?: 0L }
+
+/** Matches the web sidebar: four digits would crowd a phone-width drawer. */
+internal fun unreadBadgeText(count: Long): String = if (count > MAX_BADGE_COUNT) "$MAX_BADGE_COUNT+" else count.toString()
+
+private const val MAX_BADGE_COUNT = 999L
+
+@Composable
+private fun UnreadBadge(count: Long?) {
+    if (count == null || count <= 0L) return
+    Text(
+        unreadBadgeText(count),
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.semantics { contentDescription = "$count unread" },
+    )
+}
+
 // A simple folder outline, kept local rather than adding the extended icon pack.
 internal val FolderIcon: ImageVector = ImageVector.Builder(
     name = "ReaderFolder", defaultWidth = 24.dp, defaultHeight = 24.dp,
@@ -159,6 +184,8 @@ internal fun ReaderDrawer(
     onFeed: (FeedSelection) -> Unit,
     onSettings: () -> Unit,
     onClose: () -> Unit = {},
+    // Null outside unread-count mode, so river readers never see counts.
+    unreadCounts: UnreadCounts? = null,
 ) {
     val groups = remember(objects) { navigationFeedGroups(objects) }
     var expanded by rememberSaveable { mutableStateOf(emptyList<String>()) }
@@ -216,13 +243,16 @@ internal fun ReaderDrawer(
                         selected = view == View.ALL && selection == folder,
                         icon = { Icon(FolderIcon, contentDescription = null) },
                         badge = {
-                            IconButton(onClick = {
-                                expanded = if (group.key in expanded) expanded - group.key else expanded + group.key
-                            }) {
-                                Icon(
-                                    if (group.key in expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                                    contentDescription = "${if (group.key in expanded) "Collapse" else "Expand"} ${group.title}",
-                                )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                UnreadBadge(unreadCounts?.let { group.unreadCount(it) })
+                                IconButton(onClick = {
+                                    expanded = if (group.key in expanded) expanded - group.key else expanded + group.key
+                                }) {
+                                    Icon(
+                                        if (group.key in expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                                        contentDescription = "${if (group.key in expanded) "Collapse" else "Expand"} ${group.title}",
+                                    )
+                                }
                             }
                         },
                         onClick = { onFeed(folder) },
@@ -235,6 +265,7 @@ internal fun ReaderDrawer(
                             label = { Text(subscription.name, maxLines = 2, overflow = TextOverflow.Ellipsis) },
                             selected = view == View.ALL && selection == FeedSelection.Subscription(subscription.id),
                             icon = { Icon(FeedIcon, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                            badge = { UnreadBadge(unreadCounts?.bySubscription?.get(subscription.id)) },
                             onClick = { onFeed(FeedSelection.Subscription(subscription.id)) },
                             modifier = Modifier.padding(start = 28.dp, end = 12.dp),
                         )
