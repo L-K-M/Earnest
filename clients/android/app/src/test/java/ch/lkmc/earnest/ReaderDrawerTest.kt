@@ -7,11 +7,15 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performClick
 import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.core.SyncObject
+import ch.lkmc.earnest.core.UnreadCounts
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -44,6 +48,43 @@ class ReaderDrawerTest {
         compose.onNodeWithTag("reader-drawer").performScrollToNode(hasText("Systems journal"))
         compose.onNodeWithText("Systems journal").performClick()
         assertEquals(listOf(FeedSelection.Folder(7), FeedSelection.Subscription(3)), selections)
+    }
+
+    @Test fun foldersShowTheirFeedsSummedUnreadCountsAndFeedsShowTheirOwn() {
+        val objects = listOf(
+            SyncObject(SyncEngine.OBJECT_FOLDER, 7, name = "Engineering", rev = 1),
+            SyncObject(SyncEngine.OBJECT_SUBSCRIPTION, 3, folderId = 7, name = "Systems journal", rev = 1),
+            SyncObject(SyncEngine.OBJECT_SUBSCRIPTION, 4, folderId = 7, name = "Compiler notes", rev = 1),
+            SyncObject(SyncEngine.OBJECT_SUBSCRIPTION, 5, folderId = 7, name = "Quiet blog", rev = 1),
+        )
+        val counts = UnreadCounts(bySubscription = mapOf(3L to 5L, 4L to 7L, 5L to 0L), total = 12)
+        compose.setContent {
+            EarnestTheme(ThemeSetting.LIGHT) {
+                ReaderDrawer(View.ALL, FeedSelection.All, objects, onView = {}, onFeed = {}, onSettings = {}, unreadCounts = counts)
+            }
+        }
+        compose.onNodeWithTag("reader-drawer").performScrollToNode(hasText("Engineering"))
+        compose.onNodeWithContentDescription("12 unread", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithContentDescription("Expand Engineering").performClick()
+        compose.onNodeWithTag("reader-drawer").performScrollToNode(hasText("Quiet blog"))
+        compose.onNodeWithContentDescription("5 unread", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithContentDescription("7 unread", useUnmergedTree = true).assertIsDisplayed()
+        compose.onAllNodesWithContentDescription("0 unread", useUnmergedTree = true).assertCountEquals(0)
+    }
+
+    @Test fun drawerShowsNoCountsWithoutUnreadCounts() {
+        val objects = listOf(
+            SyncObject(SyncEngine.OBJECT_FOLDER, 7, name = "Engineering", rev = 1),
+            SyncObject(SyncEngine.OBJECT_SUBSCRIPTION, 3, folderId = 7, name = "Systems journal", rev = 1),
+        )
+        compose.setContent {
+            EarnestTheme(ThemeSetting.LIGHT) {
+                ReaderDrawer(View.ALL, FeedSelection.All, objects, onView = {}, onFeed = {}, onSettings = {})
+            }
+        }
+        compose.onNodeWithContentDescription("Expand Engineering").performClick()
+        compose.onNodeWithTag("reader-drawer").performScrollToNode(hasText("Systems journal"))
+        compose.onAllNodesWithContentDescription("unread", substring = true, useUnmergedTree = true).assertCountEquals(0)
     }
 
     @Test fun secondaryShelvesRemainReachableFromTheDrawer() {

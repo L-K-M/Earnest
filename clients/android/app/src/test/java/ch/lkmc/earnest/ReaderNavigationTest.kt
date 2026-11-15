@@ -5,6 +5,7 @@ import androidx.compose.runtime.saveable.SaverScope
 import ch.lkmc.earnest.core.CachedEntry
 import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.core.SyncObject
+import ch.lkmc.earnest.core.UnreadCounts
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -46,6 +47,19 @@ class ReaderNavigationTest {
         assertEquals(listOf("No folder", "Empty", "Engineering"), groups.map { it.title })
         assertTrue(groups[1].subscriptions.isEmpty())
         assertEquals(listOf(1L, 2L), groups[2].subscriptions.map { it.id })
+    }
+
+    @Test fun folderUnreadCountsSumOnlyTheirOwnLiveFeeds() {
+        // Feed 5 is deleted and feed 4's folder is gone, so neither counts toward Engineering.
+        val counts = UnreadCounts(bySubscription = mapOf(1L to 4L, 2L to 6L, 3L to 2L, 4L to 1L, 5L to 100L))
+        val totals = navigationFeedGroups(objects).associate { it.title to it.unreadCount(counts) }
+        assertEquals(mapOf("No folder" to 3L, "Empty" to 0L, "Engineering" to 10L), totals)
+        assertEquals(0L, navigationFeedGroups(objects).last().unreadCount(UnreadCounts()))
+    }
+
+    @Test fun unreadBadgesCapAtThreeDigits() {
+        assertEquals("999", unreadBadgeText(999))
+        assertEquals("999+", unreadBadgeText(1000))
     }
 
     @Test fun selectionRoundTripsLargeIdsWithoutConfusingFeedAndFolderNamespaces() {

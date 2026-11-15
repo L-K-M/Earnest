@@ -459,6 +459,9 @@ internal fun MainScaffold(
                     onView = ::selectView,
                     onFeed = ::selectFeed,
                     onClose = { scope.launch { drawerState.close() } },
+                    unreadCounts = state.unreadCounts.takeIf {
+                        state.readerSettings.readingMode == ch.lkmc.earnest.core.ReadingMode.UNREAD_COUNTS
+                    },
                     onSettings = {
                         showSettings = true
                         scope.launch { drawerState.close() }
