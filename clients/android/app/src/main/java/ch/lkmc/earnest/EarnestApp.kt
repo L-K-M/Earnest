@@ -1218,10 +1218,10 @@ private fun MarkSeenOnScroll(
                 visible = listState.layoutInfo.visibleItemsInfo.mapNotNull { item ->
                     (item.key as? Long)?.let { key -> key to item.index }
                 }.toMap(),
-            )
+            ) to listState.isScrollInProgress
         }
             .distinctUntilChanged()
-            .collect { viewport -> tracker.observe(viewport).forEach(onSeen) }
+            .collect { (viewport, scrolling) -> tracker.observe(viewport, scrolling).forEach(onSeen) }
     }
 }
 

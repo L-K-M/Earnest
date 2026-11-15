@@ -15,7 +15,10 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.unit.dp
 import ch.lkmc.earnest.core.CachedEntry
 import org.junit.Assert.assertEquals
@@ -37,7 +40,7 @@ class InlineReadingScrollTest {
     private var back: OnBackPressedDispatcher? = null
     private val viewportWidth = mutableIntStateOf(400)
 
-    private fun openTallArticle(selected: Long = 7, onViewport: (InlineArticleState) -> Unit = {}) {
+    private fun openTallArticle(selected: Long = 7, onSeen: (Long) -> Unit = {}, onViewport: (InlineArticleState) -> Unit = {}) {
         compose.setContent {
             back = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
             EarnestTheme(ThemeSetting.DARK) {
@@ -53,7 +56,7 @@ class InlineReadingScrollTest {
                         states = emptyMap(), principalId = 1, subscriptionTitles = emptyMap(), subscriptionIcons = emptyMap(),
                         briefs = emptyList(), principalNames = emptyMap(), entryTitles = emptyMap(), agentChanges = emptyList(),
                         sessionChanges = emptyList(), agentChangesError = null, onRevert = {}, onOpenAgentSelected = {},
-                        onOpen = {}, onLater = {}, onDone = {}, onSeen = {}, onKeep = {}, onUnkeep = {}, onMarkUnread = {},
+                        onOpen = {}, onLater = {}, onDone = {}, onSeen = onSeen, onKeep = {}, onUnkeep = {}, onMarkUnread = {},
                         accountKey = "inline-scroll", layoutOverride = ArticleLayout.READING, listState = listState,
                         onLoadContent = { ContentUrlResult(null, null, "Body $it") },
                         inlineContent = { _, _, viewport ->
@@ -73,6 +76,27 @@ class InlineReadingScrollTest {
             listState.requestScrollToItem(selected.toInt() - 1, with(compose.density) { 1000.dp.roundToPx() })
         }
         compose.waitForIdle()
+    }
+
+    @Test fun openingAnArticleDoesNotMarkUnrelatedRowsRead() {
+        val seen = mutableListOf<Long>()
+        openTallArticle(onSeen = { seen += it })
+        compose.runOnIdle { seen.clear() }
+        compose.onNodeWithText("Headline 8").performClick()
+        compose.waitForIdle()
+        compose.runOnIdle {
+            assertTrue("opening an article must not mark other rows read: $seen", seen.isEmpty())
+        }
+    }
+
+    @Test fun scrollingPastHeadlinesStillMarksThemRead() {
+        val seen = mutableListOf<Long>()
+        openTallArticle(onSeen = { seen += it })
+        compose.onNodeWithText("Collapse").performClick()
+        compose.runOnIdle { seen.clear() }
+        compose.onRoot().performTouchInput { swipeUp() }
+        compose.waitForIdle()
+        compose.runOnIdle { assertTrue("scrolling past headlines must mark them read", seen.isNotEmpty()) }
     }
 
     @Test fun openingTheNextArticleKeepsItsHeadlineInPlace() {

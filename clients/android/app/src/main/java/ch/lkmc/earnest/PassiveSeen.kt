@@ -12,20 +12,15 @@ internal data class SeenViewport(
  * never composed, stay unseen.
  */
 internal class PassiveSeenTracker {
-    private val composed = mutableSetOf<Long>()
-    private val positions = mutableMapOf<Long, Int>()
+    private var visible = emptyMap<Long, Int>()
     private val passed = mutableSetOf<Long>()
 
-    /** Returns entries that composed and then scrolled out through the top edge. */
-    fun observe(viewport: SeenViewport): Set<Long> {
-        val seen = composed.filter { id ->
-            val index = positions[id]
-            id !in viewport.visible && index != null && index < viewport.firstVisibleIndex && passed.add(id)
-        }.toSet()
-        viewport.visible.forEach { (id, index) ->
-            composed += id
-            positions[id] = index
-        }
+    /** Only scrolling, not layout changes, can move a visible row past the reader. */
+    fun observe(viewport: SeenViewport, scrolling: Boolean): Set<Long> {
+        val seen = if (scrolling) visible.filter { (id, index) ->
+            id !in viewport.visible && index < viewport.firstVisibleIndex && passed.add(id)
+        }.keys.toSet() else emptySet()
+        visible = viewport.visible
         return seen
     }
 }

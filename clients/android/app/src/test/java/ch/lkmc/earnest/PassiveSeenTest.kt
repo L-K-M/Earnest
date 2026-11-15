@@ -4,6 +4,22 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PassiveSeenTest {
+    private fun PassiveSeenTracker.observe(viewport: SeenViewport) = observe(viewport, scrolling = true)
+
+    @Test fun layoutChangesDoNotMarkRowsAndResetTheVisibleBaseline() {
+        val tracker = PassiveSeenTracker()
+        tracker.observe(SeenViewport(0, mapOf(1L to 0, 2L to 1)), scrolling = false)
+        assertTrue(tracker.observe(SeenViewport(1, mapOf(2L to 1, 3L to 2)), scrolling = false).isEmpty())
+        assertEquals(setOf(2L), tracker.observe(SeenViewport(2, mapOf(3L to 2)), scrolling = true))
+    }
+
+    @Test fun rowsThatPreviouslyLeftTheBottomAreNotMarkedOnLaterScrolls() {
+        val tracker = PassiveSeenTracker()
+        tracker.observe(SeenViewport(0, mapOf(1L to 0, 2L to 1)))
+        tracker.observe(SeenViewport(0, mapOf(1L to 0)), scrolling = false)
+        assertEquals(setOf(1L), tracker.observe(SeenViewport(3, mapOf(4L to 3))))
+    }
+
     @Test fun rowsVisibleOnFirstCompositionStayUnseen() {
         val tracker = PassiveSeenTracker()
         val passed = tracker.observe(SeenViewport(firstVisibleIndex = 0, visible = mapOf(1L to 0, 2L to 1)))
