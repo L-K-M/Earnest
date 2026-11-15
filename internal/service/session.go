@@ -12,14 +12,50 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const sessionIdle = 24 * time.Hour
-const sessionAbsolute = 30 * 24 * time.Hour
+// SessionPersistence chooses how long a web session survives without use.
+type SessionPersistence int
+
+const (
+	// SessionStandard ends after a day without use.
+	SessionStandard SessionPersistence = iota
+	// SessionRemembered is "remember me on this computer": it survives a
+	// month without use, up to its own absolute limit.
+	SessionRemembered
+)
+
+const (
+	sessionIdle             = 24 * time.Hour
+	sessionAbsolute         = 30 * 24 * time.Hour
+	rememberedSessionIdle   = 30 * 24 * time.Hour
+	rememberedSessionMaxAge = 90 * 24 * time.Hour
+)
+
+// Queries pick each session row's limits from its remembered flag. The
+// intervals are these constants, so they are written into the SQL text.
+var (
+	sessionIdleSQL     = sessionLimitSQL(sessionIdle, rememberedSessionIdle)
+	sessionAbsoluteSQL = sessionLimitSQL(sessionAbsolute, rememberedSessionMaxAge)
+)
+
+func sessionLimitSQL(standard, remembered time.Duration) string {
+	return fmt.Sprintf("(CASE WHEN s.remembered THEN interval '%d seconds' ELSE interval '%d seconds' END)", int64(remembered/time.Second), int64(standard/time.Second))
+}
+
+// limits returns the idle and absolute lifetimes of a new session.
+func (p SessionPersistence) limits() (idle, absolute time.Duration) {
+	if p == SessionRemembered {
+		return rememberedSessionIdle, rememberedSessionMaxAge
+	}
+	return sessionIdle, sessionAbsolute
+}
 
 // SessionCredentials contains the cookie and its associated CSRF secret.
+// ExpiresAt is the idle expiry, which use extends up to AbsoluteExpiresAt.
 type SessionCredentials struct {
-	ID        string
-	CSRF      string
-	ExpiresAt time.Time
+	ID                string
+	CSRF              string
+	ExpiresAt         time.Time
+	AbsoluteExpiresAt time.Time
 }
 
 // Session contains metadata for one web session; IDHash is safe to use to identify it.
@@ -30,7 +66,7 @@ type Session struct {
 }
 
 // CreateSession creates a web session for a human principal.
-func (a *Auth) CreateSession(ctx context.Context, actor Actor) (SessionCredentials, error) {
+func (a *Auth) CreateSession(ctx context.Context, actor Actor, persistence SessionPersistence) (SessionCredentials, error) {
 	if actor.Kind != PrincipalHuman {
 		return SessionCredentials{}, ErrForbidden
 	}
@@ -42,23 +78,24 @@ func (a *Auth) CreateSession(ctx context.Context, actor Actor) (SessionCredentia
 	if _, err := rand.Read(csrf); err != nil {
 		return SessionCredentials{}, fmt.Errorf("generate CSRF secret: %w", err)
 	}
+	idle, absolute := persistence.limits()
 	now := a.now()
-	expires := now.Add(sessionIdle)
-	tag, err := a.db.Pool().Exec(ctx, "INSERT INTO sessions (id_hash,principal_id,csrf_secret,created_at,expires_at) SELECT $1,id,$3,$4,$5 FROM principals WHERE id=$2 AND user_id=$6 AND kind='human'", hashSecret(id), actor.PrincipalID, csrf, now, expires, actor.UserID)
+	expires := now.Add(idle)
+	tag, err := a.db.Pool().Exec(ctx, "INSERT INTO sessions (id_hash,principal_id,csrf_secret,created_at,expires_at,remembered) SELECT $1,id,$3,$4,$5,$7 FROM principals WHERE id=$2 AND user_id=$6 AND kind='human'", hashSecret(id), actor.PrincipalID, csrf, now, expires, actor.UserID, persistence == SessionRemembered)
 	if err != nil {
 		return SessionCredentials{}, fmt.Errorf("create session: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return SessionCredentials{}, ErrForbidden
 	}
-	return SessionCredentials{ID: id, CSRF: base64.RawURLEncoding.EncodeToString(csrf), ExpiresAt: expires}, nil
+	return SessionCredentials{ID: id, CSRF: base64.RawURLEncoding.EncodeToString(csrf), ExpiresAt: expires, AbsoluteExpiresAt: now.Add(absolute)}, nil
 }
 
 // ResolveSession authenticates and refreshes the idle expiry up to the absolute limit.
 func (a *Auth) ResolveSession(ctx context.Context, id string) (Actor, error) {
 	now := a.now()
 	var actor Actor
-	err := a.db.Pool().QueryRow(ctx, "UPDATE sessions s SET expires_at=LEAST($2::timestamptz + $3::interval,s.created_at + $4::interval) FROM principals p WHERE s.id_hash=$1 AND s.principal_id=p.id AND p.kind='human' AND s.expires_at>$2 AND s.created_at + $4::interval>$2 RETURNING p.user_id,p.id", hashSecret(id), now, sessionIdle, sessionAbsolute).Scan(&actor.UserID, &actor.PrincipalID)
+	err := a.db.Pool().QueryRow(ctx, "UPDATE sessions s SET expires_at=LEAST($2::timestamptz + "+sessionIdleSQL+",s.created_at + "+sessionAbsoluteSQL+") FROM principals p WHERE s.id_hash=$1 AND s.principal_id=p.id AND p.kind='human' AND s.expires_at>$2 AND s.created_at + "+sessionAbsoluteSQL+">$2 RETURNING p.user_id,p.id", hashSecret(id), now).Scan(&actor.UserID, &actor.PrincipalID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Actor{}, ErrUnauthorized
 	}
@@ -74,7 +111,7 @@ func (a *Auth) ResolveSession(ctx context.Context, id string) (Actor, error) {
 // VerifyCSRF checks the session-bound CSRF token without extending the session.
 func (a *Auth) VerifyCSRF(ctx context.Context, id, token string) error {
 	var secret []byte
-	err := a.db.Pool().QueryRow(ctx, "SELECT csrf_secret FROM sessions WHERE id_hash=$1 AND expires_at>$2 AND created_at + $3::interval>$2", hashSecret(id), a.now(), sessionAbsolute).Scan(&secret)
+	err := a.db.Pool().QueryRow(ctx, "SELECT s.csrf_secret FROM sessions s WHERE s.id_hash=$1 AND s.expires_at>$2 AND s.created_at + "+sessionAbsoluteSQL+">$2", hashSecret(id), a.now()).Scan(&secret)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrUnauthorized
 	}

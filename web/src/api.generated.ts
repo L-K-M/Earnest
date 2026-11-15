@@ -1901,6 +1901,8 @@ export interface components {
         };
         LoginBody: {
             password: string;
+            /** @description Keep this browser signed in across restarts and up to 30 days without use */
+            remember?: boolean;
             username: string;
         };
         LoginResult: {

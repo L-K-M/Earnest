@@ -23,7 +23,7 @@ import {OfflineStatus, clearOffline, useOnline} from './offline/Offline'
 import {Ask} from './pipeline/Pipeline'
 import {Brand} from './Brand'
 import {Icon} from './Icon'
-import {Login} from './Login'
+import {Login, type SignIn} from './Login'
 import {READING_VIEWS, Sidebar} from './Sidebar'
 import {ResizeHandle} from './ResizeHandle'
 import {usePaneWidths} from './paneWidths'
@@ -575,9 +575,9 @@ function Session({onLogout}: {onLogout: () => void}) {
     {id:'sign-out', title:'Sign out', group:'Account', run:() => {void logout()}},
   ]
   function savedSettings(value: ReadingSettings) { queryClient.setQueryData(['settings'], value) }
-  async function login(username: string, password: string): Promise<string | null> {
+  async function login(credentials: SignIn): Promise<string | null> {
     try {
-      const result = await request<{csrf_token: string}>('/v1/session/login', {method:'POST', body:JSON.stringify({username, password})})
+      const result = await request<{csrf_token: string}>('/v1/session/login', {method:'POST', body:JSON.stringify(credentials)})
       setCSRF(result.csrf_token)
       setIdentity(await request<Identity>('/v1/me')); setError('')
       return null

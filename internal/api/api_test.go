@@ -489,6 +489,36 @@ func TestOpenAPIIsCurrent(t *testing.T) {
 	}
 }
 
+func TestLoginRememberKeepsCookieAcrossRestarts(t *testing.T) {
+	template := storetest.NewTemplate(t)
+	f := newAPIFixture(t, template)
+	for _, test := range []struct {
+		name     string
+		remember bool
+		lifetime time.Duration
+	}{
+		{"standard", false, 24 * time.Hour},
+		{"remembered", true, 90 * 24 * time.Hour},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			before := time.Now()
+			rec := f.do(t, http.MethodPost, "/v1/session/login", loginBody{Username: "reader", Password: "password", Remember: test.remember}, requestCredentials{})
+			requireStatus(t, rec, http.StatusOK)
+			cookies := rec.Result().Cookies()
+			if len(cookies) != 1 {
+				t.Fatalf("cookies=%v", cookies)
+			}
+			expires := cookies[0].Expires
+			if expires.Before(before.Add(test.lifetime).Add(-time.Minute)) || expires.After(time.Now().Add(test.lifetime).Add(time.Minute)) {
+				t.Fatalf("cookie expires in %v, want %v", time.Until(expires), test.lifetime)
+			}
+			if !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteLaxMode {
+				t.Fatalf("cookie attributes=%+v", cookies[0])
+			}
+		})
+	}
+}
+
 func TestLoginReplacesExistingSessionWithoutCSRF(t *testing.T) {
 	template := storetest.NewTemplate(t)
 	f := newAPIFixture(t, template)
