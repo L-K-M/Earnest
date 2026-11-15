@@ -57,7 +57,7 @@ class ReaderNavigationTest {
         assertEquals(0L, navigationFeedGroups(objects).last().unreadCount(UnreadCounts()))
     }
 
-    @Test fun unreadBadgesCapAtFourDigits() {
+    @Test fun unreadBadgesCapAtThreeDigits() {
         assertEquals("999", unreadBadgeText(999))
         assertEquals("999+", unreadBadgeText(1000))
     }
