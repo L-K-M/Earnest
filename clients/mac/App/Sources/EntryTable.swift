@@ -464,6 +464,8 @@ final class EntryCell: NSTableCellView {
     /// line empty instead.
     private static func titleHeight(_ text: String, width: CGFloat) -> CGFloat {
         let font = unreadTitleFont
+        assert(font.pointSize == titleFont.pointSize,
+               "titleHeight reserves with unreadTitleFont; both title fonts must share metrics")
         let line = ceil(font.ascender - font.descender + font.leading)
         let bounds = (text as NSString).boundingRect(
             with: NSSize(width: width, height: .greatestFiniteMagnitude),

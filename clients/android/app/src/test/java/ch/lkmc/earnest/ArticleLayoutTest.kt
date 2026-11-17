@@ -99,7 +99,7 @@ class ArticleLayoutTest {
             "Apple Announces New Accessibility Features Coming Later This Year",
             "Quoting Somebody on Something Moderately Interesting",
         )
-        val widths = 180..360 step 4
+        val widths = 180..600 step 4
         val heights = mutableMapOf<Triple<String, Int, Boolean>, Int>()
         compose.setContent {
             EarnestTheme(ThemeSetting.LIGHT) {
