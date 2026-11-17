@@ -102,6 +102,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The web reader hides the iframe's blank document between articles, and
   article error pages use the reading theme rather than a white background.
 - Web article titles open the original article in a new tab.
+- Article rows on the web, Mac and Android keep their height when an article
+  is read. Each row reserves the lines its semibold unread title needs, so
+  the narrower read title no longer shortens the row and moves the rows
+  below it.
 - Feed cache lifetimes now follow observed posting cadence instead of allowing
   a publisher's long `max-age` to stall busy feeds for days. Cadence survives
   unchanged responses and restarts; cache hints are capped at twice the

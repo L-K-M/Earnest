@@ -143,6 +143,19 @@ describe('unread-only list visits', () => {
     expect(screen.getByText('Article 2')).toBeTruthy()
   })
 
+  it('keeps the unread title rendition as the height reserve once read', async () => {
+    const {states, rerender, tree} = mount()
+    const entry = article(2)
+    await screen.findByText('Article 2')
+    const title = () => screen.getByText('Article 2').closest('.entry-title')
+    expect(title()?.getAttribute('data-title')).toBe('Article 2')
+    states.set(2, {...entry.state, seen: {...entry.state.seen, value: 'seen', rev: 1}})
+    rerender(tree(0, true, entry))
+    expect(title()?.closest('a')?.hasAttribute('data-unread')).toBe(false)
+    expect(title()?.querySelector('.unread-dot')).toBeNull()
+    expect(title()?.getAttribute('data-title')).toBe('Article 2')
+  })
+
   it('retains admitted articles when a background refetch omits them', async () => {
     const {client, states, setRows} = mount({kind: 'today', title: 'Today'})
     await screen.findByText('Article 2')

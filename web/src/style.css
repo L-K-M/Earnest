@@ -274,9 +274,15 @@ dd {margin: 0}
 .entry[data-selected] {background: var(--selected)}
 .entry[aria-current=page] {box-shadow: inset 3px 0 0 var(--brand)}
 .entry:focus-visible {outline: 2px solid var(--brand); outline-offset: -2px}
-.entry-title {display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.35; color: var(--ink-muted); overflow-wrap: anywhere}
-.entry[data-unread] .entry-title {color: var(--ink); font-weight: 600}
-.unread-dot {display: inline-block; width: .5rem; height: .5rem; margin-right: .45rem; border-radius: 50%; background: var(--orange); vertical-align: .1em}
+/* A title keeps the height of its unread rendition (the dot, then semibold
+   text) in every state. Reading an article narrows the text, so it can wrap
+   to fewer lines; a hidden unread copy stacked in the same grid cell holds
+   the row at the unread height, and nothing below the title moves. */
+.entry-title {--unread-weight: 600; --unread-dot: .5rem; --unread-dot-gap: .45rem; display: grid; line-height: 1.35; color: var(--ink-muted); overflow-wrap: anywhere}
+.entry-title-text, .entry-title::after {grid-area: 1 / 1; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden}
+.entry-title::after {content: attr(data-title); visibility: hidden; font-weight: var(--unread-weight); text-indent: calc(var(--unread-dot) + var(--unread-dot-gap))}
+.entry[data-unread] .entry-title {color: var(--ink); font-weight: var(--unread-weight)}
+.unread-dot {display: inline-block; width: var(--unread-dot); height: var(--unread-dot); margin-right: var(--unread-dot-gap); border-radius: 50%; background: var(--orange); vertical-align: .1em}
 .entry-blurb {display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: var(--step--1); color: var(--ink-muted)}
 .entry-meta {display: flex; align-items: center; gap: var(--s2); min-width: 0; font-size: var(--step--1); color: var(--ink-muted)}
 .feed-icon {flex: none; width: 1.15rem; height: 1.15rem; border-radius: var(--r1); object-fit: contain}

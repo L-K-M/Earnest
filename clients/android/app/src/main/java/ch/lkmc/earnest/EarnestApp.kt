@@ -127,6 +127,7 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -134,9 +135,14 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.constrainHeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.window.core.layout.WindowSizeClass
@@ -1228,6 +1234,28 @@ private fun MarkSeenOnScroll(
     }
 }
 
+private const val HEADLINE_MAX_LINES = 4
+
+/**
+ * Sizes a list headline for its unread (semibold) rendition in every state.
+ * The regular weight is narrower and can wrap to fewer lines, so a row sized
+ * by the shown weight would shrink as its article is read and move every row
+ * below it; a read headline leaves its last reserved line empty instead.
+ */
+private fun Modifier.unreadHeadlineHeight(text: String, style: TextStyle, measurer: TextMeasurer) =
+    layout { measurable, constraints ->
+        val placeable = measurable.measure(constraints)
+        val unread = measurer.measure(
+            text,
+            style.copy(fontWeight = FontWeight.SemiBold),
+            overflow = TextOverflow.Ellipsis,
+            maxLines = HEADLINE_MAX_LINES,
+            constraints = Constraints(maxWidth = constraints.maxWidth),
+        )
+        val height = constraints.constrainHeight(maxOf(placeable.height, unread.size.height))
+        layout(placeable.width, height) { placeable.place(0, 0) }
+    }
+
 @Composable
 internal fun EntryRow(
     entry: CachedEntry,
@@ -1292,13 +1320,16 @@ internal fun EntryRow(
             }
         }
         Row(Modifier.padding(end = 8.dp), verticalAlignment = Alignment.Top) {
+            val headline = entry.title.ifBlank { "Untitled" }
+            val headlineStyle = MaterialTheme.typography.titleMedium
             Text(
-                entry.title.ifBlank { "Untitled" },
-                style = MaterialTheme.typography.titleMedium,
+                headline,
+                style = headlineStyle,
                 fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal,
-                maxLines = 4,
+                maxLines = HEADLINE_MAX_LINES,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f).testTag("headline-${entry.id}"),
+                modifier = Modifier.weight(1f).testTag("headline-${entry.id}")
+                    .unreadHeadlineHeight(headline, headlineStyle, rememberTextMeasurer()),
             )
             entry.thumbnailUrl?.let { thumbnail ->
                 Spacer(Modifier.width(12.dp))

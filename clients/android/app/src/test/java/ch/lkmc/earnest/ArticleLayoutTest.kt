@@ -1,7 +1,13 @@
 package ch.lkmc.earnest
 
 import android.content.Context
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.Text
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.junit4.StateRestorationTester
@@ -79,6 +85,37 @@ class ArticleLayoutTest {
         val unreadLeft = compose.onNodeWithText("Unread headline", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.left
         val readLeft = compose.onNodeWithText("Read headline", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.left
         assertEquals("read status must not indent the headline", readLeft, unreadLeft, 0.5f)
+    }
+
+    /** The semibold unread headline is wider than the read one, so at some
+     *  widths it wraps to a line the read headline does not need. Reading an
+     *  article must not shrink its row and move the rows below. */
+    @Test fun readingAnArticleKeepsItsRowHeight() {
+        val unread = SyncEngine.initialState(1, 1)
+        val read = unread.copy(seen = unread.seen.copy(value = JsonPrimitive(SyncEngine.VALUE_SEEN)))
+        val titles = listOf(
+            "Developers Continue to Optimize iPhone Apps for the Duo",
+            "Irish Goodbye / French Leave / Leave the English Way",
+            "Apple Announces New Accessibility Features Coming Later This Year",
+            "Quoting Somebody on Something Moderately Interesting",
+        )
+        val widths = 180..600 step 4
+        val heights = mutableMapOf<Triple<String, Int, Boolean>, Int>()
+        compose.setContent {
+            EarnestTheme(ThemeSetting.LIGHT) {
+                Column(Modifier.wrapContentHeight(unbounded = true)) {
+                    for (title in titles) for (width in widths) for (isUnread in listOf(true, false)) {
+                        Box(Modifier.width(width.dp).onSizeChanged { heights[Triple(title, width, isUnread)] = it.height }) {
+                            EntryRow(CachedEntry(1, title = title), if (isUnread) unread else read, "A feed", onClick = {})
+                        }
+                    }
+                }
+            }
+        }
+        compose.waitForIdle()
+        val changed = titles.flatMap { title -> widths.filter { heights[Triple(title, it, true)] != heights[Triple(title, it, false)] }.map { "$title at $it dp" } }
+        assertEquals(titles.size * widths.count() * 2, heights.size)
+        assertTrue("reading must keep the row height: $changed", changed.isEmpty())
     }
 
     @Test fun articleActionsHaveADiscoverableMenuInsteadOfASeparateButtonRow() {
