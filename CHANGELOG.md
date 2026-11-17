@@ -105,7 +105,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Article rows on the web, Mac and Android keep their height when an article
   is read. Each row reserves the lines its semibold unread title needs, so
   the narrower read title no longer shortens the row and moves the rows
-  below it.
+  below it. On the web the unread dot hangs in the row's left margin, as on
+  the Mac, so a title no longer moves sideways when it is read.
 - Feed cache lifetimes now follow observed posting cadence instead of allowing
   a publisher's long `max-age` to stall busy feeds for days. Cadence survives
   unchanged responses and restarts; cache hints are capped at twice the

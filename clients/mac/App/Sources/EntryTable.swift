@@ -464,13 +464,20 @@ final class EntryCell: NSTableCellView {
     /// line empty instead.
     private static func titleHeight(_ text: String, width: CGFloat) -> CGFloat {
         let font = unreadTitleFont
-        assert(font.pointSize == titleFont.pointSize,
-               "titleHeight reserves with unreadTitleFont; both title fonts must share metrics")
-        let line = ceil(font.ascender - font.descender + font.leading)
+        let line = lineHeight(font)
+        // A read title draws in titleFont inside this frame, so its lines must
+        // fit the semibold ones the frame is sized for.
+        assert(lineHeight(titleFont) <= line,
+               "a regular title line is taller than the semibold line its frame reserves")
         let bounds = (text as NSString).boundingRect(
             with: NSSize(width: width, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font])
         return min(line * 2, max(line, ceil(bounds.height)))
+    }
+
+    /// One title line as `titleHeight` reserves it.
+    private static func lineHeight(_ font: NSFont) -> CGFloat {
+        ceil(font.ascender - font.descender + font.leading)
     }
 }
 

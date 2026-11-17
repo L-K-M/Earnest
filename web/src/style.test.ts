@@ -47,18 +47,26 @@ function tokens(body: string): Map<string, string> {
   return new Map([...body.matchAll(/--([\w-]+)\s*:\s*([^;]+);/g)].map(match => [match[1], match[2].trim()]))
 }
 
-// Reading narrows a title (no dot, regular weight), so it can wrap to fewer
-// lines. The hidden copy that reserves the unread lines must stay semibold
-// and indented by the dot, or rows shrink again when an article is read.
-it('reserves the unread title rendition in every row state', () => {
+// Reading narrows a title (regular weight), so it can wrap to fewer lines.
+// The hidden copy that reserves the unread lines must stay semibold and share
+// the title's grid cell, or rows shrink again when an article is read. The
+// dot hangs in the row's left padding, out of the text, or the title moves
+// sideways when the dot goes.
+it('keeps a title in place in every row state', () => {
+  const title = ruleBody('\n.entry-title {')
+  expect(title).toContain('display: grid')
+  expect(title).toContain('position: relative')
+  expect(ruleBody('.entry-title-text, .entry-title::after {')).toContain('grid-area: 1 / 1')
   const reserve = ruleBody('\n.entry-title::after {')
   expect(reserve).toContain('content: attr(data-title)')
   expect(reserve).toContain('visibility: hidden')
   expect(reserve).toContain('font-weight: var(--unread-weight)')
+  expect(reserve).not.toContain('text-indent')
   expect(ruleBody('.entry[data-unread] .entry-title {')).toContain('font-weight: var(--unread-weight)')
-  expect(reserve).toContain('text-indent: calc(var(--unread-dot) + var(--unread-dot-gap))')
-  expect(ruleBody('\n.unread-dot {')).toMatch(/width: var\(--unread-dot\);.*margin-right: var\(--unread-dot-gap\)/)
-  expect(ruleBody('.entry-title-text, .entry-title::after {')).toContain('grid-area: 1 / 1')
+  const dot = ruleBody('\n.unread-dot {')
+  expect(dot).toContain('position: absolute')
+  expect(dot).toContain('left: calc((var(--entry-gutter) + var(--unread-dot)) / -2)')
+  expect(ruleBody('\n.entry {')).toMatch(/padding: \S+ \S+ \S+ var\(--entry-gutter\);/)
 })
 
 it('defines the icon tones and the sign-in glow in every theme block', () => {

@@ -143,12 +143,15 @@ describe('unread-only list visits', () => {
     expect(screen.getByText('Article 2')).toBeTruthy()
   })
 
-  it('keeps the unread title rendition as the height reserve once read', async () => {
+  it('keeps the dot out of the title text and the reserve once read', async () => {
     const {states, rerender, tree} = mount()
     const entry = article(2)
     await screen.findByText('Article 2')
     const title = () => screen.getByText('Article 2').closest('.entry-title')
     expect(title()?.getAttribute('data-title')).toBe('Article 2')
+    const dot = title()?.querySelector('.unread-dot')
+    expect(dot).toBeTruthy()
+    expect(dot?.closest('.entry-title-text')).toBeNull()
     states.set(2, {...entry.state, seen: {...entry.state.seen, value: 'seen', rev: 1}})
     rerender(tree(0, true, entry))
     expect(title()?.closest('a')?.hasAttribute('data-unread')).toBe(false)
