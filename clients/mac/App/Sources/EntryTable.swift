@@ -427,7 +427,7 @@ final class EntryCell: NSTableCellView {
         let thumbSpace = thumbPath != nil ? Self.thumbSpace : 0
         let iconSpace = iconPath != nil ? Self.iconSpace : 0
         let textWidth = max(40, bounds.width - inset.left - inset.right - Self.markWidth - thumbSpace)
-        let titleHeight = Self.titleHeight(title.stringValue, font: title.font ?? Self.titleFont, width: textWidth)
+        let titleHeight = Self.titleHeight(title.stringValue, width: textWidth)
         let subtitleHeight = ceil(Self.subtitleFont.ascender - Self.subtitleFont.descender + Self.subtitleFont.leading)
         // Flipped-agnostic: AppKit's origin is bottom-left.
         let top = bounds.height - inset.top
@@ -450,14 +450,20 @@ final class EntryCell: NSTableCellView {
     static func height(for row: EntryRow, width: CGFloat) -> CGFloat {
         let thumbSpace: CGFloat = row.thumbnail == nil ? 0 : Self.thumbSpace
         let textWidth = max(40, width - inset.left - inset.right - markWidth - thumbSpace)
-        let titleHeight = titleHeight(row.title, font: row.unread ? unreadTitleFont : titleFont, width: textWidth)
+        let titleHeight = titleHeight(row.title, width: textWidth)
         let subtitleHeight = ceil(subtitleFont.ascender - subtitleFont.descender + subtitleFont.leading)
         let text = inset.top + titleHeight + 2 + subtitleHeight + inset.bottom
         let media: CGFloat = row.thumbnail == nil ? 0 : inset.top + thumbSize + inset.bottom
         return ceil(max(text, media))
     }
 
-    private static func titleHeight(_ text: String, font: NSFont, width: CGFloat) -> CGFloat {
+    /// The title's height in its unread (semibold) font, whatever the row's
+    /// state: the regular font is narrower and can wrap to fewer lines, so
+    /// sizing by the shown font would shrink the row as an article is read
+    /// and move every row below it. A read title can leave its last reserved
+    /// line empty instead.
+    private static func titleHeight(_ text: String, width: CGFloat) -> CGFloat {
+        let font = unreadTitleFont
         let line = ceil(font.ascender - font.descender + font.leading)
         let bounds = (text as NSString).boundingRect(
             with: NSSize(width: width, height: .greatestFiniteMagnitude),

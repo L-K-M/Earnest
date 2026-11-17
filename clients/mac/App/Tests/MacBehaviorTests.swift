@@ -388,4 +388,21 @@ import EarnestKit
         XCTAssertEqual(EntryCell.height(for: long, width: 300), EntryCell.height(for: long, width: 200),
                        "Titles stop at two lines")
     }
+
+    /// The semibold unread title is wider than the read one, so at some widths
+    /// it wraps to a second line the read title does not need. Reading must
+    /// not shrink the row under the pointer.
+    func testReadingAnArticleKeepsItsRowHeight() {
+        let titles = ["Developers Continue to Optimize iPhone Apps for the Duo",
+                      "Irish Goodbye / French Leave / Leave the English Way",
+                      "Apple Announces New Accessibility Features Coming Later This Year"]
+        for title in titles {
+            let unread = EntryRow(id: 1, title: title, subtitle: "Daring Fireball", unread: true)
+            let read = EntryRow(id: 1, title: title, subtitle: "Daring Fireball", unread: false)
+            for width in stride(from: CGFloat(200), through: 600, by: 2) {
+                XCTAssertEqual(EntryCell.height(for: unread, width: width), EntryCell.height(for: read, width: width),
+                               "\(title) at \(width) points")
+            }
+        }
+    }
 }

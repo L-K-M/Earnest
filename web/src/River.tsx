@@ -372,7 +372,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
             {group && <h3 className="feed-group">{source}</h3>}
             <a className="entry" href={viewHref({kind: view.kind, id: view.id}, entry.id)} tabIndex={entry.id === tabStop ? 0 : -1} data-unread={isUnread || undefined} data-selected={selected?.id === entry.id || undefined} aria-current={reading && selected?.id === entry.id ? 'page' : undefined} onFocus={() => onSelect(entry)} onClick={event => { if (newTabClick(event)) return; event.preventDefault(); open(entry) }} onContextMenu={onMenu ? event => rowMenu(event, entry) : undefined} {...(onMenu ? {[MENU_ATTRIBUTE]: ''} : {})}>
               <span className="entry-body">
-              <span className="entry-title">{isUnread && <span className="unread-dot" aria-hidden="true" />}{entry.title || 'Untitled'}</span>
+              <span className="entry-title" data-title={entry.title || 'Untitled'}><span className="entry-title-text">{isUnread && <span className="unread-dot" aria-hidden="true" />}{entry.title || 'Untitled'}</span></span>
               {pipeline.status.blurb === 'enabled' && entry.blurb && <span className="entry-blurb">{entry.blurb}</span>}
               <span className="entry-meta"><FeedIcon subscription={subscription} title={source} /><span className="entry-source">{source}{shelf && ` · ${shelf}`}{state.kept.value === true ? ' · Kept' : ''}{cluster && alsoIn > 0 ? ` · also in ${alsoIn}` : ''}{isUnread && <span className="sr-only"> · Unread</span>}</span>{date && <time dateTime={date} title={longDate(date)}>{shortAge(date)}</time>}</span>
               </span>
