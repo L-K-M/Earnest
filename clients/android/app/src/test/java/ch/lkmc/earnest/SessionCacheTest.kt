@@ -183,6 +183,7 @@ class SessionCacheTest {
         val other = SessionCache(context, AccountIdentity("https://other.test", 2, 2))
         other.withSync(api) {
             other.markAgentChangesStale()
+            assertEquals(AgentChangesStatus.REFRESHING, other.agentChangesStatus)
             assertEquals(AgentChangesStatus.STALE, cache.agentChangesStatus)
         }
 

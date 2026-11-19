@@ -789,7 +789,10 @@ class AppViewModelTest {
             }
         }
         try {
-            delay(200)
+            // Best effort: give the flush time to queue on the sync lock before
+            // the refresh fails, so the lock is handed straight to it. On a slow
+            // runner this may miss and degrade to the plain failure path.
+            delay(1_000)
             fail.countDown()
             withTimeout(15_000) { flushHolding.await() }
             withTimeout(15_000) { model.state.first { !it.loading && it.error != null } }
