@@ -369,7 +369,10 @@ class AppViewModel internal constructor(
                         briefs = cache.db.briefs().get(),
                         principals = cachedPrincipalNames(cache),
                         agentChanges = changes,
-                        agentChangesError = if (cache.agentChangesStale) AGENT_CHANGES_STALE_MESSAGE else null,
+                        // The refresh launched below settles the notice. Until it
+                        // finishes, a stale mark an earlier cycle left behind is
+                        // not a failure of this one.
+                        agentChangesError = null,
                         readerSettingsUi = ReaderSettingsUi(
                             loaded = restored.readerSettingsUi.loaded,
                             loadedRev = restored.readerSettingsRev,
@@ -418,6 +421,7 @@ class AppViewModel internal constructor(
                 val readerRestore = restored.snapshot.cursor.generation != _state.value.snapshot.cursor.generation
                 val restoreEpoch = if (readerRestore) readerEpoch.incrementAndGet() else 0L
                 val changes = cache.agentChanges()
+                val changesStatus = cache.agentChangesStatus
                 // update{} keeps the reload from clobbering a concurrent
                 // foreground write to the state flow.
                 _state.update { previous -> previous.copy(
@@ -428,7 +432,7 @@ class AppViewModel internal constructor(
                     riverEntryIds = previous.riverMembersAfter(restored),
                     agentChanges = changes,
                     sessionAgentChanges = activitySince(changes, sessionStartedAt),
-                    agentChangesError = if (cache.agentChangesStale) AGENT_CHANGES_STALE_MESSAGE else null,
+                    agentChangesError = agentChangesNotice(changesStatus, previous.agentChangesError),
                     briefs = cache.db.briefs().get(),
                     unreadCounts = cache.cachedUnreadCounts(restored.snapshot.cursor.generation),
                     unreadCountsSyncedAt = cache.cachedUnreadCountsAt(restored.snapshot.cursor.generation),
@@ -540,12 +544,20 @@ class AppViewModel internal constructor(
                     // concurrently must not lose its token or get signed out.
                     expireSessionIfCurrent(session)
                 }
-                _state.update { current -> current.copy(error = failureText("Could not refresh", error)) }
+                val changesStatus = cache.agentChangesStatus
+                _state.update { current -> current.copy(
+                    error = failureText("Could not refresh", error),
+                    agentChangesError = agentChangesNotice(changesStatus, current.agentChangesError),
+                ) }
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
             } catch (error: Exception) {
                 if (currentOrExpired(session, cache)) {
-                    _state.update { current -> current.copy(error = failureText("Could not refresh", error)) }
+                    val changesStatus = cache.agentChangesStatus
+                    _state.update { current -> current.copy(
+                        error = failureText("Could not refresh", error),
+                        agentChangesError = agentChangesNotice(changesStatus, current.agentChangesError),
+                    ) }
                 }
             } finally {
                 if (currentOrExpired(session, cache)) _state.update { current -> current.copy(loading = false) }
@@ -2457,6 +2469,17 @@ class AppViewModel internal constructor(
     private fun effectiveStates(syncEngine: SyncEngine, principal: Long): Map<Long, State> {
         if (principal == 0L) return emptyMap()
         return syncEngine.states(principal)
+    }
+
+    /**
+     * The notice's error for [status]. A sync cycle in flight settles the
+     * notice when it finishes, so its own stale mark keeps the [previous]
+     * error instead of flashing as a failure.
+     */
+    private fun agentChangesNotice(status: AgentChangesStatus, previous: String?): String? = when (status) {
+        AgentChangesStatus.CURRENT -> null
+        AgentChangesStatus.STALE -> previous ?: AGENT_CHANGES_STALE_MESSAGE
+        AgentChangesStatus.REFRESHING -> previous
     }
 
     private fun opId(action: String) = "$action-${java.util.UUID.randomUUID()}"

@@ -720,6 +720,131 @@ class AppViewModelTest {
         assertFalse(model.loggedIn.value)
     }
 
+    /** An earlier cycle that failed or was cut off leaves the notice marked stale. */
+    private suspend fun cacheWithStaleAgentChanges() = SessionCache(app, identity).apply {
+        withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        withSync(api()) { markAgentChangesStale() }
+    }
+
+    @Test fun startupWaitsForItsRefreshBeforeReportingStaleAgentChanges() = runBlocking(Dispatchers.IO) {
+        cacheWithStaleAgentChanges()
+        val pulling = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val model = AppViewModel(app, Sessions(AuthenticatedSession(identity, "token"))) {
+            api(onRequest = { path ->
+                if (path == "/v1/changes" && release.count > 0) {
+                    pulling.countDown()
+                    release.await()
+                }
+            })
+        }
+        try {
+            assertTrue("the startup refresh never pulled", pulling.await(15, java.util.concurrent.TimeUnit.SECONDS))
+            assertNull("the startup refresh has not failed yet", model.state.value.agentChangesError)
+        } finally {
+            release.countDown()
+        }
+
+        withTimeout(15_000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        assertNull(model.state.value.agentChangesError)
+        assertFalse(SessionCache(app, identity).agentChangesStale)
+    }
+
+    @Test fun failedStartupRefreshReportsStaleAgentChanges() = runBlocking(Dispatchers.IO) {
+        cacheWithStaleAgentChanges()
+        val model = AppViewModel(app, Sessions(AuthenticatedSession(identity, "token"))) {
+            api(onRequest = { path -> if (path == "/v1/changes") throw java.io.IOException("server unreachable") })
+        }
+
+        withTimeout(15_000) { model.state.first { !it.loading && it.error != null } }
+        assertEquals(
+            "Agent changes could not be refreshed. Reconnect to check automated actions.",
+            model.state.value.agentChangesError,
+        )
+    }
+
+    @Test fun failedRefreshReportsStaleAgentChangesWhileAFlushWaitsForTheLock() = runBlocking(Dispatchers.IO) {
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val pulling = java.util.concurrent.CountDownLatch(1)
+        val fail = java.util.concurrent.CountDownLatch(1)
+        val model = AppViewModel(app, Sessions(AuthenticatedSession(identity, "token"))) {
+            api(onRequest = { path ->
+                if (path == "/v1/changes") {
+                    pulling.countDown()
+                    fail.await()
+                    throw java.io.IOException("server unreachable")
+                }
+            })
+        }
+        assertTrue("the startup refresh never pulled", pulling.await(15, java.util.concurrent.TimeUnit.SECONDS))
+
+        // An outbox flush queues on the sync lock behind the failing refresh,
+        // so the lock passes straight to it without ever being free.
+        val flushHolding = CompletableDeferred<Unit>()
+        val flushRelease = CompletableDeferred<Unit>()
+        val flush = launch {
+            SessionCache(app, identity).withSync(api()) {
+                flushHolding.complete(Unit)
+                flushRelease.await()
+            }
+        }
+        try {
+            // Best effort: give the flush time to queue on the sync lock before
+            // the refresh fails, so the lock is handed straight to it. On a slow
+            // runner this may miss and degrade to the plain failure path.
+            delay(1_000)
+            fail.countDown()
+            withTimeout(15_000) { flushHolding.await() }
+            withTimeout(15_000) { model.state.first { !it.loading && it.error != null } }
+            assertEquals(
+                "Agent changes could not be refreshed. Reconnect to check automated actions.",
+                model.state.value.agentChangesError,
+            )
+        } finally {
+            fail.countDown()
+            flushRelease.complete(Unit)
+            flush.join()
+        }
+    }
+
+    @Test fun backgroundCommitDuringRefreshKeepsItsStaleMarkOutOfTheNotice() = runBlocking(Dispatchers.IO) {
+        val signals = MutableSharedFlow<String>(extraBufferCapacity = 1)
+        SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }
+        val gated = java.util.concurrent.atomic.AtomicBoolean()
+        val pulling = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val model = AppViewModel(app, Sessions(AuthenticatedSession(identity, "token")), signals) {
+            api(onRequest = { path ->
+                if (path == "/v1/changes" && gated.get()) {
+                    pulling.countDown()
+                    release.await()
+                }
+            })
+        }
+        withTimeout(15_000) { model.state.first { !it.loading && calls.contains("/v1/tokens") } }
+        assertNull(model.state.value.agentChangesError)
+
+        gated.set(true)
+        model.refresh()
+        try {
+            // The refresh holds the sync lock and has marked the notice stale.
+            assertTrue("the refresh never pulled", pulling.await(15, java.util.concurrent.TimeUnit.SECONDS))
+            SessionCache(app, identity).withEngine { engine ->
+                engine.mergeEntry(CachedEntry(6, title = "Committed in the background"))
+                engine.flush()
+            }
+            signals.emit(identity.cacheKey)
+            withTimeout(15_000) { model.state.first { state -> state.snapshot.entries.any { it.id == 6L } } }
+            assertNull("the reload reported the in-flight refresh as failed", model.state.value.agentChangesError)
+        } finally {
+            gated.set(false)
+            release.countDown()
+        }
+
+        withTimeout(15_000) { model.state.first { !it.loading } }
+        assertNull(model.state.value.agentChangesError)
+    }
+
     @Test fun reLoginDuringExpiryIsNotSignedOut() = runBlocking(Dispatchers.IO) {
         val sessions = Sessions(AuthenticatedSession(identity, "token"))
         SessionCache(app, identity).withEngine { it.beginBootstrap(Revision("g1", 0)) }

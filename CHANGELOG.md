@@ -144,6 +144,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   comments feed, no longer stops `earnest serve`: comments on one post
   keep distinct identities, a repeated item is stored once, and data the
   server refuses is recorded as that feed's failure.
+- The Android front page no longer flashes "Agent changes could not be
+  refreshed" for a few seconds when the app starts or a background sync
+  lands during a refresh. The warning now waits for the refresh to
+  finish and appears only if it fails, for example while the server is
+  unreachable.
 
 ### Changed
 

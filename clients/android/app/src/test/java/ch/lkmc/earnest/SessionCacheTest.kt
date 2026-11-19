@@ -163,4 +163,35 @@ class SessionCacheTest {
         }
     }
 
+    @Test fun agentChangesStatusTellsACycleInFlightFromAFailedOne() = runBlocking(Dispatchers.IO) {
+        val cache = SessionCache(context, identity)
+        val api = EarnestApi(identity.server, "token", okhttp3.OkHttpClient.Builder().addInterceptor { chain ->
+            okhttp3.Response.Builder().request(chain.request()).protocol(okhttp3.Protocol.HTTP_1_1)
+                .code(200).message("test").body("[]".toResponseBody()).build()
+        }.build())
+        assertEquals(AgentChangesStatus.CURRENT, cache.agentChangesStatus)
+
+        cache.withSync(api) {
+            cache.markAgentChangesStale()
+            assertEquals(AgentChangesStatus.REFRESHING, cache.agentChangesStatus)
+        }
+        assertEquals("a cycle that ended without refreshing the notice", AgentChangesStatus.STALE, cache.agentChangesStatus)
+
+        // An outbox flush holds the lock but never refreshes the notice.
+        cache.withSync(api) { assertEquals(AgentChangesStatus.STALE, cache.agentChangesStatus) }
+        // Neither does another account's cycle.
+        val other = SessionCache(context, AccountIdentity("https://other.test", 2, 2))
+        other.withSync(api) {
+            other.markAgentChangesStale()
+            assertEquals(AgentChangesStatus.REFRESHING, other.agentChangesStatus)
+            assertEquals(AgentChangesStatus.STALE, cache.agentChangesStatus)
+        }
+
+        cache.withSync(api) {
+            cache.markAgentChangesStale()
+            cache.refreshAgentChanges(api)
+        }
+        assertEquals(AgentChangesStatus.CURRENT, cache.agentChangesStatus)
+    }
+
 }
