@@ -53,7 +53,7 @@ class InlineReadingScrollTest {
                         states = emptyMap(), principalId = 1, subscriptionTitles = emptyMap(), subscriptionIcons = emptyMap(),
                         briefs = emptyList(), principalNames = emptyMap(), entryTitles = emptyMap(), agentChanges = emptyList(),
                         sessionChanges = emptyList(), agentChangesError = null, onRevert = {}, onOpenAgentSelected = {},
-                        onOpen = {}, onLater = {}, onDone = {}, onSeen = {}, onKeep = {}, onUnkeep = {}, onMarkUnread = {},
+                        onOpen = {}, onLater = {}, onDone = {}, onKeep = {}, onUnkeep = {}, onMarkUnread = {},
                         accountKey = "inline-scroll", layoutOverride = ArticleLayout.READING, listState = listState,
                         onLoadContent = { ContentUrlResult(null, null, "Body $it") },
                         inlineContent = { _, _, viewport ->

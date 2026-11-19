@@ -249,10 +249,6 @@ class AppViewModel internal constructor(
     @Volatile private var account: SessionCache? = null
     @Volatile private var activeSession: AuthenticatedSession? = null
     @Volatile private var keptImportDocument: ByteArray? = null
-    // Entries the reader explicitly marked unread. The passive seen heuristic
-    // from scrolling never overrides that choice (the web client's rule);
-    // opening the article reads it again.
-    private val markedUnread: MutableSet<Long> = java.util.concurrent.ConcurrentHashMap.newKeySet()
     // The cadence this client last saved per subscription, so an undo can
     // leave one a later change replaced alone.
     private val savedCadence = java.util.concurrent.ConcurrentHashMap<Long, String>()
@@ -338,7 +334,6 @@ class AppViewModel internal constructor(
         activeSession = null
         mediaClient = null
         keptImportDocument = null
-        markedUnread.clear()
         savedCadence.clear()
         _sessionNotice.value = null
         _state.value = UiState(
@@ -454,7 +449,6 @@ class AppViewModel internal constructor(
         sessions.clearToken()
         activeSession = null
         mediaClient = null
-        markedUnread.clear()
         savedCadence.clear()
         account = null
         keptImportDocument = null
@@ -1881,24 +1875,14 @@ class AppViewModel internal constructor(
         return FrontPageUi(period = period, page = page, updatedAt = cache.cachedFrontPageAt(period))
     }
 
-    /** Marks the entry read, as opening an article does, and releases the mark-unread guard. */
+    /**
+     * Marks the entry read because the reader opened it. Opening is the only
+     * automatic read mark: scrolling a list never calls this.
+     */
     fun markSeen(entryId: Long) {
-        markedUnread -= entryId
         queue(entryId, "seen", SyncEngine.KIND_PASSIVE) { state ->
             listOf(RegisterIntent(SyncEngine.REGISTER_SEEN, JsonPrimitive(SyncEngine.VALUE_SEEN), state.seen.value))
         }
-    }
-
-    /**
-     * Records reading progress from scrolling past a row. Returns false, and
-     * writes nothing, for an entry the reader explicitly marked unread: the
-     * passive heuristic never overrides that choice until the article is
-     * opened.
-     */
-    fun markScrolledPast(entryId: Long): Boolean {
-        if (entryId in markedUnread) return false
-        markSeen(entryId)
-        return true
     }
 
     internal fun later(entryId: Long, onSaved: (ReversibleAction) -> Unit = {}) {
@@ -1920,13 +1904,12 @@ class AppViewModel internal constructor(
     /**
      * Marks a read article unread again. A Done shelf is cleared with it (the
      * server rule the engine enforces), and [undo] restores both registers.
-     * Scrolling past the row never marks it read again (see [markScrolledPast]).
+     * Short of [undo], only opening the article reads it again.
      */
     internal fun markUnread(entryId: Long, onSaved: (ReversibleAction) -> Unit = {}) {
-        markedUnread += entryId
         queue(
             entryId, EntryActionName.UNREAD.id, SyncEngine.KIND_EXPLICIT, EntryActionName.UNREAD, onSaved,
-            onNotSaved = { markedUnread -= entryId }, build = ::unreadIntents,
+            build = ::unreadIntents,
         )
     }
 
@@ -1938,13 +1921,7 @@ class AppViewModel internal constructor(
     ) {
         queue(
             action.entryId, "undo", SyncEngine.KIND_EXPLICIT,
-            onSaved = { saved ->
-                // The entry is read again (or the restore was moot because
-                // the register moved on), so the mark-unread guard goes with
-                // it. A failed undo keeps the guard.
-                if (SyncEngine.REGISTER_SEEN in action.written) markedUnread -= action.entryId
-                onSaved(saved)
-            },
+            onSaved = onSaved,
             onNotSaved = onNotSaved,
         ) { state -> undoIntents(action, state) }
     }
@@ -2380,7 +2357,6 @@ class AppViewModel internal constructor(
         account = null
         activeSession = null
         mediaClient = null
-        markedUnread.clear()
         savedCadence.clear()
         keptImportDocument = null
         _state.value = UiState(

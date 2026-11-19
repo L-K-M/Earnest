@@ -97,6 +97,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Scrolling an Android list no longer marks articles read, so scrolling
+  down and back up keeps their unread dots. As on the web, only opening an
+  article, in the reader or by expanding it in Read in feed, marks it read.
 - New entries fetched together receive sequences in publisher-date order,
   so newest-first lists no longer reverse a newest-first feed batch.
 - The web reader hides the iframe's blank document between articles, and

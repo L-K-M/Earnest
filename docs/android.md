@@ -132,12 +132,13 @@ is hidden until the row moves. Each article's overflow menu also offers
 Keep, Unkeep and, once read, Mark unread. Mark unread returns the article to unread and clears Done with
 it, as the server does; its undo restores both registers. Undo writes back
 the registers an action changed and leaves alone one another writer has
-changed since. A row marks itself seen once it has been on
-screen and then scrolls out through the top edge, or when you open it; rows
-visible on first composition, or never composed, stay unseen. Scrolling never
-marks a row read again after you marked it unread; opening the article does. Today keeps
-its session membership stable: passive seen updates do not remove rows or
-expose more rows to automatic marking. Later and Done remove rows
+changed since. An article is marked read only when you open it, in the
+reader or by expanding it in Read in feed. Scrolling a list and background
+refreshes never mark an article read, expanding or collapsing one article
+never marks the rows around it, and an article you mark unread stays unread
+until you open it again or undo the change. Today keeps
+its session membership stable: marking an article read does not remove its
+row. Later and Done remove rows
 immediately; refresh starts a new membership from the current effective
 state. Cached subscription cadences are restored before a network request,
 so Today and Edition also work on an offline cold launch.
@@ -261,12 +262,12 @@ That menu item appears only while permission is missing.
 `:app:testDebugUnitTest` covers snapshot replacement failure, oversized snapshot
 recovery and cold reopen with unsent actions and multibyte text, transactional
 chunk reads, concurrent foreground/background writes, account isolation,
-offline cadence restoration, Today session membership, passive seen on scroll, missing notification metadata,
+offline cadence restoration, Today session membership, scrolling without read marks, missing notification metadata,
 agent-change retrieval, WebView error fallback, deep-link parsing, brief labels,
 widget headline selection, theme persistence, notification channels and server
 notification text, notification permission timing, cadence selection, swipe
 thresholds and action messages, undo restoration and its changed-since
-guard, mark unread clearing Done and surviving passive marking, share
+guard, mark unread clearing Done and lasting until the article is reopened, share
 and clipboard intents, activity descriptions, reader date and original
 URL, outbox flush debounce, state restoration of the section and settings,
 and the find listener's per-article re-registration. Compose UI tests on

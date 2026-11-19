@@ -115,7 +115,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -162,7 +161,6 @@ import ch.lkmc.earnest.core.readAtMost
 import ch.lkmc.earnest.core.typographyFor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonPrimitive
@@ -634,7 +632,6 @@ internal fun MainScaffold(
                                     },
                                     onLater = { id -> model.later(id, undoable) },
                                     onDone = { id -> model.done(id, undoable) },
-                                    onSeen = { id -> model.markScrolledPast(id) },
                                     onKeep = { id -> model.keep(id, undoable) },
                                     onUnkeep = { id -> model.unkeep(id, undoable) },
                                     onMarkUnread = { id -> model.markUnread(id, undoable) },
@@ -1027,7 +1024,6 @@ internal fun EntryListScreen(
     onOpenAgentSelected: (Long) -> Unit,
     onLater: (Long) -> Unit,
     onDone: (Long) -> Unit,
-    onSeen: (Long) -> Unit,
     onKeep: (Long) -> Unit,
     onUnkeep: (Long) -> Unit,
     onMarkUnread: (Long) -> Unit,
@@ -1093,7 +1089,6 @@ internal fun EntryListScreen(
         }
     }
     BackHandler(enabled = expanded != null) { changeExpansion(null) }
-    MarkSeenOnScroll(entries, principalId, listState, onSeen)
     val headerCount = (if (briefs.isNotEmpty()) 1 else 0) +
         (if (agentChanges.isNotEmpty() || agentChangesError != null) 1 else 0)
     LaunchedEffect(headerCount) {
@@ -1206,31 +1201,6 @@ internal fun EntryListScreen(
                 AgentChangesNotice("Agent changes this session", sessionChanges, entryTitles, agentChangesError, onOpenAgentSelected, onRevert)
             }
         }
-    }
-}
-
-@Composable
-private fun MarkSeenOnScroll(
-    entries: List<CachedEntry>,
-    principalId: Long,
-    listState: androidx.compose.foundation.lazy.LazyListState,
-    onSeen: (Long) -> Unit,
-) {
-    // Resetting with the principal keeps offline launches from losing marks:
-    // rows are marked again once the principal is known.
-    val tracker = remember(principalId) { PassiveSeenTracker() }
-    LaunchedEffect(listState, entries, principalId) {
-        if (principalId == 0L) return@LaunchedEffect
-        snapshotFlow {
-            SeenViewport(
-                firstVisibleIndex = listState.firstVisibleItemIndex,
-                visible = listState.layoutInfo.visibleItemsInfo.mapNotNull { item ->
-                    (item.key as? Long)?.let { key -> key to item.index }
-                }.toMap(),
-            )
-        }
-            .distinctUntilChanged()
-            .collect { viewport -> tracker.observe(viewport).forEach(onSeen) }
     }
 }
 
