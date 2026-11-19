@@ -9,6 +9,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeUp
@@ -54,7 +55,7 @@ class ScrollReadStateTest {
                     title = "All articles", entries = entries, states = states, principalId = 1,
                     subscriptionTitles = emptyMap(), subscriptionIcons = emptyMap(), briefs = emptyList(),
                     principalNames = emptyMap(), entryTitles = emptyMap(), agentChanges = emptyList(),
-                    sessionChanges = emptyList(), agentChangesError = null, onRevert = {},
+                    sessionChanges = emptyList(), agentChangesError = null, onRevert = { actions += "revert $it" },
                     onOpen = { actions += "open $it" }, onOpenAgentSelected = { actions += "open $it" },
                     onLater = { actions += "later $it" }, onDone = { actions += "done $it" },
                     onKeep = { actions += "keep $it" }, onUnkeep = { actions += "unkeep $it" },
@@ -68,14 +69,23 @@ class ScrollReadStateTest {
         compose.waitForIdle()
     }
 
-    /** Scrolls well past the first screen of rows, then back to the top. */
+    /** Swipes until [reached] holds, so the test does not depend on how far one swipe travels. */
+    private fun swipeUntil(what: String, swipe: () -> Unit, reached: () -> Boolean) {
+        repeat(MAX_SWIPES) {
+            if (compose.runOnIdle(reached)) return
+            swipe()
+        }
+        compose.runOnIdle { assertTrue("the list must $what within $MAX_SWIPES swipes", reached()) }
+    }
+
+    /** Scrolls the first rows out through the top edge, then back to the top. */
     private fun scrollDownAndBackUp() {
-        repeat(4) { compose.onRoot().performTouchInput { swipeUp() } }
-        compose.waitForIdle()
-        compose.runOnIdle { assertTrue("the list must scroll past its first rows", listState.firstVisibleItemIndex > 5) }
-        repeat(8) { compose.onRoot().performTouchInput { swipeDown() } }
-        compose.waitForIdle()
-        compose.runOnIdle { assertEquals("the list must return to its top", 0, listState.firstVisibleItemIndex) }
+        swipeUntil("scroll past its first rows", { compose.onRoot().performTouchInput { swipeUp() } }) {
+            listState.firstVisibleItemIndex > 5
+        }
+        swipeUntil("return to its top", { compose.onRoot().performTouchInput { swipeDown() } }) {
+            listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+        }
     }
 
     @Test fun scrollingHeadlinesDownAndBackUpKeepsThemUnread() {
@@ -89,6 +99,14 @@ class ScrollReadStateTest {
         compose.onNodeWithText("Headline 2").performClick()
         compose.onNodeWithText("Body 2").assertExists()
         scrollDownAndBackUp()
+        // Collapsing reflows the rows below; that must not mark them either.
+        compose.onNodeWithText("Collapse").performScrollTo().performClick()
+        compose.onNodeWithText("Body 2").assertDoesNotExist()
+        scrollDownAndBackUp()
         compose.runOnIdle { assertEquals("only the opened article may be read", listOf("load 2"), actions) }
+    }
+
+    private companion object {
+        const val MAX_SWIPES = 20
     }
 }

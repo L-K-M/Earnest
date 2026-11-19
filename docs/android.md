@@ -136,7 +136,7 @@ changed since. An article is marked read only when you open it, in the
 reader or by expanding it in Read in feed. Scrolling a list and background
 refreshes never mark an article read, expanding or collapsing one article
 never marks the rows around it, and an article you mark unread stays unread
-until you open it again. Today keeps
+until you open it again or undo the change. Today keeps
 its session membership stable: marking an article read does not remove its
 row. Later and Done remove rows
 immediately; refresh starts a new membership from the current effective

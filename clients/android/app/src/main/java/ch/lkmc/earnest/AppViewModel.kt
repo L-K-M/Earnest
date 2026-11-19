@@ -1904,7 +1904,7 @@ class AppViewModel internal constructor(
     /**
      * Marks a read article unread again. A Done shelf is cleared with it (the
      * server rule the engine enforces), and [undo] restores both registers.
-     * It stays unread until the reader opens it again.
+     * Short of [undo], only opening the article reads it again.
      */
     internal fun markUnread(entryId: Long, onSaved: (ReversibleAction) -> Unit = {}) {
         queue(
