@@ -74,6 +74,18 @@ internal object SyncAccess {
     val sync = Mutex()
 }
 
+/** How far the cached agent-changes notice can be trusted. */
+internal enum class AgentChangesStatus {
+    /** The last sync cycle refreshed it. */
+    CURRENT,
+
+    /** A sync cycle failed or was cut off before refreshing it. */
+    STALE,
+
+    /** Marked stale by a pull cycle that is still running. */
+    REFRESHING,
+}
+
 /** Reload, mutate and flush form one critical section for every snapshot writer. */
 internal class SessionCache(context: Context, val identity: AccountIdentity) {
     private val frontPageLock = Any()
@@ -93,7 +105,29 @@ internal class SessionCache(context: Context, val identity: AccountIdentity) {
 
     val agentChangesStale: Boolean get() = preferences.getBoolean(KEY_AGENT_CHANGES_STALE, false)
 
+    /**
+     * Each pull cycle marks the notice stale before it pulls, so process death
+     * mid-cycle still leaves the mark, and clears it once the notice is
+     * refreshed. While the cycle that marked it still runs, the mark has not
+     * failed yet, so it reads as [AgentChangesStatus.REFRESHING]. Other
+     * holders of the sync lock, such as an outbox flush, never refresh the
+     * notice and leave a mark reading as STALE.
+     */
+    val agentChangesStatus: AgentChangesStatus get() {
+        // The cycle is read before the mark. A cycle that starts in between
+        // reads as STALE only until it publishes its own outcome; one that
+        // finishes in between has cleared the mark or left it as STALE.
+        val cycleInFlight = markingCycle == identity.cacheKey
+        return when {
+            !agentChangesStale -> AgentChangesStatus.CURRENT
+            cycleInFlight -> AgentChangesStatus.REFRESHING
+            else -> AgentChangesStatus.STALE
+        }
+    }
+
+    /** Called by a pull cycle inside [withSync], before it pulls. */
     fun markAgentChangesStale() {
+        markingCycle = identity.cacheKey
         preferences.edit { putBoolean(KEY_AGENT_CHANGES_STALE, true) }
     }
 
@@ -291,7 +325,15 @@ internal class SessionCache(context: Context, val identity: AccountIdentity) {
 
     /** Runs [block] as the only pull owner so its change pages cannot interleave. */
     suspend fun <T> withSync(api: EarnestApi, block: suspend (SyncRepository) -> T): T =
-        SyncAccess.sync.withLock { block(repository(api)) }
+        SyncAccess.sync.withLock {
+            try {
+                block(repository(api))
+            } finally {
+                // Cleared before the lock passes on: whatever mark this cycle
+                // left is now its outcome.
+                markingCycle = null
+            }
+        }
 
     companion object {
         const val KEY_CHANGES_SINCE = "agent_changes_since"
@@ -301,6 +343,10 @@ internal class SessionCache(context: Context, val identity: AccountIdentity) {
         // publication reads are concurrent. In-flight requests cannot survive
         // process death, so their ordering need not be persisted.
         private val countsSequence = AtomicLong()
+        // Cache key of the account whose pull cycle, holding SyncAccess.sync,
+        // marked its agent-changes notice stale. One field is enough: the lock
+        // admits one cycle at a time, across accounts and cache instances.
+        @Volatile private var markingCycle: String? = null
         private val completedCountRequests = ConcurrentHashMap<String, Long>()
         private const val KEY_UNREAD_COUNTS = "unread_counts"
         private const val KEY_UNREAD_COUNTS_AT = "unread_counts_at"
