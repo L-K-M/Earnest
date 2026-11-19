@@ -308,7 +308,7 @@ class MobileDesignTest {
                 title = "All articles", entries = listOf(CachedEntry(1, title = "A headline to swipe")),
                 states = emptyMap(), principalId = 1, subscriptionTitles = emptyMap(), subscriptionIcons = emptyMap(),
                 briefs = emptyList(), principalNames = emptyMap(), entryTitles = emptyMap(), agentChanges = emptyList(), sessionChanges = emptyList(), agentChangesError = null,
-                onRevert = {}, onOpen = {}, onOpenAgentSelected = {}, onLater = { actions++ }, onDone = { actions++ }, onSeen = {}, onKeep = {}, onUnkeep = {}, onMarkUnread = {},
+                onRevert = {}, onOpen = {}, onOpenAgentSelected = {}, onLater = { actions++ }, onDone = { actions++ }, onKeep = {}, onUnkeep = {}, onMarkUnread = {},
                 layoutOverride = ArticleLayout.HEADLINES,
             )
         }

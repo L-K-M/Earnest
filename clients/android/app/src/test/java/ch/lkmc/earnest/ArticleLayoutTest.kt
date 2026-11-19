@@ -55,7 +55,7 @@ class ArticleLayoutTest {
                 states = emptyMap(), principalId = 1, subscriptionTitles = emptyMap(), subscriptionIcons = emptyMap(),
                 briefs = emptyList(), principalNames = emptyMap(), entryTitles = emptyMap(), agentChanges = emptyList(),
                 sessionChanges = emptyList(), agentChangesError = null, onRevert = {}, onOpenAgentSelected = {},
-                onOpen = { opened += it }, onLater = {}, onDone = {}, onSeen = {}, onKeep = { kept += it }, onUnkeep = {}, onMarkUnread = {},
+                onOpen = { opened += it }, onLater = {}, onDone = {}, onKeep = { kept += it }, onUnkeep = {}, onMarkUnread = {},
                 accountKey = account.value,
                 layoutOverride = layoutOverride,
                 onLoadContent = {

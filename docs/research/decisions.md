@@ -48,6 +48,8 @@ Taken by you on 2026-11-07, while triaging the review PRs.
 
 - **Automatic read marks happen only when you open an article** (2026-11-12, at your request). Background fetching, rendering, refreshes and automated processing do not count as a user opening an article. Scrolling a list, changing its selection without opening, and leaving an article do not mark it read. Marking an open article unread survives `j`/`k` navigation and scrolling until it is explicitly reopened or marked read. This replaces the scroll-past behavior in [ux.md](ux.md#information-model) and [api.md](api.md).
 
+- **Android follows the same read rule** (2026-11-19, after your report that scrolling down and back up there cleared unread dots). Scrolling a list never marks an article read, and expanding or collapsing one in Read in feed never marks the rows around it; only opening an article does.
+
 ## Front page
 
 Taken on 2026-11-12, at your request.

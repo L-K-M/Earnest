@@ -294,7 +294,7 @@ class AppViewModelTest {
         assertEquals(kotlinx.serialization.json.JsonPrimitive("done"), SessionCache(app, identity).withEngine { it.state(1, 2) }.shelf.value)
     }
 
-    @Test fun markUnreadSticksThroughScrollingPast() = runBlocking(Dispatchers.IO) {
+    @Test fun markUnreadLastsUntilTheArticleIsOpenedAgain() = runBlocking(Dispatchers.IO) {
         val model = model()
         model.loadEntry(2)
         // Opening the article reads it.
@@ -305,10 +305,6 @@ class AppViewModelTest {
         val action = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
         model.markUnread(2) { action.set(it) }
         withTimeout(15000) { while (action.get() == null) delay(10) }
-
-        // Scrolling past the row afterwards never re-marks it read.
-        assertFalse(model.markScrolledPast(2))
-        delay(250)
         assertEquals(kotlinx.serialization.json.JsonPrimitive("unseen"), SessionCache(app, identity).withEngine { it.state(1, 2) }.seen.value)
 
         // Opening the article reads it again.
@@ -316,62 +312,19 @@ class AppViewModelTest {
         withTimeout(15000) {
             while (SessionCache(app, identity).withEngine { it.state(1, 2) }.seen.value != kotlinx.serialization.json.JsonPrimitive("seen")) delay(10)
         }
-
-        // Opening released the guard: after another writer leaves the row
-        // unread again, scrolling past it marks it read.
-        SessionCache(app, identity).withEngine {
-            it.queue(StateWrite("external-unread", 1, 2, SyncEngine.REGISTER_SEEN, kotlinx.serialization.json.JsonPrimitive("unseen"), Revision("g1", 0), "2026-11-03T00:00:00Z", "explicit"))
-        }
-        withTimeout(15000) {
-            while (SessionCache(app, identity).withEngine { it.state(1, 2) }.seen.value != kotlinx.serialization.json.JsonPrimitive("unseen")) delay(10)
-        }
-        assertTrue(model.markScrolledPast(2))
-        withTimeout(15000) {
-            while (SessionCache(app, identity).withEngine { it.state(1, 2) }.seen.value != kotlinx.serialization.json.JsonPrimitive("seen")) delay(10)
-        }
     }
 
-    @Test fun signingOutClearsTheMarkUnreadGuard() = runBlocking(Dispatchers.IO) {
-        val model = model()
-        model.loadEntry(2)
-        val action = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
-        model.markUnread(2) { action.set(it) }
-        withTimeout(15000) { while (action.get() == null) delay(10) }
-        assertFalse(model.markScrolledPast(2))
-        model.logout()
-        assertTrue(model.markScrolledPast(2))
-    }
-
-    @Test fun undoReleasesTheMarkUnreadGuard() = runBlocking(Dispatchers.IO) {
-        val model = model()
-        model.loadEntry(2)
-        val action = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
-        model.markUnread(2) { action.set(it) }
-        withTimeout(15000) { while (action.get() == null) delay(10) }
-        assertFalse(model.markScrolledPast(2))
-
-        val undone = java.util.concurrent.atomic.AtomicInteger()
-        model.undo(action.get(), onSaved = { undone.incrementAndGet() })
-        withTimeout(15000) { while (undone.get() == 0) delay(10) }
-        assertTrue(model.markScrolledPast(2))
-    }
-
-    @Test fun failedMarkUnreadReleasesTheGuard() = runBlocking(Dispatchers.IO) {
+    @Test fun failedMarkUnreadDoesNotReportSuccess() = runBlocking(Dispatchers.IO) {
         val model = model()
         model.loadEntry(2)
         corruptSnapshot()
         val action = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
         model.markUnread(2) { action.set(it) }
-        // The guard is released in queue()'s finally once the failed write is
-        // known not to have landed; the release is the completion signal, not
-        // the shared error text, which a concurrent flush may replace.
-        await("the failed save to release the guard") { model.markScrolledPast(2) }
+        withTimeout(15000) { model.state.first { it.error?.startsWith("Could not save the action") == true } }
         assertNull("a failed save must not report success", action.get())
-        // queue() publishes the error before its finally releases the guard.
-        assertNotNull("a failed save must surface an error", model.state.value.error)
     }
 
-    @Test fun failedUndoKeepsTheMarkUnreadGuard() = runBlocking(Dispatchers.IO) {
+    @Test fun failedUndoReportsThatNothingWasSaved() = runBlocking(Dispatchers.IO) {
         val model = model()
         model.loadEntry(2)
         val action = java.util.concurrent.atomic.AtomicReference<ReversibleAction>()
@@ -389,17 +342,6 @@ class AppViewModelTest {
         assertEquals(0, undone.get())
         // queue() publishes the error before its finally runs onNotSaved.
         assertNotNull("a failed undo must surface an error", model.state.value.error)
-        // The article is still unread: the guard stands.
-        assertFalse(model.markScrolledPast(2))
-    }
-
-    @Test fun scrollingPastMarksUnseenRowsRead() = runBlocking(Dispatchers.IO) {
-        val model = model()
-        model.loadEntry(2)
-        assertTrue(model.markScrolledPast(2))
-        withTimeout(15000) {
-            while (SessionCache(app, identity).withEngine { it.state(1, 2) }.seen.value != kotlinx.serialization.json.JsonPrimitive("seen")) delay(10)
-        }
     }
 
     @Test fun cadenceUndoLeavesOneChangedSinceAlone() = runBlocking(Dispatchers.IO) {
