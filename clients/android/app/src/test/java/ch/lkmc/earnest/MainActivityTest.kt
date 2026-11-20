@@ -3,6 +3,8 @@ package ch.lkmc.earnest
 import android.Manifest
 import android.app.Application
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.Configuration
 import androidx.work.WorkManager
@@ -40,5 +42,19 @@ class MainActivityTest {
         val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
         val requested = shadowOf(activity).lastRequestedPermission
         assertEquals(Manifest.permission.POST_NOTIFICATIONS, requested?.requestedPermissions?.single())
+    }
+
+    /** The screen opens a link once per delivery, so only a new intent may count as one. */
+    @Test fun recreationKeepsTheIntentDeliveryAndANewIntentRaisesIt() {
+        connection.edit().clear().commit()
+        val link = Intent(Intent.ACTION_VIEW, Uri.parse("earnest://entry/5"))
+        val controller = Robolectric.buildActivity(MainActivity::class.java, link).setup()
+        assertEquals(1, controller.get().intentDeliveries)
+        controller.recreate()
+        assertEquals("a rotation hands back the same intent", 1, controller.get().intentDeliveries)
+        controller.newIntent(Intent(link))
+        assertEquals("tapping the same link again is a new delivery", 2, controller.get().intentDeliveries)
+        controller.recreate()
+        assertEquals(2, controller.get().intentDeliveries)
     }
 }

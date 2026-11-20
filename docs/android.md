@@ -136,8 +136,9 @@ changed since. An article is marked read only when you open it, in the
 reader or by expanding it in Read in feed. Scrolling a list and background
 refreshes never mark an article read, expanding or collapsing one article
 never marks the rows around it, and an article you mark unread stays unread
-until you open it again or undo the change. Rotating the device, or Android
-restoring the app, reloads the open article without marking it read again.
+until you open it again or undo the change. An article that cannot load when
+you open it stays unread. Rotating the device, or Android restoring the app,
+reloads the open article without marking it read again.
 Today keeps
 its session membership stable: marking an article read does not remove its
 row. Later and Done remove rows
@@ -201,8 +202,8 @@ never as HTML.
 
 Notifications and deep links resolve missing metadata through `/v1/entries/{id}`;
 selection follows the current snapshot as cold-launch loading and sync complete.
-Each opens its article once the account has loaded, and only once: a rotation
-or a restored app does not open that article again.
+Each opens its article once: rotating the device or Android restoring the app
+does not open it again, but tapping the link or notification again does.
 Incremental entry events are hydrated before their page and cursor are committed.
 A metadata 404 is retained as a tombstone; other failures leave the cursor for
 retry.

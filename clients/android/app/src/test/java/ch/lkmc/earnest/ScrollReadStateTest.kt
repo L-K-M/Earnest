@@ -104,7 +104,7 @@ class ScrollReadStateTest {
         compose.onNodeWithText("Collapse").performScrollTo().performClick()
         compose.onNodeWithText("Body 2").assertDoesNotExist()
         scrollDownAndBackUp()
-        compose.runOnIdle { assertEquals("only the opened article may be read", listOf("expand 2", "load 2"), actions) }
+        compose.runOnIdle { assertEquals("only the article you expanded may be opened and loaded", listOf("expand 2", "load 2"), actions) }
     }
 
     private companion object {

@@ -202,7 +202,7 @@ internal data class SectionSelection(
 private fun View.toneColor(tones: Tones): Color? = tone?.invoke(tones)
 
 @Composable
-internal fun EarnestApp(initialEntry: Long?, notificationId: Long?) {
+internal fun EarnestApp(initialEntry: Long?, notificationId: Long?, intentDelivery: Int) {
     val model: AppViewModel = viewModel()
     val loggedIn by model.loggedIn.collectAsState()
     val sessionNotice by model.sessionNotice.collectAsState()
@@ -239,6 +239,7 @@ internal fun EarnestApp(initialEntry: Long?, notificationId: Long?) {
             },
             initialEntry = initialEntry,
             notificationId = notificationId,
+            intentDelivery = intentDelivery,
             notificationsDenied = notificationsDenied,
             onRequestNotifications = {
                 activity?.requestNotificationPermission { granted -> notificationsDenied = !granted }
@@ -256,6 +257,7 @@ internal fun MainScaffold(
     onThemeChange: (ThemeSetting) -> Unit,
     initialEntry: Long?,
     notificationId: Long?,
+    intentDelivery: Int,
     notificationsDenied: Boolean,
     onRequestNotifications: () -> Unit,
 ) {
@@ -293,22 +295,27 @@ internal fun MainScaffold(
     // destination: after a rotation or process death the reader reopens the
     // same entry, and a plain remember would reload it with automatic images.
     var agentSelected by rememberSaveable(saver = AgentSelectedSaver) { mutableStateOf(emptySet<Long>()) }
-    // A rotation or process restore hands this screen the launch link and
-    // notification again. Each opens its article once, so recreating the
-    // screen neither returns to that article nor marks it read again. A
-    // later intent without one clears it, so the same link opens again.
-    var openedLink by rememberSaveable { mutableStateOf<Long?>(null) }
-    var openedNotification by rememberSaveable { mutableStateOf<Long?>(null) }
+    // The intent delivery whose link or notification this screen opened.
+    // A rotation or process restore hands back the same delivery, which
+    // must neither return to its article nor mark it read again; tapping
+    // the same link once more is a new delivery and opens it.
+    var openedDelivery by rememberSaveable { androidx.compose.runtime.mutableIntStateOf(0) }
+    // The article you opened that the reader still has to mark read. Saved,
+    // so a rotation during its load still marks it once and a rotation
+    // afterwards marks nothing.
+    var readOnLoad by rememberSaveable { mutableStateOf<Long?>(null) }
 
     /**
-     * Opens [entryId] in the reader and marks it read. The mark belongs to
-     * the open, not to loading the article: a rotation or process restore
-     * reloads the open article, and that must not read an article you
-     * marked unread. [agentPick] opens it with click-to-load images.
+     * Opens [entryId] in the reader, which marks it read once it has loaded
+     * the entry; an article that cannot load stays unread. The mark belongs
+     * to this open, not to every load: a rotation or process restore reloads
+     * the open article, and that must not read an article you marked unread.
+     * [agentPick] opens it with click-to-load images.
      */
     fun openArticle(entryId: Long, agentPick: Boolean = false) {
         if (agentPick) agentSelected = agentSelected + entryId
-        model.markSeen(entryId)
+        // An article the reader already shows is not loaded again.
+        if (entryId == selected && readerEntry != null) model.markSeen(entryId) else readOnLoad = entryId
         scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
     }
 
@@ -337,31 +344,35 @@ internal fun MainScaffold(
             }
         }
     }
-    // Links and notifications wait for the account, which a cold start is
-    // still restoring: the read mark needs it.
-    LaunchedEffect(initialEntry, state.accountKey) {
-        val id = initialEntry
-        if (id == null) openedLink = null
-        if (id == null || id == openedLink || state.accountKey == null) return@LaunchedEffect
-        openedLink = id
-        searchDetail = true
-        openArticle(id, agentPick = true)
-    }
-    LaunchedEffect(notificationId, state.accountKey) {
-        val id = notificationId
-        if (id == null) openedNotification = null
-        if (id == null || id == openedNotification || state.accountKey == null) return@LaunchedEffect
-        model.notificationEntry(id)?.let {
-            openedNotification = id
-            searchDetail = true
-            openArticle(it, agentPick = true)
+    // A link opens at once; on a cold start the reader loads and marks its
+    // article once the account has restored. A notification needs the
+    // account to look up its article.
+    LaunchedEffect(intentDelivery, state.accountKey) {
+        if (intentDelivery == openedDelivery) return@LaunchedEffect
+        val entryId = when {
+            initialEntry != null -> initialEntry
+            notificationId != null -> {
+                // An unresolved notification stays pending, so the next
+                // account change or recreation tries it again.
+                if (state.accountKey == null) return@LaunchedEffect
+                model.notificationEntry(notificationId) ?: return@LaunchedEffect
+            }
+            else -> null
         }
+        openedDelivery = intentDelivery
+        if (entryId == null) return@LaunchedEffect
+        searchDetail = true
+        openArticle(entryId, agentPick = true)
     }
-    // Reloads after a rotation or process restore too, so it never marks the
-    // article read; openArticle did when you opened it.
+    // Runs again after a rotation or process restore; only the load that
+    // follows an open marks the article read.
     LaunchedEffect(selected, state.accountKey, readerRetry) {
         reader.load(selected, state.accountKey) { id ->
             if (model.loadEntry(id) == null) throw java.io.IOException("This entry is no longer available.")
+            if (readOnLoad == id) {
+                readOnLoad = null
+                model.markSeen(id)
+            }
             model.openEntry(id, agentSelected = id in agentSelected)
         }
     }

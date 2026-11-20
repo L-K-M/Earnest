@@ -9,6 +9,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
@@ -132,7 +133,7 @@ class MobileDesignTest {
             back = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
             MainScaffold(
                 model = viewModel(), state = UiState(), theme = ThemeSetting.LIGHT,
-                onThemeChange = {}, initialEntry = null, notificationId = null,
+                onThemeChange = {}, initialEntry = null, notificationId = null, intentDelivery = 0,
                 notificationsDenied = false, onRequestNotifications = {},
             )
         }
@@ -237,35 +238,35 @@ class MobileDesignTest {
 
     @Test fun closingSettingsStillShowsAnIncomingArticle() {
         var incoming by mutableStateOf<Long?>(null)
+        var delivery by mutableIntStateOf(0)
         content {
             MainScaffold(
                 model = viewModel(),
-                // Links open once the account has loaded.
-                state = UiState(accountKey = "account", snapshot = SyncSnapshot(Revision("generation", 1), entries = listOf(CachedEntry(7, title = "An incoming article")))),
-                theme = ThemeSetting.LIGHT, onThemeChange = {}, initialEntry = incoming, notificationId = null,
+                state = UiState(snapshot = SyncSnapshot(Revision("generation", 1), entries = listOf(CachedEntry(7, title = "An incoming article")))),
+                theme = ThemeSetting.LIGHT, onThemeChange = {}, initialEntry = incoming, notificationId = null, intentDelivery = delivery,
                 notificationsDenied = false, onRequestNotifications = {},
             )
         }
         compose.onNodeWithContentDescription("More options").performClick()
         compose.onNode(hasText("Settings") and hasAnyAncestor(isPopup())).performClick()
-        compose.runOnIdle { incoming = 7 }
+        compose.runOnIdle { incoming = 7; delivery = 1 }
         compose.onNodeWithContentDescription("Back").performClick()
         compose.onNodeWithContentDescription("Find in article").assertExists()
     }
 
     @Test fun anIncomingArticleCanOpenWhileCompactSearchIsActive() {
         var incoming by mutableStateOf<Long?>(null)
+        var delivery by mutableIntStateOf(0)
         content {
             MainScaffold(
                 model = viewModel(),
-                // Links open once the account has loaded.
-                state = UiState(accountKey = "account", snapshot = SyncSnapshot(Revision("generation", 1), entries = listOf(CachedEntry(7, title = "An incoming article")))),
-                theme = ThemeSetting.LIGHT, onThemeChange = {}, initialEntry = incoming, notificationId = null,
+                state = UiState(snapshot = SyncSnapshot(Revision("generation", 1), entries = listOf(CachedEntry(7, title = "An incoming article")))),
+                theme = ThemeSetting.LIGHT, onThemeChange = {}, initialEntry = incoming, notificationId = null, intentDelivery = delivery,
                 notificationsDenied = false, onRequestNotifications = {},
             )
         }
         compose.onNodeWithContentDescription("Search").performClick()
-        compose.runOnIdle { incoming = 7 }
+        compose.runOnIdle { incoming = 7; delivery = 1 }
         // External links navigate from a LaunchedEffect, after the state
         // mutation's frame rather than inside a synchronous click handler.
         compose.waitUntil(5_000) {
@@ -286,7 +287,7 @@ class MobileDesignTest {
             MainScaffold(
                 model = viewModel(),
                 state = UiState(snapshot = SyncSnapshot(Revision("generation", 1), entries = listOf(CachedEntry(7, title = title)))),
-                theme = ThemeSetting.LIGHT, onThemeChange = {}, initialEntry = null, notificationId = null,
+                theme = ThemeSetting.LIGHT, onThemeChange = {}, initialEntry = null, notificationId = null, intentDelivery = 0,
                 notificationsDenied = false, onRequestNotifications = {},
             )
         }
