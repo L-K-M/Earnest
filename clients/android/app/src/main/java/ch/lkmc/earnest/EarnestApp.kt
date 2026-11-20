@@ -289,6 +289,10 @@ internal fun MainScaffold(
     var unreadFilterOverride by key(state.accountKey, state.readerSettings.showOnlyUnread) {
         rememberSaveable { mutableStateOf<Boolean?>(null) }
     }
+    // Search and the detail pane temporarily cover the current feed.
+    val feedReading = key(if (section.view == View.SEARCH) searchReturn.view else section.view, feedSelection) {
+        rememberFeedReadingState(state.accountKey)
+    }
     val searchListFocused = section.view == View.SEARCH && !searchDetail
     val detailOnly = navigator.currentDestination?.pane == ListDetailPaneScaffoldRole.Detail &&
         (section.view == View.FRONT || directive.maxHorizontalPartitions == 1) && !searchListFocused
@@ -645,6 +649,7 @@ internal fun MainScaffold(
                                 else -> key(section.view, feedSelection) { EntryListScreen(
                                     title = if (section.view == View.ALL) feedSelection.title(state.snapshot.objects) else section.view.label,
                                     entries = listEntries,
+                                    readingState = feedReading,
                                     unreadOnly = if (section.view == View.ALL) unreadFilterOverride ?: state.readerSettings.showOnlyUnread else null,
                                     onUnreadOnlyChange = { unreadFilterOverride = it },
                                     states = state.states,
@@ -1030,6 +1035,29 @@ private fun FindBar(
     }
 }
 
+/** The feed owns one loaded article while its pane is off screen. Native
+ * views still follow the lazy item's lifetime and large bodies stay out of saved state. */
+internal class FeedReadingState(
+    val selection: MutableState<Long?>,
+    val list: androidx.compose.foundation.lazy.LazyListState,
+    val reader: ReaderLoadState,
+    val viewport: InlineArticleState,
+)
+
+@Composable
+internal fun rememberFeedReadingState(accountKey: String?): FeedReadingState {
+    var owner by rememberSaveable { mutableStateOf(accountKey) }
+    val selection = rememberSaveable { mutableStateOf<Long?>(null) }
+    if (accountKey != null && owner != accountKey) {
+        if (owner != null) selection.value = null
+        owner = accountKey
+    }
+    val list = key(owner) { rememberLazyListState() }
+    return remember(selection.value, accountKey, list) {
+        FeedReadingState(selection, list, ReaderLoadState(), InlineArticleState())
+    }
+}
+
 private data class InlineScrollAnchor(val index: Int, val offset: Int)
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -1071,17 +1099,13 @@ internal fun EntryListScreen(
     inlineContent: @Composable (ContentUrlResult, CachedEntry, InlineArticleState) -> Unit = { content, entry, viewport ->
         InlineArticleContent(content, typography(entry), viewport)
     },
-    listState: androidx.compose.foundation.lazy.LazyListState = rememberLazyListState(),
+    readingState: FeedReadingState = rememberFeedReadingState(accountKey),
+    listState: androidx.compose.foundation.lazy.LazyListState = readingState.list,
 ) {
     val context = LocalContext.current
     var preferredLayout by remember { mutableStateOf(context.articleLayout()) }
     val layout = layoutOverride ?: preferredLayout
-    var owner by rememberSaveable { mutableStateOf(accountKey) }
-    var expandedId by rememberSaveable { mutableStateOf<Long?>(null) }
-    if (accountKey != null && owner != accountKey) {
-        if (owner != null) expandedId = null
-        owner = accountKey
-    }
+    var expandedId by readingState.selection
     var retry by remember { mutableStateOf(0) }
     val expandedEntry = remember(entries, expandedId, layout) {
         if (layout == ArticleLayout.READING && expandedId != null) entries.firstOrNull { it.id == expandedId } else null
@@ -1091,8 +1115,8 @@ internal fun EntryListScreen(
     val visibleEntries = remember(entries, states, unreadOnly, expanded) {
         if (unreadOnly == true) entries.filter { it.id == expanded || isUnread(states[it.id]) } else entries
     }
-    val inlineReader = remember(expanded, accountKey) { ReaderLoadState() }
-    val inlineViewport = remember(expanded, accountKey) { InlineArticleState() }
+    val inlineReader = readingState.reader
+    val inlineViewport = readingState.viewport
     var listWidth by remember { androidx.compose.runtime.mutableIntStateOf(0) }
     val density = LocalDensity.current
     val expandedTypography = expandedEntry?.let(typography)
@@ -1112,7 +1136,7 @@ internal fun EntryListScreen(
         }
     }
     LaunchedEffect(expanded, accountKey, retry) {
-        inlineReader.load(expanded, accountKey, onLoadContent)
+        if (expanded != null && inlineReader.content == null) inlineReader.load(expanded, accountKey, onLoadContent)
     }
     var scrollAnchor by remember { mutableStateOf<InlineScrollAnchor?>(null) }
     fun changeExpansion(id: Long?) {
@@ -1359,7 +1383,9 @@ internal fun EntryRow(
                 fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal,
                 maxLines = HEADLINE_MAX_LINES,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f).testTag("headline-${entry.id}"),
+                modifier = Modifier.weight(1f).testTag("headline-${entry.id}").then(
+                    if (unread) Modifier else Modifier.unreadHeadlineHeight(headline, headlineStyle, rememberTextMeasurer()),
+                ),
             )
             entry.thumbnailUrl?.let { thumbnail ->
                 Spacer(Modifier.width(12.dp))
