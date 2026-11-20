@@ -6,6 +6,8 @@ import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -101,7 +103,9 @@ class RotationReadStateTest {
         SessionCache(app, identity).withEngine { it.state(1, ENTRY) }.seen.value == JsonPrimitive(SyncEngine.VALUE_SEEN)
     }
 
-    private fun awaitSeen() = compose.waitUntil(TIMEOUT_MS) { seen() }
+    // waitUntil alone does not run the main looper, so a state change made
+    // in runOnIdle would never reach the screen; settle it on every poll.
+    private fun awaitSeen() = compose.waitUntil(TIMEOUT_MS) { compose.waitForIdle(); seen() }
 
     private fun articleLoads() = paths.count { it == "/v1/entries/$ENTRY/content" }
 
@@ -167,9 +171,10 @@ class RotationReadStateTest {
     @Test fun aLinkOpensItsArticleOnceAcrossRotations() {
         val model = model()
         var back: OnBackPressedDispatcher? = null
+        var link by mutableStateOf<Long?>(ENTRY)
         val restoration = StateRestorationTester(compose)
         // The link arrives before the account cache has restored.
-        restoration.setContent { Screen(model, initialEntry = ENTRY, onBack = { back = it }) }
+        restoration.setContent { Screen(model, initialEntry = link, onBack = { back = it }) }
         awaitSeen()
         assertFalse(model.state.value.error.orEmpty(), model.state.value.error.orEmpty().startsWith("Still signing in"))
 
@@ -178,6 +183,12 @@ class RotationReadStateTest {
 
         compose.runOnIdle { back!!.onBackPressed() }
         recreateAndExpectUnread(restoration, reloads = false, "rotating after leaving must not reopen the link")
+
+        // A later intent without the link, such as a notification, then the
+        // same link again: that is a new open.
+        compose.runOnIdle { link = null }
+        compose.runOnIdle { link = ENTRY }
+        awaitSeen()
     }
 
     @Test fun aNotificationOpensItsArticleOnceAcrossRotations() {

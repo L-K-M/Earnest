@@ -295,7 +295,8 @@ internal fun MainScaffold(
     var agentSelected by rememberSaveable(saver = AgentSelectedSaver) { mutableStateOf(emptySet<Long>()) }
     // A rotation or process restore hands this screen the launch link and
     // notification again. Each opens its article once, so recreating the
-    // screen neither returns to that article nor marks it read again.
+    // screen neither returns to that article nor marks it read again. A
+    // later intent without one clears it, so the same link opens again.
     var openedLink by rememberSaveable { mutableStateOf<Long?>(null) }
     var openedNotification by rememberSaveable { mutableStateOf<Long?>(null) }
 
@@ -339,17 +340,17 @@ internal fun MainScaffold(
     // Links and notifications wait for the account, which a cold start is
     // still restoring: the read mark needs it.
     LaunchedEffect(initialEntry, state.accountKey) {
-        if (state.accountKey == null) return@LaunchedEffect
-        val id = initialEntry ?: return@LaunchedEffect
-        if (id == openedLink) return@LaunchedEffect
+        val id = initialEntry
+        if (id == null) openedLink = null
+        if (id == null || id == openedLink || state.accountKey == null) return@LaunchedEffect
         openedLink = id
         searchDetail = true
         openArticle(id, agentPick = true)
     }
     LaunchedEffect(notificationId, state.accountKey) {
-        if (state.accountKey == null) return@LaunchedEffect
-        val id = notificationId ?: return@LaunchedEffect
-        if (id == openedNotification) return@LaunchedEffect
+        val id = notificationId
+        if (id == null) openedNotification = null
+        if (id == null || id == openedNotification || state.accountKey == null) return@LaunchedEffect
         model.notificationEntry(id)?.let {
             openedNotification = id
             searchDetail = true

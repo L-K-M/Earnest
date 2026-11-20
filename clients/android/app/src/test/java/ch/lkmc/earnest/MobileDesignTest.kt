@@ -240,7 +240,8 @@ class MobileDesignTest {
         content {
             MainScaffold(
                 model = viewModel(),
-                state = UiState(snapshot = SyncSnapshot(Revision("generation", 1), entries = listOf(CachedEntry(7, title = "An incoming article")))),
+                // Links open once the account has loaded.
+                state = UiState(accountKey = "account", snapshot = SyncSnapshot(Revision("generation", 1), entries = listOf(CachedEntry(7, title = "An incoming article")))),
                 theme = ThemeSetting.LIGHT, onThemeChange = {}, initialEntry = incoming, notificationId = null,
                 notificationsDenied = false, onRequestNotifications = {},
             )
@@ -257,7 +258,8 @@ class MobileDesignTest {
         content {
             MainScaffold(
                 model = viewModel(),
-                state = UiState(snapshot = SyncSnapshot(Revision("generation", 1), entries = listOf(CachedEntry(7, title = "An incoming article")))),
+                // Links open once the account has loaded.
+                state = UiState(accountKey = "account", snapshot = SyncSnapshot(Revision("generation", 1), entries = listOf(CachedEntry(7, title = "An incoming article")))),
                 theme = ThemeSetting.LIGHT, onThemeChange = {}, initialEntry = incoming, notificationId = null,
                 notificationsDenied = false, onRequestNotifications = {},
             )
