@@ -48,12 +48,18 @@ class ArticleLayoutTest {
     @After fun clearPreference() { context.getSharedPreferences("appearance", Context.MODE_PRIVATE).edit().clear().commit() }
 
     @androidx.compose.runtime.Composable
-    private fun list(layoutOverride: ArticleLayout? = null) {
+    private fun list(
+        layoutOverride: ArticleLayout? = null,
+        unreadOnly: Boolean? = null,
+        onFilter: (Boolean) -> Unit = {},
+        states: Map<Long, ch.lkmc.earnest.core.State> = emptyMap(),
+    ) {
         EarnestTheme(ThemeSetting.LIGHT) {
             EntryListScreen(
                 title = "All articles",
                 entries = listOf(CachedEntry(1, title = "First headline"), CachedEntry(2, title = "Second headline")),
-                states = emptyMap(), principalId = 1, subscriptionTitles = emptyMap(), subscriptionIcons = emptyMap(),
+                states = states, unreadOnly = unreadOnly, onUnreadOnlyChange = onFilter,
+                principalId = 1, subscriptionTitles = emptyMap(), subscriptionIcons = emptyMap(),
                 briefs = emptyList(), principalNames = emptyMap(), entryTitles = emptyMap(), agentChanges = emptyList(),
                 sessionChanges = emptyList(), agentChangesError = null, onRevert = {}, onOpenAgentSelected = {},
                 onOpen = { opened += it }, onLater = {}, onDone = {}, onKeep = { kept += it }, onUnkeep = {}, onMarkUnread = {},
@@ -71,6 +77,23 @@ class ArticleLayoutTest {
                 inlineContent = { content, _, _ -> Text(content.cachedHtml.orEmpty()) },
             )
         }
+    }
+
+    @Test fun unreadFilterKeepsTheOpenedArticleUntilCollapse() {
+        val filter = mutableStateOf(false)
+        val initial = SyncEngine.initialState(1, 1)
+        val read = initial.copy(seen = initial.seen.copy(value = JsonPrimitive(SyncEngine.VALUE_SEEN)))
+        val states = mutableStateOf(mapOf(2L to read.copy(entryId = 2)))
+        compose.setContent { list(unreadOnly = filter.value, onFilter = { filter.value = it }, states = states.value) }
+        compose.onNodeWithText("Unread only").performClick()
+        compose.onNodeWithText("Second headline").assertDoesNotExist()
+        compose.onNodeWithText("First headline").performClick()
+        compose.runOnIdle { states.value += 1L to read }
+        compose.onNodeWithText("Article body 1").assertExists()
+        compose.onNodeWithText("Collapse").performClick()
+        compose.onNodeWithText("First headline").assertDoesNotExist()
+        compose.onNodeWithText("Unread only").performClick()
+        compose.onNodeWithText("Second headline").assertExists()
     }
 
     @Test fun readAndUnreadHeadlinesUseTheSameGutter() {

@@ -286,6 +286,9 @@ internal fun MainScaffold(
     val selected = navigator.currentDestination?.contentKey
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     var feedSelection by rememberFeedSelection(state.accountKey)
+    var unreadFilterOverride by key(state.accountKey, state.readerSettings.showOnlyUnread) {
+        rememberSaveable { mutableStateOf<Boolean?>(null) }
+    }
     val searchListFocused = section.view == View.SEARCH && !searchDetail
     val detailOnly = navigator.currentDestination?.pane == ListDetailPaneScaffoldRole.Detail &&
         (section.view == View.FRONT || directive.maxHorizontalPartitions == 1) && !searchListFocused
@@ -642,6 +645,8 @@ internal fun MainScaffold(
                                 else -> key(section.view, feedSelection) { EntryListScreen(
                                     title = if (section.view == View.ALL) feedSelection.title(state.snapshot.objects) else section.view.label,
                                     entries = listEntries,
+                                    unreadOnly = if (section.view == View.ALL) unreadFilterOverride ?: state.readerSettings.showOnlyUnread else null,
+                                    onUnreadOnlyChange = { unreadFilterOverride = it },
                                     states = state.states,
                                     principalId = state.principalId,
                                     subscriptionTitles = subscriptionTitles,
@@ -1045,6 +1050,8 @@ internal fun EntryListScreen(
     unreadCounts: UnreadCounts? = null,
     unreadSyncedAt: Long? = null,
     unreadMode: Boolean = false,
+    unreadOnly: Boolean? = null,
+    onUnreadOnlyChange: (Boolean) -> Unit = {},
     onRevert: (Long) -> Unit,
     onOpen: (Long) -> Unit,
     onOpenAgentSelected: (Long) -> Unit,
@@ -1080,6 +1087,10 @@ internal fun EntryListScreen(
         if (layout == ArticleLayout.READING && expandedId != null) entries.firstOrNull { it.id == expandedId } else null
     }
     val expanded = expandedEntry?.id
+    // Keep the open article in the list when opening it marks it read.
+    val visibleEntries = remember(entries, states, unreadOnly, expanded) {
+        if (unreadOnly == true) entries.filter { it.id == expanded || isUnread(states[it.id]) } else entries
+    }
     val inlineReader = remember(expanded, accountKey) { ReaderLoadState() }
     val inlineViewport = remember(expanded, accountKey) { InlineArticleState() }
     var listWidth by remember { androidx.compose.runtime.mutableIntStateOf(0) }
@@ -1109,7 +1120,12 @@ internal fun EntryListScreen(
         scrollAnchor = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == anchor }?.let { item ->
             // Keep a tapped headline in place; collapsing inside a body
             // returns to its header rather than reusing a deep body offset.
-            InlineScrollAnchor(item.index, -item.offset.coerceAtLeast(0))
+            // In the unread filter the previously expanded (now read) row
+            // disappears when another article opens. Account for it above the tap.
+            val previousIndex = if (unreadOnly == true && id != null && expanded != null &&
+                !isUnread(states[expanded])) visibleEntries.indexOfFirst { it.id == expanded } else -1
+            val losesRowAbove = previousIndex >= 0 && visibleEntries.indexOfFirst { it.id == id } > previousIndex
+            InlineScrollAnchor(item.index - (if (losesRowAbove) 1 else 0), -item.offset.coerceAtLeast(0))
         }
         expandedId = id
         if (id != null) onExpand(id)
@@ -1131,13 +1147,21 @@ internal fun EntryListScreen(
         }
     }
     LazyColumn(state = listState, modifier = Modifier.fillMaxSize().onSizeChanged { listWidth = it.width }, contentPadding = PaddingValues(bottom = 16.dp)) {
-        if (layoutOverride == null) {
+        if (layoutOverride == null || unreadOnly != null) {
             item(key = "reading-layout") {
-                ArticleLayoutControl(layout, onLayout = {
+                if (layoutOverride == null) ArticleLayoutControl(layout, onLayout = {
                     changeExpansion(null)
                     preferredLayout = it
                     context.setArticleLayout(it)
                 })
+                if (unreadOnly != null) {
+                    FilterChip(
+                        selected = unreadOnly,
+                        onClick = { onUnreadOnlyChange(!unreadOnly) },
+                        label = { Text("Unread only") },
+                        modifier = Modifier.padding(horizontal = ReaderSpace.gutter),
+                    )
+                }
             }
         }
         if (unreadMode) {
@@ -1167,7 +1191,7 @@ internal fun EntryListScreen(
                 AgentChangesNotice("While you were out", agentChanges, entryTitles, agentChangesError, onOpenAgentSelected, onRevert)
             }
         }
-        items(entries, key = { it.id }) { entry ->
+        items(visibleEntries, key = { it.id }) { entry ->
             val effective = states[entry.id] ?: SyncEngine.initialState(principalId, entry.id)
             Surface(
                 modifier = Modifier.fillMaxWidth(),
@@ -1220,8 +1244,8 @@ internal fun EntryListScreen(
             }
         }
         item(key = "end") {
-            if (entries.isEmpty()) {
-                val message = when (title) {
+            if (visibleEntries.isEmpty()) {
+                val message = if (unreadOnly == true) "Turn off Unread only to see read articles." else when (title) {
                     "Kept" -> "Keep an article from its menu to find it here. Your favorites stay close at hand."
                     "Later" -> "Save an article for Later from its menu, or give it a short swipe to the left."
                     "Done" -> "Articles you mark Done will appear here. You can always mark them unread again."
@@ -1237,6 +1261,10 @@ internal fun EntryListScreen(
         }
     }
 }
+
+private fun isUnread(state: ch.lkmc.earnest.core.State?): Boolean =
+    state == null || (state.seen.value == JsonPrimitive(SyncEngine.VALUE_UNSEEN) &&
+        state.shelf.value != JsonPrimitive(SyncEngine.VALUE_DONE))
 
 private const val HEADLINE_MAX_LINES = 4
 
@@ -1276,8 +1304,7 @@ internal fun EntryRow(
     onDone: () -> Unit = {},
     onMarkUnread: () -> Unit = {},
 ) {
-    val unread = state.seen.value == JsonPrimitive(SyncEngine.VALUE_UNSEEN) &&
-        state.shelf.value != JsonPrimitive(SyncEngine.VALUE_DONE)
+    val unread = isUnread(state)
     val kept = state.kept.value == JsonPrimitive(true)
     var menuOpen by remember { mutableStateOf(false) }
     Column(
