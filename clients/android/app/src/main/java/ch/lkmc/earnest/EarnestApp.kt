@@ -369,18 +369,23 @@ internal fun MainScaffold(
             .mapNotNull { subscription -> subscription.iconUrl()?.let { subscription.id to it } }
             .toMap()
     }
-    val lists = remember(state.snapshot, state.states) {
-        val visible = entries.filterNot { it.deleted }
-        fun stateOf(id: Long) = state.states[id] ?: SyncEngine.initialState(state.principalId, id)
-        val later = visible.filter { stateOf(it.id).shelf.value == kotlinx.serialization.json.JsonPrimitive(SyncEngine.VALUE_LATER) }
-        val kept = visible.filter { stateOf(it.id).kept.value == kotlinx.serialization.json.JsonPrimitive(true) }
-        val done = visible.filter { stateOf(it.id).shelf.value == kotlinx.serialization.json.JsonPrimitive(SyncEngine.VALUE_DONE) }
-        mapOf(
-            View.ALL to allArticles(entries),
-            View.LATER to later.sortedBy { it.seq },
-            View.KEPT to kept.sortedBy { it.seq },
-            View.DONE to done.sortedBy { it.seq },
-        )
+    // Reading an article changes its registers. The chronological feed depends
+    // only on entries and subscriptions and can keep its sorted list.
+    val listEntries = when (section.view) {
+        View.ALL -> remember(entries, state.snapshot.objects, feedSelection) {
+            feedSelection.filter(allArticles(entries), state.snapshot.objects)
+        }
+        View.KEPT, View.LATER, View.DONE -> remember(entries, state.states, section.view) {
+            entries.filter { entry ->
+                val registers = state.states[entry.id]
+                !entry.deleted && when (section.view) {
+                    View.KEPT -> registers?.kept?.value == JsonPrimitive(true)
+                    View.LATER -> registers?.shelf?.value == JsonPrimitive(SyncEngine.VALUE_LATER)
+                    else -> registers?.shelf?.value == JsonPrimitive(SyncEngine.VALUE_DONE)
+                }
+            }.sortedBy { it.seq }
+        }
+        else -> emptyList()
     }
 
     /** Offers one undo for a completed action; the snackbar names the action. */
@@ -608,14 +613,14 @@ internal fun MainScaffold(
                                 )
                                 else -> key(section.view, feedSelection) { EntryListScreen(
                                     title = if (section.view == View.ALL) feedSelection.title(state.snapshot.objects) else section.view.label,
-                                    entries = if (section.view == View.ALL) feedSelection.filter(lists[section.view].orEmpty(), state.snapshot.objects) else lists[section.view].orEmpty(),
+                                    entries = listEntries,
                                     states = state.states,
                                     principalId = state.principalId,
                                     subscriptionTitles = subscriptionTitles,
                                     subscriptionIcons = subscriptionIcons,
                                     briefs = emptyList(),
                                     principalNames = state.principals,
-                                    entryTitles = state.snapshot.entries.associate { it.id to it.title },
+                                    entryTitles = emptyMap(),
                                     agentChanges = emptyList(),
                                     sessionChanges = emptyList(),
                                     agentChangesError = null,
@@ -1046,12 +1051,15 @@ internal fun EntryListScreen(
         owner = accountKey
     }
     var retry by remember { mutableStateOf(0) }
-    val expanded = expandedId?.takeIf { id -> entries.any { it.id == id } && layout == ArticleLayout.READING }
+    val expandedEntry = remember(entries, expandedId, layout) {
+        if (layout == ArticleLayout.READING && expandedId != null) entries.firstOrNull { it.id == expandedId } else null
+    }
+    val expanded = expandedEntry?.id
     val inlineReader = remember(expanded, accountKey) { ReaderLoadState() }
     val inlineViewport = remember(expanded, accountKey) { InlineArticleState() }
     var listWidth by remember { androidx.compose.runtime.mutableIntStateOf(0) }
     val density = LocalDensity.current
-    val expandedTypography = entries.firstOrNull { it.id == expanded }?.let(typography)
+    val expandedTypography = expandedEntry?.let(typography)
     val textZoom = context.readerZoom()
     val measuredListWidth = listWidth
     SideEffect {
@@ -1298,8 +1306,7 @@ internal fun EntryRow(
                 fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal,
                 maxLines = HEADLINE_MAX_LINES,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f).testTag("headline-${entry.id}")
-                    .unreadHeadlineHeight(headline, headlineStyle, rememberTextMeasurer()),
+                modifier = Modifier.weight(1f).testTag("headline-${entry.id}"),
             )
             entry.thumbnailUrl?.let { thumbnail ->
                 Spacer(Modifier.width(12.dp))
