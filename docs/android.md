@@ -105,10 +105,12 @@ article in the same scrolling list. Only the article you expand loads reader
 content and reader images, and only one article is expanded at a time. Opening
 another article keeps its headline in place instead of carrying over the previous
 article's scroll offset. Collapse or Back returns you to the expanded headline
-when you are inside its body. Choose Open reader for the dedicated reading tools. Very long
-articles have a bounded inline preview with a notice to continue in the reader.
+when you are inside its body. Use **Next page** and **Previous page** to read a
+long article in place. **Open reader** opens the dedicated reading tools.
 The layout choice is remembered on your device. Wide screens keep the existing
-side-by-side list and reader.
+side-by-side list and reader. In Articles, **Unread only** filters the current
+feed, folder or all articles. It starts with your account’s **Show only unread**
+setting. The open article stays visible until you collapse it or open another.
 
 Article rows share consistent gutters and keep their source, time, headline
 and read indicator together. Use the article's overflow menu for Keep, Unkeep,

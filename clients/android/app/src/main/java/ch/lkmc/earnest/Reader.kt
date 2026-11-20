@@ -18,13 +18,16 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Column
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.net.toUri
@@ -120,8 +123,10 @@ internal fun Reader(
     onContentHeight: ((Int) -> Unit)? = null,
 ) {
     val systemDark = isSystemInDarkTheme()
-    val displayUrl = url?.let { readerUrl(it, typography, systemDark) }
-    val fallbackHtml = cachedHtml?.let { offlineReaderHtml(it, typography, systemDark) }
+    val displayUrl = remember(url, typography, systemDark) { url?.let { readerUrl(it, typography, systemDark) } }
+    val fallbackHtml = remember(cachedHtml, typography, systemDark) {
+        cachedHtml?.let { offlineReaderHtml(it, typography, systemDark) }
+    }
     val backgroundColor = Color.parseColor(readerColors(typography, systemDark).first)
     val fallbackCallback = rememberUpdatedState(onFallback)
     val liveContentCallback = rememberUpdatedState(onLiveContent)
@@ -131,12 +136,19 @@ internal fun Reader(
     // published itself and must not null the newer instance.
     val published = remember { arrayOfNulls<WebView>(1) }
     key(url, fallbackHtml) {
-        AndroidView(
+        var rendererLost by remember { mutableStateOf(false) }
+        if (rendererLost) {
+            Column(modifier) {
+                Text("The article renderer stopped.")
+                TextButton(onClick = { rendererLost = false }) { Text("Reload article") }
+            }
+        } else AndroidView(
             modifier = modifier,
             factory = { context ->
                 createReaderWebView(
                     context, displayUrl, fallbackHtml,
-                    onContentHeight = { height -> heightCallback.value?.invoke(height) },
+                    onContentHeight = onContentHeight?.let { { height -> heightCallback.value?.invoke(height) } },
+                    onRendererLost = { if (published[0] === it) rendererLost = true },
                     backgroundColor = backgroundColor,
                     onLiveContent = { liveContentCallback.value() },
                     onFallback = { fallbackCallback.value() },
@@ -154,11 +166,11 @@ internal fun Reader(
             },
             onReset = null,
             onRelease = {
-                it.destroy()
                 if (published[0] === it) {
                     published[0] = null
                     webViewCallback.value(null)
                 }
+                it.destroy()
             },
         )
     }
@@ -269,6 +281,7 @@ internal fun createReaderWebView(
     cachedHtml: String?,
     onContentHeight: ((Int) -> Unit)? = null,
     backgroundColor: Int = Color.WHITE,
+    onRendererLost: (WebView) -> Unit = {},
     onLiveContent: () -> Unit = {},
     onFallback: () -> Unit = {},
 ): WebView {
@@ -297,8 +310,7 @@ internal fun createReaderWebView(
             if (onContentHeight == null || !documentVisible) return
             // Native layout reports changes after images and fonts settle.
             // No JavaScript bridge or script execution is needed for inline reading.
-            @Suppress("DEPRECATION")
-            val pixels = kotlin.math.ceil(contentHeight * scale.toDouble()).toInt()
+            val pixels = computeVerticalScrollRange()
             if (pixels > 0 && pixels != reportedHeight) {
                 reportedHeight = pixels
                 post { onContentHeight(pixels) }
@@ -361,7 +373,7 @@ internal fun createReaderWebView(
             }
 
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-                // The render process died; keep the app alive and let Compose recreate the view.
+                onRendererLost(view)
                 return true
             }
 

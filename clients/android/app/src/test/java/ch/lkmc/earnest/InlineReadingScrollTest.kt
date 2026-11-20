@@ -75,6 +75,49 @@ class InlineReadingScrollTest {
         compose.waitForIdle()
     }
 
+    @Test fun readerRoundTripKeepsTheListAndArticleOffsets() {
+        val showingList = androidx.compose.runtime.mutableStateOf(true)
+        var loads = 0
+        lateinit var viewport: InlineArticleState
+        lateinit var listState: LazyListState
+        compose.setContent {
+            val readingState = rememberFeedReadingState("account")
+            SideEffect { listState = readingState.list }
+            val holder = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
+            if (showingList.value) holder.SaveableStateProvider("articles") {
+                EntryListScreen(
+                    title = "Articles", entries = (1L..30L).map { CachedEntry(it, title = "Headline $it") },
+                    states = emptyMap(), principalId = 1, subscriptionTitles = emptyMap(), subscriptionIcons = emptyMap(),
+                    briefs = emptyList(), principalNames = emptyMap(), entryTitles = emptyMap(), agentChanges = emptyList(),
+                    sessionChanges = emptyList(), agentChangesError = null, onRevert = {}, onOpenAgentSelected = {},
+                    onOpen = { showingList.value = false }, onLater = {}, onDone = {}, onKeep = {}, onUnkeep = {}, onMarkUnread = {},
+                    accountKey = "account", layoutOverride = ArticleLayout.READING, readingState = readingState,
+                    onLoadContent = { loads++; ContentUrlResult(null, null, "Body") },
+                    inlineContent = { _, _, state ->
+                        SideEffect { viewport = state }
+                        Box(Modifier.fillMaxWidth().height(1400.dp))
+                    },
+                )
+            }
+        }
+        compose.runOnIdle { listState.requestScrollToItem(8) }
+        compose.onNodeWithText("Headline 9").performClick()
+        compose.runOnIdle {
+            viewport.scrollY = 3800
+            listState.requestScrollToItem(8, with(compose.density) { 1000.dp.roundToPx() })
+        }
+        val before = compose.runOnIdle { listState.firstVisibleItemScrollOffset }
+        compose.onNodeWithText("Open reader").performClick()
+        compose.runOnIdle { showingList.value = true }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            assertEquals(1, loads)
+            assertEquals(8, listState.firstVisibleItemIndex)
+            assertEquals(before, listState.firstVisibleItemScrollOffset)
+            assertEquals(3800, viewport.scrollY)
+        }
+    }
+
     @Test fun openingTheNextArticleKeepsItsHeadlineInPlace() {
         openTallArticle()
         compose.onNodeWithText("Headline 8").assertIsDisplayed()
