@@ -50,7 +50,7 @@ class SettingsNavigationTest {
         ))
         compose.setContent {
             EarnestTheme(ThemeSetting.LIGHT) {
-                MainScaffold(model, state, ThemeSetting.LIGHT, {}, null, null, false, {})
+                MainScaffold(model, state, ThemeSetting.LIGHT, {}, null, null, 0, false, {})
             }
         }
         compose.onNodeWithContentDescription("More options").performClick()

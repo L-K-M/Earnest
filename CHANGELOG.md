@@ -97,6 +97,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Rotating an Android device, or Android restoring the app, no longer marks
+  the open article read again, so an article you marked unread stays unread
+  until you open it. A link or notification no longer reopens its article
+  after a rotation either, and tapping the same link again now opens it
+  again.
 - Scrolling an Android list no longer marks articles read, so scrolling
   down and back up keeps their unread dots. As on the web, only opening an
   article, in the reader or by expanding it in Read in feed, marks it read.

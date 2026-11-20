@@ -39,6 +39,7 @@ class ArticleLayoutTest {
     private val context get() = ApplicationProvider.getApplicationContext<Context>()
     private val opened = mutableListOf<Long>()
     private val loaded = mutableListOf<Long>()
+    private val expanded = mutableListOf<Long>()
     private val kept = mutableListOf<Long>()
     private val account = mutableStateOf<String?>("account-a")
     private var failNextLoad = false
@@ -58,6 +59,7 @@ class ArticleLayoutTest {
                 onOpen = { opened += it }, onLater = {}, onDone = {}, onKeep = { kept += it }, onUnkeep = {}, onMarkUnread = {},
                 accountKey = account.value,
                 layoutOverride = layoutOverride,
+                onExpand = { expanded += it },
                 onLoadContent = {
                     loaded += it
                     if (failNextLoad) {
@@ -161,6 +163,8 @@ class ArticleLayoutTest {
         compose.onNodeWithText("Article body 1").assertExists()
         restoration.emulateSavedInstanceStateRestore()
         compose.onNodeWithText("Article body 1").assertExists()
+        assertEquals("rotation reloads the expanded article", listOf(1L, 1L), loaded)
+        assertEquals("rotation must not open it again", listOf(1L), expanded)
         compose.runOnIdle { account.value = null }
         restoration.emulateSavedInstanceStateRestore()
         compose.runOnIdle { account.value = "account-a" }

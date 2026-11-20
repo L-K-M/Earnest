@@ -1876,8 +1876,9 @@ class AppViewModel internal constructor(
     }
 
     /**
-     * Marks the entry read because the reader opened it. Opening is the only
-     * automatic read mark: scrolling a list never calls this.
+     * Marks the entry read because you opened it, in the reader or in Read
+     * in feed. Opening is the only automatic read mark: scrolling a list and
+     * reloading an open article after a rotation never call this.
      */
     fun markSeen(entryId: Long) {
         queue(entryId, "seen", SyncEngine.KIND_PASSIVE) { state ->
