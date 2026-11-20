@@ -293,6 +293,23 @@ internal fun MainScaffold(
     // destination: after a rotation or process death the reader reopens the
     // same entry, and a plain remember would reload it with automatic images.
     var agentSelected by rememberSaveable(saver = AgentSelectedSaver) { mutableStateOf(emptySet<Long>()) }
+    // A rotation or process restore hands this screen the launch link and
+    // notification again. Each opens its article once, so recreating the
+    // screen neither returns to that article nor marks it read again.
+    var openedLink by rememberSaveable { mutableStateOf<Long?>(null) }
+    var openedNotification by rememberSaveable { mutableStateOf<Long?>(null) }
+
+    /**
+     * Opens [entryId] in the reader and marks it read. The mark belongs to
+     * the open, not to loading the article: a rotation or process restore
+     * reloads the open article, and that must not read an article you
+     * marked unread. [agentPick] opens it with click-to-load images.
+     */
+    fun openArticle(entryId: Long, agentPick: Boolean = false) {
+        if (agentPick) agentSelected = agentSelected + entryId
+        model.markSeen(entryId)
+        scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
+    }
 
     @Composable
     fun SearchContent() {
@@ -302,8 +319,7 @@ internal fun MainScaffold(
             snapshot = state.snapshot,
             onOpen = { match ->
                 searchDetail = true
-                if (match.kind == "agent_note" || match.untrusted) agentSelected = agentSelected + match.entryId
-                scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, match.entryId) }
+                openArticle(match.entryId, agentPick = match.kind == "agent_note" || match.untrusted)
             },
         )
         // Register in the list pane after the scaffold's own handler. The
@@ -320,26 +336,31 @@ internal fun MainScaffold(
             }
         }
     }
-    LaunchedEffect(initialEntry) {
-        initialEntry?.let {
-            agentSelected = agentSelected + it
-            searchDetail = true
-            navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, it)
-        }
+    // Links and notifications wait for the account, which a cold start is
+    // still restoring: the read mark needs it.
+    LaunchedEffect(initialEntry, state.accountKey) {
+        if (state.accountKey == null) return@LaunchedEffect
+        val id = initialEntry ?: return@LaunchedEffect
+        if (id == openedLink) return@LaunchedEffect
+        openedLink = id
+        searchDetail = true
+        openArticle(id, agentPick = true)
     }
     LaunchedEffect(notificationId, state.accountKey) {
         if (state.accountKey == null) return@LaunchedEffect
         val id = notificationId ?: return@LaunchedEffect
+        if (id == openedNotification) return@LaunchedEffect
         model.notificationEntry(id)?.let {
-            agentSelected = agentSelected + it
+            openedNotification = id
             searchDetail = true
-            navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, it)
+            openArticle(it, agentPick = true)
         }
     }
+    // Reloads after a rotation or process restore too, so it never marks the
+    // article read; openArticle did when you opened it.
     LaunchedEffect(selected, state.accountKey, readerRetry) {
         reader.load(selected, state.accountKey) { id ->
             if (model.loadEntry(id) == null) throw java.io.IOException("This entry is no longer available.")
-            model.markSeen(id)
             model.openEntry(id, agentSelected = id in agentSelected)
         }
     }
@@ -566,13 +587,8 @@ internal fun MainScaffold(
                                     sessionChanges = state.sessionAgentChanges,
                                     agentChangesError = state.agentChangesError,
                                     onRevert = model::revert,
-                                    onOpen = { entryId ->
-                                        scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
-                                    },
-                                    onOpenAgentSelected = { entryId ->
-                                        agentSelected = agentSelected + entryId
-                                        scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
-                                    },
+                                    onOpen = { entryId -> openArticle(entryId) },
+                                    onOpenAgentSelected = { entryId -> openArticle(entryId, agentPick = true) },
                                     onPeriodChange = { period -> section = section.copy(period = period) },
                                     onRefresh = { model.refreshFrontPage() },
                                 )
@@ -623,13 +639,8 @@ internal fun MainScaffold(
                                     unreadSyncedAt = null,
                                     unreadMode = false,
                                     onRevert = model::revert,
-                                    onOpen = { entryId ->
-                                        scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
-                                    },
-                                    onOpenAgentSelected = { entryId ->
-                                        agentSelected = agentSelected + entryId
-                                        scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
-                                    },
+                                    onOpen = { entryId -> openArticle(entryId) },
+                                    onOpenAgentSelected = { entryId -> openArticle(entryId, agentPick = true) },
                                     onLater = { id -> model.later(id, undoable) },
                                     onDone = { id -> model.done(id, undoable) },
                                     onKeep = { id -> model.keep(id, undoable) },
@@ -639,10 +650,8 @@ internal fun MainScaffold(
                                     // Wide screens keep the existing side-by-side reader.
                                     layoutOverride = ArticleLayout.HEADLINES.takeIf { directive.maxHorizontalPartitions > 1 },
                                     typography = { entry -> state.readerSettings.typographyFor(entry.feedId) },
-                                    onLoadContent = { id ->
-                                        model.markSeen(id)
-                                        model.openEntry(id, agentSelected = id in agentSelected)
-                                    },
+                                    onExpand = { id -> model.markSeen(id) },
+                                    onLoadContent = { id -> model.openEntry(id, agentSelected = id in agentSelected) },
                                 ) }
                             }
                             }
@@ -1030,6 +1039,10 @@ internal fun EntryListScreen(
     accountKey: String? = null,
     layoutOverride: ArticleLayout? = null,
     typography: (CachedEntry) -> ch.lkmc.earnest.core.ReaderTypography = { ch.lkmc.earnest.core.ReaderSettings().typographyFor(it.feedId) },
+    // Expanding an article in Read in feed opens it. onLoadContent runs
+    // again when a rotation or process restore reloads it, so it must not
+    // stand in for this.
+    onExpand: (Long) -> Unit = {},
     onLoadContent: suspend (Long) -> ContentUrlResult? = { null },
     inlineContent: @Composable (ContentUrlResult, CachedEntry, InlineArticleState) -> Unit = { content, entry, viewport ->
         InlineArticleContent(content, typography(entry), viewport)
@@ -1079,6 +1092,7 @@ internal fun EntryListScreen(
             InlineScrollAnchor(item.index, -item.offset.coerceAtLeast(0))
         }
         expandedId = id
+        if (id != null) onExpand(id)
     }
     LaunchedEffect(expanded, scrollAnchor) {
         scrollAnchor?.let { anchor ->

@@ -136,7 +136,9 @@ changed since. An article is marked read only when you open it, in the
 reader or by expanding it in Read in feed. Scrolling a list and background
 refreshes never mark an article read, expanding or collapsing one article
 never marks the rows around it, and an article you mark unread stays unread
-until you open it again or undo the change. Today keeps
+until you open it again or undo the change. Rotating the device, or Android
+restoring the app, reloads the open article without marking it read again.
+Today keeps
 its session membership stable: marking an article read does not remove its
 row. Later and Done remove rows
 immediately; refresh starts a new membership from the current effective
@@ -199,6 +201,8 @@ never as HTML.
 
 Notifications and deep links resolve missing metadata through `/v1/entries/{id}`;
 selection follows the current snapshot as cold-launch loading and sync complete.
+Each opens its article once the account has loaded, and only once: a rotation
+or a restored app does not open that article again.
 Incremental entry events are hydrated before their page and cursor are committed.
 A metadata 404 is retained as a tombstone; other failures leave the cursor for
 retry.
@@ -262,7 +266,8 @@ That menu item appears only while permission is missing.
 `:app:testDebugUnitTest` covers snapshot replacement failure, oversized snapshot
 recovery and cold reopen with unsent actions and multibyte text, transactional
 chunk reads, concurrent foreground/background writes, account isolation,
-offline cadence restoration, Today session membership, scrolling without read marks, missing notification metadata,
+offline cadence restoration, Today session membership, scrolling and rotation without read marks, links and
+notifications that open once, missing notification metadata,
 agent-change retrieval, WebView error fallback, deep-link parsing, brief labels,
 widget headline selection, theme persistence, notification channels and server
 notification text, notification permission timing, cadence selection, swipe

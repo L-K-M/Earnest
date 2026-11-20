@@ -61,6 +61,7 @@ class ScrollReadStateTest {
                     onKeep = { actions += "keep $it" }, onUnkeep = { actions += "unkeep $it" },
                     onMarkUnread = { actions += "unread $it" },
                     accountKey = "scroll-read", layoutOverride = layout, listState = listState,
+                    onExpand = { actions += "expand $it" },
                     onLoadContent = { actions += "load $it"; ContentUrlResult(null, null, "Body $it") },
                     inlineContent = { content, _, _ -> Text(content.cachedHtml.orEmpty(), Modifier.height(1200.dp)) },
                 )
@@ -103,7 +104,7 @@ class ScrollReadStateTest {
         compose.onNodeWithText("Collapse").performScrollTo().performClick()
         compose.onNodeWithText("Body 2").assertDoesNotExist()
         scrollDownAndBackUp()
-        compose.runOnIdle { assertEquals("only the opened article may be read", listOf("load 2"), actions) }
+        compose.runOnIdle { assertEquals("only the opened article may be read", listOf("expand 2", "load 2"), actions) }
     }
 
     private companion object {
