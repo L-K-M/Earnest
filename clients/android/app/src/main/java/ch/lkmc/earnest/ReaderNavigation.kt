@@ -205,6 +205,7 @@ internal fun ReaderDrawer(
                     label = { Text(destination.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     selected = view == destination && selection == FeedSelection.All,
                     icon = { Icon(destination.icon, contentDescription = null) },
+                    badge = { UnreadBadge(unreadCounts?.total) },
                     onClick = { onFeed(FeedSelection.All) },
                     modifier = Modifier.padding(horizontal = 12.dp),
                 )

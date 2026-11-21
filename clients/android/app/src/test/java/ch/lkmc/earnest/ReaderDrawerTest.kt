@@ -9,6 +9,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.performScrollToNode
@@ -56,13 +57,21 @@ class ReaderDrawerTest {
             SyncObject(SyncEngine.OBJECT_SUBSCRIPTION, 3, folderId = 7, name = "Systems journal", rev = 1),
             SyncObject(SyncEngine.OBJECT_SUBSCRIPTION, 4, folderId = 7, name = "Compiler notes", rev = 1),
             SyncObject(SyncEngine.OBJECT_SUBSCRIPTION, 5, folderId = 7, name = "Quiet blog", rev = 1),
+            SyncObject(SyncEngine.OBJECT_SUBSCRIPTION, 6, name = "Unfiled feed", rev = 1),
         )
-        val counts = UnreadCounts(bySubscription = mapOf(3L to 5L, 4L to 7L, 5L to 0L), total = 12)
+        val counts = mutableStateOf<UnreadCounts?>(null)
         compose.setContent {
             EarnestTheme(ThemeSetting.LIGHT) {
-                ReaderDrawer(View.ALL, FeedSelection.All, objects, onView = {}, onFeed = {}, onSettings = {}, unreadCounts = counts)
+                ReaderDrawer(View.ALL, FeedSelection.All, objects, onView = {}, onFeed = {}, onSettings = {}, unreadCounts = counts.value)
             }
         }
+        compose.onAllNodesWithContentDescription("unread", substring = true, useUnmergedTree = true).assertCountEquals(0)
+        compose.runOnIdle {
+            counts.value = UnreadCounts(bySubscription = mapOf(3L to 5L, 4L to 7L, 6L to 2L), total = 14)
+        }
+        compose.onNode(hasText("All articles") and hasContentDescription("14 unread")).assertIsDisplayed()
+        compose.onNodeWithTag("reader-drawer").performScrollToNode(hasText("No folder"))
+        compose.onNode(hasText("No folder") and hasContentDescription("2 unread")).assertIsDisplayed()
         compose.onNodeWithTag("reader-drawer").performScrollToNode(hasText("Engineering"))
         compose.onNodeWithContentDescription("12 unread", useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithContentDescription("Expand Engineering").performClick()
@@ -70,6 +79,9 @@ class ReaderDrawerTest {
         compose.onNodeWithContentDescription("5 unread", useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithContentDescription("7 unread", useUnmergedTree = true).assertIsDisplayed()
         compose.onAllNodesWithContentDescription("0 unread", useUnmergedTree = true).assertCountEquals(0)
+        compose.runOnIdle { counts.value = UnreadCounts() }
+        compose.onNodeWithTag("reader-drawer").performScrollToNode(hasText("All articles"))
+        compose.onAllNodesWithContentDescription("unread", substring = true, useUnmergedTree = true).assertCountEquals(0)
     }
 
     @Test fun drawerShowsNoCountsWithoutUnreadCounts() {
