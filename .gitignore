@@ -4,3 +4,6 @@ coverage.out
 .DS_Store
 .idea/
 .vscode/
+
+# Local Claude Code approvals can contain secrets.
+**/.claude/settings.local.json
