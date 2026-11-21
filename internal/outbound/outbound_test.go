@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -100,9 +102,9 @@ func TestLocalAndLimits(t *testing.T) {
 }
 func TestRedirectCredentials(t *testing.T) {
 	var got http.Header
-	dst := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { got = r.Header.Clone(); fmt.Fprint(w, "ok") }))
+	dst := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { got = r.Header.Clone(); fmt.Fprint(w, "ok") }))
 	defer dst.Close()
-	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, dst.URL, 301) }))
+	src := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, dst.URL, 301) }))
 	defer src.Close()
 	p := localPolicy(t, src.URL)
 	u, _ := url.Parse(dst.URL)
@@ -110,12 +112,41 @@ func TestRedirectCredentials(t *testing.T) {
 	p.ExtraPorts = append(p.ExtraPorts, uint16(port))
 	p.Credentials = Credentials{Username: "a", Password: "b", Headers: http.Header{"X-Secret": {"secret"}}}
 	c := client(t, Config{AllowPrefixes: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}})
+	roots := x509.NewCertPool()
+	roots.AddCert(src.Certificate())
+	roots.AddCert(dst.Certificate())
+	c.transports[HTTP1].TLSClientConfig = &tls.Config{RootCAs: roots}
 	result, e := c.Get(context.Background(), src.URL, p)
 	if e != nil {
 		t.Fatal(e)
 	}
 	if !result.PermanentRedirect || got.Get("Authorization") != "" || got.Get("X-Secret") != "" {
 		t.Fatalf("redirect: %+v %v", result, got)
+	}
+}
+
+func TestRejectCleartextCredentials(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("credentialed request reached HTTP server")
+	}))
+	defer server.Close()
+	p := localPolicy(t, server.URL)
+	p.Credentials = Credentials{Headers: http.Header{"Authorization": {"Bearer private"}}}
+	c := client(t, Config{AllowPrefixes: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}})
+	if _, err := c.Get(context.Background(), server.URL, p); ErrorClass(err) != DeniedAddress {
+		t.Fatalf("cleartext credentials: %v", err)
+	}
+}
+
+func TestRejectCleartextAuthorizationHeader(t *testing.T) {
+	c := client(t, Config{})
+	req, err := http.NewRequest(http.MethodPost, "http://reader.example/push", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer private")
+	if _, err := c.Do(req, Policy{Purpose: Push, Redirect: RedirectNone}); ErrorClass(err) != DeniedAddress {
+		t.Fatalf("cleartext authorization: %v", err)
 	}
 }
 func TestRedirectDenied(t *testing.T) {

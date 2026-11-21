@@ -114,3 +114,13 @@ func TestNewRouterRejectsBadBaseURL(t *testing.T) {
 		})
 	}
 }
+
+func TestNewRouterRejectsRemoteHTTPAPIKey(t *testing.T) {
+	_, err := newProvider("remote", ProviderConfig{Kind: KindOpenAI, BaseURL: "http://models.example/v1", APIKey: "private"}, testOutbound(t))
+	if err == nil {
+		t.Fatal("accepted remote API key over HTTP")
+	}
+	if _, err := newProvider("local", ProviderConfig{Kind: KindOpenAI, BaseURL: "http://127.0.0.1:11434/v1", APIKey: "private"}, testOutbound(t)); err != nil {
+		t.Fatalf("rejected loopback provider: %v", err)
+	}
+}

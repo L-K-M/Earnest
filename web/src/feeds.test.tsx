@@ -264,10 +264,13 @@ describe('Feeds', () => {
     fireEvent.click(screen.getByLabelText('This feed needs credentials'))
     fireEvent.change(screen.getByLabelText('Username'), {target: {value: 'u'}})
     fireEvent.change(screen.getByLabelText('Password'), {target: {value: 'p'}})
+    const header = screen.getByLabelText('Header 1 (Name: value)') as HTMLInputElement
+    expect(header.type).toBe('password')
+    fireEvent.change(header, {target: {value: 'Authorization: Bearer hidden'}})
     fireEvent.click(screen.getByRole('button', {name: 'Subscribe'}))
     await screen.findByText(/probe failed \(dns\)/)
     const post = calls('/v1/subscriptions', 'POST')[0]
-    expect(bodyOf(post)).toMatchObject({url: 'https://feeds.example/rss', credentials: {username: 'u', password: 'p'}})
+    expect(bodyOf(post)).toMatchObject({url: 'https://feeds.example/rss', credentials: {username: 'u', password: 'p', headers: {Authorization: 'Bearer hidden'}}})
   })
 
   it('adds and removes mutes', async () => {

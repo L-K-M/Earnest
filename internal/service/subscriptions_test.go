@@ -37,6 +37,19 @@ func TestNormalizedFeedURLDefaultPorts(t *testing.T) {
 	}
 }
 
+func TestPrivateFeedCredentialsRequireHTTPS(t *testing.T) {
+	credentials := &FeedCredentials{Username: "reader", Password: "private"}
+	if err := validateCredentialTransport("http://feed.example/rss", credentials); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("accepted cleartext credentials: %v", err)
+	}
+	if err := validateCredentialTransport("https://feed.example/rss", credentials); err != nil {
+		t.Fatalf("rejected HTTPS credentials: %v", err)
+	}
+	if err := validateCredentialTransport("http://feed.example/rss", nil); err != nil {
+		t.Fatalf("rejected public HTTP feed: %v", err)
+	}
+}
+
 func TestSubscribeDeduplicatesDefaultPorts(t *testing.T) {
 	f := newCoreFixture(t, storetest.NewTemplate(t))
 	f.s.prober = &subscriptionsProber{}

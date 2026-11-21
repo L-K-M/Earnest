@@ -274,6 +274,9 @@ func validateLLMSettings(in LLMSettingsInput, previous llm.Config) (llm.Config, 
 			}
 			key = old.APIKey
 		}
+		if key != "" && strings.HasPrefix(base, "http://") {
+			return cfg, fmt.Errorf("provider API keys require HTTPS: %w", ErrInvalid)
+		}
 		cfg.Providers[p.Name] = llm.ProviderConfig{Kind: kind, BaseURL: base, APIKey: key, MonthlyLimitUSD: limit, Timeout: time.Duration(p.TimeoutSeconds) * time.Second, TokenField: field}
 	}
 	for _, m := range in.Models {

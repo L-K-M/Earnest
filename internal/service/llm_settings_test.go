@@ -24,6 +24,18 @@ func llmSettingsTestInput() LLMSettingsInput {
 	return LLMSettingsInput{OpID: "llm-settings", Providers: []LLMProviderInput{{Name: "local", Kind: "openai", BaseURL: "https://models.example/v1", APIKey: "sk-test-private", MonthlyLimitUSD: "20.000001", TimeoutSeconds: 60, TokenField: "max_tokens"}}, Tasks: []LLMTaskSettings{{Task: "embed", Provider: "local", Model: "local-embed"}}, Models: []LLMModelSettings{{Name: "local-embed", InputPer1M: "0", OutputPer1M: "0", EmbeddingPer1M: "0", Dimensions: 2}}}
 }
 
+func TestLLMAPIKeyRequiresHTTPS(t *testing.T) {
+	in := llmSettingsTestInput()
+	in.Providers[0].BaseURL = "http://models.example/v1"
+	if _, err := validateLLMSettings(in, llm.DefaultConfig()); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("accepted API key over cleartext HTTP: %v", err)
+	}
+	in.Providers[0].APIKey = ""
+	if _, err := validateLLMSettings(in, llm.DefaultConfig()); err != nil {
+		t.Fatalf("rejected keyless local HTTP provider: %v", err)
+	}
+}
+
 func TestLLMModelPricingApplicabilitySurvivesLegacyWrites(t *testing.T) {
 	input := llmSettingsTestInput()
 	input.Tasks[0].Task = "blurb"

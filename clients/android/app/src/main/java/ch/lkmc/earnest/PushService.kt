@@ -79,7 +79,7 @@ class EarnestPushService : PushService() {
             opId = "device-${System.currentTimeMillis()}",
         )
         runCatching { api.registerDevice(body) }
-            .onFailure { Log.i(TAG, "Device registration failed: ${it.message}") }
+            .onFailure { Log.i(TAG, "Device registration failed") }
     }
 
     companion object {

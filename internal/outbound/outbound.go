@@ -198,6 +198,9 @@ func (c *Client) Do(request *http.Request, p Policy) (*Result, error) {
 	if req.URL.User != nil {
 		return nil, fmt.Errorf("URL credentials are not allowed")
 	}
+	if req.URL.Scheme != "https" && (p.Credentials.Username != "" || p.Credentials.Password != "" || len(p.Credentials.Headers) > 0) {
+		return nil, classified(DeniedAddress, errors.New("credentials require HTTPS"))
+	}
 	if p.ETag != "" {
 		req.Header.Set("If-None-Match", p.ETag)
 	}
@@ -221,6 +224,9 @@ func (c *Client) Do(request *http.Request, p Policy) (*Result, error) {
 	for hops := 0; ; hops++ {
 		if err := validateURL(req.URL, p.ExtraPorts); err != nil {
 			return nil, err
+		}
+		if req.URL.Scheme != "https" && !loopbackHost(req.URL.Hostname()) && hasCredentialHeaders(req.Header) {
+			return nil, classified(DeniedAddress, errors.New("credential headers require HTTPS"))
 		}
 		if seen[req.URL.String()] {
 			return nil, classified(RedirectLoop, errors.New("redirect loop"))
@@ -301,6 +307,23 @@ func (c *Client) Do(request *http.Request, p Policy) (*Result, error) {
 		}
 		return result, nil
 	}
+}
+
+func loopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip, err := netip.ParseAddr(host)
+	return err == nil && ip.IsLoopback()
+}
+
+func hasCredentialHeaders(headers http.Header) bool {
+	for _, name := range []string{"Authorization", "Proxy-Authorization", "Cookie", "X-API-Key", "X-Goog-Api-Key"} {
+		if headers.Get(name) != "" {
+			return true
+		}
+	}
+	return false
 }
 func origin(u *url.URL) string {
 	port := u.Port()

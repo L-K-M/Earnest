@@ -800,12 +800,12 @@ func TestFetchScopesCredentialsToCanonicalOrigin(t *testing.T) {
 	if movedAuth != "" {
 		t.Fatalf("credentials leaked to the redirect target: %q", movedAuth)
 	}
-	// The feed's own origin still receives them, including on another path.
+	// A legacy cleartext feed must fail before sending its stored credentials.
 	if err := f.Fetch(ctx, service.FeedToFetch{FeedID: 1, URL: home.URL + "/feed", FetchURL: home.URL + "/other", Credentials: creds}); err != nil {
 		t.Fatal(err)
 	}
-	if homeHits.Load() != 1 || homeAuth == "" {
-		t.Fatal("credentials missing on the feed's own origin")
+	if homeHits.Load() != 0 || homeAuth != "" {
+		t.Fatal("credentials reached a cleartext feed")
 	}
 }
 

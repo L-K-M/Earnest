@@ -3,6 +3,7 @@ package llm
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -86,6 +87,9 @@ func newProvider(name string, cfg ProviderConfig, client *outbound.Client) (Prov
 	if parsed.Hostname() == "" {
 		return nil, fmt.Errorf("llm: provider %s base URL must name a host", name)
 	}
+	if cfg.APIKey != "" && parsed.Scheme != "https" && !localProviderHost(parsed.Hostname()) {
+		return nil, fmt.Errorf("llm: provider %s API key requires HTTPS", name)
+	}
 	ports, err := baseExtraPorts(parsed)
 	if err != nil {
 		return nil, fmt.Errorf("llm: provider %s: %w", name, err)
@@ -104,6 +108,14 @@ func newProvider(name string, cfg ProviderConfig, client *outbound.Client) (Prov
 	default:
 		return nil, fmt.Errorf("llm: provider %s has unknown kind %q", name, cfg.Kind)
 	}
+}
+
+func localProviderHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip, err := netip.ParseAddr(host)
+	return err == nil && ip.IsLoopback()
 }
 
 // baseExtraPorts returns the non-standard port in u, which outbound requires

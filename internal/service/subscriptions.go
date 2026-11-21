@@ -112,6 +112,13 @@ func normalizedFeedURL(raw string) (string, error) {
 	return u.String(), nil
 }
 
+func validateCredentialTransport(rawURL string, credentials *FeedCredentials) error {
+	if credentials != nil && strings.HasPrefix(rawURL, "http://") {
+		return fmt.Errorf("private feed credentials require HTTPS: %w", ErrInvalid)
+	}
+	return nil
+}
+
 func credentialOrigin(raw string) string {
 	u, _ := url.Parse(raw) // Callers have already validated and normalized the URL.
 	port := u.Port()
@@ -244,6 +251,9 @@ func (s *Service) Subscribe(ctx context.Context, a Actor, rawURL string, options
 	}
 	rawURL, err := normalizedFeedURL(rawURL)
 	if err != nil {
+		return Subscription{}, err
+	}
+	if err := validateCredentialTransport(rawURL, options.Credentials); err != nil {
 		return Subscription{}, err
 	}
 	var previous []byte
@@ -634,6 +644,9 @@ func (s *Service) UpdateSubscription(ctx context.Context, a Actor, id int64, opt
 		}
 		if sub.Deleted {
 			return ErrNotFound
+		}
+		if err := validateCredentialTransport(sub.URL, options.Credentials); err != nil {
+			return err
 		}
 		if options.FolderID != nil {
 			if err := ensureFolder(ctx, tx, a.UserID, *options.FolderID); err != nil {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -31,8 +32,33 @@ func newClient(baseURL, token string) *client {
 	return &client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		token:   token,
-		http:    &http.Client{Timeout: defaultTimeout},
+		http: &http.Client{Timeout: defaultTimeout, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if !secureServerURL(req.URL) {
+				return errors.New("server redirect requires HTTPS outside loopback")
+			}
+			if len(via) > 0 && (req.URL.Scheme != via[0].URL.Scheme || !strings.EqualFold(req.URL.Host, via[0].URL.Host)) {
+				return errors.New("server redirect changed origin")
+			}
+			return nil
+		}},
 	}
+}
+
+func secureServerURL(u *url.URL) bool {
+	if u == nil || u.User != nil || u.Hostname() == "" {
+		return false
+	}
+	if u.Scheme == "https" {
+		return true
+	}
+	if u.Scheme != "http" {
+		return false
+	}
+	if strings.EqualFold(u.Hostname(), "localhost") {
+		return true
+	}
+	ip, err := netip.ParseAddr(u.Hostname())
+	return err == nil && ip.IsLoopback()
 }
 
 func userAgent() string { return userAgentPrefix + Version }
@@ -70,6 +96,9 @@ func (c *client) do(ctx context.Context, method, path string, query url.Values, 
 	req, err := http.NewRequestWithContext(ctx, method, target, payload)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
+	}
+	if !secureServerURL(req.URL) {
+		return nil, errors.New("server URL requires HTTPS outside loopback")
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", userAgent())

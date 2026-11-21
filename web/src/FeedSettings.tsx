@@ -106,6 +106,18 @@ export function Feeds({onChanged, prefill = null, onPrefillApplied}: {onChanged:
   </div>
 }
 
+function CredentialHeaders({value, onChange}: {value: string; onChange: (value: string) => void}) {
+  const lines = value ? value.split('\n') : ['']
+  const update = (index: number, next: string) => onChange(lines.map((line, i) => i === index ? next : line).join('\n'))
+  return <fieldset><legend>Extra headers (optional)</legend>
+    {lines.map((line, index) => <label key={index}>Header {index + 1} (Name: value)
+      <input type="password" value={line} onChange={event => update(index, event.target.value)} autoComplete="off" spellCheck={false} />
+    </label>)}
+    <button type="button" onClick={() => onChange(`${value}\n`)}>Add header</button>
+    {lines.length > 1 && <button type="button" onClick={() => onChange(lines.slice(0, -1).join('\n'))}>Remove last header</button>}
+  </fieldset>
+}
+
 function SubscribeForm({folders, busy, act, prefill, onPrefillApplied}: {folders: Folder[]; busy: boolean; act: Act; prefill?: FeedPrefill | null; onPrefillApplied?: () => void}) {
   const [draft] = useState(readDraft)
   const [url, setURL] = useState(draft.url)
@@ -213,7 +225,7 @@ function SubscribeForm({folders, busy, act, prefill, onPrefillApplied}: {folders
         {isPrivate && <>
           <label>Username<input value={username} onChange={e => setUsername(e.target.value)} autoComplete="off" /></label>
           <label>Password<input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="off" /></label>
-          <label>Extra headers (optional)<textarea value={headerText} onChange={e => setHeaderText(e.target.value)} placeholder={'Authorization: Bearer …'} rows={2} /></label>
+          <CredentialHeaders value={headerText} onChange={setHeaderText} />
           <p>Credentials are stored encrypted and are never shown again.</p>
         </>}
       </details>
@@ -486,7 +498,7 @@ function Credentials({sub, busy, patch}: {sub: Subscription; busy: boolean; patc
     <form onSubmit={save}>
       <label>Username<input value={username} onChange={e => setUsername(e.target.value)} autoComplete="off" /></label>
       <label>Password<input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="off" /></label>
-      <label>Extra headers (optional)<textarea value={headerText} onChange={e => setHeaderText(e.target.value)} rows={2} /></label>
+      <CredentialHeaders value={headerText} onChange={setHeaderText} />
       <button disabled={busy}>{sub.private ? 'Replace credentials' : 'Set credentials'}</button>
       {error && <p role="alert">{error}</p>}
     </form>
