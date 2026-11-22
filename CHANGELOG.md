@@ -29,6 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and clears Done with it; scrolling never reverses it, only opening the
   article reads it again. The reader header gained Copy link and Share
   for the entry URL.
+- Swiping sideways on an open article in the Android app moves to the next
+  or previous article of the list it was opened from, in the reader and in
+  Read in feed.
 - Context menus in the web client. Right-click, long-press or press
   Shift+F10 on Today, a folder or a feed for "Mark all as read", a
   refresh and its settings, or on an article for its reading actions and
@@ -97,8 +100,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Android's Read in feed lets you page through long articles in place.
-  It uses a smaller WebView and offers Reload article if the renderer stops.
+- Android's Read in feed shows expanded articles in full, without pages,
+  returns to about your place in them after folding and rotation, and offers
+  Reload article if the renderer stops.
 - Rotating an Android device, or Android restoring the app, no longer marks
   the open article read again, so an article you marked unread stays unread
   until you open it. A link or notification no longer reopens its article

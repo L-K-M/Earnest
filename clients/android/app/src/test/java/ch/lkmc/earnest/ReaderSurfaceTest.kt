@@ -5,10 +5,14 @@ import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebView
 import android.view.View
 import android.view.ViewGroup
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -88,21 +92,31 @@ class ReaderSurfaceTest {
         compose.runOnIdle { assertFalse("a previously cached source must not label a fresh live page", state.offline) }
     }
 
-    @Test fun aLongArticleCanAdvanceAndReturnInsideTheFeed() {
-        val state = InlineArticleState().apply { reportHeight(16000) }
+    @Test fun aLongArticleShowsInFullInsideTheFeed() {
         var root: View? = null
+        var itemHeight = 0
         compose.setContent {
             root = LocalView.current
-            InlineArticleContent(
-                ContentUrlResult(null, null, "<p>Body</p>"),
-                ReaderTypography(ReaderTheme.DARK, 68, ReaderFont.SERIF), state,
-            )
+            LazyColumn {
+                item {
+                    Box(Modifier.onSizeChanged { itemHeight = it.height }) {
+                        InlineArticleContent(
+                            ContentUrlResult("https://content.test/signed", null, "<p>Body</p>"),
+                            ReaderTypography(ReaderTheme.DARK, 68, ReaderFont.SERIF), remember { InlineArticleState() },
+                        )
+                    }
+                }
+            }
         }
-        val view = compose.runOnIdle { checkNotNull(findWebView(checkNotNull(root))) }
-        compose.onNodeWithText("Next page").performClick()
-        compose.runOnIdle { assertTrue("Next page must scroll the native article", view.scrollY > 0) }
-        compose.onNodeWithText("Previous page").performClick()
-        compose.runOnIdle { assertEquals(0, view.scrollY) }
+        compose.runOnIdle {
+            // Stands in for a document's natural height, beyond what Compose constraints can carry.
+            val view = checkNotNull(findWebView(checkNotNull(root)))
+            view.minimumHeight = LONG_ARTICLE_PX
+            view.requestLayout()
+        }
+        compose.runOnIdle { assertEquals("the expanded article must not be capped", LONG_ARTICLE_PX, itemHeight) }
+        compose.onNodeWithText("Next page").assertDoesNotExist()
+        compose.onNodeWithText("Previous page").assertDoesNotExist()
     }
 
     @Test fun aLostRendererIsRemovedAndRetryCreatesANewView() {
@@ -140,5 +154,9 @@ class ReaderSurfaceTest {
     @Test fun cachedDarkDocumentsThemeTheCanvasAsWellAsTheBody() {
         assertTrue(offlineReaderHtml("<p>Article</p>", ReaderTypography(ReaderTheme.DARK, 68, ReaderFont.SERIF), false)
             .contains("html{color-scheme:dark;background:#242424;color:#eee}"))
+    }
+
+    private companion object {
+        const val LONG_ARTICLE_PX = 1_200_000
     }
 }

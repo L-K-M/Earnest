@@ -49,6 +49,7 @@ Taken by you on 2026-11-07, while triaging the review PRs.
 - **Automatic read marks happen only when you open an article** (2026-11-12, at your request). Background fetching, rendering, refreshes and automated processing do not count as a user opening an article. Scrolling a list, changing its selection without opening, and leaving an article do not mark it read. Marking an open article unread survives `j`/`k` navigation and scrolling until it is explicitly reopened or marked read. This replaces the scroll-past behavior in [ux.md](ux.md#information-model) and [api.md](api.md).
 
 - **Android follows the same read rule** (2026-11-19, after your report that scrolling down and back up there cleared unread dots). Opening an article in the reader, or expanding it in Read in feed, marks it read. Scrolling a list never does, and expanding or collapsing one article never marks the rows around it. See [android.md](../android.md).
+- **Android articles turn with a sideways swipe and expand in full** (2026-11-22, at your request). A swipe opens the next or previous article of the list the open one came from, like `j` and `k` on the web: it marks the article it opens, never the one it leaves, and Back still returns to the list. On the expanded article in Read in feed that swipe replaces the row's Later and Done swipe, which stay in its menu. Read in feed shows the whole article in place of the bounded, paged preview. See [android.md](../android.md).
 
 ## Front page
 

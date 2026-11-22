@@ -273,17 +273,25 @@ class ArticleLayoutTest {
         assertEquals(0, state.pixels)
     }
 
-    @Test fun inlineAllocationHasTheSamePixelBudgetOnDenseScreens() {
-        listOf(1f, 2f, 3f, 4f).forEach { density ->
-            assertEquals(4096, inlineHeightPx(Int.MAX_VALUE, density))
-            assertEquals((120 * density).toInt(), inlineHeightPx(0, density))
-        }
+    @Test fun anArticleOfAnyLengthKeepsItsFullHeight() {
+        val state = InlineArticleState()
+        assertEquals("an empty body keeps room for its spinner", 360, state.heightFor(0, 360))
+        assertEquals(1_700_000, state.heightFor(1_700_000, 360))
     }
 
-    @Test fun inlineSizeIsBoundedWithoutChangingTheDeviceZoom() {
-        assertEquals(360, inlineHeightPx(0, 3f))
-        assertEquals(1201, inlineHeightPx(1201, 3f))
-        assertEquals(MAX_INLINE_HEIGHT_PX, inlineHeightPx(Int.MAX_VALUE, 1f))
+    @Test fun aRecreatedBodyHoldsItsHeightUntilTheDocumentSettles() {
+        val state = InlineArticleState()
+        state.reportHeight(90_000)
+        state.settle()
+        state.documentReleased()
+        assertEquals("a blank replacement view must not shrink the row", 90_000, state.heightFor(0, 360))
+        state.reportHeight(30_000)
+        assertEquals("a partly laid out document must not shrink the row", 90_000, state.heightFor(30_000, 360))
+        state.settle()
+        assertEquals("a shorter settled document must not leave blank space", 30_000, state.heightFor(30_000, 360))
+    }
+
+    @Test fun inlineReadingDoesNotChangeTheDeviceZoom() {
         context.setReaderZoom(150)
         context.setArticleLayout(ArticleLayout.HEADLINES)
         assertEquals(150, context.readerZoom())

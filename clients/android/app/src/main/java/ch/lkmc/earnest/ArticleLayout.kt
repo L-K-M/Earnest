@@ -2,29 +2,28 @@ package ch.lkmc.earnest
 
 import android.content.Context
 import android.webkit.WebView
+import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
 import ch.lkmc.earnest.core.ReaderTypography
@@ -73,36 +72,89 @@ internal fun ArticleLayoutControl(layout: ArticleLayout, onLayout: (ArticleLayou
     }
 }
 
-// Cap native pixels, not dp, so dense displays cannot multiply the inline
-// allocation. Longer documents page inside the same native viewport.
-internal const val MAX_INLINE_HEIGHT_PX = 4096
 private const val MIN_INLINE_HEIGHT_DP = 120
 
-internal fun inlineHeightPx(pixels: Int, density: Float): Int {
-    val minimum = kotlin.math.ceil(MIN_INLINE_HEIGHT_DP * density.toDouble()).toInt().coerceAtMost(MAX_INLINE_HEIGHT_PX)
-    return pixels.coerceIn(minimum, MAX_INLINE_HEIGHT_PX)
-}
+// Chromium grows a document in steps and reports its size a frame or more
+// after the load ends. A height that holds this long is the article's.
+internal const val INLINE_SETTLE_MS = 300L
+
+/**
+ * How a saved reading place relates to the body it points into: not applied
+ * since that body was last measured, waiting on the headline for its height,
+ * given up because the reader scrolled, or in effect.
+ */
+internal enum class ResumeState { UNPLACED, WAITING, ABANDONED, PLACED }
 
 /** Owned by the list, not its disposable lazy item or native WebView. */
 internal class InlineArticleState {
+    /** The height to hold while a WebView is missing or still laying out. */
     var pixels by mutableIntStateOf(0)
+        private set
+
+    /** The live WebView's natural height. */
+    var contentPx by mutableIntStateOf(0)
+        private set
+    var loaded by mutableStateOf(false)
+        private set
+
+    /** The live height is final, so it may be shorter than [pixels]. */
+    var settled by mutableStateOf(false)
         private set
     var offline by mutableStateOf(false)
         private set
-    var scrollY by mutableIntStateOf(0)
+    // Observed on its own: a WebView can report a height again before the
+    // composition that saw the last one forgotten.
+    var resume by mutableStateOf(ResumeState.UNPLACED)
+
+    /** The expanded row's height above the body. */
+    var headerPx = 0
     private var measurement: Measurement? = null
 
     fun configure(widthPx: Int, typography: ReaderTypography, zoom: Int, density: Float, fontScale: Float) {
         if (widthPx <= 0) return
         val next = Measurement(widthPx, typography, zoom, density, fontScale)
-        if (measurement != next) {
-            measurement = next
-            pixels = 0
-            scrollY = 0
-        }
+        if (measurement == next) return
+        // The first measurement describes the body already being laid out.
+        if (measurement != null) invalidate()
+        measurement = next
     }
 
-    fun reportHeight(height: Int) { if (height > 0) pixels = height }
+    /** Forgets the measured height; the place in the article is kept elsewhere. */
+    fun invalidate() {
+        pixels = 0
+        settled = false
+        resume = ResumeState.UNPLACED
+    }
+
+    fun documentReleased() {
+        contentPx = 0
+        loaded = false
+        settled = false
+    }
+
+    fun rendererLost() {
+        documentReleased()
+        invalidate()
+    }
+
+    fun reportHeight(height: Int) {
+        if (height <= 0) return
+        contentPx = height
+        if (settled || height > pixels) pixels = height
+    }
+
+    fun documentLoaded() { loaded = true }
+
+    fun settle() {
+        settled = true
+        pixels = contentPx
+        resume = ResumeState.PLACED
+    }
+
+    /** The body's height, given the [natural] height measured for the live WebView. */
+    fun heightFor(natural: Int, minimum: Int): Int =
+        if (settled && natural > 0) maxOf(natural, minimum) else maxOf(natural, pixels, minimum)
+
     fun showCachedCopy() { offline = true }
     fun showLiveCopy() { offline = false }
 
@@ -115,28 +167,20 @@ internal class InlineArticleState {
     )
 }
 
-/** A single, explicitly opened article. Merely showing headlines never fetches content. */
+/**
+ * A single, explicitly opened article at its full height; the list scrolls it.
+ * Merely showing headlines never fetches content.
+ */
 @Composable
-internal fun InlineArticleContent(content: ContentUrlResult, typography: ReaderTypography, state: InlineArticleState) {
+internal fun InlineArticleContent(
+    content: ContentUrlResult,
+    typography: ReaderTypography,
+    state: InlineArticleState,
+    swipe: ArticleSwipeState? = null,
+) {
     val context = LocalContext.current
-    val density = LocalDensity.current
-    val windowHeight = LocalWindowInfo.current.containerSize.height
-    // Keep the page controls within reach and bound Chromium's backing surface.
-    val heightPx = inlineHeightPx(state.pixels, density.density)
-        .coerceAtMost((windowHeight * 2 / 3).coerceAtLeast(1))
-    val height = with(density) { heightPx.toDp() }
-    var webView by remember { mutableStateOf<WebView?>(null) }
-    val lastOffset = (state.pixels - heightPx).coerceAtLeast(0)
-    val canGoBack by remember(state) { derivedStateOf { state.scrollY > 0 } }
-    val canGoForward by remember(state, lastOffset) { derivedStateOf { state.scrollY < lastOffset } }
-    fun turnPage(direction: Int) {
-        val view = webView ?: return
-        // A little overlap keeps a line cut by the edge readable on the next page.
-        val step = (view.height * 9 / 10).coerceAtLeast(1)
-        val target = (view.scrollY.toLong() + direction * step).coerceIn(0L, lastOffset.toLong())
-        view.scrollTo(0, target.toInt())
-        state.scrollY = view.scrollY
-    }
+    val background = Color(readerBackground(typography, isSystemInDarkTheme()))
+    val attached = remember(state) { arrayOfNulls<WebView>(1) }
     Column {
         if (state.offline || content.url == null) {
             Text(
@@ -151,26 +195,30 @@ internal fun InlineArticleContent(content: ContentUrlResult, typography: ReaderT
             cachedHtml = content.cachedHtml,
             typography = typography,
             textZoom = context.readerZoom(),
-            modifier = Modifier.fillMaxWidth().height(height).testTag("inline-article-content"),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("inline-article-content")
+                .background(background)
+                .layout { measurable, constraints ->
+                    // Report a size rather than constrain to one: Constraints cannot
+                    // carry the height of a long article, and a layout result can.
+                    val page = measurable.measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))
+                    layout(page.width, state.heightFor(page.height, MIN_INLINE_HEIGHT_DP.dp.roundToPx())) {
+                        page.place(0, 0)
+                    }
+                },
             onFallback = state::showCachedCopy,
             onLiveContent = state::showLiveCopy,
             onWebView = { view ->
-                if (webView !== view) {
-                    webView?.setOnScrollChangeListener(null)
-                    webView = view
-                    view?.setOnScrollChangeListener { _, _, y, _, _ -> state.scrollY = y }
+                if (attached[0] !== view) {
+                    attached[0] = view
+                    state.documentReleased()
                 }
             },
-            onContentHeight = { pixels ->
-                state.reportHeight(pixels)
-                webView?.scrollTo(0, state.scrollY)
-            },
+            onContentHeight = state::reportHeight,
+            onPageLoaded = state::documentLoaded,
+            onRendererLost = state::rendererLost,
+            swipe = swipe,
         )
-        if (lastOffset > 0 && webView != null) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                TextButton(onClick = { turnPage(-1) }, enabled = canGoBack) { Text("Previous page") }
-                TextButton(onClick = { turnPage(1) }, enabled = canGoForward) { Text("Next page") }
-            }
-        }
     }
 }
