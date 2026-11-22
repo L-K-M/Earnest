@@ -1,5 +1,7 @@
 package ch.lkmc.earnest
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -14,12 +16,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import ch.lkmc.earnest.ReaderFilterChip as FilterChip
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -31,16 +36,20 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import ch.lkmc.earnest.ReaderFilterChip as FilterChip
 import ch.lkmc.earnest.core.LLM_MAX_CONFIGURED_MODELS
 import ch.lkmc.earnest.core.LlmDefaultRoute
 import ch.lkmc.earnest.core.LlmDiscoveredModel
@@ -77,36 +86,56 @@ internal fun LlmServicesSection(
     var modelsExpanded by remember(state.accountKey, ui.epoch) { mutableStateOf(false) }
     var discoveryTarget by remember(state.accountKey, ui.epoch) { mutableStateOf<Pair<Int, LlmTask?>?>(null) }
     var routingTask by remember(state.accountKey, ui.epoch) { mutableStateOf<String?>(null) }
+    // Names only, never keys: an open provider stays open when it moves or is renamed.
+    var openProviders by rememberSaveable(state.accountKey, ui.epoch) { mutableStateOf(emptyList<String>()) }
 
     val current = draft
     Column(modifier.fillMaxWidth()) {
-        Text("AI", style = MaterialTheme.typography.titleMedium)
         Text(
             "Server-wide settings. Add a provider, choose models, then enable the features you want.",
-            style = MaterialTheme.typography.bodySmall,
+            style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = ReaderSpace.xxs),
         )
-        ui.error?.let { NoticeBanner(it, tone = NoticeTone.ERROR) }
-        if (ui.success) NoticeBanner("Saved", tone = NoticeTone.SUCCESS)
-        if (ui.conflict) {
-            Text(
-                "The saved settings changed on the server. Reload them to review; your draft is kept.",
-                color = MaterialTheme.colorScheme.error,
-            )
-            TextButton(onClick = { confirmReload = true }, enabled = !ui.loading && !ui.saving) { Text("Reload") }
-        }
         if (current == null) {
-            if (!ui.loading) TextButton(onClick = model::loadLlmSettings) { Text("Retry loading") }
+            val failure = ui.error
+            when {
+                ui.loading -> LoadingState("Loading AI settings…")
+                failure != null -> QuietState(
+                    "AI settings did not load",
+                    failure,
+                    actionLabel = "Retry loading",
+                    onAction = model::loadLlmSettings,
+                )
+                else -> LoadNotStarted("AI settings", model::loadLlmSettings)
+            }
             return@Column
+        }
+        ui.error?.let { NoticeBanner(it, Modifier.padding(top = ReaderSpace.xs), tone = NoticeTone.ERROR) }
+        if (ui.success) NoticeBanner("Saved", Modifier.padding(top = ReaderSpace.xs), tone = NoticeTone.SUCCESS)
+        if (ui.conflict) {
+            NoticeBanner(
+                "The saved settings changed on the server. Reload them to review; your draft is kept.",
+                Modifier.padding(top = ReaderSpace.xs),
+                tone = NoticeTone.ERROR,
+                actionLabel = "Reload".takeIf { !ui.loading && !ui.saving },
+                onAction = { confirmReload = true },
+            )
         }
 
         ProvidersSection(
             draft = current,
             saving = ui.saving,
+            open = openProviders,
+            onOpen = { openProviders = it },
             onTransform = { index, replacement ->
+                val before = current.providers[index].routedName
+                val after = current.editProvider(index, replacement).providers[index].routedName
+                openProviders = (openProviders - before + after).distinct()
                 model.updateLlmSettingsDraft { it.editProvider(index, replacement) }
             },
             onRemove = { index ->
+                openProviders = openProviders - current.providers[index].routedName
                 model.updateLlmSettingsDraft { it.withoutProvider(index) }
             },
             onModels = { index ->
@@ -162,6 +191,7 @@ internal fun LlmServicesSection(
             onDismiss = { addProvider = false },
             onConfirm = { name, kind, baseUrl ->
                 addProvider = false
+                openProviders = (openProviders + name).distinct()
                 model.updateLlmSettingsDraft { draftCopy ->
                     draftCopy.copy(providers = draftCopy.providers + LlmProviderDraft(name, kind, baseUrl))
                 }
@@ -287,56 +317,98 @@ internal fun toggleTaskRoute(route: LlmTaskRoute, enabled: Boolean, defaults: Ll
 private fun ProvidersSection(
     draft: LlmSettingsDraft,
     saving: Boolean,
+    open: List<String>,
+    onOpen: (List<String>) -> Unit,
     onTransform: (Int, LlmProviderDraft) -> Unit,
     onRemove: (Int) -> Unit,
     onModels: (Int) -> Unit,
     onAdd: () -> Unit,
 ) {
     SettingsGroup("Providers") {
+        if (draft.providers.isEmpty()) {
+            SupportingText("No providers yet. A provider supplies the models behind every AI feature.")
+        }
         draft.providers.forEachIndexed { index, provider ->
+            if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            val key = provider.routedName
+            val nameTaken = provider.name.isNotEmpty() && draft.providers.withIndex().any { (i, other) ->
+                i != index && (other.name == provider.name || other.routedName == provider.name)
+            }
+            // Something to fix is never folded away.
+            val invalid = provider.name.isBlank() || nameTaken || provider.baseUrl.isBlank() ||
+                !ch.lkmc.earnest.core.validLlmMoney(provider.monthlyLimitUsd)
             ProviderCard(
                 provider = provider,
                 referencedBy = draft.tasks
                     .filter { it.provider == provider.routedName && it.provider.isNotEmpty() }
                     .map { it.task },
-                nameTaken = provider.name.isNotEmpty() && draft.providers.withIndex().any { (i, other) ->
-                    i != index && (other.name == provider.name || other.routedName == provider.name)
-                },
+                nameTaken = nameTaken,
+                expanded = invalid || key in open,
+                onExpanded = { onOpen(if (key in open) open - key else open + key) },
                 onTransform = { onTransform(index, it) },
                 onRemove = { onRemove(index) },
                 onModels = { onModels(index) },
             )
         }
-        TextButton(onClick = onAdd, enabled = !saving) { Text("Add provider") }
+        SecondaryButton("Add provider", onAdd, enabled = !saving, icon = EarnestIcons.Add)
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ProviderCard(
     provider: LlmProviderDraft,
     referencedBy: List<String>,
     nameTaken: Boolean,
+    expanded: Boolean,
+    onExpanded: () -> Unit,
     onTransform: (LlmProviderDraft) -> Unit,
     onRemove: () -> Unit,
     onModels: () -> Unit,
 ) {
-    var advanced by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(provider.name.ifBlank { "(unnamed provider)" }, style = MaterialTheme.typography.titleSmall)
-            Spacer(Modifier.width(8.dp))
-            KeyStatusChip(provider.apiKeyStatus())
-            Spacer(Modifier.weight(1f))
-            TextButton(onClick = onModels, enabled = provider.name.isNotBlank() && !nameTaken) { Text("Models") }
-            TextButton(onClick = onRemove) { Text("Remove") }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(ReaderSpace.xs)) {
+        val summary = @Composable { modifier: Modifier ->
+            Row(
+                modifier.heightIn(min = TouchTarget)
+                    .clickable(role = Role.Button, onClick = onExpanded)
+                    .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
+                    .padding(vertical = ReaderSpace.xxs),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(ReaderSpace.sm),
+            ) {
+                Icon(if (expanded) EarnestIcons.ChevronUp else EarnestIcons.ChevronDown, contentDescription = null)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs)) {
+                    Text(provider.name.ifBlank { "(unnamed provider)" }, style = MaterialTheme.typography.titleMedium)
+                    KeyStatusPill(provider.apiKeyStatus())
+                }
+            }
         }
+        val models = @Composable {
+            SecondaryButton("Models", onModels, enabled = provider.name.isNotBlank() && !nameTaken)
+        }
+        if (stackActions()) {
+            summary(Modifier.fillMaxWidth())
+            models()
+        } else {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                summary(Modifier.weight(1f))
+                models()
+            }
+        }
+        if (!expanded) return@Column
+        ProviderFields(provider, nameTaken, onTransform)
         if (referencedBy.isNotEmpty()) {
-            Text(
-                "Used by ${referencedBy.joinToString(", ")}. Removing this provider turns these features off.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            SupportingText("Used by ${referencedBy.joinToString(", ")}. Removing this provider turns these features off.")
         }
+        QuietButton("Remove", onRemove, icon = EarnestIcons.Delete, color = MaterialTheme.colorScheme.error)
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ProviderFields(provider: LlmProviderDraft, nameTaken: Boolean, onTransform: (LlmProviderDraft) -> Unit) {
+    var advanced by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(ReaderSpace.xs)) {
         OutlinedTextField(
             value = provider.name,
             onValueChange = { value -> onTransform(provider.copy(name = value)) },
@@ -353,25 +425,6 @@ private fun ProviderCard(
             } else {
                 null
             },
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = provider.baseUrl,
-            onValueChange = { value -> onTransform(provider.copy(baseUrl = value)) },
-            label = { Text("Base URL") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = provider.monthlyLimitUsd,
-            onValueChange = { value -> onTransform(provider.copy(monthlyLimitUsd = value)) },
-            label = { Text("Monthly budget (USD, 0 = unlimited)") },
-            isError = !ch.lkmc.earnest.core.validLlmMoney(provider.monthlyLimitUsd),
-            supportingText = if (!ch.lkmc.earnest.core.validLlmMoney(provider.monthlyLimitUsd)) {
-                { Text("Enter a non-negative amount with at most six decimal places.") }
-            } else null,
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
@@ -397,30 +450,44 @@ private fun ProviderCard(
             },
             modifier = Modifier.fillMaxWidth(),
         )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(
-                checked = provider.clearApiKey,
-                onCheckedChange = { checked ->
-                    // Clearing removes any typed replacement too, so a removal
-                    // can never be combined with a new key.
-                    onTransform(provider.copy(clearApiKey = checked, apiKeyInput = if (checked) "" else provider.apiKeyInput))
-                },
-                enabled = provider.hasApiKey,
-            )
-            Text("Remove the saved key")
-        }
-        TextButton(onClick = { advanced = !advanced }) { Text(if (advanced) "Hide advanced" else "Advanced") }
-        if (advanced) {
-        Text("Protocol", style = MaterialTheme.typography.bodySmall)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            LlmProviderKind.entries.forEach { kind ->
-                FilterChip(
-                    selected = provider.kind == kind,
-                    onClick = { onTransform(provider.copy(kind = kind)) },
-                    label = { Text(kind.label()) },
-                )
+        if (provider.hasApiKey) {
+            CheckRow("Remove the saved key", provider.clearApiKey) { checked ->
+                // Clearing removes any typed replacement too, so a removal
+                // can never be combined with a new key.
+                onTransform(provider.copy(clearApiKey = checked, apiKeyInput = if (checked) "" else provider.apiKeyInput))
             }
         }
+        OutlinedTextField(
+            value = provider.monthlyLimitUsd,
+            onValueChange = { value -> onTransform(provider.copy(monthlyLimitUsd = value)) },
+            label = { Text("Monthly budget (USD, 0 = unlimited)") },
+            isError = !ch.lkmc.earnest.core.validLlmMoney(provider.monthlyLimitUsd),
+            supportingText = if (!ch.lkmc.earnest.core.validLlmMoney(provider.monthlyLimitUsd)) {
+                { Text("Enter a non-negative amount with at most six decimal places.") }
+            } else null,
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = provider.baseUrl,
+            onValueChange = { value -> onTransform(provider.copy(baseUrl = value)) },
+            label = { Text("Base URL") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Disclosure("Advanced", advanced) { advanced = !advanced }
+        if (advanced) {
+            Text("Protocol", style = MaterialTheme.typography.labelLarge)
+            FlowRow(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs)) {
+                LlmProviderKind.entries.forEach { kind ->
+                    FilterChip(
+                        selected = provider.kind == kind,
+                        onClick = { onTransform(provider.copy(kind = kind)) },
+                        label = { Text(kind.label()) },
+                    )
+                }
+            }
             OutlinedTextField(
                 value = provider.timeoutSeconds,
                 onValueChange = { value -> onTransform(provider.copy(timeoutSeconds = value)) },
@@ -429,8 +496,8 @@ private fun ProviderCard(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth(),
             )
-            Text("Token field", style = MaterialTheme.typography.bodySmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Token field", style = MaterialTheme.typography.labelLarge)
+            FlowRow(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs)) {
                 LlmTokenField.entries.forEach { field ->
                     FilterChip(
                         selected = provider.tokenField == field,
@@ -456,9 +523,10 @@ private fun AddProviderDialog(
         onDismissRequest = onDismiss,
         title = { Text("Add provider") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Preset", style = MaterialTheme.typography.bodySmall)
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(ReaderSpace.xs)) {
+                Text("Preset", style = MaterialTheme.typography.labelLarge)
                 FlowRow(
+                    Modifier.selectableGroup(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
@@ -506,11 +574,7 @@ private fun DefaultsSection(
     onPick: (String) -> Unit,
 ) {
     SettingsGroup("Default models") {
-        Text(
-            "Switched-on tasks use these routes. Embed uses the embedding default; every other task uses the text default.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        SupportingText("Switched-on tasks use these routes. Embed uses the embedding default; every other task uses the text default.")
         DefaultRouteRow("Default text model", draft.defaults.text) { onPick("text") }
         DefaultRouteRow("Default embedding model", draft.defaults.embedding) { onPick("embedding") }
     }
@@ -518,19 +582,8 @@ private fun DefaultsSection(
 
 @Composable
 private fun DefaultRouteRow(label: String, route: LlmDefaultRoute?, onPick: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(label, style = MaterialTheme.typography.bodyMedium)
-            Text(
-                route?.takeIf { it.provider.isNotEmpty() }?.let { "${it.provider} / ${it.model}" } ?: "Not set",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        TextButton(onClick = onPick) { Text("Choose") }
+    SummaryRow(label, route?.takeIf { it.provider.isNotEmpty() }?.let { "${it.provider} / ${it.model}" } ?: "Not set") {
+        SecondaryButton("Choose", onPick)
     }
 }
 
@@ -553,26 +606,26 @@ private fun DefaultModelPickerDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(
-                    selected = false,
-                    onClick = { onChoose(LlmDefaultRoute()) },
-                    label = { Text("None") },
-                )
-                options.forEach { (provider, option) ->
-                    val route = LlmDefaultRoute(provider, option.name)
-                    FilterChip(
-                        selected = false,
-                        onClick = { onChoose(route) },
-                        label = { Text("$provider/${option.name}" + if (option.provider.isEmpty()) " (global)" else "") },
-                    )
-                }
-                draft.providers.forEachIndexed { index, provider ->
-                    TextButton(onClick = { onBrowse(index) }, enabled = provider.name.isNotBlank() && provider.name == provider.routedName) {
-                        Text("Browse ${provider.name} models")
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Column(Modifier.selectableGroup()) {
+                    OptionRow("None", selected = selected.provider.isEmpty(), onSelect = { onChoose(LlmDefaultRoute()) })
+                    options.forEach { (provider, option) ->
+                        OptionRow(
+                            label = "$provider/${option.name}" + if (option.provider.isEmpty()) " (global)" else "",
+                            selected = provider == selected.provider && option.name == selected.model,
+                            onSelect = { onChoose(LlmDefaultRoute(provider, option.name)) },
+                        )
                     }
                 }
-                if (draft.providers.isEmpty()) Text("Add a provider to choose a model.")
+                draft.providers.forEachIndexed { index, provider ->
+                    QuietButton(
+                        "Browse ${provider.name} models",
+                        onClick = { onBrowse(index) },
+                        enabled = provider.name.isNotBlank() && provider.name == provider.routedName,
+                        icon = EarnestIcons.Search,
+                    )
+                }
+                if (draft.providers.isEmpty()) SupportingText("Add a provider to choose a model.")
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
@@ -587,54 +640,47 @@ private fun FeaturesSection(
 ) {
     var advanced by remember { mutableStateOf(false) }
     SettingsGroup("Features") {
-        Text(
+        SupportingText(
             "The switch turns a feature on; it uses the matching default above unless Advanced names a " +
                 "provider and model. Off disables it.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        draft.tasks.forEach { route ->
-            val task = LlmTask.fromWire(route.task) ?: return@forEach
-            val enabled = route.resolvedMode() != LlmTaskMode.OFF
-            val resolved = route.effectiveRoute(draft.defaults)
-            val on = enabled && !resolved?.provider.isNullOrEmpty() && !resolved?.model.isNullOrEmpty()
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(task.label(), style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        when {
-                            !enabled -> "Off"
-                            on -> "Uses ${resolved?.provider} · ${resolved?.model}."
-                            else -> "No default is configured, so this feature stays off."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+        Column(Modifier.fillMaxWidth()) {
+            draft.tasks.forEachIndexed { index, route ->
+                val task = LlmTask.fromWire(route.task) ?: return@forEachIndexed
+                if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                val enabled = route.resolvedMode() != LlmTaskMode.OFF
+                val resolved = route.effectiveRoute(draft.defaults)
+                val on = enabled && !resolved?.provider.isNullOrEmpty() && !resolved?.model.isNullOrEmpty()
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = TouchTarget)
+                        .toggleable(value = enabled, role = Role.Switch, onValueChange = { onToggle(route, it) })
+                        .padding(vertical = ReaderSpace.xs),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(ReaderSpace.sm),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(task.label(), style = MaterialTheme.typography.titleMedium)
+                        SupportingText(
+                            when {
+                                !enabled -> "Off"
+                                on -> "Uses ${resolved?.provider} · ${resolved?.model}."
+                                else -> "No default is configured, so this feature stays off."
+                            },
+                        )
+                    }
+                    Switch(checked = enabled, onCheckedChange = null)
                 }
-                Switch(
-                    checked = enabled,
-                    onCheckedChange = { onToggle(route, it) },
-                    modifier = Modifier.semantics { contentDescription = "${task.label()} feature" },
-                )
             }
         }
-        TextButton(onClick = { advanced = !advanced }) {
-            Text(if (advanced) "Hide advanced routes" else "Advanced custom feature routes")
-        }
+        Disclosure("Advanced custom feature routes", advanced) { advanced = !advanced }
         if (advanced) {
             draft.tasks.forEach { route ->
                 val task = LlmTask.fromWire(route.task) ?: return@forEach
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(task.label(), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                    TextButton(onClick = { onRoute(route) }) {
-                        Text(if (route.resolvedMode() == LlmTaskMode.CUSTOM) "Edit custom route" else "Use a custom route")
-                    }
+                SummaryRow(task.label(), taskStatus(route, draft)) {
+                    QuietButton(
+                        if (route.resolvedMode() == LlmTaskMode.CUSTOM) "Edit custom route" else "Use a custom route",
+                        onClick = { onRoute(route) },
+                    )
                 }
             }
         }
@@ -673,14 +719,16 @@ private fun RouteTaskDialog(
         title = { Text("Route ${task.label()}") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Mode", style = MaterialTheme.typography.bodySmall)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    FilterChip(selected = useDefault, onClick = { useDefault = true }, label = { Text("Default") })
-                    FilterChip(selected = !useDefault, onClick = { useDefault = false }, label = { Text("Custom") })
-                }
+                Text("Mode", style = MaterialTheme.typography.labelLarge)
+                ChoiceGroup(
+                    options = listOf(true, false),
+                    selected = useDefault,
+                    onSelect = { useDefault = it },
+                    label = { if (it) "Default" else "Custom" },
+                )
                 if (!useDefault) {
-                    Text("Provider", style = MaterialTheme.typography.bodySmall)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Provider", style = MaterialTheme.typography.labelLarge)
+                    FlowRow(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         draft.providers.filter { it.name.isNotBlank() && it.name == it.routedName }.forEach { option ->
                             FilterChip(
                                 selected = provider == option.name,
@@ -693,18 +741,15 @@ private fun RouteTaskDialog(
                         }
                     }
                     if (provider.isNotEmpty()) {
-                        Text("Model", style = MaterialTheme.typography.bodySmall)
-                        Column {
+                        Text("Model", style = MaterialTheme.typography.labelLarge)
+                        Column(Modifier.selectableGroup()) {
                             draft.modelsForProvider(provider).filter {
                                 it.name.isNotEmpty() && (it.name == model || it.usableFor(task.requiredCapability()))
                             }.forEach { option ->
-                                FilterChip(
+                                OptionRow(
+                                    label = if (option.provider.isEmpty()) "${option.name} (global)" else option.name,
                                     selected = model == option.name,
-                                    onClick = { model = option.name },
-                                    label = {
-                                        Text(if (option.provider.isEmpty()) "${option.name} (global)" else option.name)
-                                    },
-                                    modifier = Modifier.padding(vertical = 2.dp),
+                                    onSelect = { model = option.name },
                                 )
                             }
                             if (draft.modelsForProvider(provider).none {
@@ -740,6 +785,7 @@ private fun RouteTaskDialog(
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ModelPricingSection(
     draft: LlmSettingsDraft,
@@ -749,40 +795,35 @@ private fun ModelPricingSection(
     onEdit: (LlmModel) -> Unit,
     onRemove: (LlmModel) -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+    SettingsGroup("Saved models") {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("Model pricing", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-            TextButton(onClick = onToggleExpanded) { Text(if (expanded) "Hide" else "Edit") }
-        }
-        if (expanded) {
-            Text(
-                "Prices are USD per 1M tokens; set explicit zero prices for local models. " +
-                    "Embedding dimensions are 0-1024, or wider with truncatable vectors or a provider " +
-                    "that accepts a custom width.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            Text("Model pricing", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            QuietButton(
+                if (expanded) "Hide" else "Edit",
+                onToggleExpanded,
+                icon = if (expanded) EarnestIcons.ChevronUp else EarnestIcons.ChevronDown,
             )
-            draft.models.forEach { target ->
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(target.identityLabel(), style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            "in ${target.inputPer1m} / out ${target.outputPer1m} / embed ${target.embeddingPer1m} per 1M, " +
-                                "${target.dimensions} dimensions" +
-                                (if (target.truncatable) " (truncatable)" else "") +
-                                (if (target.supportsCustomDimensions) " (custom width)" else ""),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    TextButton(onClick = { onEdit(target) }) { Text("Edit") }
-                    TextButton(
-                        onClick = { onRemove(target) },
-                        enabled = !saving,
-                    ) { Text("Remove") }
+        }
+        if (!expanded) return@SettingsGroup
+        SupportingText(
+            "Prices are USD per 1M tokens; set explicit zero prices for local models. " +
+                "Embedding dimensions are 0-1024, or wider with truncatable vectors or a provider " +
+                "that accepts a custom width.",
+        )
+        if (draft.models.isEmpty()) SupportingText("No models yet. Add one from a provider's Models.")
+        draft.models.forEachIndexed { index, target ->
+            if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Column(Modifier.fillMaxWidth()) {
+                Text(target.identityLabel(), style = MaterialTheme.typography.titleMedium)
+                SupportingText(
+                    "in ${target.inputPer1m} / out ${target.outputPer1m} / embed ${target.embeddingPer1m} per 1M, " +
+                        "${target.dimensions} dimensions" +
+                        (if (target.truncatable) " (truncatable)" else "") +
+                        (if (target.supportsCustomDimensions) " (custom width)" else ""),
+                )
+                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    QuietButton("Remove", { onRemove(target) }, enabled = !saving, color = MaterialTheme.colorScheme.error)
+                    QuietButton("Edit", { onEdit(target) })
                 }
             }
         }
@@ -869,14 +910,8 @@ private fun ModelDialog(
                     isError = dimensionsProblem != null || (editingEmbedding && (dimensionValue == null || dimensionValue <= 0)),
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = truncatable, onCheckedChange = { truncatable = it })
-                    Text("Truncatable")
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = supportsCustom, onCheckedChange = { supportsCustom = it })
-                    Text("Provider accepts a custom width")
-                }
+                CheckRow("Truncatable", truncatable) { truncatable = it }
+                CheckRow("Provider accepts a custom width", supportsCustom) { supportsCustom = it }
                 problems.forEach { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             }
         },
@@ -918,6 +953,7 @@ private data class ModelSelection(
  * applicable field published is ready in one tap; anything missing opens an
  * inline pane where an explicit free choice or typed metadata completes it.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CatalogueDialog(
     model: AppViewModel,
@@ -969,10 +1005,14 @@ private fun CatalogueDialog(
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 6.dp,
         ) {
-            Column(Modifier.padding(24.dp).heightIn(max = 560.dp).fillMaxWidth().verticalScroll(rememberScrollState())) {
+            Column(Modifier.heightIn(max = CatalogueHeight).fillMaxWidth()) {
+            Column(
+                Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())
+                    .padding(start = ReaderSpace.lg, top = ReaderSpace.lg, end = ReaderSpace.lg),
+            ) {
                 Text(
                     if (task != null) "Models for ${task.label()}; $providerName" else "Models; $providerName",
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.titleLarge,
                 )
                 Text(
                     "Choose a model for this provider. Changes are saved with your AI settings.",
@@ -988,13 +1028,15 @@ private fun CatalogueDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                if (task == null) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = capability == LlmCapability.CHAT, onClick = {
-                        capability = LlmCapability.CHAT; selection = null; free = false; previousPrices = null
-                    }, label = { Text("Text") })
-                    FilterChip(selected = capability == LlmCapability.EMBEDDING, onClick = {
-                        capability = LlmCapability.EMBEDDING; selection = null; free = false; previousPrices = null
-                    }, label = { Text("Embedding") })
+                if (task == null) {
+                    ChoiceGroup(
+                        options = listOf(LlmCapability.CHAT, LlmCapability.EMBEDDING),
+                        selected = capability,
+                        onSelect = {
+                            capability = it; selection = null; free = false; previousPrices = null
+                        },
+                        label = { if (it == LlmCapability.EMBEDDING) "Embedding" else "Text" },
+                    )
                 }
                 Spacer(Modifier.height(8.dp))
                 when {
@@ -1024,7 +1066,7 @@ private fun CatalogueDialog(
                         }
                     }
                     discovery.error != null -> {
-                        Text(discovery.error, color = MaterialTheme.colorScheme.error)
+                        NoticeBanner(discovery.error, tone = NoticeTone.ERROR)
                         Text(
                             "The configured and manual models are unchanged and stay available.",
                             style = MaterialTheme.typography.bodySmall,
@@ -1085,8 +1127,7 @@ private fun CatalogueDialog(
                         }
                     }
                 }
-
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                             OutlinedTextField(
                                 value = manualId,
                                 onValueChange = { manualId = it },
@@ -1155,15 +1196,20 @@ private fun CatalogueDialog(
                     )
                 }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (!loading) TextButton(onClick = { refresh++ }) { Text(if (discovery?.error != null) "Retry" else "Refresh") }
-                    TextButton(onClick = onDismiss) { Text("Close") }
-                }
+            }
+            FlowRow(
+                Modifier.fillMaxWidth().padding(horizontal = ReaderSpace.sm, vertical = ReaderSpace.xs),
+                horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs, Alignment.End),
+            ) {
+                if (!loading) QuietButton(if (discovery?.error != null) "Retry" else "Refresh", { refresh++ })
+                QuietButton("Close", onDismiss)
+            }
             }
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CatalogueRow(
     entry: LlmDiscoveredModel,
@@ -1180,19 +1226,21 @@ private fun CatalogueRow(
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.weight(1f),
             )
-            if (configured) StatusChip("configured", MaterialTheme.colorScheme.primaryContainer)
-            Spacer(Modifier.width(4.dp))
             if (onUse != null) {
-                TextButton(onClick = onUse) { Text("Use") }
+                SecondaryButton("Use", onUse)
             } else {
-                TextButton(onClick = onConfigure) { Text("Configure") }
+                SecondaryButton("Configure", onConfigure)
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (entry.chat == true) StatusChip("chat", MaterialTheme.colorScheme.surfaceVariant)
-            if (entry.embedding == true) StatusChip("embedding", MaterialTheme.colorScheme.surfaceVariant)
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+            verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+        ) {
+            if (configured) TagPill("configured", colors = toneColors(MaterialTheme.colorScheme, LocalTones.current.green))
+            if (entry.chat == true) TagPill("chat")
+            if (entry.embedding == true) TagPill("embedding")
             if (entry.chat == null && entry.embedding == null) {
-                StatusChip("capabilities unknown", MaterialTheme.colorScheme.tertiaryContainer)
+                TagPill("capabilities unknown", colors = toneColors(MaterialTheme.colorScheme, LocalTones.current.amber))
             }
         }
         val details = buildList {
@@ -1221,6 +1269,7 @@ private fun CatalogueRow(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SelectionPane(
     model: AppViewModel,
@@ -1271,8 +1320,9 @@ private fun SelectionPane(
             it.capability == if (capability == LlmCapability.EMBEDDING) LlmModelCapability.EMBEDDING else LlmModelCapability.CHAT
     }
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.groupContainer,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shape = MaterialTheme.shapes.large,
         modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
     ) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1340,18 +1390,9 @@ private fun SelectionPane(
                     isError = review.dimensions.isBlank() || review.dimensions.trim().toLongOrNull() == null,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(
-                        checked = review.truncatable,
-                        onCheckedChange = { onReviewChange(review.copy(truncatable = it)) },
-                    )
-                    Text("Truncatable")
-                    Spacer(Modifier.width(8.dp))
-                    Checkbox(
-                        checked = review.supportsCustomDimensions,
-                        onCheckedChange = { onReviewChange(review.copy(supportsCustomDimensions = it)) },
-                    )
-                    Text("Custom width")
+                CheckRow("Truncatable", review.truncatable) { onReviewChange(review.copy(truncatable = it)) }
+                CheckRow("Custom width", review.supportsCustomDimensions) {
+                    onReviewChange(review.copy(supportsCustomDimensions = it))
                 }
             }
             if (capability == LlmCapability.CHAT) {
@@ -1361,10 +1402,7 @@ private fun SelectionPane(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = free, onCheckedChange = onFreeChange)
-                Text("This model is free")
-            }
+            CheckRow("This model is free", free, onFreeChange)
             problems.forEach {
                 Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
@@ -1400,7 +1438,11 @@ private fun SelectionPane(
                 }
                 else -> Unit
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs, Alignment.End),
+            ) {
+                QuietButton("Cancel", onDismiss)
                 TextButton(
                     onClick = {
                         // A no-context selection checks chat; a task context
@@ -1417,10 +1459,11 @@ private fun SelectionPane(
                         (if (embedding) ch.lkmc.earnest.core.validLlmMoney(review.embedding) else true) &&
                         (if (chat) ch.lkmc.earnest.core.validLlmMoney(review.input) && ch.lkmc.earnest.core.validLlmMoney(review.output) else true),
                 ) { Text("Check model") }
-                TextButton(onClick = onApply, enabled = problems.isEmpty()) {
-                    Text(if (task != null) "Use for ${task.label()}" else "Add to draft")
-                }
-                TextButton(onClick = onDismiss) { Text("Cancel") }
+                SecondaryButton(
+                    if (task != null) "Use for ${task.label()}" else "Add to draft",
+                    onApply,
+                    enabled = problems.isEmpty(),
+                )
             }
         }
     }
@@ -1453,25 +1496,79 @@ private fun LlmTask.capabilityLabel(): String = when (this) {
 }
 
 
-/** A small status chip; the API-key badge and catalogue labels share it. */
+private val CatalogueHeight = 560.dp
+private const val STACK_ACTIONS_FONT_SCALE = 1.3f
+
+/** Past this text size an action beside a label leaves the label no room. */
 @Composable
-private fun StatusChip(text: String, container: Color) {
-    Surface(color = container, shape = MaterialTheme.shapes.small) {
-        Text(
-            text,
-            Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-            style = MaterialTheme.typography.labelSmall,
-        )
+private fun stackActions(): Boolean = LocalDensity.current.fontScale > STACK_ACTIONS_FONT_SCALE
+
+@Composable
+private fun SupportingText(text: String) {
+    Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+@Composable
+private fun SummaryRow(title: String, supporting: String, action: @Composable () -> Unit) {
+    val words = @Composable { modifier: Modifier ->
+        Column(modifier) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            SupportingText(supporting)
+        }
+    }
+    if (stackActions()) {
+        Column(Modifier.fillMaxWidth()) {
+            words(Modifier.fillMaxWidth())
+            action()
+        }
+        return
+    }
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(ReaderSpace.sm),
+    ) {
+        words(Modifier.weight(1f))
+        action()
     }
 }
 
 @Composable
-private fun KeyStatusChip(status: LlmApiKeyStatus) {
-    val container = when (status) {
-        LlmApiKeyStatus.SAVED -> MaterialTheme.colorScheme.primaryContainer
-        LlmApiKeyStatus.ENTERED_UNSAVED -> MaterialTheme.colorScheme.tertiaryContainer
-        LlmApiKeyStatus.REMOVAL_PENDING -> MaterialTheme.colorScheme.errorContainer
-        LlmApiKeyStatus.NONE -> MaterialTheme.colorScheme.surfaceVariant
+private fun Disclosure(label: String, expanded: Boolean, onToggle: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = TouchTarget)
+            .clickable(role = Role.Button, onClick = onToggle)
+            .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+        Icon(if (expanded) EarnestIcons.ChevronUp else EarnestIcons.ChevronDown, contentDescription = null)
     }
-    StatusChip(status.label(), container)
+}
+
+@Composable
+private fun CheckRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = TouchTarget)
+            .toggleable(value = checked, role = Role.Checkbox, onValueChange = onChange),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(ReaderSpace.sm),
+    ) {
+        Checkbox(checked = checked, onCheckedChange = null)
+        Text(label, modifier = Modifier.weight(1f))
+    }
+}
+
+/** Says where the key stands in words as well as colour. */
+@Composable
+private fun KeyStatusPill(status: LlmApiKeyStatus) {
+    val scheme = MaterialTheme.colorScheme
+    val tones = LocalTones.current
+    val colors = when (status) {
+        LlmApiKeyStatus.SAVED -> toneColors(scheme, tones.green)
+        LlmApiKeyStatus.ENTERED_UNSAVED -> toneColors(scheme, tones.amber)
+        LlmApiKeyStatus.REMOVAL_PENDING -> ToneColors(scheme.errorContainer, scheme.onErrorContainer)
+        LlmApiKeyStatus.NONE -> null
+    }
+    TagPill(status.label(), colors = colors)
 }

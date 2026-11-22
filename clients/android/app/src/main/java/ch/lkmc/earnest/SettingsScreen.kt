@@ -334,7 +334,7 @@ private fun ReadingSettingsCategory(model: AppViewModel, state: UiState, appThem
                     "Sync your account first",
                     "Reading preferences can be edited here after the first sync.",
                 )
-                else -> LoadNotStarted(onLoad = model::loadReaderSettings)
+                else -> LoadNotStarted("reading settings", model::loadReaderSettings)
             }
             return@Column
         }
@@ -530,19 +530,19 @@ private fun ReadingSettingsCategory(model: AppViewModel, state: UiState, appThem
  * screen's state, so after that moment this offers the load again.
  */
 @Composable
-private fun LoadNotStarted(onLoad: () -> Unit) {
+internal fun LoadNotStarted(what: String, onLoad: () -> Unit) {
     var waited by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         delay(LOAD_DISPATCH_GRACE_MS)
         waited = true
     }
     if (!waited) {
-        LoadingState("Loading reading settings…")
+        LoadingState("Loading $what…")
         return
     }
     QuietState(
         "Settings are not loaded",
-        "Load them to edit your reading preferences.",
+        "Load your $what to edit them.",
         actionLabel = "Load settings",
         onAction = onLoad,
     )
