@@ -128,6 +128,9 @@ Historical credentials are removed when their jobs finish. Clearing a key
 removes it from new routing, not from a batch already accepted by its provider.
 Disabling the edition task pauses collection until you re-enable it; it does
 not cancel work already running at the provider.
+A batch whose key may no longer travel over HTTP waits, without contacting its
+provider, for the allowlist entry to return. If the edition falls due first,
+it uses the current settings and warns that the batch may still be charged.
 
 ## Environment defaults
 
