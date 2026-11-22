@@ -1,5 +1,8 @@
 package ch.lkmc.earnest
 
+import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
 import androidx.activity.OnBackPressedDispatcher
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -160,6 +163,40 @@ class MobileDesignTest {
         content(2f) { ThemeDialog(ThemeSetting.SYSTEM, {}, { selected = it }) }
         compose.onNodeWithText("E-ink").performScrollTo().performClick()
         compose.runOnIdle { assertEquals(ThemeSetting.E_INK, selected) }
+    }
+
+    @Test fun savedSwitchesShelvesWithoutTheDrawer() {
+        content {
+            MainScaffold(
+                model = viewModel(), state = UiState(), theme = ThemeSetting.LIGHT,
+                onThemeChange = {}, initialEntry = null, notificationId = null, intentDelivery = 0,
+                notificationsDenied = false, onRequestNotifications = {},
+            )
+        }
+        compose.onNodeWithText("Saved").performClick()
+        val shelf = { name: String ->
+            compose.onNode(hasText(name) and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton))
+        }
+        shelf("Kept").assertIsSelected()
+        shelf("Done").performClick()
+        shelf("Done").assertIsSelected()
+        shelf("Kept").assertIsNotSelected()
+    }
+
+    @Test fun theSubscribeButtonKeepsItsAccessibleName() {
+        val feed = SyncObject(SyncEngine.OBJECT_SUBSCRIPTION, 1, name = "A source", raw = """{"url":"https://example.test/feed"}""", rev = 1)
+        content {
+            MainScaffold(
+                model = viewModel(),
+                state = UiState(snapshot = SyncSnapshot(Revision("generation", 1), objects = listOf(feed))),
+                theme = ThemeSetting.LIGHT, onThemeChange = {}, initialEntry = null, notificationId = null, intentDelivery = 0,
+                notificationsDenied = false, onRequestNotifications = {},
+            )
+        }
+        compose.onNodeWithText("Feeds").performClick()
+        // The button's visible label has no semantics of its own.
+        compose.onNodeWithContentDescription("Subscribe by URL").assertHasClickAction().performClick()
+        compose.onNodeWithText("Feed URL").assertExists()
     }
 
     @Test fun theFeedIconOpensItsSourceAndTheMenuDoesNot() {

@@ -83,6 +83,13 @@ class AiSettingsUiTest {
         compose.onNodeWithText("Browse venice models").performClick()
     }
 
+    @Test fun aProviderShowsItsFieldsOnlyWhenSelected() {
+        show()
+        compose.onNodeWithText("Base URL").assertDoesNotExist()
+        compose.onNodeWithText("venice").performScrollTo().performClick()
+        compose.onNodeWithText("Base URL").performScrollTo().assertIsDisplayed()
+    }
+
     @Test fun choosingADefaultOpensTheProviderCatalogueDirectly() {
         show()
         openEmbeddingPicker()
