@@ -134,3 +134,168 @@ func TestFeedCredentialsFollowOutboundAllowlist(t *testing.T) {
 		t.Fatalf("unlisted feed was probed with credentials: %v", err)
 	}
 }
+
+func requireTransportRefusal(t *testing.T, what string, err error) {
+	t.Helper()
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "EARNEST_OUTBOUND_ALLOW_PRIVATE") {
+		t.Fatalf("%s must be refused with the fix: %v", what, err)
+	}
+}
+
+func TestIntegrationTokenFollowsOutboundAllowlist(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := t.Context()
+	token := "private-token"
+	in := IntegrationSettingsInput{URL: "http://public.example", Token: &token, OpID: "keep-refused"}
+	f.s.outbound = namedEgress(t, "hister.test:8080")
+	_, err := f.s.PutArticleIntegration(ctx, f.a, IntegrationKarakeep, in)
+	requireTransportRefusal(t, "Karakeep token", err)
+	in.OpID = "hister-refused"
+	_, err = f.s.PutArticleIntegration(ctx, f.a, IntegrationHister, in)
+	requireTransportRefusal(t, "Hister token", err)
+	in.OpID, in.URL = "other-port", "http://hister.test:8081"
+	_, err = f.s.PutArticleIntegration(ctx, f.a, IntegrationHister, in)
+	requireTransportRefusal(t, "token on another port", err)
+
+	in.OpID, in.URL = "listed", "http://hister.test:8080"
+	if out, err := f.s.PutArticleIntegration(ctx, f.a, IntegrationHister, in); err != nil || !out.TokenSet {
+		t.Fatalf("allowlisted token: %+v %v", out, err)
+	}
+
+	// Settings saved before the entry was removed stay editable and clearable.
+	f.s.outbound = namedEgress(t)
+	in.OpID, in.Token, in.DefaultLabel = "label", nil, "Reading"
+	if out, err := f.s.PutArticleIntegration(ctx, f.a, IntegrationHister, in); err != nil || !out.TokenSet {
+		t.Fatalf("label edit: %+v %v", out, err)
+	}
+	in.OpID, in.Token = "replace", &token
+	_, err = f.s.PutArticleIntegration(ctx, f.a, IntegrationHister, in)
+	requireTransportRefusal(t, "replacement token", err)
+	empty := ""
+	in.OpID, in.Token = "clear", &empty
+	if out, err := f.s.PutArticleIntegration(ctx, f.a, IntegrationHister, in); err != nil || out.TokenSet {
+		t.Fatalf("clear token: %+v %v", out, err)
+	}
+	in.OpID, in.URL, in.Token = "tokenless", "http://public.example", nil
+	if _, err := f.s.PutArticleIntegration(ctx, f.a, IntegrationHister, in); err != nil {
+		t.Fatalf("tokenless HTTP destination: %v", err)
+	}
+}
+
+func TestNtfyTokenFollowsOutboundAllowlist(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := t.Context()
+	token := "tk_private"
+	in := PushSettingsInput{NtfyServer: "http://public.example", NtfyTopic: "reader", NtfyToken: &token, OpID: "refused"}
+	f.s.outbound = namedEgress(t, "ntfy.test:80")
+	_, err := f.s.PutPushSettings(ctx, f.a, in)
+	requireTransportRefusal(t, "ntfy token", err)
+
+	in.OpID, in.NtfyServer = "listed", "http://ntfy.test"
+	if out, err := f.s.PutPushSettings(ctx, f.a, in); err != nil || !out.TokenSet {
+		t.Fatalf("allowlisted token: %+v %v", out, err)
+	}
+	in.OpID, in.NtfyServer, in.NtfyToken = "move", "http://public.example", nil
+	_, err = f.s.PutPushSettings(ctx, f.a, in)
+	requireTransportRefusal(t, "retained token on a new server", err)
+
+	// Settings saved before the entry was removed stay editable and clearable.
+	f.s.outbound = namedEgress(t)
+	in.OpID, in.NtfyServer, in.QuietStart, in.QuietEnd = "quiet", "http://ntfy.test", "22:00", "07:00"
+	if out, err := f.s.PutPushSettings(ctx, f.a, in); err != nil || !out.TokenSet {
+		t.Fatalf("quiet hours edit: %+v %v", out, err)
+	}
+	in.OpID, in.NtfyToken = "replace", &token
+	_, err = f.s.PutPushSettings(ctx, f.a, in)
+	requireTransportRefusal(t, "replacement token", err)
+	empty := ""
+	in.OpID, in.NtfyToken = "clear", &empty
+	if out, err := f.s.PutPushSettings(ctx, f.a, in); err != nil || out.TokenSet {
+		t.Fatalf("clear token: %+v %v", out, err)
+	}
+	in.OpID, in.NtfyServer, in.NtfyToken = "tokenless", "http://public.example", nil
+	if _, err := f.s.PutPushSettings(ctx, f.a, in); err != nil {
+		t.Fatalf("tokenless HTTP server: %v", err)
+	}
+}
+
+func TestWebhookSignatureFollowsOutboundAllowlist(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := t.Context()
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls.Add(1) }))
+	defer server.Close()
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := "hooks.test:" + u.Port()
+	events := []string{string(WebhookFeedFailing)}
+	f.s.outbound = namedEgress(t, host)
+	_, err = f.s.CreateWebhook(ctx, f.a, WebhookInput{URL: "http://public.example/hook", Events: events}, "refused")
+	requireTransportRefusal(t, "new webhook", err)
+	hook, err := f.s.CreateWebhook(ctx, f.a, WebhookInput{URL: "http://" + host + "/hook?token=private", Events: events}, "listed")
+	if err != nil {
+		t.Fatalf("allowlisted webhook: %v", err)
+	}
+	moved := "http://public.example/hook"
+	_, err = f.s.UpdateWebhook(ctx, f.a, hook.ID, WebhookPatch{URL: &moved}, "move")
+	requireTransportRefusal(t, "new webhook URL", err)
+
+	// A webhook saved before the entry was removed no longer sends.
+	if err := f.s.EmitWebhookEvent(ctx, f.a.UserID, WebhookEvent{Type: WebhookFeedFailing, FeedID: 1}); err != nil {
+		t.Fatal(err)
+	}
+	f.s.outbound = namedEgress(t)
+	if n, err := f.s.RunWebhookJobs(ctx, 10); err != nil || n != 1 || calls.Load() != 0 {
+		t.Fatalf("signature travelled over HTTP: processed %d, calls %d, %v", n, calls.Load(), err)
+	}
+	if n, active := webhookFailures(t, f, hook.ID); n != 1 || !active {
+		t.Fatalf("refusal must be a definite failure: failures %d, active %t", n, active)
+	}
+
+	// It stays editable and can be switched off, but not back on.
+	same := hook.URL
+	if _, err := f.s.UpdateWebhook(ctx, f.a, hook.ID, WebhookPatch{URL: &same, Events: []string{string(WebhookEditionReady)}}, "events"); err != nil {
+		t.Fatalf("events edit: %v", err)
+	}
+	off, on := false, true
+	if _, err := f.s.UpdateWebhook(ctx, f.a, hook.ID, WebhookPatch{Active: &off}, "off"); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	_, err = f.s.UpdateWebhook(ctx, f.a, hook.ID, WebhookPatch{Active: &on}, "on")
+	requireTransportRefusal(t, "enable", err)
+	secure := "https://public.example/hook"
+	if out, err := f.s.UpdateWebhook(ctx, f.a, hook.ID, WebhookPatch{URL: &secure, Active: &on}, "secure"); err != nil || !out.Active {
+		t.Fatalf("move to HTTPS: %+v %v", out, err)
+	}
+}
+
+func TestFeedQuerySecretFollowsOutboundAllowlist(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	ctx := t.Context()
+	prober := &subscriptionsProber{}
+	f.s.prober = prober
+	f.s.outbound = namedEgress(t, "feeds.test:8080")
+	_, err := f.s.Subscribe(ctx, f.a, "http://public.example/rss?token=private", SubscribeOptions{OpID: "refused"})
+	requireTransportRefusal(t, "feed URL secret", err)
+	if prober.calls.Load() != 0 || strings.Contains(err.Error(), "private?") {
+		t.Fatalf("secret was probed: %v", err)
+	}
+	for i, raw := range []string{"http://feeds.test:8080/rss?token=private", "http://public.example/?feed=rss2"} {
+		if _, err := f.s.Subscribe(ctx, f.a, raw, SubscribeOptions{OpID: "accepted-" + string(rune('a'+i))}); err != nil {
+			t.Fatalf("subscribe %q: %v", raw, err)
+		}
+	}
+
+	results, err := f.s.ImportOPML(ctx, f.a, []OPMLOutline{
+		{Title: "Secret", XMLURL: "http://public.example/rss?api_key=hidden-value"},
+		{Title: "Plain", XMLURL: "http://public.example/other?feed=rss2"},
+	})
+	if err != nil || len(results) != 2 || results[1].Subscription == nil {
+		t.Fatalf("import: %+v %v", results, err)
+	}
+	if got := results[0]; got.Subscription != nil || !strings.Contains(got.Error, "EARNEST_OUTBOUND_ALLOW_PRIVATE") || strings.Contains(got.Error, "hidden-value") {
+		t.Fatalf("import must name the fix and hide the secret: %+v", got)
+	}
+}

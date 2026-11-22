@@ -32,7 +32,7 @@ const defaultTimeout = 30 * time.Second
 const localhostName = "localhost"
 
 // credentialHeaders always count as credentials, as do Credentials.Headers.
-var credentialHeaders = []string{"Authorization", "Proxy-Authorization", "Cookie", "X-API-Key", "X-Goog-Api-Key"}
+var credentialHeaders = []string{"Authorization", "Proxy-Authorization", "Cookie", "X-API-Key", "X-Goog-Api-Key", "Webhook-Signature"}
 
 type Purpose string
 
@@ -231,8 +231,8 @@ func (c *Client) Do(request *http.Request, p Policy) (*Result, error) {
 		if err := validateURL(req.URL, p.ExtraPorts); err != nil {
 			return nil, err
 		}
-		if !c.AllowsCredentials(req.URL) && hasCredentialHeaders(req.Header, p.Credentials.Headers) {
-			return nil, classified(DeniedAddress, errors.New("credentials require HTTPS, loopback or an allowlisted host:port"))
+		if err := c.checkCleartext(req, p); err != nil {
+			return nil, err
 		}
 		if seen[req.URL.String()] {
 			return nil, classified(RedirectLoop, errors.New("redirect loop"))
@@ -337,6 +337,23 @@ func (c *Client) AllowsCredentials(u *url.URL) bool {
 		port = "80"
 	}
 	return c.allowlisted(net.JoinHostPort(host, port))
+}
+
+// checkCleartext refuses a hop that would send a secret over untrusted HTTP.
+// Only feed URLs are searched for query secrets: you supply those, while the
+// tokens in image, icon and article URLs are the publisher's for every reader.
+func (c *Client) checkCleartext(req *http.Request, p Policy) error {
+	if c.AllowsCredentials(req.URL) {
+		return nil
+	}
+	if hasCredentialHeaders(req.Header, p.Credentials.Headers) {
+		return classified(DeniedAddress, errors.New("credentials require HTTPS, loopback or an allowlisted host:port"))
+	}
+	if (p.Purpose == Feed || p.Purpose == Discovery) && HasQuerySecret(req.URL) {
+		return classified(DeniedAddress, errors.New("secrets in feed URLs require HTTPS, loopback or an allowlisted host:port"))
+	}
+
+	return nil
 }
 
 func (c *Client) allowlisted(hostport string) bool {

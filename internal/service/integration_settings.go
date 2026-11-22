@@ -139,6 +139,9 @@ func (s *Service) PutArticleIntegration(ctx context.Context, a Actor, provider A
 			next.DefaultListID = ""
 			next.DefaultLabel = ""
 		case in.Token != nil && *in.Token != "":
+			if !credentialsMayTravel(s.outbound, server) {
+				return fmt.Errorf("integration tokens %s: %w", credentialTransportRule, ErrInvalid)
+			}
 			next.Token, err = s.sealSecret([]byte(*in.Token), provider.tokenPurpose(a.UserID))
 			if err != nil {
 				return err

@@ -1072,6 +1072,43 @@ func TestFetchBatchOrderUsesUpdatedWithoutPublished(t *testing.T) {
 	}
 }
 
+func TestFetchQuerySecretNeedsHTTPS(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
+	defer server.Close()
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := outbound.New(outbound.Config{
+		Resolver:      loopbackResolver{},
+		AllowPrefixes: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")},
+		Spacing:       time.Nanosecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded := &fakeService{}
+	f, err := New(recorded, c, Config{ExtraPorts: []uint16{uint16(port)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.Fetch(t.Context(), service.FeedToFetch{FeedID: 1, URL: "http://feeds.test:" + u.Port() + "/rss?token=hidden-value"}); err != nil {
+		t.Fatal(err)
+	}
+	if hits.Load() != 0 || len(recorded.outcomes) != 1 {
+		t.Fatalf("secret travelled: hits %d", hits.Load())
+	}
+	if got := recorded.outcomes[0]; got.ErrorClass != "policy" || strings.Contains(got.ErrorMessage, "hidden-value") {
+		t.Fatalf("feed health: %+v", got)
+	}
+}
+
 func TestFetchKeepsSrcsetURLsWithCommas(t *testing.T) {
 	const srcset = "https://cdn.test/a.jpg 6000w, https://cdn.test/a.jpg?resize=250,141 250w, https://cdn.test/a.jpg?resize=1536,864 1536w"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

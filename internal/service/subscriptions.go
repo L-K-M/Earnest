@@ -258,6 +258,9 @@ func (s *Service) Subscribe(ctx context.Context, a Actor, rawURL string, options
 	if err := validateCredentialTransport(rawURL, options.Credentials, s.outbound); err != nil {
 		return Subscription{}, err
 	}
+	if err := validateQuerySecretTransport(s.outbound, rawURL); err != nil {
+		return Subscription{}, err
+	}
 	var previous []byte
 	err = s.store.Pool().QueryRow(ctx, "SELECT result FROM op_ids WHERE principal_id=$1 AND op_id=$2", a.PrincipalID, options.OpID).Scan(&previous)
 	if err == nil {
@@ -355,6 +358,11 @@ func (s *Service) subscribeTx(ctx context.Context, tx pgx.Tx, a Actor, rawURL st
 		return sub, false, err
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
+		return Subscription{}, false, err
+	}
+	// Imports subscribe without a probe, so check here too. A subscription
+	// you already have is reused above.
+	if err := validateQuerySecretTransport(s.outbound, rawURL); err != nil {
 		return Subscription{}, false, err
 	}
 	var feedID int64

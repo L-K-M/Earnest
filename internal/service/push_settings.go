@@ -125,11 +125,12 @@ func (s *Service) PutPushSettings(ctx context.Context, a Actor, in PushSettingsI
 			return nil
 		}
 		var envelope []byte
+		var previousServer *string
 		switch {
 		case server == "":
 			// Disabling ntfy also drops the stored token.
 		case in.NtfyToken == nil:
-			if err := tx.QueryRow(ctx, "SELECT ntfy_token_encrypted FROM push_settings WHERE user_id=$1", a.UserID).Scan(&envelope); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			if err := tx.QueryRow(ctx, "SELECT ntfy_token_encrypted,ntfy_server FROM push_settings WHERE user_id=$1", a.UserID).Scan(&envelope, &previousServer); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 				return err
 			}
 		case *in.NtfyToken == "":
@@ -139,6 +140,11 @@ func (s *Service) PutPushSettings(ctx context.Context, a Actor, in PushSettingsI
 			if envelope, err = s.sealSecret([]byte(*in.NtfyToken), ntfyTokenPurpose); err != nil {
 				return err
 			}
+		}
+		// A token already saved for this server doesn't block other edits.
+		tokenPlaced := envelope != nil && (in.NtfyToken != nil || server != value(previousServer))
+		if tokenPlaced && !credentialsMayTravel(s.outbound, server) {
+			return fmt.Errorf("ntfy tokens %s: %w", credentialTransportRule, ErrInvalid)
 		}
 		err = tx.QueryRow(ctx, `INSERT INTO push_settings(user_id,ntfy_server,ntfy_topic,ntfy_token_encrypted,quiet_start,quiet_end,timezone,show_text)
 			VALUES($1,$2,$3,$4,NULLIF($5,'')::time,NULLIF($6,'')::time,$7,$8)
@@ -319,8 +325,9 @@ func wallClock(day time.Time, minutes int) time.Time {
 }
 
 // ntfyServerURL validates the configured server. http is allowed because a
-// self-hosted ntfy commonly sits on the tailnet without TLS; the outbound
-// client's address and port rules still apply at publish time.
+// self-hosted ntfy commonly sits on the tailnet without TLS; saving a token
+// also applies credentialTransportRule, and the outbound client's address and
+// port rules still apply at publish time.
 func ntfyServerURL(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
