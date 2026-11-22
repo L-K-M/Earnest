@@ -26,6 +26,8 @@ import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -101,6 +103,7 @@ import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteDefaul
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -115,6 +118,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -130,6 +134,7 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -161,6 +166,7 @@ import ch.lkmc.earnest.core.readAtMost
 import ch.lkmc.earnest.core.typographyFor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonPrimitive
@@ -275,7 +281,12 @@ internal fun MainScaffold(
         if (section.view == View.FRONT) directive.copy(maxHorizontalPartitions = 1) else directive,
     )
     var showSettings by rememberSettingsOpen()
-    val readerEntry = state.snapshot.entries.firstOrNull { it.id == navigator.currentDestination?.contentKey && !it.deleted }
+    val destination = navigator.currentDestination
+    // An article opened over another replaces it, as j and k do on the web. A
+    // destination per swipe would grow the saved Back history without limit.
+    var replacement by rememberSaveable(destination?.contentKey) { mutableStateOf<Long?>(null) }
+    val selected = replacement ?: destination?.contentKey
+    val readerEntry = state.snapshot.entries.firstOrNull { it.id == selected && !it.deleted }
     val reader = remember { ReaderLoadState() }
     var readerRetry by remember { androidx.compose.runtime.mutableIntStateOf(0) }
     var activityGroups by remember { mutableStateOf<List<ch.lkmc.earnest.core.ActivityGroup>>(emptyList()) }
@@ -283,7 +294,6 @@ internal fun MainScaffold(
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    val selected = navigator.currentDestination?.contentKey
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     var feedSelection by rememberFeedSelection(state.accountKey)
     var unreadFilterOverride by key(state.accountKey, state.readerSettings.showOnlyUnread) {
@@ -311,19 +321,27 @@ internal fun MainScaffold(
     // so a rotation during its load still marks it once and a rotation
     // afterwards marks nothing.
     var readOnLoad by rememberSaveable { mutableStateOf<Long?>(null) }
+    // The list the open article came from, which sideways swipes move through.
+    var articleSequence by rememberArticleSequence(state.accountKey)
 
     /**
      * Opens [entryId] in the reader, which marks it read once it has loaded
      * the entry; an article that cannot load stays unread. The mark belongs
      * to this open, not to every load: a rotation or process restore reloads
      * the open article, and that must not read an article you marked unread.
-     * [agentPick] opens it with click-to-load images.
+     * [agentPick] opens it with click-to-load images. [within] is the list it
+     * was opened from; a link, notification or agent notice has none.
      */
-    fun openArticle(entryId: Long, agentPick: Boolean = false) {
+    fun openArticle(entryId: Long, agentPick: Boolean = false, within: ArticleSequence = ArticleSequence.NONE) {
+        articleSequence = within
         if (agentPick) agentSelected = agentSelected + entryId
         // An article the reader already shows is not loaded again.
         if (entryId == selected && readerEntry != null) model.markSeen(entryId) else readOnLoad = entryId
-        scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
+        if (selected != null && destination?.pane == ListDetailPaneScaffoldRole.Detail) {
+            replacement = entryId
+        } else {
+            scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, entryId) }
+        }
     }
 
     @Composable
@@ -334,7 +352,8 @@ internal fun MainScaffold(
             snapshot = state.snapshot,
             onOpen = { match ->
                 searchDetail = true
-                openArticle(match.entryId, agentPick = match.kind == "agent_note" || match.untrusted)
+                val step = match.articleStep()
+                openArticle(step.entryId, step.agentPick, within = model.search.state.value.matches.articleSequence(match))
             },
         )
         // Register in the list pane after the scaffold's own handler. The
@@ -611,7 +630,10 @@ internal fun MainScaffold(
                                     sessionChanges = state.sessionAgentChanges,
                                     agentChangesError = state.agentChangesError,
                                     onRevert = model::revert,
-                                    onOpen = { entryId -> openArticle(entryId) },
+                                    onOpen = { entryId ->
+                                        val order = state.frontPage.page?.articleSequence(entryId)
+                                        openArticle(entryId, within = order ?: ArticleSequence.NONE)
+                                    },
                                     onOpenAgentSelected = { entryId -> openArticle(entryId, agentPick = true) },
                                     onPeriodChange = { period -> section = section.copy(period = period) },
                                     onRefresh = { model.refreshFrontPage() },
@@ -666,7 +688,7 @@ internal fun MainScaffold(
                                     unreadSyncedAt = null,
                                     unreadMode = false,
                                     onRevert = model::revert,
-                                    onOpen = { entryId -> openArticle(entryId) },
+                                    onOpen = { entryId -> openArticle(entryId, within = feedReading.sequence.value) },
                                     onOpenAgentSelected = { entryId -> openArticle(entryId, agentPick = true) },
                                     onLater = { id -> model.later(id, undoable) },
                                     onDone = { id -> model.done(id, undoable) },
@@ -688,17 +710,35 @@ internal fun MainScaffold(
                     detailPane = {
                         if (!panesCovered) AnimatedPane {
                             val entry = readerEntry
+                            val swipe = rememberArticleSwipeState()
+                            var findOpen by remember(selected) { mutableStateOf(false) }
+                            val neighbour = { direction: ArticleDirection ->
+                                articleSequence.neighbour(selected, direction) { id ->
+                                    state.snapshot.entries.none { it.id == id && it.deleted }
+                                }
+                            }
+                            val turn = { step: ArticleStep ->
+                                openArticle(step.entryId, step.agentPick, within = articleSequence)
+                            }
+                            SideEffect { swipe.bind(neighbour, turn) }
+                            val awaitingLoad = reader.loading || reader.entryId != selected
+                            Box(Modifier.fillMaxSize().clipToBounds()) {
+                            // Find has a text field, whose own sideways drags move the cursor.
+                            Box(if (selected != null && !findOpen) Modifier.fillMaxSize().articleSwipe(swipe) else Modifier.fillMaxSize()) {
                             if (entry == null) {
                                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                     when {
                                         selected == null -> QuietState("Ready when you are", "Choose an article to settle into a good read.")
-                                        reader.loading -> LoadingState("Opening article…")
+                                        awaitingLoad -> LoadingState("Opening article…")
                                         else -> QuietState("This article did not load", reader.error ?: "Check your connection and try again.", actionLabel = "Try again", onAction = { readerRetry++ })
                                     }
                                 }
                             } else {
                                 BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
                                 val headerMaxHeight = maxHeight * 0.48f
+                                // A swipe replaces the article in place; its header scroll, find
+                                // and WebView must not carry over to the next one.
+                                key(entry.id) {
                                 Column(Modifier.widthIn(max = ReaderSpace.contentWidth).fillMaxSize()) {
                                     val original = originalUrl(entry)
                                     val entryState = state.states[entry.id]
@@ -708,7 +748,6 @@ internal fun MainScaffold(
                                     // article itself; the device-local zoom
                                     // survives navigation.
                                     var offlineCopy by remember(entry.id) { mutableStateOf(false) }
-                                    var findOpen by remember(entry.id) { mutableStateOf(false) }
                                     var findQuery by remember(entry.id) { mutableStateOf("") }
                                     var findLabel by remember(entry.id) { mutableStateOf("") }
                                     var textZoom by remember { mutableStateOf(context.readerZoom()) }
@@ -735,6 +774,7 @@ internal fun MainScaffold(
                                         source = subscriptionTitles[entry.subscriptionId].orEmpty(),
                                         isRead = canMarkUnread(entryState),
                                         offlineCopy = offlineCopy,
+                                        articleActions = articleActions(neighbour, turn),
                                         onOpenOriginal = {
                                             original?.let { url ->
                                                 if (!openOriginal(context, url)) {
@@ -783,7 +823,7 @@ internal fun MainScaffold(
                                     }
                                     val content = reader.content
                                     when {
-                                        reader.loading -> LoadingState("Opening article…")
+                                        awaitingLoad -> LoadingState("Opening article…")
                                         content == null -> QuietState("This article did not load", reader.error ?: "Check your connection and try again.", actionLabel = "Try again", onAction = { readerRetry++ })
                                         else -> Reader(
                                             url = content.url,
@@ -794,10 +834,15 @@ internal fun MainScaffold(
                                             onFallback = { offlineCopy = true },
                                             onLiveContent = { offlineCopy = false },
                                             onWebView = { readerWebView = it },
+                                            swipe = swipe,
                                         )
                                     }
                                 }
                                 }
+                                }
+                            }
+                            }
+                            ArticleSwipeHint(swipe)
                             }
                         }
                     },
@@ -955,13 +1000,17 @@ internal fun ReaderHeader(
     onSmallerText: () -> Unit,
     onLargerText: () -> Unit,
     modifier: Modifier = Modifier,
+    articleActions: List<CustomAccessibilityAction> = emptyList(),
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     Column(modifier.fillMaxWidth().padding(start = ReaderSpace.gutter, end = ReaderSpace.gutter, top = ReaderSpace.sm)) {
         Text(
             entry.title.ifBlank { "Untitled" },
             style = MaterialTheme.typography.titleLarge,
-            modifier = Modifier.semantics { heading() },
+            modifier = Modifier.semantics {
+                heading()
+                customActions = articleActions
+            },
             maxLines = 4,
             overflow = TextOverflow.Ellipsis,
         )
@@ -1036,9 +1085,15 @@ private fun FindBar(
 }
 
 /** The feed owns one loaded article while its pane is off screen. Native
- * views still follow the lazy item's lifetime and large bodies stay out of saved state. */
+ * views still follow the lazy item's lifetime and large bodies stay out of saved state.
+ *
+ * [place] is how far into the expanded body the top of the list is, as a
+ * fraction of its height. Folding, rotating and process restore change or
+ * forget that height, and a pixel offset would then land many rows away. */
 internal class FeedReadingState(
     val selection: MutableState<Long?>,
+    val place: MutableState<Float?>,
+    val sequence: MutableState<ArticleSequence>,
     val list: androidx.compose.foundation.lazy.LazyListState,
     val reader: ReaderLoadState,
     val viewport: InlineArticleState,
@@ -1048,17 +1103,23 @@ internal class FeedReadingState(
 internal fun rememberFeedReadingState(accountKey: String?): FeedReadingState {
     var owner by rememberSaveable { mutableStateOf(accountKey) }
     val selection = rememberSaveable { mutableStateOf<Long?>(null) }
+    val sequence = rememberArticleSequence(accountKey)
     if (accountKey != null && owner != accountKey) {
         if (owner != null) selection.value = null
         owner = accountKey
     }
+    val place = rememberSaveable(selection.value) { mutableStateOf<Float?>(null) }
     val list = key(owner) { rememberLazyListState() }
-    return remember(selection.value, accountKey, list) {
-        FeedReadingState(selection, list, ReaderLoadState(), InlineArticleState())
+    return remember(selection.value, accountKey, list, place) {
+        FeedReadingState(selection, place, sequence, list, ReaderLoadState(), InlineArticleState())
     }
 }
 
 private data class InlineScrollAnchor(val index: Int, val offset: Int)
+
+/** How many pixels of [entryId]'s row are above the top of the list, when that row is the first on screen. */
+private fun androidx.compose.foundation.lazy.LazyListState.depthInto(entryId: Long): Int? =
+    layoutInfo.visibleItemsInfo.firstOrNull()?.takeIf { it.key == entryId && it.offset < 0 }?.let { -it.offset }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -1096,8 +1157,9 @@ internal fun EntryListScreen(
     // stand in for this.
     onExpand: (Long) -> Unit = {},
     onLoadContent: suspend (Long) -> ContentUrlResult? = { null },
+    swipe: ArticleSwipeState = rememberArticleSwipeState(),
     inlineContent: @Composable (ContentUrlResult, CachedEntry, InlineArticleState) -> Unit = { content, entry, viewport ->
-        InlineArticleContent(content, typography(entry), viewport)
+        InlineArticleContent(content, typography(entry), viewport, swipe)
     },
     readingState: FeedReadingState = rememberFeedReadingState(accountKey),
     listState: androidx.compose.foundation.lazy.LazyListState = readingState.list,
@@ -1107,9 +1169,8 @@ internal fun EntryListScreen(
     val layout = layoutOverride ?: preferredLayout
     var expandedId by readingState.selection
     var retry by remember { mutableStateOf(0) }
-    val expandedEntry = remember(entries, expandedId, layout) {
-        if (layout == ArticleLayout.READING && expandedId != null) entries.firstOrNull { it.id == expandedId } else null
-    }
+    val selectedEntry = remember(entries, expandedId) { expandedId?.let { id -> entries.firstOrNull { it.id == id } } }
+    val expandedEntry = selectedEntry?.takeIf { layout == ArticleLayout.READING }
     val expanded = expandedEntry?.id
     // Keep the open article in the list when opening it marks it read.
     val visibleEntries = remember(entries, states, unreadOnly, expanded) {
@@ -1122,7 +1183,34 @@ internal fun EntryListScreen(
     val expandedTypography = expandedEntry?.let(typography)
     val textZoom = context.readerZoom()
     val measuredListWidth = listWidth
+    var place by readingState.place
+    var sequence by readingState.sequence
+    val headerCount = (if (briefs.isNotEmpty()) 1 else 0) +
+        (if (agentChanges.isNotEmpty() || agentChangesError != null) 1 else 0)
+    val itemsBeforeArticles = headerCount + (if (unreadMode) 1 else 0) +
+        (if (layoutOverride == null || unreadOnly != null) 1 else 0)
+    // Where an article's row is, or will be once it is the expanded one: an
+    // expanded article off screen, or one about to be, has no layout info.
+    val rowIndexOf = { id: Long ->
+        itemsBeforeArticles + entries.asSequence().takeWhile { it.id != id }
+            .count { unreadOnly != true || isUnread(states[it.id]) }
+    }
+    val currentRowIndexOf by rememberUpdatedState(rowIndexOf)
+    var scrollAnchor by remember { mutableStateOf<InlineScrollAnchor?>(null) }
+    // Read while composing, so losing the measurement runs the effect below again.
+    val needsPlacing = remember(inlineViewport) { derivedStateOf { inlineViewport.pixels == 0 } }.value
+    val lastExpanded = remember { arrayOfNulls<Long>(1) }
     SideEffect {
+        val previous = lastExpanded[0]
+        lastExpanded[0] = expanded
+        if (previous != null && expanded == null && scrollAnchor == null) {
+            // The body left without a collapse: the layout went side by side or
+            // the article left this shelf. Its deep offset would skip many rows.
+            if (listState.depthInto(previous) != null) {
+                listState.requestScrollToItem(listState.firstVisibleItemIndex)
+            }
+            inlineViewport.invalidate()
+        }
         expandedTypography?.let { typography ->
             val previousHeight = inlineViewport.pixels
             inlineViewport.configure(measuredListWidth, typography, textZoom, density.density, density.fontScale)
@@ -1134,12 +1222,62 @@ internal fun EntryListScreen(
                 }
             }
         }
+        if (selectedEntry != null && needsPlacing && place != null && inlineViewport.resume == ResumeState.IDLE) {
+            // Wait on the headline until the body has a height to resume into.
+            inlineViewport.resume = ResumeState.WAITING
+            listState.requestScrollToItem(rowIndexOf(selectedEntry.id))
+        }
+    }
+    LaunchedEffect(inlineViewport, listState) {
+        snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
+            if (scrolling && inlineViewport.resume == ResumeState.WAITING) {
+                inlineViewport.resume = ResumeState.ABANDONED
+                place = null
+            }
+        }
+    }
+    LaunchedEffect(inlineViewport, listState, expanded) {
+        val id = expanded ?: return@LaunchedEffect
+        snapshotFlow { Triple(inlineViewport.loaded, inlineViewport.contentPx, inlineViewport.settled) }
+            .collectLatest { (loaded, height, settled) ->
+                if (!loaded || height <= 0 || settled) return@collectLatest
+                delay(INLINE_SETTLE_MS)
+                val header = inlineViewport.headerPx
+                val held = inlineViewport.pixels
+                val depth = listState.depthInto(id)
+                val resumeAt = when {
+                    inlineViewport.resume == ResumeState.WAITING -> place
+                    // A shorter body, such as the cached copy, would end above the reader.
+                    depth != null && height < held && depth > header + height -> (depth - header).toFloat() / held
+                    else -> null
+                }
+                inlineViewport.settle()
+                resumeAt?.let {
+                    listState.requestScrollToItem(currentRowIndexOf(id), header + (it.coerceIn(0f, 1f) * height).roundToInt())
+                }
+            }
+    }
+    LaunchedEffect(inlineViewport, listState, expanded) {
+        val id = expanded ?: return@LaunchedEffect
+        snapshotFlow {
+            // Until the body settles, its offsets do not describe the reader's place.
+            if (inlineViewport.settled && inlineViewport.pixels > 0) {
+                listState.layoutInfo.visibleItemsInfo.firstOrNull()?.let { it.key to it.offset }
+            } else null
+        }.collect { top ->
+            val (key, offset) = top ?: return@collect
+            val intoBody = -offset - inlineViewport.headerPx
+            place = if (key == id && intoBody > 0) (intoBody.toFloat() / inlineViewport.pixels).coerceAtMost(1f) else null
+        }
     }
     LaunchedEffect(expanded, accountKey, retry) {
         if (expanded != null && inlineReader.content == null) inlineReader.load(expanded, accountKey, onLoadContent)
     }
-    var scrollAnchor by remember { mutableStateOf<InlineScrollAnchor?>(null) }
+    fun snapshotOrder(id: Long) {
+        sequence = ArticleSequence.around(visibleEntries.map { ArticleStep(it.id) }, ArticleStep(id))
+    }
     fun changeExpansion(id: Long?) {
+        if (id != null) snapshotOrder(id)
         val anchor = id ?: expanded
         scrollAnchor = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == anchor }?.let { item ->
             // Keep a tapped headline in place; collapsing inside a body
@@ -1154,6 +1292,20 @@ internal fun EntryListScreen(
         expandedId = id
         if (id != null) onExpand(id)
     }
+    fun openReader(id: Long) {
+        // From the expanded article the reader continues the order being swiped through.
+        if (id != expanded || id !in sequence) snapshotOrder(id)
+        onOpen(id)
+    }
+    val neighbour = { direction: ArticleDirection ->
+        sequence.neighbour(expanded, direction) { id -> entries.any { it.id == id } }
+    }
+    val turn = { step: ArticleStep ->
+        scrollAnchor = InlineScrollAnchor(rowIndexOf(step.entryId), 0)
+        expandedId = step.entryId
+        onExpand(step.entryId)
+    }
+    SideEffect { swipe.bind(neighbour, turn) }
     LaunchedEffect(expanded, scrollAnchor) {
         scrollAnchor?.let { anchor ->
             // Request against the new composition. An earlier request can
@@ -1163,13 +1315,12 @@ internal fun EntryListScreen(
         }
     }
     BackHandler(enabled = expanded != null) { changeExpansion(null) }
-    val headerCount = (if (briefs.isNotEmpty()) 1 else 0) +
-        (if (agentChanges.isNotEmpty() || agentChangesError != null) 1 else 0)
     LaunchedEffect(headerCount) {
         if (shouldRevealHeaders(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, headerCount)) {
             listState.scrollToItem(0)
         }
     }
+    Box(Modifier.fillMaxSize()) {
     LazyColumn(state = listState, modifier = Modifier.fillMaxSize().onSizeChanged { listWidth = it.width }, contentPadding = PaddingValues(bottom = 16.dp)) {
         if (layoutOverride == null || unreadOnly != null) {
             item(key = "reading-layout") {
@@ -1221,21 +1372,29 @@ internal fun EntryListScreen(
                 modifier = Modifier.fillMaxWidth(),
                 color = MaterialTheme.colorScheme.surface,
             ) {
-                Column {
-                    SwipeActionRow(onLater = { onLater(entry.id) }, onDone = { onDone(entry.id) }) {
+                val isExpanded = expanded == entry.id
+                Column(if (isExpanded) Modifier.articleSwipe(swipe) else Modifier) {
+                    SwipeActionRow(
+                        // On the open article a sideways drag turns to the next one.
+                        enabled = !isExpanded,
+                        modifier = if (isExpanded) Modifier.onSizeChanged { inlineViewport.headerPx = it.height } else Modifier,
+                        onLater = { onLater(entry.id) },
+                        onDone = { onDone(entry.id) },
+                    ) {
                         EntryRow(
                             entry = entry,
                             state = effective,
                             source = subscriptionTitles[entry.subscriptionId].orEmpty(),
                             sourceIcon = subscriptionIcons[entry.subscriptionId],
                             readingInFeed = layout == ArticleLayout.READING,
-                            expanded = expanded == entry.id,
+                            expanded = isExpanded,
+                            articleActions = if (isExpanded) articleActions(neighbour, turn) else emptyList(),
                             onClick = {
                                 if (layout == ArticleLayout.READING) {
-                                    changeExpansion(if (expanded == entry.id) null else entry.id)
-                                } else onOpen(entry.id)
+                                    changeExpansion(if (isExpanded) null else entry.id)
+                                } else openReader(entry.id)
                             },
-                            onOpenReader = { onOpen(entry.id) },
+                            onOpenReader = { openReader(entry.id) },
                             onKeep = { onKeep(entry.id) },
                             onUnkeep = { onUnkeep(entry.id) },
                             onLater = { onLater(entry.id) },
@@ -1243,7 +1402,7 @@ internal fun EntryListScreen(
                             onMarkUnread = { onMarkUnread(entry.id) },
                         )
                     }
-                    if (expanded == entry.id) {
+                    if (isExpanded) {
                         when {
                             inlineReader.loading -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
                                 CircularProgressIndicator(Modifier.size(24.dp))
@@ -1259,7 +1418,7 @@ internal fun EntryListScreen(
                             }
                         }
                         FlowRow(Modifier.fillMaxWidth().padding(horizontal = ReaderSpace.md, vertical = ReaderSpace.xs), horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs)) {
-                            FilledTonalButton(onClick = { onOpen(entry.id) }) { Text("Open reader") }
+                            FilledTonalButton(onClick = { openReader(entry.id) }) { Text("Open reader") }
                             TextButton(onClick = { changeExpansion(null) }) { Text("Collapse") }
                         }
                     }
@@ -1283,6 +1442,8 @@ internal fun EntryListScreen(
                 AgentChangesNotice("Agent changes this session", sessionChanges, entryTitles, agentChangesError, onOpenAgentSelected, onRevert)
             }
         }
+    }
+    ArticleSwipeHint(swipe)
     }
 }
 
@@ -1321,6 +1482,7 @@ internal fun EntryRow(
     onClick: () -> Unit,
     readingInFeed: Boolean = false,
     expanded: Boolean = false,
+    articleActions: List<CustomAccessibilityAction> = emptyList(),
     onOpenReader: () -> Unit = onClick,
     onKeep: () -> Unit = {},
     onUnkeep: () -> Unit = {},
@@ -1340,7 +1502,10 @@ internal fun EntryRow(
             },
             onClick = onClick,
         )
-            .semantics { stateDescription = if (unread) "Unread" else "Read" }
+            .semantics {
+                stateDescription = if (unread) "Unread" else "Read"
+                if (articleActions.isNotEmpty()) customActions = articleActions
+            }
             .padding(start = ReaderSpace.gutter, end = ReaderSpace.xs, top = ReaderSpace.xs, bottom = ReaderSpace.gutter),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1407,8 +1572,10 @@ internal fun EntryRow(
 /** A short swipe reveals Later, a long swipe reveals Done; release to apply. */
 @Composable
 private fun SwipeActionRow(
+    enabled: Boolean,
     onLater: () -> Unit,
     onDone: () -> Unit,
+    modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
     val density = LocalDensity.current
@@ -1424,7 +1591,7 @@ private fun SwipeActionRow(
             animate(offset, 0f, animationSpec = spring(dampingRatio = 0.85f, stiffness = 500f)) { value, _ -> offset = value }
         }
     }
-    Box(Modifier.fillMaxWidth()) {
+    Box(modifier.fillMaxWidth()) {
         val target = swipeTargetFor(-offset, laterThreshold, doneThreshold)
         // Below the Later threshold the reveal already promises Later, so it
         // keeps the Later tone rather than fading to neutral.
@@ -1450,7 +1617,8 @@ private fun SwipeActionRow(
             Modifier
                 .offset { IntOffset(offset.roundToInt(), 0) }
                 .background(MaterialTheme.colorScheme.surface)
-                .pointerInput(Unit) {
+                .pointerInput(enabled) {
+                    if (!enabled) return@pointerInput
                     detectHorizontalDragGestures(
                         onDragStart = { settling?.cancel() },
                         onHorizontalDrag = { change, dragAmount ->

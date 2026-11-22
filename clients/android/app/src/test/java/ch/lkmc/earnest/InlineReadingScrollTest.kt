@@ -7,17 +7,29 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.activity.OnBackPressedDispatcher
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.junit4.StateRestorationTester
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeLeft
+import androidx.compose.ui.test.swipeRight
+import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import ch.lkmc.earnest.core.CachedEntry
+import ch.lkmc.earnest.core.State
+import ch.lkmc.earnest.core.SyncEngine
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -103,7 +115,7 @@ class InlineReadingScrollTest {
         compose.runOnIdle { listState.requestScrollToItem(8) }
         compose.onNodeWithText("Headline 9").performClick()
         compose.runOnIdle {
-            viewport.scrollY = 3800
+            viewport.reportHeight(3800)
             listState.requestScrollToItem(8, with(compose.density) { 1000.dp.roundToPx() })
         }
         val before = compose.runOnIdle { listState.firstVisibleItemScrollOffset }
@@ -114,7 +126,7 @@ class InlineReadingScrollTest {
             assertEquals(1, loads)
             assertEquals(8, listState.firstVisibleItemIndex)
             assertEquals(before, listState.firstVisibleItemScrollOffset)
-            assertEquals(3800, viewport.scrollY)
+            assertEquals(3800, viewport.pixels)
         }
     }
 
@@ -192,5 +204,189 @@ class InlineReadingScrollTest {
             assertEquals("collapse must not reuse an offset deep inside the removed body", 6, listState.firstVisibleItemIndex)
             assertEquals(0, listState.firstVisibleItemScrollOffset)
         }
+    }
+
+    /** Reading articles with bodies sized as the real inline WebView sizes them. */
+    private fun showMeasuredArticles(
+        restoration: StateRestorationTester? = null,
+        entries: () -> List<CachedEntry> = { ARTICLES },
+        states: () -> Map<Long, State> = { emptyMap() },
+        layout: () -> ArticleLayout = { ArticleLayout.READING },
+        unreadOnly: Boolean? = null,
+        onLater: (Long) -> Unit = {},
+        onExpand: (Long) -> Unit = {},
+        onViewport: (InlineArticleState) -> Unit = {},
+        onList: (LazyListState) -> Unit = {},
+    ) {
+        val content = @Composable {
+            val reading = rememberFeedReadingState("measured")
+            SideEffect { onList(reading.list) }
+            EarnestTheme(ThemeSetting.DARK) {
+                EntryListScreen(
+                    title = "Articles", entries = entries(), states = states(), unreadOnly = unreadOnly,
+                    principalId = 1, subscriptionTitles = emptyMap(), subscriptionIcons = emptyMap(),
+                    briefs = emptyList(), principalNames = emptyMap(), entryTitles = emptyMap(), agentChanges = emptyList(),
+                    sessionChanges = emptyList(), agentChangesError = null, onRevert = {}, onOpenAgentSelected = {},
+                    onOpen = {}, onLater = onLater, onDone = {}, onKeep = {}, onUnkeep = {}, onMarkUnread = {},
+                    accountKey = "measured", layoutOverride = layout(), readingState = reading, onExpand = onExpand,
+                    onLoadContent = { ContentUrlResult(null, null, "Body $it") },
+                    inlineContent = { _, _, viewport ->
+                        SideEffect { onViewport(viewport) }
+                        Box(Modifier.fillMaxWidth().testTag("measured-body").layout { measurable, constraints ->
+                            val height = viewport.heightFor(viewport.contentPx, 120)
+                            val child = measurable.measure(constraints.copy(minHeight = 0, maxHeight = 0))
+                            layout(constraints.maxWidth, height) { child.place(0, 0) }
+                        })
+                    },
+                )
+            }
+        }
+        if (restoration != null) restoration.setContent(content) else compose.setContent(content)
+    }
+
+    private fun settle(viewport: InlineArticleState, height: Int) {
+        compose.runOnIdle {
+            viewport.reportHeight(height)
+            viewport.documentLoaded()
+        }
+        // Let the report reach the settle timer before advancing its clock.
+        compose.waitForIdle()
+        compose.mainClock.advanceTimeBy(INLINE_SETTLE_MS + 100)
+        compose.waitForIdle()
+    }
+
+    @Test fun recreationResumesTheSamePlaceInAFullArticle() {
+        val restoration = StateRestorationTester(compose)
+        lateinit var viewport: InlineArticleState
+        lateinit var list: LazyListState
+        showMeasuredArticles(restoration, onViewport = { viewport = it }, onList = { list = it })
+        compose.onNodeWithText("Headline 2").performClick()
+        compose.waitForIdle()
+        settle(viewport, 300_000)
+        compose.runOnIdle { list.requestScrollToItem(1, 150_000) }
+        compose.waitForIdle()
+        val before = compose.runOnIdle { (list.firstVisibleItemScrollOffset - viewport.headerPx) / 300_000f }
+
+        val old = viewport
+        restoration.emulateSavedInstanceStateRestore()
+        compose.waitForIdle()
+        compose.runOnIdle {
+            assertTrue("the body must have been recreated", viewport !== old)
+            assertEquals("an unmeasured body must wait on its headline", 1, list.firstVisibleItemIndex)
+            assertEquals(0, list.firstVisibleItemScrollOffset)
+        }
+        // The other width of a foldable: the same article at another height.
+        settle(viewport, 200_000)
+        compose.runOnIdle {
+            assertEquals(1, list.firstVisibleItemIndex)
+            val after = (list.firstVisibleItemScrollOffset - viewport.headerPx) / 200_000f
+            assertEquals("the reading place must survive a new height", before, after, 0.001f)
+        }
+    }
+
+    @Test fun scrollingWhileTheBodyLoadsAbandonsTheSavedPlace() {
+        val restoration = StateRestorationTester(compose)
+        lateinit var viewport: InlineArticleState
+        lateinit var list: LazyListState
+        showMeasuredArticles(restoration, onViewport = { viewport = it }, onList = { list = it })
+        compose.onNodeWithText("Headline 2").performClick()
+        compose.waitForIdle()
+        settle(viewport, 300_000)
+        compose.runOnIdle { list.requestScrollToItem(1, 150_000) }
+        compose.waitForIdle()
+        restoration.emulateSavedInstanceStateRestore()
+        compose.waitForIdle()
+        compose.onRoot().performTouchInput { swipeUp() }
+        compose.waitForIdle()
+        val chosen = compose.runOnIdle { list.firstVisibleItemIndex to list.firstVisibleItemScrollOffset }
+        settle(viewport, 300_000)
+        compose.runOnIdle { assertEquals(chosen, list.firstVisibleItemIndex to list.firstVisibleItemScrollOffset) }
+    }
+
+    @Test fun losingTheBodyDoesNotSkipTheRowsBelowIt() {
+        val layout = mutableStateOf(ArticleLayout.READING)
+        lateinit var viewport: InlineArticleState
+        lateinit var list: LazyListState
+        showMeasuredArticles(layout = { layout.value }, onViewport = { viewport = it }, onList = { list = it })
+        compose.onNodeWithText("Headline 2").performClick()
+        compose.waitForIdle()
+        settle(viewport, 100_000)
+        compose.runOnIdle { list.requestScrollToItem(1, 60_000) }
+        compose.waitForIdle()
+        // A split window turns into the side-by-side reader without recreation.
+        compose.runOnIdle { layout.value = ArticleLayout.HEADLINES }
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals(1, list.firstVisibleItemIndex) }
+    }
+
+    @Test fun anArticleLeavingItsShelfDoesNotSkipTheRowsBelowIt() {
+        val entries = mutableStateOf(ARTICLES)
+        lateinit var viewport: InlineArticleState
+        lateinit var list: LazyListState
+        showMeasuredArticles(entries = { entries.value }, onViewport = { viewport = it }, onList = { list = it })
+        compose.onNodeWithText("Headline 2").performClick()
+        compose.waitForIdle()
+        settle(viewport, 100_000)
+        compose.runOnIdle { list.requestScrollToItem(1, 60_000) }
+        compose.waitForIdle()
+        compose.runOnIdle { entries.value = ARTICLES.filter { it.id != 2L } }
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals(1, list.firstVisibleItemIndex) }
+        compose.onNodeWithText("Headline 3").assertIsDisplayed()
+    }
+
+    @Test fun swipingTheExpandedArticleExpandsTheNeighbourAtTheTop() {
+        val expanded = mutableListOf<Long>()
+        val later = mutableListOf<Long>()
+        lateinit var list: LazyListState
+        showMeasuredArticles(onExpand = { expanded += it }, onLater = { later += it }, onList = { list = it })
+        compose.onNodeWithText("Headline 2").performClick()
+        compose.onNodeWithText("Headline 2").performTouchInput { swipeLeft() }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            assertEquals(listOf(2L, 3L), expanded)
+            assertTrue("the open article's swipe is not Later or Done", later.isEmpty())
+            assertEquals(2, list.firstVisibleItemIndex)
+            assertEquals(0, list.firstVisibleItemScrollOffset)
+        }
+        compose.onNodeWithText("Headline 3").performTouchInput { swipeRight() }
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals(listOf(2L, 3L, 2L), expanded) }
+    }
+
+    @Test fun swipingBackInAnUnreadListReturnsToTheArticleJustRead() {
+        val states = mutableStateOf(emptyMap<Long, State>())
+        val expanded = mutableListOf<Long>()
+        lateinit var list: LazyListState
+        showMeasuredArticles(
+            states = { states.value }, unreadOnly = true, onList = { list = it },
+            onExpand = { id ->
+                expanded += id
+                val initial = SyncEngine.initialState(1, id)
+                states.value += id to initial.copy(seen = initial.seen.copy(value = JsonPrimitive(SyncEngine.VALUE_SEEN)))
+            },
+        )
+        compose.onNodeWithText("Headline 2").performClick()
+        compose.onNodeWithText("Headline 2").performTouchInput { swipeLeft() }
+        compose.waitForIdle()
+        compose.onNodeWithText("Headline 2").assertDoesNotExist()
+        compose.onNodeWithText("Headline 3").assertIsDisplayed().performTouchInput { swipeRight() }
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals(listOf(2L, 3L, 2L), expanded) }
+        compose.onNodeWithText("Headline 2").assertIsDisplayed()
+    }
+
+    @Test fun theSwipesAreAlsoAccessibilityActions() {
+        val expanded = mutableListOf<Long>()
+        showMeasuredArticles(onExpand = { expanded += it })
+        compose.onNodeWithText("Headline 2").performClick()
+        val actions = compose.onNodeWithText("Headline 2").fetchSemanticsNode().config[SemanticsActions.CustomActions]
+        assertEquals(listOf("Previous article", "Next article"), actions.map { it.label })
+        compose.runOnUiThread { actions.last().action() }
+        compose.runOnIdle { assertEquals(listOf(2L, 3L), expanded) }
+    }
+
+    private companion object {
+        val ARTICLES = (1L..60L).map { CachedEntry(it, title = "Headline $it") }
     }
 }

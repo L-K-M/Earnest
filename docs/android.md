@@ -105,12 +105,27 @@ article in the same scrolling list. Only the article you expand loads reader
 content and reader images, and only one article is expanded at a time. Opening
 another article keeps its headline in place instead of carrying over the previous
 article's scroll offset. Collapse or Back returns you to the expanded headline
-when you are inside its body. Use **Next page** and **Previous page** to read a
-long article in place. **Open reader** opens the dedicated reading tools.
+when you are inside its body. The expanded article shows in full: keep scrolling
+the list to read it and to continue to the next headline. Your place in it
+survives folding, rotating and an app restore. **Open reader** opens the
+dedicated reading tools.
 The layout choice is remembered on your device. Wide screens keep the existing
 side-by-side list and reader. In Articles, **Unread only** filters the current
 feed, folder or all articles. It starts with your account’s **Show only unread**
 setting. The open article stays visible until you collapse it or open another.
+
+Swipe sideways on an open article to move between articles: left for the next,
+right for the previous. This works in the reader and on the expanded article in
+Read in feed, where it expands the neighbour. The order is that of the list you
+opened the article from (a folder, feed, shelf, the front page or search
+results), as it was when you opened it, so reading under **Unread only** does
+not remove the article behind you. An article opened from a link, notification,
+widget or agent notice has no list to move through. Moving to an article opens
+it, so it is marked read once it loads; the article you leave keeps the state
+you gave it. Back returns to the list, however many articles you moved through.
+A code block or table that can scroll sideways keeps the drag; once it is at
+its edge, a new swipe changes article. With TalkBack, use the headline's
+**Next article** and **Previous article** actions.
 
 Article rows share consistent gutters and keep their source, time, headline
 and read indicator together. Use the article's overflow menu for Keep, Unkeep,
@@ -127,8 +142,8 @@ restores oversized caches written by older versions, including unsent actions,
 without clearing app data or changing the database format.
 
 Lists work without a connection; the reader falls back to the cached content
-when the signed content URL cannot be fetched. Swipe a row left a short distance for Later, or a long distance
-for Done; the label appears during the gesture and an undo action is offered
+when the signed content URL cannot be fetched. Swipe a collapsed row left a short distance for Later, or a long distance
+for Done (the expanded article's swipe changes article; use its menu there); the label appears during the gesture and an undo action is offered
 in a snackbar that names the action and auto-dismisses. The swipe background
 is hidden until the row moves. Each article's overflow menu also offers
 Keep, Unkeep and, once read, Mark unread. Mark unread returns the article to unread and clears Done with

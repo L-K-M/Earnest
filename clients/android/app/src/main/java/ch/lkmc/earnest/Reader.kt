@@ -6,10 +6,9 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.graphics.Bitmap
-import android.graphics.Canvas
 import android.graphics.Color
 import android.os.Build
+import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceError
@@ -109,6 +108,11 @@ internal fun shareLink(context: Context, title: String, url: String): Boolean = 
  * main frame may load only the signed article URL (or the local asset
  * origin when offline); every other link opens in the browser. [typography]
  * reaches the article page through the content URL and the offline fallback.
+ *
+ * With [onContentHeight] the page lays out at its whole content height, for a
+ * scrolling parent to move, and reports that height; [modifier] must then
+ * leave the height unbounded. With [swipe] the page takes part in article
+ * swipes.
  */
 @Composable
 internal fun Reader(
@@ -121,17 +125,23 @@ internal fun Reader(
     onWebView: (WebView?) -> Unit = {},
     onLiveContent: () -> Unit = {},
     onContentHeight: ((Int) -> Unit)? = null,
+    onPageLoaded: () -> Unit = {},
+    onRendererLost: () -> Unit = {},
+    swipe: ArticleSwipeState? = null,
 ) {
     val systemDark = isSystemInDarkTheme()
     val displayUrl = remember(url, typography, systemDark) { url?.let { readerUrl(it, typography, systemDark) } }
     val fallbackHtml = remember(cachedHtml, typography, systemDark) {
         cachedHtml?.let { offlineReaderHtml(it, typography, systemDark) }
     }
-    val backgroundColor = Color.parseColor(readerColors(typography, systemDark).first)
+    val backgroundColor = readerBackground(typography, systemDark)
     val fallbackCallback = rememberUpdatedState(onFallback)
     val liveContentCallback = rememberUpdatedState(onLiveContent)
     val webViewCallback = rememberUpdatedState(onWebView)
     val heightCallback = rememberUpdatedState(onContentHeight)
+    val loadedCallback = rememberUpdatedState(onPageLoaded)
+    val lostCallback = rememberUpdatedState(onRendererLost)
+    val swipeState = rememberUpdatedState(swipe)
     // The last WebView handed out; a release may run after a replacement has
     // published itself and must not null the newer instance.
     val published = remember { arrayOfNulls<WebView>(1) }
@@ -143,12 +153,19 @@ internal fun Reader(
                 TextButton(onClick = { rendererLost = false }) { Text("Reload article") }
             }
         } else AndroidView(
-            modifier = modifier,
+            modifier = (if (swipe == null) Modifier else Modifier.articlePage(swipe) { published[0] }).then(modifier),
             factory = { context ->
                 createReaderWebView(
                     context, displayUrl, fallbackHtml,
                     onContentHeight = onContentHeight?.let { { height -> heightCallback.value?.invoke(height) } },
-                    onRendererLost = { if (published[0] === it) rendererLost = true },
+                    onRendererLost = {
+                        if (published[0] === it) {
+                            rendererLost = true
+                            lostCallback.value()
+                        }
+                    },
+                    onPageLoaded = { loadedCallback.value() },
+                    onScrollRefused = { swipeState.value?.pageRefusedScroll() },
                     backgroundColor = backgroundColor,
                     onLiveContent = { liveContentCallback.value() },
                     onFallback = { fallbackCallback.value() },
@@ -214,6 +231,9 @@ internal fun readerUrl(url: String, typography: ReaderTypography, systemDark: Bo
         .appendQueryParameter("font", typography.font.wireName())
         .toString()
 
+internal fun readerBackground(typography: ReaderTypography, systemDark: Boolean): Int =
+    Color.parseColor(readerColors(typography, systemDark).first)
+
 private fun readerColors(typography: ReaderTypography, systemDark: Boolean): Pair<String, String> =
     when (typography.theme.contentTheme(systemDark)) {
         "dark" -> "#242424" to "#eee"
@@ -249,6 +269,9 @@ internal fun offlineReaderHtml(cachedHtml: String, typography: ReaderTypography,
 
 /** State for one selection; cancellation clears the previous load before a new one starts. */
 internal class ReaderLoadState {
+    /** The article the other fields describe; a new selection precedes its load by a frame. */
+    var entryId by mutableStateOf<Long?>(null)
+        private set
     var content by mutableStateOf<ContentUrlResult?>(null)
         private set
     var error by mutableStateOf<String?>(null)
@@ -257,6 +280,7 @@ internal class ReaderLoadState {
         private set
 
     suspend fun load(selected: Long?, accountKey: String?, fetch: suspend (Long) -> ContentUrlResult?) {
+        entryId = selected
         content = null
         error = null
         loading = false
@@ -282,6 +306,8 @@ internal fun createReaderWebView(
     onContentHeight: ((Int) -> Unit)? = null,
     backgroundColor: Int = Color.WHITE,
     onRendererLost: (WebView) -> Unit = {},
+    onPageLoaded: () -> Unit = {},
+    onScrollRefused: () -> Unit = {},
     onLiveContent: () -> Unit = {},
     onFallback: () -> Unit = {},
 ): WebView {
@@ -292,29 +318,18 @@ internal fun createReaderWebView(
     // Only the article path itself may drive the main frame: click-to-load
     // /img/ links share the origin and would otherwise replace the article.
     fun article(uri: android.net.Uri): Boolean = allowed(uri) && uri.encodedPath == allowedOrigin?.encodedPath
-    var documentVisible = false
     return object : WebView(context) {
-        private var reportedHeight = 0
-
         override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
             super.onSizeChanged(w, h, oldw, oldh)
-            // A new viewport must be measured even if the document's height
-            // happens to equal the last report from the previous layout.
-            reportedHeight = 0
+            // Under WRAP_CONTENT the view's own height is the document's. The
+            // scroll range is not: it can count the viewport on top of it.
+            if (onContentHeight != null && h > 0) post { onContentHeight(h) }
         }
 
-        override fun onDraw(canvas: Canvas) {
-            super.onDraw(canvas)
-            // Blank navigation frames describe the viewport, not the article.
-            // They must not overwrite a retained measurement on reattachment.
-            if (onContentHeight == null || !documentVisible) return
-            // Native layout reports changes after images and fonts settle.
-            // No JavaScript bridge or script execution is needed for inline reading.
-            val pixels = computeVerticalScrollRange()
-            if (pixels > 0 && pixels != reportedHeight) {
-                reportedHeight = pixels
-                post { onContentHeight(pixels) }
-            }
+        override fun onOverScrolled(scrollX: Int, scrollY: Int, clampedX: Boolean, clampedY: Boolean) {
+            super.onOverScrolled(scrollX, scrollY, clampedX, clampedY)
+            // Chromium gets here only with movement that no element on the page took.
+            if (clampedX) onScrollRefused()
         }
     }.apply {
         // Cover the first Chromium frame and clip its separate native draw
@@ -322,6 +337,14 @@ internal fun createReaderWebView(
         setBackgroundColor(backgroundColor)
         outlineProvider = ViewOutlineProvider.BOUNDS
         clipToOutline = true
+        if (onContentHeight != null) {
+            // Asks Chromium to size the view from the document. An explicit
+            // height would also overflow Compose's constraints on long articles.
+            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            // The list draws the overscroll stretch. The page's own would need
+            // a layer as tall as the article, which can exceed the GPU's limit.
+            overScrollMode = android.view.View.OVER_SCROLL_NEVER
+        }
         settings.javaScriptEnabled = false
         settings.allowFileAccess = false
         settings.allowContentAccess = false
@@ -345,16 +368,15 @@ internal fun createReaderWebView(
         webViewClient = object : WebViewClient() {
             private var usingFallback = url == null
 
-            override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
-                documentVisible = false
-            }
+            private fun currentDocument(address: String) =
+                if (usingFallback) address == ASSET_URL else article(address.toUri())
 
             override fun onPageCommitVisible(view: WebView, url: String) {
-                val currentDocument = if (usingFallback) url == ASSET_URL else article(url.toUri())
-                if (!currentDocument) return
-                documentVisible = true
-                if (!usingFallback) onLiveContent()
-                view.invalidate()
+                if (!usingFallback && currentDocument(url)) onLiveContent()
+            }
+
+            override fun onPageFinished(view: WebView, url: String) {
+                if (currentDocument(url)) onPageLoaded()
             }
 
             private fun fallback(view: WebView, request: WebResourceRequest) {

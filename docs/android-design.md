@@ -44,7 +44,7 @@ font download or additional runtime network dependency is introduced.
   continues to scroll with the stories.
 - **Articles and shelves:** aligned, full-width rows with quiet separators,
   consistent source/time metadata, stronger headlines and larger thumbnails.
-  Inline reading, article menus, swipes and undo retain their existing meaning.
+  Article menus, collapsed-row swipes and undo retain their existing meaning.
   Swipe thresholds give haptic feedback; released and cancelled gestures settle
   back into place.
 - **Feeds:** an obvious subscribe action, secondary import/export actions,
@@ -54,6 +54,10 @@ font download or additional runtime network dependency is introduced.
   find tools and a height-bounded, scrollable native header so large text does
   not consume the entire reading viewport. Existing WebView restrictions and
   click-to-load behavior remain unchanged.
+- **Article swipes:** the article follows a sideways drag at a third of the
+  finger's speed and a label at the uncovered edge names the move, or says
+  there is no article that way. The label fills and the device ticks at the
+  72dp threshold.
 - **Search:** the query leads, filters use progressive disclosure, results are
   readable rows rather than text buttons, and publisher articles remain
   separate from agent notes.
@@ -90,12 +94,25 @@ a tall, collapsed body must not be reinterpreted as many later article rows.
 Collapsing from inside the body anchors its own headline instead.
 
 The native WebView canvas is themed before loading, and its draw layer is clipped
-to the resizing viewport. Cached HTML themes the document canvas as well as the
-body. Blank navigation frames cannot overwrite the retained height; native height
-reports start after the current document is visibly committed. A recreated
-reader clears its cached-copy indicator when live content commits successfully.
-The 4096-native-pixel preview
-budget, full-reader continuation and content-origin security policy are unchanged.
+to its bounds. Cached HTML themes the document canvas as well as the body. A
+recreated reader clears its cached-copy indicator when live content commits
+successfully. The content-origin security policy is unchanged.
+
+An expanded article is as tall as its document. Its WebView uses `WRAP_CONTENT`
+under an unbounded height, so Chromium supplies the height and rasters only
+what is on screen. Never size it with `Modifier.height` or a constraint: Compose
+constraints cannot represent a long article's height, while a layout result
+can. Never measure it with the scroll range either, which can include the
+viewport and feed back into the height. The row holds its last height until the
+document has loaded and stayed the same size for 300ms. The reading place is
+saved as a fraction of the body, because folding and rotation change its
+height; until the body is measured again the list waits on the headline.
+
+Article pages run without JavaScript, so a swipe cannot ask what is under the
+finger. The WebView's clamped horizontal overscroll answers instead: Chromium
+reports it only when no element on the page took the movement. Without that
+report a drag on the page never changes article, so a WebView that stopped
+reporting would lose the swipe and not the page's own scrolling.
 
 ## Verification
 
