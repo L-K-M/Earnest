@@ -83,12 +83,7 @@ func (s *Service) RunEditionJobs(ctx context.Context, limit int) (int, error) {
 		processed++
 		out, err := s.editionByID(ctx, job.job.UserID, job.job.EditionID)
 		if err == nil {
-			original, contextErr := s.editionModelContext(ctx, job.job.BatchID)
-			if contextErr != nil {
-				err = contextErr
-			} else {
-				err = s.generateEdition(original, job, &out)
-			}
+			err = s.advanceEdition(ctx, job, &out)
 		}
 		if err := s.finishEdition(ctx, job, &out, err); err != nil {
 			return processed, err
@@ -121,6 +116,23 @@ func (s *Service) claimEdition(ctx context.Context) (*claimedEdition, error) {
 		return nil
 	})
 	return out, err
+}
+
+func (s *Service) advanceEdition(ctx context.Context, job *claimedEdition, out *Edition) error {
+	original, err := s.editionModelContext(ctx, job.job.BatchID)
+	if errors.Is(err, errEditionBatchBlocked) {
+		// Like a failed poll: keep the handle until due, as the entry may return.
+		if s.now().Before(out.ReadyAt) {
+			out.Status = "pending"
+			return nil
+		}
+		// Then drop the handle without sending it, and use the current settings.
+		return s.generateEdition(pipeline.WithEditionBatch(ctx, nil), job, out)
+	}
+	if err != nil {
+		return err
+	}
+	return s.generateEdition(original, job, out)
 }
 
 func (s *Service) generateEdition(ctx context.Context, job *claimedEdition, out *Edition) error {

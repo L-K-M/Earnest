@@ -105,6 +105,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Android article text follows the system font size, Back closes the drawer
   instead of the app, healthy feeds no longer report a failed fetch, and
   Articles on a wide screen opens with the reader pane beside the list.
+- Credentials work over plain HTTP again for loopback and for exact hosts
+  in `EARNEST_OUTBOUND_ALLOW_PRIVATE`, such as `hister:8080`. Other HTTP
+  destinations still need HTTPS, and an LLM provider with a blocked key
+  disables its features instead of stopping the server.
 - Android's Read in feed shows expanded articles in full, without pages,
   returns to about your place in them after folding and rotation, and offers
   Reload article if the renderer stops.

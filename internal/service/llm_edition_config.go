@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -17,6 +18,8 @@ import (
 
 const llmBatchConfigPurpose = "earnest/llm-batch-config/v1"
 const editionConfigPrefix = "llm-settings:"
+
+var errEditionBatchBlocked = errors.New("edition batch key may not travel over HTTP")
 
 type modelContextKey struct{}
 type managedModelContext struct {
@@ -93,6 +96,10 @@ func (s *Service) editionModelContext(ctx context.Context, handle string) (conte
 	revision := int64(1)
 	if legacy {
 		revision = 0
+	}
+	submitter := cfg.Providers[cfg.Tasks[llm.TaskEdition].Provider]
+	if submitter.APIKey != "" && !credentialsMayTravel(s.outbound, submitter.BaseURL) {
+		return ctx, errEditionBatchBlocked
 	}
 	runtime, err := s.buildModelRuntime(cfg, revision)
 	if err != nil || runtime.batch == nil {

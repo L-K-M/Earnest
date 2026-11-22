@@ -157,7 +157,7 @@ func (s *Service) integrationRequest(ctx context.Context, provider ArticleIntegr
 	}
 	if err != nil {
 		if outbound.ErrorClass(err) == outbound.DeniedAddress {
-			return fmt.Errorf("integration destination blocked; allow its exact host:port with EARNEST_OUTBOUND_ALLOW_PRIVATE for a private server: %w", ErrUnavailable)
+			return fmt.Errorf("integration destination blocked; use HTTPS, or allow its exact host:port with EARNEST_OUTBOUND_ALLOW_PRIVATE for a private server: %w", ErrUnavailable)
 		}
 		if result == nil || result.Response == nil {
 			return fmt.Errorf("could not confirm delivery; the article may have been saved. Check the destination before retrying: %w", ErrUnavailable)

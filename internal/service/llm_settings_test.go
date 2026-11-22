@@ -27,11 +27,11 @@ func llmSettingsTestInput() LLMSettingsInput {
 func TestLLMAPIKeyRequiresHTTPS(t *testing.T) {
 	in := llmSettingsTestInput()
 	in.Providers[0].BaseURL = "http://models.example/v1"
-	if _, err := validateLLMSettings(in, llm.DefaultConfig()); !errors.Is(err, ErrInvalid) {
+	if _, err := validateLLMSettings(in, llm.DefaultConfig(), nil); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("accepted API key over cleartext HTTP: %v", err)
 	}
 	in.Providers[0].APIKey = ""
-	if _, err := validateLLMSettings(in, llm.DefaultConfig()); err != nil {
+	if _, err := validateLLMSettings(in, llm.DefaultConfig(), nil); err != nil {
 		t.Fatalf("rejected keyless local HTTP provider: %v", err)
 	}
 }
@@ -59,7 +59,7 @@ func TestLLMModelPricingApplicabilitySurvivesLegacyWrites(t *testing.T) {
 	if err := json.Unmarshal(raw, &input); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := validateLLMSettings(input, llm.DefaultConfig())
+	cfg, err := validateLLMSettings(input, llm.DefaultConfig(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestLLMModelPricingApplicabilitySurvivesLegacyWrites(t *testing.T) {
 	if err := json.Unmarshal(raw, &legacy); err != nil {
 		t.Fatal(err)
 	}
-	retained, err := validateLLMSettings(legacy, cfg)
+	retained, err := validateLLMSettings(legacy, cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestLLMModelPricingApplicabilitySurvivesLegacyWrites(t *testing.T) {
 	}
 	legacy.Tasks[0].Task = "embed"
 	legacy.Models[0].Dimensions = 1024 // Isolate pricing from the geometry check.
-	if _, err := validateLLMSettings(legacy, cfg); !errors.Is(err, ErrInvalid) {
+	if _, err := validateLLMSettings(legacy, cfg, nil); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("enabled embedding with unconfirmed pricing: %v", err)
 	}
 }
@@ -105,18 +105,18 @@ func TestLLMEmbeddingPricingConfirmationRequiresGeometry(t *testing.T) {
 	in.Models[0].Dimensions = 0
 	confirmed := true
 	in.Models[0].EmbeddingPricingConfigured = &confirmed
-	if _, err := validateLLMSettings(in, llm.DefaultConfig()); !errors.Is(err, ErrInvalid) {
+	if _, err := validateLLMSettings(in, llm.DefaultConfig(), nil); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("accepted confirmed embedding without a native width: %v", err)
 	}
 	// Legacy entries remain valid even if their native width was not recorded.
 	in.Models[0].EmbeddingPricingConfigured = nil
-	if _, err := validateLLMSettings(in, llm.DefaultConfig()); err != nil {
+	if _, err := validateLLMSettings(in, llm.DefaultConfig(), nil); err != nil {
 		t.Fatalf("legacy route with unknown width: %v", err)
 	}
 	// An explicitly free model is allowed when its geometry is known.
 	in.Models[0].EmbeddingPricingConfigured = &confirmed
 	in.Models[0].Dimensions = 1024
-	if _, err := validateLLMSettings(in, llm.DefaultConfig()); err != nil {
+	if _, err := validateLLMSettings(in, llm.DefaultConfig(), nil); err != nil {
 		t.Fatalf("confirmed free embedding: %v", err)
 	}
 }
@@ -135,7 +135,7 @@ func TestLLMPricingConfirmationIsProviderScoped(t *testing.T) {
 	second.Provider = "other"
 	second.TextPricingConfigured = &missing
 	in.Models = append(in.Models, second)
-	cfg, err := validateLLMSettings(in, llm.DefaultConfig())
+	cfg, err := validateLLMSettings(in, llm.DefaultConfig(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,18 +183,18 @@ func TestLLMSettingsValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			in := llmSettingsTestInput()
 			tc.change(&in)
-			if _, err := validateLLMSettings(in, llm.DefaultConfig()); !errors.Is(err, ErrInvalid) {
+			if _, err := validateLLMSettings(in, llm.DefaultConfig(), nil); !errors.Is(err, ErrInvalid) {
 				t.Fatalf("accepted invalid settings: %v", err)
 			}
 		})
 	}
 	in := llmSettingsTestInput()
-	cfg, err := validateLLMSettings(in, llm.DefaultConfig())
+	cfg, err := validateLLMSettings(in, llm.DefaultConfig(), nil)
 	if err != nil || cfg.Providers["local"].MonthlyLimitUSD != 20000001 {
 		t.Fatalf("exact money: %v %v", cfg.Providers["local"].MonthlyLimitUSD, err)
 	}
 	in.Tasks[0].Provider, in.Tasks[0].Model = "", ""
-	cfg, err = validateLLMSettings(in, llm.DefaultConfig())
+	cfg, err = validateLLMSettings(in, llm.DefaultConfig(), nil)
 	if err != nil || len(cfg.Tasks) != 0 {
 		t.Fatalf("disabled route: %v", err)
 	}

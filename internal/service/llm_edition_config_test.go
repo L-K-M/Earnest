@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -192,5 +193,138 @@ func TestLLMEditionLegacyConfigurationSurvivesFirstSave(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "unrelated-key-sentinel") {
 		t.Fatal("batch retained credentials for an unrelated task")
+	}
+}
+
+func TestBlockedEditionBatchWaitsUntilDue(t *testing.T) {
+	template := storetest.NewTemplate(t)
+	for _, tc := range []struct {
+		name     string
+		relisted bool
+		model    string
+		polls    int64
+	}{
+		{name: "listed again before it is due", relisted: true, model: "old-chat", polls: 1},
+		{name: "still blocked when due", model: "new-chat"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCoreFixture(t, template)
+			body := "Weekly Beacon report."
+			id := f.ingest(t, body)
+			if _, err := f.db.Pool().Exec(t.Context(), "UPDATE subscriptions SET cadence='week' WHERE id=$1", f.subscription); err != nil {
+				t.Fatal(err)
+			}
+			answer := map[string]any{
+				"usage":   map[string]int{"prompt_tokens": 1, "completion_tokens": 1},
+				"choices": []any{map[string]any{"finish_reason": "stop", "message": map[string]string{"content": groundedOutput(id, coreHash("body"+body), "Beacon report.", body)}}},
+			}
+			var originalCalls, polls, currentCalls atomic.Int64
+			original := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				originalCalls.Add(1)
+				switch r.Method + " " + r.URL.Path {
+				case "POST /v1/files":
+					_, _ = w.Write([]byte(`{"id":"input-file"}`))
+				case "POST /v1/batches":
+					_, _ = w.Write([]byte(`{"id":"original-batch"}`))
+				case "GET /v1/batches/original-batch":
+					polls.Add(1)
+					_, _ = w.Write([]byte(`{"status":"completed","output_file_id":"output-file"}`))
+				case "GET /v1/files/output-file/content":
+					_ = json.NewEncoder(w).Encode(map[string]any{"custom_id": "0", "response": map[string]any{"status_code": 200, "body": answer}})
+				default:
+					t.Errorf("unexpected original-provider request: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusBadRequest)
+				}
+			}))
+			defer original.Close()
+			current := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				currentCalls.Add(1)
+				if r.Header.Get("Authorization") != "" {
+					t.Error("original key reached the current provider")
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(answer)
+			}))
+			defer current.Close()
+			a, err := url.Parse(original.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, err := url.Parse(current.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			host := "models.test:" + a.Port()
+			listed, blocked := namedEgress(t, host, b.Host), namedEgress(t, b.Host)
+
+			f.s.outbound = listed
+			cfg := llm.DefaultConfig()
+			cfg.Providers["local"] = llm.ProviderConfig{Kind: llm.KindOpenAI, BaseURL: "http://" + host + "/v1", APIKey: "original-key"}
+			cfg.Models["old-chat"] = llm.ModelInfo{}
+			cfg.Tasks[llm.TaskEdition] = llm.TaskConfig{Provider: "local", Model: "old-chat"}
+			f.s.modelDefaults = cfg
+			ctx, err := f.s.ModelContext(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.s.TriggerEdition(ctx, f.a, EditionWeekly, f.s.now().Add(time.Hour), "blocked-batch"); err != nil {
+				t.Fatal(err)
+			}
+			if n, err := f.s.RunEditionJobs(ctx, 1); err != nil || n != 1 {
+				t.Fatalf("submit: %d %v", n, err)
+			}
+			submitted := originalCalls.Load()
+
+			// The entry is removed and the edition moved to a usable provider.
+			replaced := llm.DefaultConfig()
+			replaced.Providers["current"] = llm.ProviderConfig{Kind: llm.KindOpenAI, BaseURL: current.URL + "/v1"}
+			replaced.Models["new-chat"] = llm.ModelInfo{}
+			replaced.Tasks[llm.TaskEdition] = llm.TaskConfig{Provider: "current", Model: "new-chat"}
+			restart := func(client *outbound.Client) (*Service, context.Context) {
+				s, err := New(f.db, Deps{SecretKey: []byte(strings.Repeat("s", 32)), Clock: f.s.now, Outbound: client, LLMConfig: &replaced})
+				if err != nil {
+					t.Fatal(err)
+				}
+				ctx, err := s.ModelContext(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				return s, ctx
+			}
+			worker, ctx := restart(blocked)
+			for range editionMaxAttempts + 1 {
+				f.clock.Add(int64(2 * editionPollDelay))
+				if n, err := worker.RunEditionJobs(ctx, 1); err != nil || n != 1 {
+					t.Fatalf("waiting batch lost its job: %d %v", n, err)
+				}
+			}
+			if originalCalls.Load() != submitted || currentCalls.Load() != 0 {
+				t.Fatalf("calls while waiting: original %d, current %d", originalCalls.Load()-submitted, currentCalls.Load())
+			}
+
+			if tc.relisted {
+				worker, ctx = restart(listed)
+				f.clock.Add(int64(2 * editionPollDelay))
+			} else {
+				f.clock.Add(int64(time.Hour))
+			}
+			if n, err := worker.RunEditionJobs(ctx, 1); err != nil || n != 1 {
+				t.Fatalf("finish: %d %v", n, err)
+			}
+			latest, err := worker.LatestEdition(ctx, f.a)
+			if err != nil || latest.Status != "ready" || latest.Model != tc.model || polls.Load() != tc.polls {
+				t.Fatalf("edition: %+v, polls %d, %v", latest, polls.Load(), err)
+			}
+			if warned := strings.Contains(latest.Error, editionCancellationWarning); warned == tc.relisted {
+				t.Fatalf("cancellation warning = %t: %q", warned, latest.Error)
+			}
+			if !tc.relisted && originalCalls.Load() != submitted {
+				t.Fatal("blocked provider was contacted")
+			}
+			var retained int
+			if err := f.db.Pool().QueryRow(t.Context(), "SELECT count(*) FROM llm_batch_configs").Scan(&retained); err != nil || retained != 0 {
+				t.Fatalf("unused batch credentials retained: %d %v", retained, err)
+			}
+		})
 	}
 }

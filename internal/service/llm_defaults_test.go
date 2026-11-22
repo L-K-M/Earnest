@@ -14,7 +14,7 @@ func TestLLMDefaultsAndLegacyRoundTrip(t *testing.T) {
 	in.Models[0].Provider = "local"
 	in.Models[0].Dimensions = 4096
 	in.Models[0].SupportsCustomDimensions = true
-	cfg, err := validateLLMSettings(in, llm.DefaultConfig())
+	cfg, err := validateLLMSettings(in, llm.DefaultConfig(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,13 +29,13 @@ func TestLLMDefaultsAndLegacyRoundTrip(t *testing.T) {
 	legacy := in
 	legacy.Defaults = nil
 	legacy.Tasks = []LLMTaskSettings{{Task: "embed", Provider: "local", Model: "local-embed"}}
-	old, err := validateLLMSettings(legacy, cfg)
+	old, err := validateLLMSettings(legacy, cfg, nil)
 	if err != nil || old.Defaults != nil || len(old.TaskModes) != 0 || old.Tasks[llm.TaskEmbed] != cfg.Tasks[llm.TaskEmbed] {
 		t.Fatalf("legacy route changed: %+v %v", old, err)
 	}
 	// Changing an unused default cannot enable disabled features.
 	in.Tasks[0].Mode = "off"
-	off, err := validateLLMSettings(in, cfg)
+	off, err := validateLLMSettings(in, cfg, nil)
 	if err != nil || len(off.Tasks) != 0 {
 		t.Fatalf("default enabled features: %+v %v", off, err)
 	}
@@ -54,7 +54,7 @@ func TestLLMProviderSpecificModels(t *testing.T) {
 	second.Provider = "other"
 	second.EmbeddingPer1M = "2"
 	in.Models = []LLMModelSettings{global, local, second}
-	cfg, err := validateLLMSettings(in, llm.DefaultConfig())
+	cfg, err := validateLLMSettings(in, llm.DefaultConfig(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestLLMDefaultValidation(t *testing.T) {
 	} {
 		in := llmSettingsTestInput()
 		change(&in)
-		if _, err := validateLLMSettings(in, llm.DefaultConfig()); err == nil {
+		if _, err := validateLLMSettings(in, llm.DefaultConfig(), nil); err == nil {
 			t.Fatal("invalid settings accepted")
 		}
 	}

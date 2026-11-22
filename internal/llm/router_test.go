@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/L-K-M/Earnest/internal/outbound"
 )
 
 // fakeProvider records what the router asked it to do.
@@ -122,5 +124,35 @@ func TestNewRouterRejectsRemoteHTTPAPIKey(t *testing.T) {
 	}
 	if _, err := newProvider("local", ProviderConfig{Kind: KindOpenAI, BaseURL: "http://127.0.0.1:11434/v1", APIKey: "private"}, testOutbound(t)); err != nil {
 		t.Fatalf("rejected loopback provider: %v", err)
+	}
+}
+
+func TestNewRouterDisablesOnlyProvidersWithBlockedKeys(t *testing.T) {
+	router, err := NewRouter(Config{
+		Providers: map[string]ProviderConfig{
+			"blocked": {Kind: KindOpenAI, BaseURL: "http://models.example/v1", APIKey: "private"},
+			"secure":  {Kind: KindOpenAI, BaseURL: "https://models.example/v1", APIKey: "private"},
+		},
+		Tasks: map[Task]TaskConfig{
+			TaskBlurb:   {Provider: "blocked", Model: "chat"},
+			TaskSummary: {Provider: "secure", Model: "chat"},
+		},
+		Models: map[string]ModelInfo{"chat": {}},
+	}, testOutbound(t))
+	if err != nil {
+		t.Fatalf("blocked key failed every provider: %v", err)
+	}
+	if router.Enabled(TaskBlurb) || !router.Enabled(TaskSummary) {
+		t.Fatal("only the blocked provider's task should be disabled")
+	}
+}
+
+func TestNewProviderAcceptsAllowlistedHTTPAPIKey(t *testing.T) {
+	client, err := outbound.New(outbound.Config{AllowHosts: []string{"ollama:11434"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newProvider("ollama", ProviderConfig{Kind: KindOpenAI, BaseURL: "http://ollama:11434/v1", APIKey: "private"}, client); err != nil {
+		t.Fatalf("rejected allowlisted provider: %v", err)
 	}
 }

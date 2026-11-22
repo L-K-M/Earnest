@@ -15,6 +15,7 @@ import (
 	"net/netip"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -132,8 +133,13 @@ func TestRejectCleartextCredentials(t *testing.T) {
 	defer server.Close()
 	p := localPolicy(t, server.URL)
 	p.Credentials = Credentials{Headers: http.Header{"Authorization": {"Bearer private"}}}
-	c := client(t, Config{AllowPrefixes: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}})
-	if _, err := c.Get(context.Background(), server.URL, p); ErrorClass(err) != DeniedAddress {
+	// The prefix lets the name be dialled, so only the credential rule can block it.
+	c := client(t, Config{
+		Resolver:      &fakeResolver{addresses: [][]netip.Addr{{netip.MustParseAddr("127.0.0.1")}}},
+		AllowPrefixes: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")},
+	})
+	target := strings.Replace(server.URL, "127.0.0.1", "feed.test", 1)
+	if _, err := c.Get(context.Background(), target, p); ErrorClass(err) != DeniedAddress {
 		t.Fatalf("cleartext credentials: %v", err)
 	}
 }
