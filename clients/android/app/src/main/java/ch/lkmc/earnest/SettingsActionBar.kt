@@ -44,14 +44,31 @@ internal fun SettingsActionBar(actions: DraftActions, modifier: Modifier = Modif
     ) {
         FlowRow(
             Modifier.fillMaxWidth().padding(ReaderSpace.xs),
-            horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs, Alignment.End),
+            horizontalArrangement = Arrangement.SpaceBetween,
             itemVerticalAlignment = Alignment.CenterVertically,
         ) {
-            QuietButton("Discard", actions.onDiscard, enabled = actions.canDiscard)
-            actions.onRetry?.let { QuietButton("Retry save", it, enabled = actions.canRetry) }
-            PrimaryButton("Save", actions.onSave, saveModifier, enabled = actions.canSave, busy = actions.working)
+            Text(
+                draftStatus(actions),
+                style = MaterialTheme.typography.bodyMedium,
+                color = scheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = ReaderSpace.sm),
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs, Alignment.End),
+                itemVerticalAlignment = Alignment.CenterVertically,
+            ) {
+                QuietButton("Discard", actions.onDiscard, enabled = actions.canDiscard)
+                actions.onRetry?.let { QuietButton("Retry save", it, enabled = actions.canRetry) }
+                PrimaryButton("Save", actions.onSave, saveModifier, enabled = actions.canSave, busy = actions.working)
+            }
         }
     }
+}
+
+private fun draftStatus(actions: DraftActions): String = when {
+    actions.working -> "Working…"
+    actions.canDiscard -> "Unsaved changes"
+    else -> "No changes"
 }
 
 /** The AI category's bar: discarding over a server conflict reloads, after asking. */

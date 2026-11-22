@@ -115,8 +115,9 @@ class MobileDesignTest {
                 unreadMode = false, unreadCount = null, onCadence = { _, _ -> }, onOpen = {}, onUnsubscribe = {},
             )
         }
+        compose.onNodeWithContentDescription("Delivery pace for A thoughtful publication").performClick()
         Cadence.entries.forEach { cadence ->
-            val chip = compose.onNodeWithText(cadence.label)
+            val chip = compose.onNode(hasText(cadence.label) and hasAnyAncestor(isPopup()))
             chip.assertIsDisplayed()
             // Allow nonlinear Android font scaling: the 20sp label line
             // still needs 12dp of breathing room inside the chip surface.

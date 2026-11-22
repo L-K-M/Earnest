@@ -2,61 +2,71 @@ package ch.lkmc.earnest
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.material3.Button
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import ch.lkmc.earnest.ReaderFilterChip as FilterChip
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ch.lkmc.earnest.core.MAX_OPML_IMPORT_BYTES
@@ -71,6 +81,7 @@ import ch.lkmc.earnest.core.readAtMost
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -136,89 +147,153 @@ internal fun FeedsScreen(
             }
         }
     }
-    val subscriptions = state.snapshot.objects.filter { it.kind == SyncEngine.OBJECT_SUBSCRIPTION && !it.deleted }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = ReaderSpace.xl)) {
-        item(key = "feeds-intro") {
-            Column(Modifier.padding(horizontal = ReaderSpace.gutter)) {
-                ScreenIntro("Your sources", "Follow your interests, at your pace.")
-                Button(onClick = onSubscribe, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
-                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(ReaderSpace.xs))
-                    Text("Subscribe by URL")
-                }
-            }
-        }
-        if (unreadMode) {
-            item(key = "unread-synced") {
-                val text = when {
-                    unreadCounts == null -> "Unread counts unavailable"
-                    unreadSyncedAt != null -> "Counts as last synced ${unreadSyncedAt.relativeTime()}"
-                    else -> "Counts as last synced (time unavailable)"
-                }
-                Text(
-                    text,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                )
-            }
-        }
-        item {
-            FlowRow(Modifier.padding(horizontal = ReaderSpace.md, vertical = ReaderSpace.xs), horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs)) {
-                TextButton(
-                    onClick = { importPicker.launch(arrayOf("text/x-opml", "application/xml", "text/xml", "*/*")) },
-                    enabled = !opml.busy && !readingOpml,
-                ) { Text("Import OPML") }
-                TextButton(
-                    onClick = { exportPicker.launch("earnest.opml") },
-                    enabled = !opml.busy && !readingOpml,
-                ) { Text("Export OPML") }
-            }
-        }
-        if (opml.busy || readingOpml) {
-            item {
-                LoadingState("Working on OPML…")
-            }
-        }
-        opml.error?.let { message ->
-            item {
-                NoticeBanner(message, tone = NoticeTone.ERROR, modifier = Modifier.padding(ReaderSpace.md))
-            }
-        }
+    val objects = state.snapshot.objects
+    val subscriptions = remember(objects) { objects.filter { it.kind == SyncEngine.OBJECT_SUBSCRIPTION && !it.deleted } }
+    val groups = remember(objects) {
         if (subscriptions.isEmpty()) {
-            item(key = "no-feeds") {
-                QuietState("A home for your interests", "Subscribe to a favorite site, or import an OPML file from another reader. Your articles will appear here after syncing.", icon = FeedIcon)
-            }
+            emptyList()
+        } else {
+            feedGroups(subscriptions, objects.filter { it.kind == SyncEngine.OBJECT_FOLDER && !it.deleted })
         }
-        val folders = state.snapshot.objects.filter { it.kind == SyncEngine.OBJECT_FOLDER && !it.deleted }
-        feedGroups(subscriptions, folders).forEach { group ->
-            group.title?.let { title ->
-                item(key = group.key) {
-                    TextButton(
-                        onClick = { onFolder(group.key.removePrefix("folder-").toLongOrNull() ?: 0L) },
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+    }
+    val fileBusy = opml.busy || readingOpml
+    val listState = rememberLazyListState()
+    val atTop by remember { derivedStateOf { listState.firstVisibleItemIndex == 0 } }
+
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        LazyColumn(
+            Modifier.widthIn(max = ReaderSpace.contentWidth).fillMaxSize(),
+            state = listState,
+            contentPadding = PaddingValues(
+                start = ReaderSpace.md,
+                end = ReaderSpace.md,
+                bottom = if (subscriptions.isEmpty()) ReaderSpace.xl else SubscribeClearance,
+            ),
+        ) {
+            item(key = "feeds-intro") {
+                Column(Modifier.fillMaxWidth().padding(horizontal = ReaderSpace.xxs)) {
+                    SectionHeader("Your sources")
+                    if (unreadMode) UnreadSyncNote(unreadCounts, unreadSyncedAt)
+                    FlowRow(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
                     ) {
-                        Icon(FolderIcon, contentDescription = null, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text(title, style = MaterialTheme.typography.titleSmall)
+                        SecondaryButton(
+                            "Import OPML",
+                            onClick = { importPicker.launch(arrayOf("text/x-opml", "application/xml", "text/xml", "*/*")) },
+                            enabled = !fileBusy,
+                            icon = EarnestIcons.Import,
+                        )
+                        QuietButton(
+                            "Export OPML",
+                            onClick = { exportPicker.launch("earnest.opml") },
+                            enabled = !fileBusy,
+                            icon = EarnestIcons.Export,
+                        )
                     }
                 }
             }
-            items(group.subscriptions, key = { it.id }) { subscription ->
-                FeedRow(
-                    subscription = subscription,
-                    unreadMode = unreadMode,
-                    unreadCount = unreadCounts?.bySubscription?.get(subscription.id),
-                    onCadence = onCadence,
-                    onOpen = { onFeed(subscription.id) },
-                    onUnsubscribe = onUnsubscribe,
-                )
+            if (fileBusy) item(key = "opml-busy") { LoadingState("Working on OPML…") }
+            opml.error?.let { message ->
+                item(key = "opml-error") {
+                    NoticeBanner(message, Modifier.padding(vertical = ReaderSpace.xs), tone = NoticeTone.ERROR)
+                }
             }
+            if (subscriptions.isEmpty()) {
+                item(key = "no-feeds") {
+                    QuietState(
+                        "A home for your interests",
+                        "Subscribe to a favorite site, or import an OPML file from another reader. Your articles will appear here after syncing.",
+                        icon = EarnestIcons.FeedsSelected,
+                        tone = LocalTones.current.green,
+                        actionLabel = "Subscribe by URL",
+                        onAction = onSubscribe,
+                    )
+                }
+            }
+            groups.forEach { group ->
+                item(key = "heading-${group.key}") {
+                    val title = group.title
+                    if (title == null) {
+                        Spacer(Modifier.height(ReaderSpace.sm))
+                    } else {
+                        FolderHeading(
+                            title,
+                            group.subscriptions.size,
+                            onOpen = { onFolder(group.key.removePrefix("folder-").toLongOrNull() ?: 0L) },
+                        )
+                    }
+                }
+                itemsIndexed(group.subscriptions, key = { _, feed -> feed.id }) { index, subscription ->
+                    if (index > 0) Spacer(Modifier.height(GroupGap))
+                    FeedRow(
+                        subscription = subscription,
+                        unreadMode = unreadMode,
+                        unreadCount = unreadCounts?.bySubscription?.get(subscription.id),
+                        onCadence = onCadence,
+                        onOpen = { onFeed(subscription.id) },
+                        onUnsubscribe = onUnsubscribe,
+                        shape = groupedShape(index, group.subscriptions.size),
+                    )
+                }
+            }
+        }
+        // The screen's one action, in thumb reach. The empty state carries it instead.
+        if (subscriptions.isNotEmpty()) {
+            ExtendedFloatingActionButton(
+                text = { Text("Subscribe by URL") },
+                icon = { Icon(EarnestIcons.Add, contentDescription = if (atTop) null else "Subscribe by URL") },
+                onClick = onSubscribe,
+                expanded = atTop,
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(ReaderSpace.md),
+            )
         }
     }
 
     state.opml.summary?.let { summary ->
         OpmlReportDialog(summary = summary, onDismiss = model::dismissOpmlReport)
+    }
+}
+
+private val GroupGap = 2.dp
+private val SubscribeClearance = 88.dp
+private val FolderHeadingHeight = 56.dp
+private val FeedMark = 40.dp
+private val InlineIcon = 18.dp
+
+@Composable
+private fun UnreadSyncNote(counts: UnreadCounts?, syncedAt: Long?) {
+    val text = when {
+        counts == null -> "Unread counts unavailable"
+        syncedAt != null -> "Counts as last synced ${syncedAt.relativeTime()}"
+        else -> "Counts as last synced (time unavailable)"
+    }
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(bottom = ReaderSpace.xs),
+    )
+}
+
+@Composable
+private fun FolderHeading(title: String, feeds: Int, onOpen: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().padding(top = ReaderSpace.sm)
+            .clip(MaterialTheme.shapes.medium)
+            .clickable(onClickLabel = "Read folder", role = Role.Button, onClick = onOpen)
+            .heightIn(min = FolderHeadingHeight)
+            .padding(horizontal = ReaderSpace.sm),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(ReaderSpace.sm),
+    ) {
+        Icon(EarnestIcons.FolderSelected, contentDescription = null, tint = toneColors(scheme, LocalTones.current.green).ink)
+        Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f).semantics { heading() })
+        Text(feedCount(feeds), style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
+        Icon(EarnestIcons.ChevronForward, contentDescription = null, tint = scheme.onSurfaceVariant)
     }
 }
 
@@ -230,7 +305,7 @@ private fun OpmlReportDialog(summary: OpmlSummary, onDismiss: () -> Unit) {
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
             ) {
                 Text(opmlSummaryLine(summary), style = MaterialTheme.typography.bodyMedium)
                 if (summary.deferred > 0) {
@@ -244,7 +319,7 @@ private fun OpmlReportDialog(summary: OpmlSummary, onDismiss: () -> Unit) {
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        confirmButton = { QuietButton("Close", onDismiss) },
     )
 }
 
@@ -257,138 +332,201 @@ internal fun FeedRow(
     onCadence: (Long, String) -> Unit,
     onOpen: () -> Unit,
     onUnsubscribe: (Long) -> Unit,
+    shape: Shape = MaterialTheme.shapes.large,
 ) {
-    // The icon path and fetch health live in the subscription's raw JSON.
-    // Parse them once per revision, not on every redraw of the list.
+    // The icon, address, pace and fetch health live in the subscription's raw
+    // JSON. Parse them once per revision, not on every redraw of the list.
     val iconUrl = remember(subscription.raw) { subscription.iconUrl() }
-    val health = remember(subscription.raw) { subscription.health() }
+    val address = remember(subscription.raw) { shortAddress(subscription.raw.url()) }
+    val cadence = remember(subscription.raw) { cadenceOf(River.cadence(subscription)) }
+    val problem = remember(subscription.raw) { feedProblem(subscription.health()) }
+    val name = subscription.name.ifBlank { "Untitled feed" }
     var menuOpen by remember { mutableStateOf(false) }
     var confirmUnsubscribe by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth().padding(horizontal = ReaderSpace.gutter, vertical = ReaderSpace.md)) {
-        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClickLabel = "Read feed", onClick = onOpen), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ReaderSpace.sm)) {
-            Surface(modifier = Modifier.testTag("feed-icon-${subscription.id}"), shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
-                if (iconUrl != null) {
-                    MediaImage(iconUrl, Modifier.padding(10.dp).size(24.dp), RoundedCornerShape(4.dp))
-                } else {
-                    Icon(FeedIcon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(10.dp).size(24.dp))
-                }
-            }
-            Column(Modifier.weight(1f).padding(vertical = ReaderSpace.xs)) {
-                Text(subscription.name.ifBlank { "Untitled feed" }, style = MaterialTheme.typography.titleMedium)
-                Text(subscription.raw.url(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            Box {
-                IconButton(onClick = { menuOpen = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "Feed options for ${subscription.name}") }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    DropdownMenuItem(text = { Text("Read") }, onClick = { menuOpen = false; onOpen() })
-                    DropdownMenuItem(text = { Text("Unsubscribe", color = MaterialTheme.colorScheme.error) }, onClick = { menuOpen = false; confirmUnsubscribe = true })
-                }
-            }
-        }
-        feedProblem(health)?.let { problem ->
-            Text(
-                "Fetch failing: ${problem.detail}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-            problem.triedAt?.let {
-                Text(
-                    "Tried ${it.relativeTime()}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        if (unreadMode) {
-            Text(
-                unreadCount?.let { "Unread $it" } ?: "Unread unavailable",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+    val scheme = MaterialTheme.colorScheme
+    Surface(
+        Modifier.fillMaxWidth(),
+        shape = shape,
+        color = scheme.groupContainer,
+        border = if (scheme.isMonochrome) BorderStroke(1.dp, scheme.outlineVariant) else null,
+    ) {
+        Column(
+            Modifier.clickable(onClickLabel = "Read feed", onClick = onOpen)
+                .padding(start = ReaderSpace.md, top = ReaderSpace.xs, bottom = ReaderSpace.xs),
         ) {
-            val selection = cadenceSelection(River.cadence(subscription))
-            Cadence.entries.forEach { cadence ->
-                CadenceChip(
-                    cadence = cadence,
-                    selected = selection[cadence] == true,
-                    onSelect = { onCadence(subscription.id, cadence.value) },
-                )
-            }
-        }
-        Text(
-            cadenceOf(River.cadence(subscription)).hint,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-    HorizontalDivider(Modifier.padding(horizontal = ReaderSpace.gutter), color = MaterialTheme.colorScheme.outlineVariant)
-    if (confirmUnsubscribe) {
-        AlertDialog(
-            onDismissRequest = { confirmUnsubscribe = false },
-            title = { Text("Unsubscribe from ${subscription.name}?") },
-            text = { Text("You will stop receiving new articles from this feed.") },
-            confirmButton = { TextButton(onClick = { confirmUnsubscribe = false; onUnsubscribe(subscription.id) }) { Text("Unsubscribe", color = MaterialTheme.colorScheme.error) } },
-            dismissButton = { TextButton(onClick = { confirmUnsubscribe = false }) { Text("Cancel") } },
-        )
-    }
-}
-
-@Composable
-private fun CadenceChip(cadence: Cadence, selected: Boolean, onSelect: () -> Unit) {
-    FilterChip(
-        selected = selected,
-        onClick = onSelect,
-        label = { Text(cadence.label) },
-        modifier = Modifier.semantics {
-            this.selected = selected
-            stateDescription = if (selected) "Selected" else "Not selected"
-        },
-    )
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-internal fun SubscribeDialog(
-    onDismiss: () -> Unit,
-    onSubscribe: (String, String) -> Unit,
-) {
-    var url by remember { mutableStateOf("") }
-    var selectedCadence by remember { mutableStateOf(Cadence.TODAY.value) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Subscribe by URL") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(ReaderSpace.sm)) {
-                Text("Paste the address of a site or its RSS feed.", style = MaterialTheme.typography.bodyMedium)
-                OutlinedTextField(url, { url = it }, label = { Text("Feed URL") }, singleLine = true, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done))
-                Text("Delivery pace", style = MaterialTheme.typography.titleSmall)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Cadence.entries.forEach { cadence ->
-                        CadenceChip(
-                            cadence = cadence,
-                            selected = cadence.value == selectedCadence,
-                            onSelect = { selectedCadence = cadence.value },
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = TouchTarget),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(ReaderSpace.sm),
+            ) {
+                FeedAvatar(name, iconUrl, Modifier.testTag("feed-icon-${subscription.id}"), FeedMark)
+                Column(Modifier.weight(1f)) {
+                    Text(name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        address,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = scheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Box {
+                    ActionIconButton(EarnestIcons.More, "Feed options for ${subscription.name}", onClick = { menuOpen = true })
+                    AppMenu(expanded = menuOpen, onDismiss = { menuOpen = false }) {
+                        AppMenuItem("Read", onClick = { menuOpen = false; onOpen() }, icon = EarnestIcons.Book)
+                        AppMenuItem(
+                            "Unsubscribe",
+                            onClick = { menuOpen = false; confirmUnsubscribe = true },
+                            icon = EarnestIcons.Delete,
+                            role = MenuRole.DESTRUCTIVE,
                         )
                     }
                 }
-                Text(
-                    cadenceOf(selectedCadence).hint,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
-        },
-        confirmButton = {
-            Button(onClick = { onSubscribe(url.trim(), selectedCadence) }, enabled = url.isNotBlank()) { Text("Subscribe") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
+            Column(Modifier.fillMaxWidth().padding(start = FeedMark + ReaderSpace.sm, end = ReaderSpace.md)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(ReaderSpace.sm),
+                    itemVerticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CadenceMenu(name, cadence, onSelect = { onCadence(subscription.id, it.value) })
+                    if (unreadMode) {
+                        Text(
+                            unreadCount?.let { "Unread $it" } ?: "Unread unavailable",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = scheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                problem?.let { FeedTrouble(it) }
+            }
+        }
+    }
+    if (confirmUnsubscribe) {
+        AlertDialog(
+            onDismissRequest = { confirmUnsubscribe = false },
+            title = { Text("Unsubscribe from $name?") },
+            text = { Text("You will stop receiving new articles from this feed.") },
+            confirmButton = {
+                QuietButton(
+                    "Unsubscribe",
+                    onClick = { confirmUnsubscribe = false; onUnsubscribe(subscription.id) },
+                    color = scheme.error,
+                )
+            },
+            dismissButton = { QuietButton("Cancel", onClick = { confirmUnsubscribe = false }) },
+        )
+    }
 }
 
+/** The pace as one quiet pill; its menu says what each pace means. */
+@Composable
+private fun CadenceMenu(feed: String, current: Cadence, onSelect: (Cadence) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        AssistChip(
+            onClick = { open = true },
+            label = { Text(current.label) },
+            trailingIcon = { Icon(EarnestIcons.ChevronDown, contentDescription = null, modifier = Modifier.size(InlineIcon)) },
+            modifier = Modifier.semantics {
+                contentDescription = "Delivery pace for $feed"
+                stateDescription = current.label
+            },
+        )
+        AppMenu(expanded = open, onDismiss = { open = false }) {
+            Cadence.entries.forEach { cadence ->
+                AppMenuItem(
+                    cadence.label,
+                    onClick = {
+                        open = false
+                        if (cadence != current) onSelect(cadence)
+                    },
+                    supporting = cadence.hint,
+                    selected = cadence == current,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FeedTrouble(problem: FeedProblem) {
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        Modifier.padding(bottom = ReaderSpace.xs),
+        horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+    ) {
+        Icon(EarnestIcons.Alert, contentDescription = null, tint = scheme.error, modifier = Modifier.size(InlineIcon))
+        Column {
+            Text("Fetch failing: ${problem.detail}", style = MaterialTheme.typography.bodySmall, color = scheme.error)
+            problem.triedAt?.let {
+                Text("Tried ${it.relativeTime()}", style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun SubscribeSheet(onDismiss: () -> Unit, onSubscribe: (String, String) -> Unit) {
+    var url by rememberSaveable { mutableStateOf("") }
+    var pace by rememberSaveable { mutableStateOf(Cadence.TODAY.value) }
+    val field = remember { FocusRequester() }
+    val submit = { if (url.isNotBlank()) onSubscribe(url.trim(), pace) }
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
+        Column(Modifier.fillMaxWidth().imePadding()) {
+            Column(
+                Modifier.fillMaxWidth().weight(1f, fill = false)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = ReaderSpace.lg),
+                verticalArrangement = Arrangement.spacedBy(ReaderSpace.sm),
+            ) {
+                Text("Subscribe by URL", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() })
+                Text(
+                    "Paste the address of a site or its RSS feed.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = { Text("Feed URL") },
+                    leadingIcon = { Icon(EarnestIcons.Feeds, contentDescription = null) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().focusRequester(field),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { submit() }),
+                )
+                SectionHeader("Delivery pace")
+                Column(Modifier.fillMaxWidth().selectableGroup()) {
+                    Cadence.entries.forEach { cadence ->
+                        OptionRow(
+                            label = cadence.label,
+                            selected = cadence.value == pace,
+                            onSelect = { pace = cadence.value },
+                            description = cadence.hint,
+                        )
+                    }
+                }
+            }
+            // Outside the scroll, so the keyboard never covers it.
+            PrimaryButton(
+                "Subscribe",
+                onClick = submit,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = ReaderSpace.lg, vertical = ReaderSpace.sm),
+                enabled = url.isNotBlank(),
+            )
+        }
+    }
+    LaunchedEffect(Unit) { field.requestFocus() }
+}
+
+/** An address as people read it: no scheme, no www, no trailing slash. */
+private fun shortAddress(url: String): String =
+    url.substringAfter("://").removePrefix("www.").trimEnd('/')
+
 private fun String.url(): String = runCatching {
-    kotlinx.serialization.json.Json.parseToJsonElement(this)
-        .jsonObject["url"]?.jsonPrimitive?.content ?: ""
+    Json.parseToJsonElement(this).jsonObject["url"]?.jsonPrimitive?.content ?: ""
 }.getOrDefault("")

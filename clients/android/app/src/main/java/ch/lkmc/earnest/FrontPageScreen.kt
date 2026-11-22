@@ -351,7 +351,7 @@ private fun SectionRule(name: String) {
             name,
             style = MaterialTheme.typography.titleSmall,
             color = scheme.primary,
-            modifier = Modifier.weight(1f, fill = false).semantics { heading() }.testTag("section-$name"),
+            modifier = Modifier.semantics { heading() }.testTag("section-$name"),
         )
         HorizontalDivider(Modifier.weight(1f), color = scheme.outlineVariant)
     }

@@ -2,6 +2,7 @@ package ch.lkmc.earnest
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -9,21 +10,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.NavigationDrawerItem
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.material3.NavigationDrawerItemColors
+import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
@@ -34,17 +29,20 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ch.lkmc.earnest.core.CachedEntry
 import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.core.SyncObject
 import ch.lkmc.earnest.core.UnreadCounts
+import ch.lkmc.earnest.core.iconUrl
 
 /** Four destinations; the drawer keeps every shelf one tap away as well. */
 internal val primaryDestinations = listOf(View.FRONT, View.ALL, View.KEPT, View.FEEDS)
@@ -187,34 +185,19 @@ private const val MAX_BADGE_COUNT = 999L
 @Composable
 private fun UnreadBadge(count: Long?) {
     if (count == null || count <= 0L) return
+    // No colour of its own: a selected row may be dark on e-paper.
     Text(
         unreadBadgeText(count),
         style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.semantics { contentDescription = "$count unread" },
     )
 }
 
-// A simple folder outline, kept local rather than adding the extended icon pack.
-internal val FolderIcon: ImageVector = ImageVector.Builder(
-    name = "ReaderFolder", defaultWidth = 24.dp, defaultHeight = 24.dp,
-    viewportWidth = 24f, viewportHeight = 24f,
-).apply {
-    path(fill = SolidColor(Color.Black)) {
-        moveTo(3f, 5f)
-        lineTo(10f, 5f)
-        lineTo(12f, 7f)
-        lineTo(21f, 7f)
-        lineTo(21f, 20f)
-        lineTo(3f, 20f)
-        close()
-        moveTo(5f, 9f)
-        lineTo(5f, 18f)
-        lineTo(19f, 18f)
-        lineTo(19f, 9f)
-        close()
-    }
-}.build()
+private val DrawerWidth = 336.dp
+private val DrawerEdge = ReaderSpace.sm
+private val DrawerText = ReaderSpace.sm + ReaderSpace.md
+private val DrawerFeedMark = 24.dp
+private val BrandMark = 40.dp
 
 @Composable
 internal fun ReaderDrawer(
@@ -230,107 +213,177 @@ internal fun ReaderDrawer(
 ) {
     val groups = remember(objects) { navigationFeedGroups(objects) }
     var expanded by rememberSaveable { mutableStateOf(emptyList<String>()) }
-    ModalDrawerSheet(modifier = Modifier.widthIn(max = 320.dp)) {
-        LazyColumn(modifier = Modifier.testTag("reader-drawer"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            item {
-                Row(Modifier.padding(start = 28.dp, end = 12.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Your library", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() })
-                        Text("Read by folder or feed", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    IconButton(onClick = onClose) { Icon(Icons.Filled.Close, contentDescription = "Close folders") }
-                }
-            }
-            items(listOf(View.ALL), key = { "view-${it.name}" }) { destination ->
-                NavigationDrawerItem(
-                    label = { Text(destination.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    selected = view == destination && selection == FeedSelection.All,
-                    icon = { Icon(destination.icon, contentDescription = null) },
-                    badge = { UnreadBadge(unreadCounts?.total) },
+    ModalDrawerSheet(Modifier.widthIn(max = DrawerWidth)) {
+        LazyColumn(
+            Modifier.testTag("reader-drawer").weight(1f),
+            contentPadding = PaddingValues(bottom = ReaderSpace.xs),
+            verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+        ) {
+            item(key = "header") { DrawerHeader(onClose) }
+            item(key = "view-${View.ALL.name}") {
+                DrawerPlace(
+                    place = View.ALL,
+                    selected = view == View.ALL && selection == FeedSelection.All,
+                    unread = unreadCounts?.total,
                     onClick = { onFeed(FeedSelection.All) },
-                    modifier = Modifier.padding(horizontal = 12.dp),
                 )
             }
-            item {
-                HorizontalDivider(Modifier.padding(horizontal = 28.dp, vertical = 12.dp))
-                Row(Modifier.fillMaxWidth().padding(start = 28.dp, end = 16.dp)) {
-                    Text("Folders & feeds", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f).padding(vertical = 14.dp).semantics { heading() })
-                    TextButton(onClick = { onView(View.FEEDS) }) { Text("Manage") }
-                }
+            item(key = "feeds-heading") {
+                SectionHeader(
+                    "Folders & feeds",
+                    Modifier.padding(start = DrawerText, end = DrawerEdge, top = ReaderSpace.sm),
+                    action = { QuietButton("Manage", onClick = { onView(View.FEEDS) }) },
+                )
             }
             if (groups.isEmpty()) {
-                item {
+                item(key = "no-feeds") {
                     Text(
                         "No feeds yet. Add a feed or import OPML in Feeds.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 28.dp, vertical = 12.dp),
+                        modifier = Modifier.padding(horizontal = DrawerText, vertical = ReaderSpace.xs),
                     )
                 }
             }
             groups.forEach { group ->
-                val folderId = group.key.removePrefix("folder-").toLongOrNull() ?: 0L
-                val folder = FeedSelection.Folder(folderId)
+                val open = group.key in expanded
+                val folder = FeedSelection.Folder(group.key.removePrefix("folder-").toLongOrNull() ?: 0L)
                 item(key = group.key) {
-                    NavigationDrawerItem(
-                        label = {
-                            Column {
-                                Text(group.title.orEmpty(), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(
-                                    "${group.subscriptions.size} ${if (group.subscriptions.size == 1) "feed" else "feeds"}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                )
-                            }
-                        },
+                    DrawerFolder(
+                        group = group,
                         selected = view == View.ALL && selection == folder,
-                        icon = { Icon(FolderIcon, contentDescription = null) },
-                        badge = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                UnreadBadge(unreadCounts?.let { group.unreadCount(it) })
-                                IconButton(onClick = {
-                                    expanded = if (group.key in expanded) expanded - group.key else expanded + group.key
-                                }) {
-                                    Icon(
-                                        if (group.key in expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                                        contentDescription = "${if (group.key in expanded) "Collapse" else "Expand"} ${group.title}",
-                                    )
-                                }
-                            }
-                        },
+                        open = open,
+                        unread = unreadCounts?.let { group.unreadCount(it) },
                         onClick = { onFeed(folder) },
-                        modifier = Modifier.padding(horizontal = 12.dp),
+                        onToggle = { expanded = if (open) expanded - group.key else expanded + group.key },
                     )
                 }
-                if (group.key in expanded) {
-                    items(group.subscriptions.sortedBy { it.name.lowercase() }, key = { "feed-${it.id}" }) { subscription ->
-                        NavigationDrawerItem(
-                            label = { Text(subscription.name, maxLines = 2, overflow = TextOverflow.Ellipsis) },
-                            selected = view == View.ALL && selection == FeedSelection.Subscription(subscription.id),
-                            icon = { Icon(FeedIcon, contentDescription = null, modifier = Modifier.size(20.dp)) },
-                            badge = { UnreadBadge(unreadCounts?.bySubscription?.get(subscription.id)) },
-                            onClick = { onFeed(FeedSelection.Subscription(subscription.id)) },
-                            modifier = Modifier.padding(start = 28.dp, end = 12.dp),
-                        )
-                    }
+                if (!open) return@forEach
+                items(group.subscriptions.sortedBy { it.name.lowercase() }, key = { "feed-${it.id}" }) { subscription ->
+                    val feed = FeedSelection.Subscription(subscription.id)
+                    DrawerFeed(
+                        subscription = subscription,
+                        selected = view == View.ALL && selection == feed,
+                        unread = unreadCounts?.bySubscription?.get(subscription.id),
+                        onClick = { onFeed(feed) },
+                        modifier = Modifier.animateItem(),
+                    )
                 }
             }
-            item {
-                HorizontalDivider(Modifier.padding(horizontal = 28.dp, vertical = 12.dp))
-                Text("Saved & activity", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(horizontal = 28.dp, vertical = 12.dp).semantics { heading() })
+            item(key = "places-heading") {
+                SectionHeader("Saved & activity", Modifier.padding(horizontal = DrawerText).padding(top = ReaderSpace.sm))
             }
-            items(listOf(View.LATER, View.KEPT, View.DONE, View.ACTIVITY), key = { "view-${it.name}" }) { destination ->
-                NavigationDrawerItem(
-                    label = { Text(destination.label) },
-                    selected = view == destination,
-                    icon = { Icon(destination.icon, contentDescription = null) },
-                    onClick = { onView(destination) },
-                    modifier = Modifier.padding(horizontal = 12.dp),
-                )
-            }
-            item {
-                HorizontalDivider(Modifier.padding(horizontal = 28.dp, vertical = 12.dp))
-                TextButton(onClick = onSettings, modifier = Modifier.padding(start = 16.dp, bottom = 16.dp)) { Text("Settings") }
+            items(savedShelves + View.ACTIVITY, key = { "view-${it.name}" }) { place ->
+                DrawerPlace(place, selected = view == place, onClick = { onView(place) })
             }
         }
+        // Settings stays put however long the folder list grows.
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        NavigationDrawerItem(
+            label = { Text("Settings") },
+            selected = false,
+            icon = { Icon(EarnestIcons.Settings, contentDescription = null) },
+            onClick = onSettings,
+            modifier = Modifier.padding(horizontal = DrawerEdge, vertical = ReaderSpace.xs),
+        )
     }
+}
+
+@Composable
+private fun DrawerHeader(onClose: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(start = DrawerText, end = DrawerEdge, top = ReaderSpace.sm, bottom = ReaderSpace.md),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(ReaderSpace.sm),
+    ) {
+        Icon(
+            painterResource(R.drawable.ic_notification),
+            contentDescription = null,
+            tint = toneColors(MaterialTheme.colorScheme, LocalTones.current.orange).ink,
+            modifier = Modifier.size(BrandMark),
+        )
+        Column(Modifier.weight(1f)) {
+            Text("Your library", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() })
+            Text(
+                "Read by folder or feed",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        ActionIconButton(EarnestIcons.Close, "Close folders", onClose)
+    }
+}
+
+/** A place in its own tone, the one it lights up in on the navigation bar. */
+@Composable
+private fun DrawerPlace(place: View, selected: Boolean, onClick: () -> Unit, unread: Long? = null) {
+    NavigationDrawerItem(
+        label = { Text(place.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        selected = selected,
+        icon = { Icon(if (selected) place.selectedIcon else place.icon, contentDescription = null) },
+        badge = { UnreadBadge(unread) },
+        colors = tonedItemColors(place.tone?.invoke(LocalTones.current)),
+        onClick = onClick,
+        modifier = Modifier.padding(horizontal = DrawerEdge),
+    )
+}
+
+@Composable
+private fun DrawerFolder(
+    group: FeedGroup,
+    selected: Boolean,
+    open: Boolean,
+    unread: Long?,
+    onClick: () -> Unit,
+    onToggle: () -> Unit,
+) {
+    val secondary = MaterialTheme.colorScheme.onSurfaceVariant
+    NavigationDrawerItem(
+        label = {
+            Column {
+                Text(group.title.orEmpty(), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    feedCount(group.subscriptions.size),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (selected) Color.Unspecified else secondary,
+                )
+            }
+        },
+        selected = selected,
+        icon = { Icon(if (selected) EarnestIcons.FolderSelected else EarnestIcons.Folder, contentDescription = null) },
+        badge = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                UnreadBadge(unread)
+                IconButton(onClick = onToggle) {
+                    Icon(
+                        if (open) EarnestIcons.ChevronUp else EarnestIcons.ChevronDown,
+                        contentDescription = "${if (open) "Collapse" else "Expand"} ${group.title}",
+                    )
+                }
+            }
+        },
+        colors = tonedItemColors(LocalTones.current.green),
+        onClick = onClick,
+        modifier = Modifier.padding(horizontal = DrawerEdge),
+    )
+}
+
+@Composable
+private fun DrawerFeed(subscription: SyncObject, selected: Boolean, unread: Long?, onClick: () -> Unit, modifier: Modifier) {
+    val iconUrl = remember(subscription.raw) { subscription.iconUrl() }
+    NavigationDrawerItem(
+        label = { Text(subscription.name.ifBlank { "Untitled feed" }, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        selected = selected,
+        icon = { FeedAvatar(subscription.name, iconUrl, size = DrawerFeedMark) },
+        badge = { UnreadBadge(unread) },
+        onClick = onClick,
+        modifier = modifier.padding(start = DrawerEdge + ReaderSpace.md, end = DrawerEdge),
+    )
+}
+
+@Composable
+private fun tonedItemColors(tone: Color?): NavigationDrawerItemColors {
+    val scheme = MaterialTheme.colorScheme
+    val ink = tone?.let { toneColors(scheme, it).ink } ?: scheme.onSurfaceVariant
+    return NavigationDrawerItemDefaults.colors(unselectedIconColor = ink)
 }

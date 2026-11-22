@@ -316,7 +316,7 @@ internal fun ReaderHeader(
         if (chrome == ReaderChrome.FULL) {
             Column(
                 titleModifier.align(Alignment.CenterHorizontally).widthIn(max = ReaderSpace.contentWidth).fillMaxWidth()
-                    .padding(start = ReaderSpace.gutter, end = ReaderSpace.gutter, bottom = ReaderSpace.sm),
+                    .padding(start = ReaderSpace.md, end = ReaderSpace.md, bottom = ReaderSpace.sm),
                 verticalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
             ) {
                 Text(

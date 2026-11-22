@@ -17,6 +17,8 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.ToggleButton
+import androidx.compose.material3.ToggleButtonDefaults
+import androidx.compose.material3.ToggleButtonColors
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -74,13 +76,26 @@ internal fun ArticleLayoutControl(layout: ArticleLayout, onLayout: (ArticleLayou
                 } else {
                     ButtonGroupDefaults.connectedTrailingButtonShapes()
                 },
-                colors = choiceColors(),
+                colors = layoutChoiceColors(),
                 contentPadding = PaddingValues(horizontal = ReaderSpace.sm, vertical = ReaderSpace.xxs),
             ) {
                 Text(option.label, style = MaterialTheme.typography.labelLarge)
             }
         }
     }
+}
+
+/** A view preference stays neutral; the accent is for choosing what to read. */
+@Composable
+private fun layoutChoiceColors(): ToggleButtonColors {
+    val scheme = MaterialTheme.colorScheme
+    if (scheme.isMonochrome) return choiceColors()
+    return ToggleButtonDefaults.colors(
+        containerColor = Color.Transparent,
+        contentColor = scheme.onSurfaceVariant,
+        checkedContainerColor = scheme.surfaceContainerHighest,
+        checkedContentColor = scheme.onSurface,
+    )
 }
 
 private const val MIN_INLINE_HEIGHT_DP = 120

@@ -6,6 +6,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -54,7 +55,7 @@ class SettingsNavigationTest {
             }
         }
         compose.onNodeWithContentDescription("More options").performClick()
-        compose.onNodeWithText("Settings").performClick()
+        compose.onNode(hasText("Settings") and hasAnyAncestor(isPopup())).performClick()
     }
 
     @Test fun backFromTheCompleteSettingsScreenProtectsUnsavedChanges() {

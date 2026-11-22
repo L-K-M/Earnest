@@ -742,7 +742,7 @@ internal fun MainScaffold(
     }
 
     if (showSubscribe) {
-        SubscribeDialog(
+        SubscribeSheet(
             onDismiss = { showSubscribe = false },
             onSubscribe = { url, cadence ->
                 showSubscribe = false

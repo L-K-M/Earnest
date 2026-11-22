@@ -4,6 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.add
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -86,6 +88,7 @@ internal fun EarnestTopBar(
             BarNavigation.BACK -> ActionIconButton(EarnestIcons.Back, "Back", onNavigation)
         }
     }
+    val barInsets = TopAppBarDefaults.windowInsets.add(BarInset)
     when (size) {
         BarSize.LARGE -> LargeFlexibleTopAppBar(
             title = { BarTitle(title.title, maxLines = 2) },
@@ -95,6 +98,7 @@ internal fun EarnestTopBar(
             navigationIcon = navigationButton,
             actions = { actions?.let { BarActionButtons(it) } },
             colors = colors,
+            windowInsets = barInsets,
             scrollBehavior = scrollBehavior,
         )
         BarSize.SMALL -> TopAppBar(
@@ -102,9 +106,13 @@ internal fun EarnestTopBar(
             navigationIcon = navigationButton,
             actions = { actions?.let { BarActionButtons(it) } },
             colors = colors,
+            windowInsets = barInsets,
         )
     }
 }
+
+// A bar lays out 16dp from its edge; this brings it to the 20dp content gutter.
+private val BarInset = WindowInsets(left = ReaderSpace.gutter - ReaderSpace.md, right = ReaderSpace.gutter - ReaderSpace.md)
 
 @Composable
 private fun BarTitle(text: String, maxLines: Int) {

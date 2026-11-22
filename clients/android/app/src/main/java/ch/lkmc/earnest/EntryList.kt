@@ -504,7 +504,7 @@ private fun EmptyPlace(place: View, title: String, onBrowse: (() -> Unit)?) {
     when (place) {
         View.KEPT -> QuietState(
             "Your favorites belong here",
-            "Keep an article from its menu to find it here. Your favorites stay close at hand.",
+            "Tap Keep while you read, or pick it from an article's menu.",
             icon = EarnestIcons.KeptSelected, tone = tones.plum, actionLabel = browse, onAction = open,
         )
         View.LATER -> QuietState(
