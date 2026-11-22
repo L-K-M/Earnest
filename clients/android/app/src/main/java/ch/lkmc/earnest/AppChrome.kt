@@ -102,7 +102,7 @@ internal fun EarnestTopBar(
             scrollBehavior = scrollBehavior,
         )
         BarSize.SMALL -> TopAppBar(
-            title = { BarTitle(title.title, maxLines = 1) },
+            title = { SmallBarTitle(title.title) },
             navigationIcon = navigationButton,
             actions = { actions?.let { BarActionButtons(it) } },
             colors = colors,
@@ -118,6 +118,16 @@ private val BarInset = WindowInsets(left = ReaderSpace.gutter - ReaderSpace.md, 
 private fun BarTitle(text: String, maxLines: Int) {
     Text(text, maxLines = maxLines, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
 }
+
+/** A one-line title shares its row with the actions, so it stops growing before it truncates. */
+@Composable
+private fun SmallBarTitle(text: String) {
+    val density = LocalDensity.current
+    val titleDensity = Density(density.density, density.fontScale.coerceAtMost(BAR_TITLE_MAX_FONT_SCALE))
+    CompositionLocalProvider(LocalDensity provides titleDensity) { BarTitle(text, maxLines = 1) }
+}
+
+private const val BAR_TITLE_MAX_FONT_SCALE = 1.15f
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable

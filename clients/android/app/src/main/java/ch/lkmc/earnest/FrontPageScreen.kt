@@ -1,5 +1,6 @@
 package ch.lkmc.earnest
 
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -147,6 +148,8 @@ internal fun FrontPageScreen(
     }
 }
 
+private const val MASTHEAD_STACK_FONT_SCALE = 1.3f
+
 /** The dateline, the window and anything waiting to change the page. */
 @Composable
 private fun FrontPageMasthead(
@@ -159,8 +162,9 @@ private fun FrontPageMasthead(
     val page = state.page
     val quiet = MaterialTheme.typography.bodySmall
     Column(modifier.fillMaxWidth().padding(bottom = ReaderSpace.xxs), verticalArrangement = Arrangement.spacedBy(ReaderSpace.sm)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
+        val stacked = LocalDensity.current.fontScale > MASTHEAD_STACK_FONT_SCALE
+        val dateline = @Composable { lineModifier: Modifier ->
+            Column(lineModifier) {
                 page?.let {
                     val date = frontPageDate(it)
                     if (date.isNotBlank()) Text(date, style = StoryType.secondary, modifier = Modifier.semantics { heading() })
@@ -177,7 +181,19 @@ private fun FrontPageMasthead(
                     )
                 }
             }
+        }
+        val refresh = @Composable {
             QuietButton("Refresh", onRefresh, Modifier.testTag("front-refresh"), enabled = !state.loading, icon = EarnestIcons.Refresh)
+        }
+        // Beside Refresh, large text would break the date inside a word.
+        if (stacked) {
+            dateline(Modifier.fillMaxWidth())
+            refresh()
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                dateline(Modifier.weight(1f))
+                refresh()
+            }
         }
         ChoiceGroup(
             options = FrontPagePeriod.entries,

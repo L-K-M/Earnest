@@ -283,6 +283,35 @@ class MobileDesignTest {
 
     @Test
     @Config(sdk = [35], qualifiers = "w1200dp-h800dp")
+    fun leavingTheFrontPageOpensTheArticlePaneBesideTheList() {
+        content(width = 1200.dp) {
+            MainScaffold(
+                model = viewModel(), state = UiState(), theme = ThemeSetting.LIGHT,
+                onThemeChange = {}, initialEntry = null, notificationId = null, intentDelivery = 0,
+                notificationsDenied = false, onRequestNotifications = {},
+            )
+        }
+        compose.onNodeWithText("Articles").performClick()
+        compose.onNodeWithText("Ready when you are").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(sdk = [35], qualifiers = "w1200dp-h800dp")
+    fun feedsOffersNoEmptyArticlePane() {
+        content(width = 1200.dp) {
+            MainScaffold(
+                model = viewModel(), state = UiState(), theme = ThemeSetting.LIGHT,
+                onThemeChange = {}, initialEntry = null, notificationId = null, intentDelivery = 0,
+                notificationsDenied = false, onRequestNotifications = {},
+            )
+        }
+        compose.onNodeWithText("Articles").performClick()
+        compose.onNodeWithText("Feeds").performClick()
+        compose.onNodeWithText("Ready when you are").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(sdk = [35], qualifiers = "w1200dp-h800dp")
     fun wideSearchAndBackKeepTheOpenArticle() {
         var back: OnBackPressedDispatcher? = null
         val title = "An article to return to"

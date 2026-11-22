@@ -196,7 +196,7 @@ internal fun MainScaffold(
     // The newspaper owns the reading area; an original opens on the next
     // pane, with native Back restoring the paper even on a wide display.
     val navigator = rememberListDetailPaneScaffoldNavigator<Long>(
-        if (section.view == View.FRONT) directive.copy(maxHorizontalPartitions = 1) else directive,
+        if (section.view.singlePane) directive.copy(maxHorizontalPartitions = 1) else directive,
     )
     var showSettings by rememberSettingsOpen()
     val destination = navigator.currentDestination
@@ -225,7 +225,7 @@ internal fun MainScaffold(
     }
     val searchListFocused = section.view == View.SEARCH && !searchDetail
     val detailOnly = navigator.currentDestination?.pane == ListDetailPaneScaffoldRole.Detail &&
-        (section.view == View.FRONT || directive.maxHorizontalPartitions == 1) && !searchListFocused
+        (section.view.singlePane || directive.maxHorizontalPartitions == 1) && !searchListFocused
     // Entries reached through an agent's output (a notification, a deep link
     // of unknown origin, an agent-change notice) open with click-to-load
     // images; see AppViewModel.openEntry. The set is saved with the navigator's
@@ -389,15 +389,20 @@ internal fun MainScaffold(
         offerUndo(action.message) { model.undo(action) }
     }
 
+    // Navigation computes the panes from the directive of its moment, so it
+    // waits until the new place's directive has been composed.
+    var listVisit by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    LaunchedEffect(listVisit) {
+        if (listVisit > 0) navigator.navigateTo(ListDetailPaneScaffoldRole.List)
+    }
+
     fun selectView(destination: View) {
         model.beginListVisit()
         showSettings = false
         feedSelection = FeedSelection.All
         section = section.copy(view = destination)
-        scope.launch {
-            navigator.navigateTo(ListDetailPaneScaffoldRole.List)
-            drawerState.close()
-        }
+        listVisit++
+        scope.launch { drawerState.close() }
     }
 
     fun selectFeed(selection: FeedSelection) {
@@ -405,16 +410,14 @@ internal fun MainScaffold(
         showSettings = false
         feedSelection = selection
         section = section.copy(view = View.ALL)
-        scope.launch {
-            navigator.navigateTo(ListDetailPaneScaffoldRole.List)
-            drawerState.close()
-        }
+        listVisit++
+        scope.launch { drawerState.close() }
     }
 
     val underlyingView = if (section.view == View.SEARCH) searchReturn.view else section.view
     val windowSize = adaptiveInfo.windowSizeClass
     val shortWindow = !windowSize.isHeightAtLeastBreakpoint(WindowSizeClass.HEIGHT_DP_MEDIUM_LOWER_BOUND)
-    val besideList = directive.maxHorizontalPartitions > 1 && section.view != View.FRONT
+    val besideList = directive.maxHorizontalPartitions > 1
     val barSize = when {
         section.view == View.SEARCH || shortWindow || besideList -> BarSize.SMALL
         LocalDensity.current.fontScale >= LARGE_TITLE_MAX_FONT_SCALE -> BarSize.SMALL
@@ -749,6 +752,9 @@ internal fun MainScaffold(
         )
     }
 }
+
+/** The paper and the subscription list have nothing to show in an article pane. */
+private val View.singlePane: Boolean get() = this == View.FRONT || this == View.FEEDS
 
 /** Above this text size a collapsing title would take the screen from its content. */
 private const val LARGE_TITLE_MAX_FONT_SCALE = 1.5f

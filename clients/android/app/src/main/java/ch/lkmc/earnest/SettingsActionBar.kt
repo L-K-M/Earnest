@@ -1,5 +1,6 @@
 package ch.lkmc.earnest
 
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -36,6 +37,8 @@ internal data class DraftActions(
 @Composable
 internal fun SettingsActionBar(actions: DraftActions, modifier: Modifier = Modifier, saveModifier: Modifier = Modifier) {
     val scheme = MaterialTheme.colorScheme
+    // At large text its line would double the bar's height over the form.
+    val showStatus = LocalDensity.current.fontScale <= DRAFT_STATUS_MAX_FONT_SCALE
     Surface(
         modifier.fillMaxWidth().padding(horizontal = ReaderSpace.sm, vertical = ReaderSpace.xs),
         shape = MaterialTheme.shapes.extraLarge,
@@ -44,15 +47,17 @@ internal fun SettingsActionBar(actions: DraftActions, modifier: Modifier = Modif
     ) {
         FlowRow(
             Modifier.fillMaxWidth().padding(ReaderSpace.xs),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = if (showStatus) Arrangement.SpaceBetween else Arrangement.End,
             itemVerticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                draftStatus(actions),
-                style = MaterialTheme.typography.bodyMedium,
-                color = scheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = ReaderSpace.sm),
-            )
+            if (showStatus) {
+                Text(
+                    draftStatus(actions),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = scheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = ReaderSpace.sm),
+                )
+            }
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs, Alignment.End),
                 itemVerticalAlignment = Alignment.CenterVertically,
@@ -64,6 +69,8 @@ internal fun SettingsActionBar(actions: DraftActions, modifier: Modifier = Modif
         }
     }
 }
+
+private const val DRAFT_STATUS_MAX_FONT_SCALE = 1.3f
 
 private fun draftStatus(actions: DraftActions): String = when {
     actions.working -> "Working…"

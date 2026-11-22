@@ -1,5 +1,7 @@
 package ch.lkmc.earnest
 
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -98,6 +100,9 @@ private const val MIN_MEASURE = 62L
 private const val MAX_MEASURE = 72L
 private const val MEASURE_STEPS = 9
 private const val LOAD_DISPATCH_GRACE_MS = 300L
+private const val CATEGORY_PIN_MAX_FONT_SCALE = 1.5f
+// Phones in landscape; the smallest portrait phones still pin the switch.
+private val ShortSettingsHeight = 440.dp
 
 private val OverrideAvatarSize = 32.dp
 private val FeedPickerListHeight = 280.dp
@@ -161,6 +166,34 @@ internal fun SettingsScreen(
         }
     }
 
+    // A short window or very large text needs the height for the form itself.
+    val density = LocalDensity.current
+    val windowHeight = with(density) { LocalWindowInfo.current.containerSize.height.toDp() }
+    val categoriesScroll = windowHeight < ShortSettingsHeight || density.fontScale > CATEGORY_PIN_MAX_FONT_SCALE
+    val categorySwitch = @Composable {
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+            FlowRow(
+                Modifier.widthIn(max = ReaderSpace.formWidth).fillMaxWidth()
+                    .selectableGroup()
+                    .padding(horizontal = ReaderSpace.md, vertical = ReaderSpace.xs),
+                horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+                verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+            ) {
+                SettingsCategory.entries.forEach { option ->
+                    ReaderFilterChip(
+                        selected = category == option,
+                        onClick = {
+                            if (option != category) {
+                                if (dirty) pendingCategory = option else category = option
+                            }
+                        },
+                        label = { Text(option.label) },
+                    )
+                }
+            }
+        }
+    }
+
     Column(modifier.fillMaxSize()) {
         TopAppBar(
             title = {
@@ -183,30 +216,11 @@ internal fun SettingsScreen(
             // The parent scaffold already applies the window insets.
             windowInsets = WindowInsets(0, 0, 0, 0),
         )
-        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-            FlowRow(
-                Modifier.widthIn(max = ReaderSpace.formWidth).fillMaxWidth()
-                    .selectableGroup()
-                    .padding(horizontal = ReaderSpace.md, vertical = ReaderSpace.xs),
-                horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
-                verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
-            ) {
-                SettingsCategory.entries.forEach { option ->
-                    ReaderFilterChip(
-                        selected = category == option,
-                        onClick = {
-                            if (option != category) {
-                                if (dirty) pendingCategory = option else category = option
-                            }
-                        },
-                        label = { Text(option.label) },
-                    )
-                }
-            }
-        }
+        if (!categoriesScroll) categorySwitch()
         // The form scrolls edge to edge; the side padding lives inside the
         // scroll, so group surfaces keep their corners at the viewport edge.
         Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(categoryScroll)) {
+            if (categoriesScroll) categorySwitch()
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
                 Column(
                     Modifier.widthIn(max = ReaderSpace.formWidth).fillMaxWidth()

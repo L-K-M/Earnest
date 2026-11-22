@@ -1,5 +1,6 @@
 package ch.lkmc.earnest
 
+import androidx.compose.ui.platform.LocalDensity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -245,7 +246,8 @@ internal fun FeedsScreen(
                 // Material clears the label's semantics, expanded or not: the icon names the button.
                 icon = { Icon(EarnestIcons.Add, contentDescription = "Subscribe by URL") },
                 onClick = onSubscribe,
-                expanded = atTop,
+                // At large text the spelled-out button would cover the rows beneath it.
+                expanded = atTop && LocalDensity.current.fontScale <= SUBSCRIBE_LABEL_MAX_FONT_SCALE,
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary,
                 modifier = Modifier.align(Alignment.BottomEnd).padding(ReaderSpace.md),
@@ -258,6 +260,7 @@ internal fun FeedsScreen(
     }
 }
 
+private const val SUBSCRIBE_LABEL_MAX_FONT_SCALE = 1.3f
 private val GroupGap = 2.dp
 private val SubscribeClearance = 88.dp
 private val FolderHeadingHeight = 56.dp
