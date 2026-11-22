@@ -12,6 +12,7 @@ func TestDropUnusableSrcsets(t *testing.T) {
 		{name: "densities", srcset: "https://e.test/a.jpg, https://e.test/b.jpg 2x"},
 		{name: "single candidate", srcset: "https://e.test/a.jpg 2x"},
 		{name: "commas in paths", srcset: "https://e.test/w_424,c_limit/a.jpg 424w, https://e.test/w_848,c_limit/a.jpg 848w"},
+		{name: "name ending in a descriptor", srcset: "https://e.test/icon%202x, https://e.test/icon-large 2x"},
 
 		// What Earnest stored while it split srcset at every comma.
 		{name: "split query", drop: true, srcset: "https://e.test/a.jpg 6000w, https://e.test/a.jpg?resize=250, https://e.test/141 250w"},

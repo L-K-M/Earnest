@@ -109,8 +109,7 @@ func usableSrcset(raw string) bool {
 
 		density := 1.0
 		if candidate.descriptor == "" {
-			// Resolving a lone "a.png 2x" as one URL left "a.png%202x".
-			if i := strings.LastIndex(candidate.url, escapedSpace); i >= 0 && validDescriptor(candidate.url[i+len(escapedSpace):]) {
+			if len(candidates) == 1 && absorbedDescriptor(candidate.url) {
 				return false
 			}
 		} else {
@@ -127,4 +126,12 @@ func usableSrcset(raw string) bool {
 	}
 
 	return widths == 0 || widths == len(candidates)
+}
+
+// absorbedDescriptor reports whether resolving "a.png 2x" as one URL left
+// "a.png%202x". That only happened to a srcset without commas, so in a
+// longer list the ending is part of the name.
+func absorbedDescriptor(rawURL string) bool {
+	i := strings.LastIndex(rawURL, escapedSpace)
+	return i >= 0 && validDescriptor(rawURL[i+len(escapedSpace):])
 }
