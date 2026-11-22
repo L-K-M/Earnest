@@ -61,7 +61,7 @@ func Discover(page []byte, pageURL string) ([]DiscoveredFeed, error) {
 	var out []DiscoveredFeed
 	seen := make(map[string]bool)
 	add := func(f DiscoveredFeed) {
-		f.URL = CleanURL(f.URL)
+		f.URL = cleanFetchURL(f.URL)
 		if f.URL == "" || seen[f.URL] {
 			return
 		}

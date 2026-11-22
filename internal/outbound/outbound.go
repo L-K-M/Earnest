@@ -21,6 +21,8 @@ import (
 	"syscall"
 	"time"
 	"unicode"
+
+	"github.com/L-K-M/Earnest/internal/hostname"
 )
 
 const UserAgentFormat = "Earnest/%s (+https://github.com/L-K-M/Earnest)"
@@ -30,7 +32,7 @@ const defaultTimeout = 30 * time.Second
 const localhostName = "localhost"
 
 // credentialHeaders always count as credentials, as do Credentials.Headers.
-var credentialHeaders = []string{"Authorization", "Proxy-Authorization", "Cookie", "X-API-Key", "X-Goog-Api-Key"}
+var credentialHeaders = []string{"Authorization", "Proxy-Authorization", "Cookie", "X-API-Key", "X-Goog-Api-Key", "Webhook-Signature"}
 
 type Purpose string
 
@@ -229,8 +231,8 @@ func (c *Client) Do(request *http.Request, p Policy) (*Result, error) {
 		if err := validateURL(req.URL, p.ExtraPorts); err != nil {
 			return nil, err
 		}
-		if !c.AllowsCredentials(req.URL) && hasCredentialHeaders(req.Header, p.Credentials.Headers) {
-			return nil, classified(DeniedAddress, errors.New("credentials require HTTPS, loopback or an allowlisted host:port"))
+		if err := c.checkCleartext(req, p); err != nil {
+			return nil, err
 		}
 		if seen[req.URL.String()] {
 			return nil, classified(RedirectLoop, errors.New("redirect loop"))
@@ -337,6 +339,23 @@ func (c *Client) AllowsCredentials(u *url.URL) bool {
 	return c.allowlisted(net.JoinHostPort(host, port))
 }
 
+// checkCleartext refuses a hop that would send a secret over untrusted HTTP.
+// Only feed URLs are searched for query secrets: you supply those, while the
+// tokens in image, icon and article URLs are the publisher's for every reader.
+func (c *Client) checkCleartext(req *http.Request, p Policy) error {
+	if c.AllowsCredentials(req.URL) {
+		return nil
+	}
+	if hasCredentialHeaders(req.Header, p.Credentials.Headers) {
+		return classified(DeniedAddress, errors.New("credentials require HTTPS, loopback or an allowlisted host:port"))
+	}
+	if (p.Purpose == Feed || p.Purpose == Discovery) && HasQuerySecret(req.URL) {
+		return classified(DeniedAddress, errors.New("secrets in feed URLs require HTTPS, loopback or an allowlisted host:port"))
+	}
+
+	return nil
+}
+
 func (c *Client) allowlisted(hostport string) bool {
 	return slices.ContainsFunc(c.config.AllowHosts, func(entry string) bool { return strings.EqualFold(entry, hostport) })
 }
@@ -378,7 +397,7 @@ func origin(u *url.URL) string {
 			port = "80"
 		}
 	}
-	return strings.ToLower(u.Scheme) + "://" + net.JoinHostPort(strings.ToLower(u.Hostname()), port)
+	return strings.ToLower(u.Scheme) + "://" + net.JoinHostPort(hostname.Lower(u.Hostname()), port)
 }
 func isRedirect(code int) bool {
 	return code == 301 || code == 302 || code == 303 || code == 307 || code == 308

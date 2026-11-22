@@ -389,6 +389,12 @@ internal fun MainScaffold(
         offerUndo(action.message) { model.undo(action) }
     }
 
+    /** Marks [entryId] unread, which also withdraws the mark its open still owes. */
+    fun markUnread(entryId: Long) {
+        if (readOnLoad == entryId) readOnLoad = null
+        model.markUnread(entryId, undoable)
+    }
+
     // Navigation computes the panes from the directive of its moment, so it
     // waits until the new place's directive has been composed.
     var listVisit by remember { androidx.compose.runtime.mutableIntStateOf(0) }
@@ -639,7 +645,7 @@ internal fun MainScaffold(
                                     onDone = { id -> model.done(id, undoable) },
                                     onKeep = { id -> model.keep(id, undoable) },
                                     onUnkeep = { id -> model.unkeep(id, undoable) },
-                                    onMarkUnread = { id -> model.markUnread(id, undoable) },
+                                    onMarkUnread = ::markUnread,
                                     accountKey = state.accountKey,
                                     // Wide screens keep the existing side-by-side reader.
                                     layoutOverride = ArticleLayout.HEADLINES.takeIf { directive.maxHorizontalPartitions > 1 },
@@ -702,7 +708,7 @@ internal fun MainScaffold(
                                                 articleActions = articleActions(neighbour, turn),
                                                 findOpen = findOpen,
                                                 onFindOpen = { findOpen = it },
-                                                onMarkUnread = { model.markUnread(entry.id, undoable) },
+                                                onMarkUnread = { markUnread(entry.id) },
                                                 onRetry = { readerRetry++ },
                                                 onNotify = { scope.launch { snackbar.showSnackbar(it) } },
                                                 onBack = if (readerFills) ({ scope.launch { navigator.navigateBack() } }) else null,

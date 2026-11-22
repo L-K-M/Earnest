@@ -4,6 +4,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/L-K-M/Earnest/internal/hostname"
 )
 
 // ResolveURL resolves ref against base following RFC 3986, which handles
@@ -53,7 +55,14 @@ func absURL(base, ref string) string {
 // no fragment, dot segments removed, tracking parameters dropped and the
 // remaining query parameters sorted. The path keeps its case and trailing
 // slash; percent-encoding is left as written.
-func CleanURL(raw string) string {
+func CleanURL(raw string) string { return cleanURL(raw, strings.ToLower) }
+
+// cleanFetchURL is CleanURL for a URL that will be fetched, where only ASCII
+// case may be folded: IDNA can dial another server for a Unicode-folded name.
+// CleanURL cannot follow, because stored entry identities depend on it.
+func cleanFetchURL(raw string) string { return cleanURL(raw, hostname.Lower) }
+
+func cleanURL(raw string, foldHost func(string) string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return ""
@@ -66,7 +75,7 @@ func CleanURL(raw string) string {
 	if scheme != "http" && scheme != "https" {
 		return ""
 	}
-	host := strings.ToLower(u.Hostname())
+	host := foldHost(u.Hostname())
 	if host == "" {
 		return ""
 	}

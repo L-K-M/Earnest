@@ -428,6 +428,14 @@ struct ReaderPreferencesScope: Equatable {
         }
     }
 
+    /// Counts an article's Mark as Unread actions, in any window, so a load
+    /// that began earlier knows not to mark it read.
+    private(set) var unreadMarks: [Int64: Int] = [:]
+
+    func noteMarkedUnread(_ entryID: Int64) {
+        unreadMarks[entryID, default: 0] += 1
+    }
+
     func reloadLists() {
         for window in windows { window.requestListReload() }
         scheduleSync()

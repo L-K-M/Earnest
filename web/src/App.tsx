@@ -353,6 +353,7 @@ function Session({onLogout}: {onLogout: () => void}) {
   const actions: ReaderActions = {
     deleted: sync.deleted,
     state: entry => sync.state(entry),
+    seenChoices: sync.seenChoices,
     act: async (entry, register, value, kind = 'explicit') => {
       const before = sync.state(entry)
       await sync.act(entry, register, value, kind)

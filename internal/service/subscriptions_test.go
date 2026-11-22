@@ -27,6 +27,8 @@ func TestNormalizedFeedURLDefaultPorts(t *testing.T) {
 		{"https://example.test:80/feed", "https://example.test:80/feed"},
 		{"http://example.test:443/feed", "http://example.test:443/feed"},
 		{"https://example.test:8443/feed", "https://example.test:8443/feed"},
+		// Only ASCII case folds: IDNA dials wİki.test and wiki.test separately.
+		{"https://WİKI.test/feed", "https://w%C4%B0ki.test/feed"},
 	} {
 		t.Run(tc.raw, func(t *testing.T) {
 			got, err := normalizedFeedURL(tc.raw)
@@ -34,6 +36,20 @@ func TestNormalizedFeedURLDefaultPorts(t *testing.T) {
 				t.Fatalf("normalized URL = %q, want %q: %v", got, tc.want, err)
 			}
 		})
+	}
+}
+
+func TestSubscribeCredentialsStayOffLookAlikeHost(t *testing.T) {
+	f := newCoreFixture(t, storetest.NewTemplate(t))
+	f.s.prober = &subscriptionsProber{probe: func(context.Context, string, *FeedCredentials) (string, FeedMeta, []IngestItem, error) {
+		return "https://wİki.test/feed", FeedMeta{}, nil, nil
+	}}
+	_, err := f.s.Subscribe(t.Context(), f.a, "https://wiki.test/page", SubscribeOptions{
+		OpID:        "look-alike",
+		Credentials: &FeedCredentials{Username: "reader", Password: "very-secret"},
+	})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("accepted credentials for a feed on a look-alike host: %v", err)
 	}
 }
 

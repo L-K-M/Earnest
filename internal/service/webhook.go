@@ -213,6 +213,16 @@ func (s *Service) checkWebhookOwner(ctx context.Context, a Actor) error {
 	return nil
 }
 
+// validateSignatureTransport refuses a destination that deliveries could not
+// reach, as each carries a signature.
+func (s *Service) validateSignatureTransport(rawURL string) error {
+	if credentialsMayTravel(s.outbound, rawURL) {
+		return nil
+	}
+
+	return fmt.Errorf("webhook signatures %s: %w", credentialTransportRule, ErrInvalid)
+}
+
 // Webhooks lists the user's destinations in stable ID order.
 func (s *Service) Webhooks(ctx context.Context, a Actor) ([]Webhook, error) {
 	if err := s.checkWebhookOwner(ctx, a); err != nil {
@@ -265,6 +275,9 @@ func (s *Service) CreateWebhook(ctx context.Context, a Actor, in WebhookInput, o
 			out.Secret = ""
 			return json.Unmarshal(replay, &out.Webhook)
 		}
+		if err := s.validateSignatureTransport(in.URL); err != nil {
+			return err
+		}
 		err = tx.QueryRow(ctx, `INSERT INTO webhooks(user_id,created_by,url,secret_encrypted,events,rev)
    VALUES($1,$2,$3,$4,$5,1) RETURNING id,created_at`,
 			a.UserID, a.PrincipalID, in.URL, sealed, in.Events).Scan(&out.ID, &out.CreatedAt)
@@ -311,7 +324,7 @@ func (s *Service) UpdateWebhook(ctx context.Context, a Actor, id int64, patch We
 		if err := tx.QueryRow(ctx, "SELECT url,events,active FROM webhooks WHERE user_id=$1 AND id=$2 FOR UPDATE", a.UserID, id).Scan(&url, &out.Events, &out.Active); err != nil {
 			return domainError(err)
 		}
-		events, active := out.Events, out.Active
+		previousURL, events, active := url, out.Events, out.Active
 		if patch.URL != nil {
 			url = *patch.URL
 		}
@@ -320,6 +333,11 @@ func (s *Service) UpdateWebhook(ctx context.Context, a Actor, id int64, patch We
 		}
 		if patch.Active != nil {
 			active = *patch.Active
+		}
+		if url != previousURL || (active && !out.Active) {
+			if err := s.validateSignatureTransport(url); err != nil {
+				return err
+			}
 		}
 		if err := tx.QueryRow(ctx, `UPDATE webhooks SET url=$3,events=$4,active=$5,rev=rev+1,
    consecutive_failures=CASE WHEN $5 AND NOT active THEN 0 ELSE consecutive_failures END

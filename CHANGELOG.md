@@ -105,6 +105,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Android article text follows the system font size, Back closes the drawer
   instead of the app, healthy feeds no longer report a failed fetch, and
   Articles on a wide screen opens with the reader pane beside the list.
+- Webhook signatures, and secrets in feed URLs such as `?token=`, no longer
+  travel over plain HTTP to hosts outside `EARNEST_OUTBOUND_ALLOW_PRIVATE`.
+  On upgrade, such feeds stop refreshing, and such webhooks are disabled
+  after five failed deliveries, which discards their pending ones. Use
+  HTTPS, or list the exact `host:port` and restart.
+- Settings refuse an integration or ntfy token, or a webhook, for a plain
+  HTTP host that couldn't receive it, instead of failing when it is used.
+- A redirect, discovered feed link or stored redirect to a look-alike
+  international domain, such as `wİki.test` for `wiki.test`, no longer
+  receives the original site's password, headers or token. Two Unicode
+  spellings of one domain now need their own credentials.
+- Feed discovery on an international domain, such as `wİki.test`, finds
+  that site's feeds instead of those of a look-alike such as `wiki.test`.
 - Credentials work over plain HTTP again for loopback and for exact hosts
   in `EARNEST_OUTBOUND_ALLOW_PRIVATE`, such as `hister:8080`. Other HTTP
   destinations still need HTTPS, and an LLM provider with a blocked key
@@ -117,6 +130,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until you open it. A link or notification no longer reopens its article
   after a rotation either, and tapping the same link again now opens it
   again.
+- Mark unread holds while an article is still opening, on Android, Mac and
+  the web. On the Mac it also holds through Load Images and retries, until
+  you open the article again.
 - Scrolling an Android list no longer marks articles read, so scrolling
   down and back up keeps their unread dots. As on the web, only opening an
   article, in the reader or by expanding it in Read in feed, marks it read.
@@ -125,6 +141,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The web reader hides the iframe's blank document between articles, and
   article error pages use the reading theme rather than a white background.
 - Web article titles open the original article in a new tab.
+- Article images whose `srcset` URLs contain commas, as on Hackaday, load
+  instead of leaving a blank gap and then a broken image. Articles already
+  stored with a damaged list show their regular image.
 - Article rows on the web, Mac and Android keep their height when an article
   is read. Each row reserves the lines its semibold unread title needs, so
   the narrower read title no longer shortens the row and moves the rows

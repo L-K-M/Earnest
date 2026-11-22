@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/L-K-M/Earnest/internal/hostname"
 )
 
 const (
@@ -36,7 +38,7 @@ func newClient(baseURL, token string) *client {
 			if !secureServerURL(req.URL) {
 				return errors.New("server redirect requires HTTPS outside loopback")
 			}
-			if len(via) > 0 && (req.URL.Scheme != via[0].URL.Scheme || !strings.EqualFold(req.URL.Host, via[0].URL.Host)) {
+			if len(via) > 0 && (req.URL.Scheme != via[0].URL.Scheme || !hostname.Equal(req.URL.Host, via[0].URL.Host)) {
 				return errors.New("server redirect changed origin")
 			}
 			return nil

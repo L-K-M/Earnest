@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"net/url"
 
 	"github.com/L-K-M/Earnest/internal/outbound"
@@ -14,4 +15,17 @@ const credentialTransportRule = "require HTTPS, or an exact host:port in EARNEST
 func credentialsMayTravel(client *outbound.Client, rawURL string) bool {
 	u, err := url.Parse(rawURL)
 	return err == nil && client.AllowsCredentials(u)
+}
+
+// validateQuerySecretTransport applies the same rule to a feed URL's query.
+func validateQuerySecretTransport(client *outbound.Client, rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("feed URL: %w", ErrInvalid)
+	}
+	if outbound.HasQuerySecret(u) && !client.AllowsCredentials(u) {
+		return fmt.Errorf("secrets in feed URLs %s: %w", credentialTransportRule, ErrInvalid)
+	}
+
+	return nil
 }

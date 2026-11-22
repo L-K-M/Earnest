@@ -64,7 +64,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   const listRef = useRef<HTMLDivElement>(null)
   const [scrollMargin, setScrollMargin] = useState(0)
   const heading = useRef<HTMLHeadingElement>(null)
-  const pending = useRef(new Map<number, {entry: Entry; seenRev: number}>())
+  const pending = useRef(new Map<number, {entry: Entry; seenRev: number; seenChoices: number | undefined}>())
   const focusNext = useRef<number | null>(null)
   const [error, setError] = useState('')
   const [cluster, setCluster] = useState(false)
@@ -224,7 +224,8 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
       for (const {entry, intent} of due) {
         if (inFlight.has(entry.id)) continue
         const state = actionsRef.current.state(entry).seen
-        if (state.rev !== intent.seenRev || state.value === 'seen') {
+        const chosenSince = actionsRef.current.seenChoices?.(entry) !== intent.seenChoices
+        if (chosenSince || state.rev !== intent.seenRev || state.value === 'seen') {
           pending.current.delete(entry.id)
           continue
         }
@@ -256,7 +257,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
   }, [key])
 
   const queueSeen = useCallback((entry: Entry) => {
-    pending.current.set(entry.id, {entry, seenRev: actionsRef.current.state(entry).seen.rev})
+    pending.current.set(entry.id, {entry, seenRev: actionsRef.current.state(entry).seen.rev, seenChoices: actionsRef.current.seenChoices?.(entry)})
   }, [])
 
   const open = useCallback((entry: Entry, mode?: OpenMode) => {

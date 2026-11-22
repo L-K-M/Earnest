@@ -16,6 +16,7 @@ import (
 
 	"github.com/L-K-M/Earnest/internal/extract"
 	"github.com/L-K-M/Earnest/internal/feed"
+	"github.com/L-K-M/Earnest/internal/hostname"
 	"github.com/L-K-M/Earnest/internal/metrics"
 	"github.com/L-K-M/Earnest/internal/outbound"
 	"github.com/L-K-M/Earnest/internal/sanitize"
@@ -547,7 +548,8 @@ type ProbeError struct {
 func (e *ProbeError) Error() string { return e.Class + ": " + e.Err.Error() }
 func (e *ProbeError) Unwrap() error { return e.Err }
 
-// parseOrigin returns the lowercase scheme://host:port of an absolute URL.
+// parseOrigin returns the scheme://host:port of an absolute URL, folding
+// only ASCII case in the host.
 // Default ports are made explicit so https://host and https://host:443 are
 // one origin; relative or malformed URLs report ok=false and compare unequal
 // to anything, so scoping fails closed.
@@ -565,7 +567,7 @@ func parseOrigin(raw string) (string, bool) {
 			port = "80"
 		}
 	}
-	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Hostname()) + ":" + port, true
+	return strings.ToLower(u.Scheme) + "://" + hostname.Lower(u.Hostname()) + ":" + port, true
 }
 
 func sameOrigin(a, b string) bool {
@@ -580,7 +582,6 @@ func sameOrigin(a, b string) bool {
 // Probe discovers a feed and returns its parsed, sanitised contents.
 func (f *Fetcher) Probe(ctx context.Context, rawURL string, creds *service.FeedCredentials) (string, service.FeedMeta, []service.IngestItem, error) {
 	urls := []string{rawURL}
-	original, _ := url.Parse(rawURL)
 	seen := map[string]bool{}
 	var last error
 	for len(urls) > 0 && len(seen) < 32 {
@@ -590,9 +591,8 @@ func (f *Fetcher) Probe(ctx context.Context, rawURL string, creds *service.FeedC
 			continue
 		}
 		seen[target] = true
-		targetURL, _ := url.Parse(target)
 		var scoped *service.FeedCredentials
-		if original != nil && targetURL != nil && strings.EqualFold(original.Scheme, targetURL.Scheme) && strings.EqualFold(original.Host, targetURL.Host) {
+		if sameOrigin(rawURL, target) {
 			scoped = creds
 		}
 		r, err := f.client.Get(ctx, target, outbound.Policy{Purpose: outbound.Discovery, Credentials: credentials(scoped), ExtraPorts: f.config.ExtraPorts})

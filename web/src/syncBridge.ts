@@ -25,6 +25,9 @@ export function useReaderSync(identity: {user_id: number; principal_id: number} 
   const [attempt, setAttempt] = useState(0)
   const [, setRevision] = useState(0)
   const changes = useRef(onChanges)
+  // A queued write leaves the register's revision as it was, so a delayed
+  // passive write needs this to see a newer deliberate choice.
+  const seenChoices = useRef(new Map<number, number>())
   useEffect(() => {changes.current=onChanges},[onChanges])
   const userID=identity?.user_id
   const principal=identity?.principal_id
@@ -68,7 +71,10 @@ export function useReaderSync(identity: {user_id: number; principal_id: number} 
       if (!sync || !sync.hasEntry(BigInt(entry.id))) return entry.state
       return nativeState(sync.state(BigInt(principal ?? entry.state.principal),BigInt(entry.id)))
     },
+    seenChoices:(entry:Entry):number => seenChoices.current.get(entry.id) ?? 0,
     act:async (entry:Entry, register:Register, value:Value, kind:'explicit'|'passive'='explicit'):Promise<void> => {
+      // Before the first await, so no timer can run between choice and count.
+      if (register === 'seen' && kind === 'explicit') seenChoices.current.set(entry.id, (seenChoices.current.get(entry.id) ?? 0) + 1)
       const sync=runtime.current
       if (!sync) throw new Error('Reading state is not ready. Try again after sync opens.')
       if (!sync.status().bootstrapped) throw new Error('Reading state is being restored. Try again when sync finishes.')

@@ -26,6 +26,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/hkdf"
+
+	"github.com/L-K-M/Earnest/internal/hostname"
 )
 
 const (
@@ -249,9 +251,9 @@ func endpointOrigin(raw string) (string, error) {
 	scheme := strings.ToLower(u.Scheme)
 	port := u.Port()
 	if port != "" && !((scheme == "https" && port == "443") || (scheme == "http" && port == "80")) {
-		return scheme + "://" + net.JoinHostPort(strings.ToLower(u.Hostname()), port), nil
+		return scheme + "://" + net.JoinHostPort(hostname.Lower(u.Hostname()), port), nil
 	}
-	return scheme + "://" + strings.ToLower(u.Hostname()), nil
+	return scheme + "://" + hostname.Lower(u.Hostname()), nil
 }
 
 // encryptPayload encrypts plaintext per RFC 8291 with a fresh ephemeral key.

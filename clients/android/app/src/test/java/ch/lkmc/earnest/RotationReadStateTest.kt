@@ -13,6 +13,7 @@ import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -196,6 +197,33 @@ class RotationReadStateTest {
 
         markUnread(model)
         recreateAndExpectUnread(restoration, reloads = true, "rotating must not read the open article again")
+    }
+
+    @Test fun markingUnreadWhileTheArticleLoadsOutlastsTheLoad() {
+        app.setArticleLayout(ArticleLayout.HEADLINES)
+        val model = model()
+        compose.setContent { Screen(model) }
+        model.awaitAccount()
+        runBlocking(Dispatchers.IO) { model.loadEntry(ENTRY) }
+        model.markSeen(ENTRY)
+        awaitSeen()
+        compose.onNodeWithText("Articles").performClick()
+        compose.waitForIdle()
+
+        val loads = articleLoads()
+        // A load waits for the cache, as it does while a sync cycle writes to it.
+        runBlocking { SyncAccess.mutex.lock() }
+        try {
+            compose.onNodeWithText(TITLE).performClick()
+            compose.onNodeWithText("Opening article…").assertExists()
+            compose.onNodeWithContentDescription("Reader options").performClick()
+            compose.onNodeWithText("Mark unread").performClick()
+            compose.waitForIdle()
+        } finally {
+            SyncAccess.mutex.unlock()
+        }
+        compose.waitUntil(TIMEOUT_MS) { compose.waitForIdle(); articleLoads() > loads }
+        expectUnread("finishing the load must not undo mark unread")
     }
 
     @Test fun anArticleThatCannotLoadStaysUnreadUntilItDoes() {
