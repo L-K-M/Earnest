@@ -95,7 +95,7 @@ internal fun LlmServicesSection(
             "Server-wide settings. Add a provider, choose models, then enable the features you want.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = ReaderSpace.xxs),
+            modifier = Modifier.padding(start = ReaderSpace.xxs, end = ReaderSpace.xxs, bottom = ReaderSpace.sm),
         )
         if (current == null) {
             val failure = ui.error

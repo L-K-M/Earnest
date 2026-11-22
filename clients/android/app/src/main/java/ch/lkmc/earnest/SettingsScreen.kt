@@ -807,6 +807,7 @@ private fun ImportExportCategory(model: AppViewModel, state: UiState, importScop
                     onValueChange = { subscribeMissing = it },
                 ),
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(ReaderSpace.sm),
             ) {
                 Checkbox(
                     checked = subscribeMissing,

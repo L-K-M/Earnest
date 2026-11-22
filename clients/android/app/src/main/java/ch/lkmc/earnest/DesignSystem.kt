@@ -83,14 +83,6 @@ internal fun ReaderFilterChip(
     )
 }
 
-@Composable
-internal fun ScreenIntro(title: String, description: String, modifier: Modifier = Modifier) {
-    Column(modifier.fillMaxWidth().padding(vertical = ReaderSpace.md), verticalArrangement = Arrangement.spacedBy(ReaderSpace.xs)) {
-        Text(title, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
-        Text(description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
 internal enum class NoticeTone { INFO, ERROR, SUCCESS }
 
 /** Plain-language feedback, with text and semantics rather than color alone. */

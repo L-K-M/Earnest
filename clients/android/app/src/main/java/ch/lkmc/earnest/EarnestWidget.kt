@@ -2,35 +2,48 @@ package ch.lkmc.earnest
 
 import android.content.Context
 import android.content.Intent
+import androidx.compose.material3.ColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
-import androidx.glance.appwidget.action.actionStartActivity
+import androidx.glance.Image
+import androidx.glance.ImageProvider
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
+import androidx.glance.appwidget.action.actionStartActivity
+import androidx.glance.appwidget.appWidgetBackground
+import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
 import androidx.glance.appwidget.updateAll
 import androidx.glance.background
+import androidx.glance.color.ColorProvider
+import androidx.glance.layout.Alignment
 import androidx.glance.layout.Column
+import androidx.glance.layout.Row
+import androidx.glance.layout.Spacer
 import androidx.glance.layout.fillMaxSize
+import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.padding
+import androidx.glance.layout.size
+import androidx.glance.layout.width
+import androidx.glance.text.FontFamily
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
-import androidx.glance.unit.ColorProvider
 import ch.lkmc.earnest.core.CachedEntry
 import ch.lkmc.earnest.core.SyncSnapshot
 import ch.lkmc.earnest.db.AppDatabase
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
-import kotlinx.coroutines.CancellationException
 
 /**
  * The home-screen widget: the newest headlines and nothing else. It shows no
@@ -47,25 +60,42 @@ class EarnestWidget : GlanceAppWidget() {
     @Composable
     private fun Headlines(entries: List<CachedEntry>) {
         val context = LocalContext.current
+        val paper = dayNight { it.surface }
+        val ink = dayNight { it.onSurface }
+        val quiet = dayNight { it.onSurfaceVariant }
         Column(
             modifier = GlanceModifier
                 .fillMaxSize()
-                .background(ColorProvider(Color(0xFFFFFFFF)))
-                .padding(16.dp),
+                .appWidgetBackground()
+                .background(paper)
+                .cornerRadius(WidgetCorner)
+                .clickable(actionStartActivity(Intent(context, MainActivity::class.java)))
+                .padding(horizontal = ReaderSpace.md, vertical = ReaderSpace.sm),
         ) {
-            Text(
-                "Front page",
-                style = TextStyle(
-                    fontWeight = FontWeight.Bold,
-                    color = ColorProvider(Color(0xFF101418)),
-                ),
-            )
+            Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Image(ImageProvider(R.drawable.brand_icon), contentDescription = null, modifier = GlanceModifier.size(WidgetMark))
+                Spacer(GlanceModifier.width(ReaderSpace.xs))
+                Text(
+                    "Front page",
+                    style = TextStyle(color = ink, fontSize = WidgetTitle, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Serif),
+                    maxLines = 1,
+                )
+            }
+            if (entries.isEmpty()) {
+                Text(
+                    "No headlines yet. Open Earnest to sync.",
+                    style = TextStyle(color = quiet, fontSize = WidgetHeadline),
+                    modifier = GlanceModifier.padding(top = ReaderSpace.sm),
+                )
+            }
             entries.forEach { entry ->
                 Text(
                     entry.title,
-                    style = TextStyle(color = ColorProvider(Color(0xFF101418))),
+                    style = TextStyle(color = ink, fontSize = WidgetHeadline, fontFamily = FontFamily.Serif),
+                    maxLines = HEADLINE_LINES,
                     modifier = GlanceModifier
-                        .padding(top = 8.dp)
+                        .fillMaxWidth()
+                        .padding(top = ReaderSpace.sm)
                         .clickable(
                             actionStartActivity(
                                 Intent(context, MainActivity::class.java).apply {
@@ -77,8 +107,16 @@ class EarnestWidget : GlanceAppWidget() {
             }
         }
     }
-
 }
+
+// A widget lives on the home screen, so it follows the device rather than the app's theme.
+private fun dayNight(role: (ColorScheme) -> Color) = ColorProvider(day = role(LightColors), night = role(DarkColors))
+
+private val WidgetCorner = 24.dp
+private val WidgetMark = 24.dp
+private val WidgetTitle = 16.sp
+private val WidgetHeadline = 14.sp
+private const val HEADLINE_LINES = 2
 
 class EarnestWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = EarnestWidget()

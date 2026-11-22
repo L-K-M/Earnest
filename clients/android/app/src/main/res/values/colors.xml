@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="earnest_launcher_background">#FF07566E</color>
+    <!-- LightColors in Theme.kt, for what draws before Compose does. -->
+    <color name="earnest_window">#FFF8F6EF</color>
+    <color name="earnest_window_ink">#FF4A463C</color>
 </resources>
