@@ -59,7 +59,8 @@ Use these before adding a screen-local style:
   layout toggle stays neutral, so it does not compete with the shelf choice.
 - **Reader:** the tools take the article's canvas. Keep, Later, Done and Open
   original sit in thumb reach. A short window moves them into the reader's
-  menu to keep its height for the text.
+  menu to keep its height for the text, and keeps the byline as one line
+  that starts with Cached copy when it shows one.
 - **Drawer:** brand mark, places in their tones, feeds with their own marks
   and Settings pinned below the list.
 - **Feeds:** grouped rows by folder, each with one pace menu that explains
@@ -76,6 +77,8 @@ Use these before adding a screen-local style:
   the device rather than the app's theme.
 
 Focused search, settings and phone-reader screens hide primary navigation.
+Search and the phone reader keep the app's options in their menus. Notices
+sit above the reader's action bar and the subscribe button, never over them.
 Back returns to the previous reading place. Front page and Feeds use one pane
 on wide screens, as neither has anything to show in an article pane. A change
 of place navigates only after the new place's pane directive has been
@@ -86,8 +89,10 @@ articles cannot leave navigation history and the visible pane out of step.
 
 Article swipes follow the finger at a third of its speed, and a label at the
 uncovered edge names the move or says there is no article that way. The label
-fills and the device ticks at the 72dp threshold. Pull to refresh starts from
-an expanded title, so it never competes with expanding the title.
+fills and the device ticks at the 72dp threshold. Under a large title, pull
+to refresh starts once the title is expanded, so it never competes with
+expanding it. An empty list says it is fetching only during the account's
+first sync; later refreshes leave its empty state in place.
 
 ## Decisions in this redesign
 
@@ -167,9 +172,12 @@ main screens in dark, at 320dp with 200% text, in phone landscape and at
 1280x800dp, and the reader, lists or Feeds in e-ink and true black. Device
 sign-in was completed against that server. The widget was placed on the
 launcher, rendered in day and night, and opened the headline that was tapped.
+The cached-copy reader and the failed-refresh notice were seen offline.
 
-Not covered: physical devices, TalkBack speech, push delivery and OEM font
-or launcher differences. Do not infer them from these checks.
+Not covered: physical devices, Android before 16, TalkBack speech, push
+delivery, 600-840dp windows, AI settings with a configured provider, file
+pickers, the swipe gestures and OEM font or launcher differences. Do not
+infer them from these checks.
 
 ## References
 

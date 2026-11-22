@@ -452,6 +452,22 @@ internal fun MainScaffold(
         model.reloadList()
     }
 
+    val appOptions = AppOptions(
+        theme = theme,
+        onThemeChange = onThemeChange,
+        onSettings = { showSettings = true },
+        onSignOut = model::logout,
+        onEnableNotifications = onRequestNotifications.takeIf { notificationsDenied },
+    )
+    // The article reports its bar, which depends on its pane's height and on Find.
+    var actionBarShown by remember { mutableStateOf(false) }
+    val noticeClearance = when {
+        showSettings -> 0.dp
+        actionBarShown -> BottomControlClearance
+        section.view == View.FEEDS && !readerFills -> BottomControlClearance
+        else -> 0.dp
+    }
+
     ModalNavigationDrawer(
         drawerState = drawerState,
         // Closed-drawer edge gestures must not compete with article swipes.
@@ -510,27 +526,23 @@ internal fun MainScaffold(
                         onNavigation = {
                             if (searching) section = searchReturn else scope.launch { drawerState.open() }
                         },
-                        actions = if (searching) null else BarActions(
-                            onSearch = {
+                        actions = BarActions(
+                            options = appOptions,
+                            onSearch = if (searching) null else ({
                                 searchReturn = section
                                 searchDetail = false
                                 section = section.copy(view = View.SEARCH)
-                            },
-                            onSettings = { showSettings = true },
-                            onSignOut = model::logout,
-                            theme = theme,
-                            onThemeChange = onThemeChange,
-                            onRefresh = refreshList.takeIf { section.view != View.FRONT },
+                            }),
+                            onRefresh = refreshList.takeIf { !searching && section.view != View.FRONT },
                             refreshing = state.loading || (section.view == View.ACTIVITY && activityLoad == ActivityLoad.LOADING),
-                            onEnableNotifications = onRequestNotifications.takeIf { notificationsDenied },
                         ),
                         scrollBehavior = scrollBehavior.takeIf { barSize == BarSize.LARGE },
                     )
                 }
             },
             snackbarHost = {
-                // An article's action bar stays tappable under an Undo notice.
-                SnackbarHost(snackbar, Modifier.padding(bottom = if (readerFills && !shortWindow) ReaderActionClearance else 0.dp))
+                // An article's action bar and the subscribe button stay tappable under a notice.
+                SnackbarHost(snackbar, Modifier.padding(bottom = noticeClearance))
             },
         ) { padding ->
             Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()) {
@@ -619,7 +631,7 @@ internal fun MainScaffold(
                                 else -> key(section.view, feedSelection) { EntryListScreen(
                                     title = if (section.view == View.ALL) feedSelection.title(state.snapshot.objects) else section.view.label,
                                     destination = section.view,
-                                    loading = state.loading,
+                                    firstSync = state.loading && state.snapshot.cursor.generation.isEmpty(),
                                     onBrowse = { selectView(if (section.view == View.ALL) View.FEEDS else View.ALL) },
                                     entries = listEntries,
                                     readingState = feedReading,
@@ -712,7 +724,8 @@ internal fun MainScaffold(
                                                 onRetry = { readerRetry++ },
                                                 onNotify = { scope.launch { snackbar.showSnackbar(it) } },
                                                 onBack = if (readerFills) ({ scope.launch { navigator.navigateBack() } }) else null,
-                                                onSettings = if (readerFills) ({ showSettings = true }) else null,
+                                                appOptions = appOptions.takeIf { readerFills },
+                                                onActionBar = { actionBarShown = it },
                                             )
                                         }
                                     }
@@ -765,7 +778,7 @@ private val View.singlePane: Boolean get() = this == View.FRONT || this == View.
 /** Above this text size a collapsing title would take the screen from its content. */
 private const val LARGE_TITLE_MAX_FONT_SCALE = 1.5f
 
-private val ReaderActionClearance = 72.dp
+private val BottomControlClearance = 72.dp
 
 /** Pull to refresh, showing its indicator only for a pull and not for background syncs. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)

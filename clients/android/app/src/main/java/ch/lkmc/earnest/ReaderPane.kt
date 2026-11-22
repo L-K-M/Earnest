@@ -66,6 +66,7 @@ import kotlinx.serialization.json.JsonPrimitive
 private val ShortReaderHeight = 420.dp
 private const val HEADER_SHARE = 0.48f
 private const val TITLE_LINES = 4
+private const val CACHED_COPY = "Cached copy"
 private val SourceMarkSize = 20.dp
 private val ActionBarHeight = 64.dp
 private val ActionIndicatorWidth = 56.dp
@@ -121,9 +122,10 @@ internal fun ArticlePane(
     onMarkUnread: () -> Unit,
     onRetry: () -> Unit,
     onNotify: (String) -> Unit,
-    /** Null beside its list, where Back belongs to the list's chrome. */
+    /** Null beside its list, where Back and the app's options belong to the list's chrome. */
     onBack: (() -> Unit)?,
-    onSettings: (() -> Unit)?,
+    appOptions: AppOptions?,
+    onActionBar: (shown: Boolean) -> Unit,
 ) {
     val context = LocalContext.current
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -187,7 +189,7 @@ internal fun ArticlePane(
                         articleActions = articleActions,
                         titleModifier = Modifier.heightIn(max = headerMaxHeight).verticalScroll(rememberScrollState()),
                         onBack = onBack,
-                        onSettings = onSettings,
+                        appOptions = appOptions,
                         onOpenOriginal = openOriginalPage,
                         onCopyLink = {
                             original?.let { url ->
@@ -231,9 +233,19 @@ internal fun ArticlePane(
                 }
                 if (!findOpen && chrome == ReaderChrome.FULL) {
                     ReaderActionBar(shelf, canOpenOriginal = original != null, onOpenOriginal = openOriginalPage)
+                    ReportWhileShown(onActionBar)
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ReportWhileShown(report: (Boolean) -> Unit) {
+    val latest by rememberUpdatedState(report)
+    DisposableEffect(Unit) {
+        latest(true)
+        onDispose { latest(false) }
     }
 }
 
@@ -270,7 +282,7 @@ internal fun ReaderHeader(
     chrome: ReaderChrome = ReaderChrome.FULL,
     shelf: ReaderShelf? = null,
     onBack: (() -> Unit)? = null,
-    onSettings: (() -> Unit)? = null,
+    appOptions: AppOptions? = null,
 ) {
     val scheme = MaterialTheme.colorScheme
     val title = entry.title.ifBlank { "Untitled" }
@@ -285,7 +297,7 @@ internal fun ReaderHeader(
         ) {
             onBack?.let { ActionIconButton(EarnestIcons.Back, "Back", it) }
             Column(Modifier.weight(1f).padding(horizontal = ReaderSpace.sm)) {
-                if (onBack != null) {
+                if (onBack != null && chrome == ReaderChrome.FULL) {
                     Text("Article", style = MaterialTheme.typography.labelLarge, color = scheme.onSurfaceVariant, maxLines = 1)
                 }
                 if (chrome == ReaderChrome.SHORT) {
@@ -296,6 +308,7 @@ internal fun ReaderHeader(
                         overflow = TextOverflow.Ellipsis,
                         modifier = titleSemantics,
                     )
+                    ShortByline(entry, source, offlineCopy)
                 }
             }
             ActionIconButton(EarnestIcons.Search, "Find in article", onFind)
@@ -310,7 +323,7 @@ internal fun ReaderHeader(
                 onMarkUnread = onMarkUnread,
                 onSmallerText = onSmallerText,
                 onLargerText = onLargerText,
-                onSettings = onSettings,
+                appOptions = appOptions,
             )
         }
         if (chrome == ReaderChrome.FULL) {
@@ -334,12 +347,7 @@ internal fun ReaderHeader(
 
 @Composable
 private fun ArticleByline(entry: CachedEntry, source: String, sourceIcon: String?, offlineCopy: Boolean) {
-    val date = entryDateLabel(entry)
-    val meta = listOfNotNull(
-        source.takeIf { it.isNotBlank() },
-        date.takeIf { it.isNotBlank() },
-        "Cached copy".takeIf { offlineCopy },
-    )
+    val meta = articleOrigin(entry, source) + listOfNotNull(CACHED_COPY.takeIf { offlineCopy })
     if (meta.isEmpty()) return
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs)) {
         if (source.isNotBlank()) FeedAvatar(source, sourceIcon, size = SourceMarkSize)
@@ -354,6 +362,23 @@ private fun ArticleByline(entry: CachedEntry, source: String, sourceIcon: String
     }
 }
 
+/** One line for a short window, with the cached copy first so that it is never cut off. */
+@Composable
+private fun ShortByline(entry: CachedEntry, source: String, offlineCopy: Boolean) {
+    val meta = listOfNotNull(CACHED_COPY.takeIf { offlineCopy }) + articleOrigin(entry, source)
+    if (meta.isEmpty()) return
+    Text(
+        meta.joinToString(" · "),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+private fun articleOrigin(entry: CachedEntry, source: String): List<String> =
+    listOf(source, entryDateLabel(entry)).filter { it.isNotBlank() }
+
 @Composable
 private fun ReaderMenu(
     canOpen: Boolean,
@@ -365,9 +390,10 @@ private fun ReaderMenu(
     onMarkUnread: () -> Unit,
     onSmallerText: () -> Unit,
     onLargerText: () -> Unit,
-    onSettings: (() -> Unit)?,
+    appOptions: AppOptions?,
 ) {
     var open by remember { mutableStateOf(false) }
+    var choosingTheme by remember { mutableStateOf(false) }
     fun choose(action: () -> Unit): () -> Unit = {
         open = false
         action()
@@ -390,12 +416,13 @@ private fun ReaderMenu(
             AppMenuItem("Smaller text", choose(onSmallerText), EarnestIcons.TextSmaller)
             AppMenuItem("Larger text", choose(onLargerText), EarnestIcons.TextLarger)
             if (canUnread) AppMenuItem("Mark unread", choose(onMarkUnread), EarnestIcons.MarkUnread)
-            onSettings?.let {
+            appOptions?.let {
                 HorizontalDivider()
-                AppMenuItem("Settings", choose(it), EarnestIcons.Settings)
+                AppOptionItems(it, dismiss = { open = false }, chooseTheme = { choosingTheme = true })
             }
         }
     }
+    if (choosingTheme) appOptions?.let { AppThemeChooser(it) { choosingTheme = false } }
 }
 
 @Composable

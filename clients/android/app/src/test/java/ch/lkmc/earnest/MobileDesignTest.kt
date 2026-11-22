@@ -1,5 +1,7 @@
 package ch.lkmc.earnest
 
+import android.app.Application
+import androidx.test.core.app.ApplicationProvider
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
@@ -65,6 +67,10 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [35], qualifiers = "w320dp-h800dp")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class MobileDesignTest {
+    private companion object {
+        const val SETTLE_MS = 1_000L
+    }
+
     @get:Rule val compose = createComposeRule()
 
     private fun content(fontScale: Float = 1f, width: Dp = 320.dp, body: @Composable () -> Unit) {
@@ -91,6 +97,92 @@ class MobileDesignTest {
         assertTrue("reader options must not overflow at 200% text", tools.getUnclippedBoundsInRoot().right <= 320.dp)
         tools.performClick()
         compose.onNodeWithText("Share").assertIsDisplayed()
+    }
+
+    @Test fun aShortReaderStillSaysWhenItShowsACachedCopy() {
+        content {
+            ReaderHeader(
+                entry = CachedEntry(1, title = "An article worth reading"),
+                source = "A favorite publication", isRead = true, offlineCopy = true,
+                chrome = ReaderChrome.SHORT,
+                onOpenOriginal = {}, onCopyLink = {}, onShare = {}, onMarkUnread = {},
+                onFind = {}, onSmallerText = {}, onLargerText = {},
+            )
+        }
+        compose.onNodeWithText("Cached copy", substring = true).assertIsDisplayed()
+    }
+
+    @Test fun searchKeepsTheAppsOptions() {
+        content {
+            MainScaffold(
+                model = viewModel(), state = UiState(), theme = ThemeSetting.LIGHT,
+                onThemeChange = {}, initialEntry = null, notificationId = null, intentDelivery = 0,
+                notificationsDenied = true, onRequestNotifications = {},
+            )
+        }
+        compose.onNodeWithText("Articles").performClick()
+        compose.onNodeWithContentDescription("Search").performClick()
+        compose.onNodeWithContentDescription("More options").performClick()
+        listOf("Theme", "Enable notifications", "Settings", "Sign out").forEach {
+            compose.onNode(hasText(it) and hasAnyAncestor(isPopup())).assertExists()
+        }
+    }
+
+    @Test fun anArticleThatFillsTheWindowKeepsTheAppsOptions() {
+        val title = "An article that fills the window"
+        ApplicationProvider.getApplicationContext<Application>().setArticleLayout(ArticleLayout.HEADLINES)
+        content {
+            MainScaffold(
+                model = viewModel(), state = UiState(snapshot = SyncSnapshot(Revision("generation", 1), entries = listOf(CachedEntry(7, title = title)))), theme = ThemeSetting.LIGHT,
+                onThemeChange = {}, initialEntry = null, notificationId = null, intentDelivery = 0,
+                notificationsDenied = true, onRequestNotifications = {},
+            )
+        }
+        compose.onNodeWithText("Articles").performClick()
+        compose.onNodeWithText(title).performClick()
+        compose.onNodeWithContentDescription("Reader options").performClick()
+        listOf("Theme", "Enable notifications", "Settings", "Sign out").forEach {
+            compose.onNode(hasText(it) and hasAnyAncestor(isPopup())).assertExists()
+        }
+    }
+
+    @Test fun aRefreshDoesNotReplaceAnEmptyShelfsMessage() {
+        compose.mainClock.autoAdvance = false
+        content {
+            MainScaffold(
+                model = viewModel(), state = UiState(loading = true, snapshot = SyncSnapshot(Revision("generation", 1))), theme = ThemeSetting.LIGHT,
+                onThemeChange = {}, initialEntry = null, notificationId = null, intentDelivery = 0,
+                notificationsDenied = false, onRequestNotifications = {},
+            )
+        }
+        compose.mainClock.advanceTimeBy(SETTLE_MS)
+        compose.onNodeWithText("Saved").performClick()
+        compose.mainClock.advanceTimeBy(SETTLE_MS)
+        compose.onNodeWithText("Your favorites belong here").assertExists()
+        compose.onNodeWithText("Fetching your articles…").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(sdk = [35], qualifiers = "w1200dp-h800dp")
+    fun aNoticeLeavesTheActionBarUncoveredBesideTheList() {
+        val entry = CachedEntry(7, title = "An article beside the list", url = "https://example.test/article")
+        content(width = 1200.dp) {
+            MainScaffold(
+                model = viewModel(), state = UiState(snapshot = SyncSnapshot(Revision("generation", 1), entries = listOf(entry))), theme = ThemeSetting.LIGHT,
+                onThemeChange = {}, initialEntry = null, notificationId = null, intentDelivery = 0,
+                notificationsDenied = false, onRequestNotifications = {},
+            )
+        }
+        compose.onNodeWithText("Articles").performClick()
+        compose.onNodeWithText(entry.title).performClick()
+        compose.onNodeWithContentDescription("Reader options").performClick()
+        compose.onNodeWithText("Copy link").performClick()
+        compose.mainClock.autoAdvance = false
+        compose.mainClock.advanceTimeBy(SETTLE_MS)
+        val notice = compose.onNodeWithText("Link copied.").getUnclippedBoundsInRoot()
+        // The merged node is the whole action, not just its label.
+        val bar = compose.onNodeWithText("Open original").getUnclippedBoundsInRoot()
+        assertTrue("the notice ends at ${notice.bottom}, below the actions' top ${bar.top}", notice.bottom <= bar.top)
     }
 
     @Test fun settingsSaveStaysReachableWhileTheFormScrolls() {

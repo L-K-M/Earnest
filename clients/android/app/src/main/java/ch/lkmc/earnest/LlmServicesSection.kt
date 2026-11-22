@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -22,7 +21,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -30,7 +28,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -344,7 +341,7 @@ private fun ProvidersSection(
                     .map { it.task },
                 nameTaken = nameTaken,
                 expanded = invalid || key in open,
-                onExpanded = { onOpen(if (key in open) open - key else open + key) },
+                onExpanded = if (invalid) null else ({ onOpen(if (key in open) open - key else open + key) }),
                 onTransform = { onTransform(index, it) },
                 onRemove = { onRemove(index) },
                 onModels = { onModels(index) },
@@ -361,22 +358,30 @@ private fun ProviderCard(
     referencedBy: List<String>,
     nameTaken: Boolean,
     expanded: Boolean,
-    onExpanded: () -> Unit,
+    /** Null while the provider has a problem to fix, which is never folded away. */
+    onExpanded: (() -> Unit)?,
     onTransform: (LlmProviderDraft) -> Unit,
     onRemove: () -> Unit,
     onModels: () -> Unit,
 ) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(ReaderSpace.xs)) {
+        val fold = if (onExpanded == null) {
+            Modifier
+        } else {
+            Modifier.clickable(role = Role.Button, onClick = onExpanded)
+                .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
+        }
         val summary = @Composable { modifier: Modifier ->
             Row(
                 modifier.heightIn(min = TouchTarget)
-                    .clickable(role = Role.Button, onClick = onExpanded)
-                    .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
+                    .then(fold)
                     .padding(vertical = ReaderSpace.xxs),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(ReaderSpace.sm),
             ) {
-                Icon(if (expanded) EarnestIcons.ChevronUp else EarnestIcons.ChevronDown, contentDescription = null)
+                if (onExpanded != null) {
+                    Icon(if (expanded) EarnestIcons.ChevronUp else EarnestIcons.ChevronDown, contentDescription = null)
+                }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs)) {
                     Text(provider.name.ifBlank { "(unnamed provider)" }, style = MaterialTheme.typography.titleMedium)
                     KeyStatusPill(provider.apiKeyStatus())
@@ -559,12 +564,13 @@ private fun AddProviderDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            QuietButton(
+                "Add",
                 onClick = { onConfirm(name.trim(), preset.kind, baseUrl.trim()) },
                 enabled = name.trim().isNotEmpty() && name.trim() !in existing && baseUrl.trim().isNotEmpty(),
-            ) { Text("Add") }
+            )
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { QuietButton("Cancel", onDismiss) },
     )
 }
 
@@ -628,7 +634,7 @@ private fun DefaultModelPickerDialog(
                 if (draft.providers.isEmpty()) SupportingText("Add a provider to choose a model.")
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        confirmButton = { QuietButton("Close", onDismiss) },
     )
 }
 
@@ -773,15 +779,16 @@ private fun RouteTaskDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            QuietButton(
+                "Apply",
                 onClick = {
                     val mode = if (useDefault) LlmTaskMode.DEFAULT else LlmTaskMode.CUSTOM
                     onApply(LlmTaskRoute(taskName, provider, model, mode))
                 },
                 enabled = useDefault || (provider.isNotEmpty() && model.isNotEmpty()),
-            ) { Text("Apply") }
+            )
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { QuietButton("Cancel", onDismiss) },
     )
 }
 
@@ -916,7 +923,8 @@ private fun ModelDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            QuietButton(
+                "Apply",
                 onClick = {
                     onApply(
                         LlmModel(
@@ -924,7 +932,7 @@ private fun ModelDialog(
                             inputPer1m = input.trim(),
                             outputPer1m = output.trim(),
                             embeddingPer1m = embedding.trim(),
-                            dimensions = dimensionValue ?: return@TextButton,
+                            dimensions = dimensionValue ?: return@QuietButton,
                             truncatable = truncatable,
                             provider = provider.trim(),
                             supportsCustomDimensions = supportsCustom,
@@ -934,9 +942,9 @@ private fun ModelDialog(
                     )
                 },
                 enabled = problems.isEmpty(),
-            ) { Text("Apply") }
+            )
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { QuietButton("Cancel", onDismiss) },
     )
 }
 
@@ -1006,204 +1014,197 @@ private fun CatalogueDialog(
             tonalElevation = 6.dp,
         ) {
             Column(Modifier.heightIn(max = CatalogueHeight).fillMaxWidth()) {
-            Column(
-                Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())
-                    .padding(start = ReaderSpace.lg, top = ReaderSpace.lg, end = ReaderSpace.lg),
-            ) {
-                Text(
-                    if (task != null) "Models for ${task.label()}; $providerName" else "Models; $providerName",
-                    style = MaterialTheme.typography.titleLarge,
-                )
-                Text(
-                    "Choose a model for this provider. Changes are saved with your AI settings.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    label = { Text("Search models") },
-                    placeholder = { Text("Filter by ID or name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (task == null) {
-                    ChoiceGroup(
-                        options = listOf(LlmCapability.CHAT, LlmCapability.EMBEDDING),
-                        selected = capability,
-                        onSelect = {
-                            capability = it; selection = null; free = false; previousPrices = null
-                        },
-                        label = { if (it == LlmCapability.EMBEDDING) "Embedding" else "Text" },
+                Column(
+                    Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())
+                        .padding(start = ReaderSpace.lg, top = ReaderSpace.lg, end = ReaderSpace.lg),
+                ) {
+                    Text(
+                        if (task != null) "Models for ${task.label()}; $providerName" else "Models; $providerName",
+                        style = MaterialTheme.typography.titleLarge,
                     )
-                }
-                Spacer(Modifier.height(8.dp))
-                when {
-                    loading -> {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(Modifier.width(20.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("Fetching models…", style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                    stale -> {
-                        Text(
-                            "The provider details or settings revision changed; the earlier results were discarded.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        TextButton(onClick = { refresh++ }) { Text("Fetch again") }
-                    }
-                    discovery == null -> {
-                        Text(
-                            "Fetch the provider's catalogue to browse it.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(onClick = { refresh++ }) { Text("Fetch models") }
-                        }
-                    }
-                    discovery.error != null -> {
-                        NoticeBanner(discovery.error, tone = NoticeTone.ERROR)
-                        Text(
-                            "The configured and manual models are unchanged and stay available.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    Text(
+                        "Choose a model for this provider. Changes are saved with your AI settings.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        label = { Text("Search models") },
+                        placeholder = { Text("Filter by ID or name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (task == null) {
+                        ChoiceGroup(
+                            options = listOf(LlmCapability.CHAT, LlmCapability.EMBEDDING),
+                            selected = capability,
+                            onSelect = {
+                                capability = it; selection = null; free = false; previousPrices = null
+                            },
+                            label = { if (it == LlmCapability.EMBEDDING) "Embedding" else "Text" },
                         )
                     }
-                    else -> {
-                        if (shown.isEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    when {
+                        loading -> InlineProgress("Fetching models…")
+                        stale -> {
                             Text(
-                                if (models.isEmpty()) "The provider listed no models." else "No catalogue entries match the search.",
+                                "The provider details or settings revision changed; the earlier results were discarded.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            QuietButton("Fetch again", { refresh++ })
+                        }
+                        discovery == null -> {
+                            Text(
+                                "Fetch the provider's catalogue to browse it.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            QuietButton("Fetch models", { refresh++ })
+                        }
+                        discovery.error != null -> {
+                            NoticeBanner(discovery.error, tone = NoticeTone.ERROR)
+                            Text(
+                                "The configured and manual models are unchanged and stay available.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        LazyColumn(Modifier.heightIn(max = 220.dp).fillMaxWidth()) {
-                            items(shown, key = { it.id }) { entry ->
-                                val prefill = entry.reviewPrefill(providerName, capability)
-                                val identity = prefill.provider to prefill.name
-                                val existing = draft.models.firstOrNull { it.identity() == identity }
-                                val alreadyConfigured = existing != null
-                                val problems = entry.reviewProblems(
-                                    prefill,
-                                    configured - identity,
-                                    capability,
+                        else -> {
+                            if (shown.isEmpty()) {
+                                Text(
+                                    if (models.isEmpty()) "The provider listed no models." else "No catalogue entries match the search.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
-                                // A configured row is reusable only when its saved
-                                // metadata serves this capability; otherwise the
-                                // row opens the pane for explicit completion.
-                                val ready = existing?.usableFor(capability) ?: problems.isEmpty()
-                                CatalogueRow(
-                                    entry = entry,
-                                    configured = alreadyConfigured,
-                                    ready = ready,
-                                    selected = selection?.review?.name == entry.id,
-                                    onConfigure = {
-                                        selection = ModelSelection(entry, prefill.prefillSaved(existing, capability))
-                                        free = false
-                                        previousPrices = null
-                                    },
-                                    onUse = if (ready && (alreadyConfigured || room > 0)) {
-                                        {
-                                            onSelect(existing ?: prefill.toConfiguredModel(capability), false)
-                                            onDismiss()
-                                        }
-                                    } else {
-                                        null
-                                    },
+                            }
+                            LazyColumn(Modifier.heightIn(max = 220.dp).fillMaxWidth()) {
+                                items(shown, key = { it.id }) { entry ->
+                                    val prefill = entry.reviewPrefill(providerName, capability)
+                                    val identity = prefill.provider to prefill.name
+                                    val existing = draft.models.firstOrNull { it.identity() == identity }
+                                    val alreadyConfigured = existing != null
+                                    val problems = entry.reviewProblems(
+                                        prefill,
+                                        configured - identity,
+                                        capability,
+                                    )
+                                    // A configured row is reusable only when its saved
+                                    // metadata serves this capability; otherwise the
+                                    // row opens the pane for explicit completion.
+                                    val ready = existing?.usableFor(capability) ?: problems.isEmpty()
+                                    CatalogueRow(
+                                        entry = entry,
+                                        configured = alreadyConfigured,
+                                        ready = ready,
+                                        selected = selection?.review?.name == entry.id,
+                                        onConfigure = {
+                                            selection = ModelSelection(entry, prefill.prefillSaved(existing, capability))
+                                            free = false
+                                            previousPrices = null
+                                        },
+                                        onUse = if (ready && (alreadyConfigured || room > 0)) {
+                                            {
+                                                onSelect(existing ?: prefill.toConfiguredModel(capability), false)
+                                                onDismiss()
+                                            }
+                                        } else {
+                                            null
+                                        },
+                                    )
+                                }
+                            }
+                            if (hidden > 0) {
+                                Text(
+                                    "$hidden catalogue ${if (hidden == 1) "entry is" else "entries are"} hidden because " +
+                                        "the provider says ${if (hidden == 1) "it" else "they"} cannot do ${task?.capabilityLabel() ?: "that"} work.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
                         }
-                        if (hidden > 0) {
-                            Text(
-                                "$hidden catalogue ${if (hidden == 1) "entry is" else "entries are"} hidden because " +
-                                    "the provider says ${if (hidden == 1) "it" else "they"} cannot do ${task?.capabilityLabel() ?: "that"} work.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
                     }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                            OutlinedTextField(
-                                value = manualId,
-                                onValueChange = { manualId = it },
-                                label = { Text("Add model ID manually") },
-                                singleLine = true,
-                                modifier = Modifier.weight(1f),
-                            )
-                            TextButton(
-                                onClick = {
-                                    val id = manualId.trim()
-                                    if (id.isNotEmpty()) {
-                                        val existing = draft.models.firstOrNull { it.identity() == (providerName to id) }
-                                        selection = ModelSelection(null, LlmModelReview(name = id, provider = providerName).prefillSaved(existing, capability))
-                                        manualId = ""
-                                        free = false
-                                        previousPrices = null
-                                    }
-                                },
-                                enabled = manualId.isNotBlank(),
-                            ) { Text("Add") }
-                        }
-
-                selection?.let { current ->
-                    draft.models.firstOrNull { it.identity() == (current.review.provider to current.review.name) }?.let { existing ->
-                        val rates = if (capability == LlmCapability.EMBEDDING) {
-                            "embedding $${existing.embeddingPer1m}"
-                        } else {
-                            "input $${existing.inputPer1m}, output $${existing.outputPer1m}"
-                        }
-                        Text("Saved rates per 1M: $rates. Confirm prices for this use; other saved prices stay unchanged.", style = MaterialTheme.typography.bodySmall)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = manualId,
+                            onValueChange = { manualId = it },
+                            label = { Text("Add model ID manually") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                        QuietButton(
+                            "Add",
+                            onClick = {
+                                val id = manualId.trim()
+                                if (id.isNotEmpty()) {
+                                    val existing = draft.models.firstOrNull { it.identity() == (providerName to id) }
+                                    selection = ModelSelection(null, LlmModelReview(name = id, provider = providerName).prefillSaved(existing, capability))
+                                    manualId = ""
+                                    free = false
+                                    previousPrices = null
+                                }
+                            },
+                            enabled = manualId.isNotBlank(),
+                        )
                     }
-                    SelectionPane(
-                        model = model,
-                        state = state,
-                        providerIndex = providerIndex,
-                        providerName = providerName,
-                        providerKey = provider.discoveryFingerprint(),
-                        capability = capability,
-                        task = task,
-                        selection = current,
-                        free = free,
-                        configured = configured,
-                        room = room,
-                        onFreeChange = { value ->
-                            if (value) previousPrices = current.review
-                            selection = current.copy(review = current.review.freePriceChoice(capability, value, previousPrices))
-                            free = value
-                            if (!value) previousPrices = null
-                        },
-                        onReviewChange = { review ->
-                            selection = current.copy(review = review)
-                        },
-                        onApply = {
-                            // The pane is the explicit confirmation: its
-                            // completed review may fill a capability the saved
-                            // row lacks, while the view model preserves the
-                            // other side's saved rates.
-                            onSelect(current.review.toConfiguredModel(capability), true)
-                            onDismiss()
-                        },
-                        onDismiss = {
-                            selection = null
-                            free = false
-                            previousPrices = null
-                        },
-                    )
-                }
 
-            }
-            FlowRow(
-                Modifier.fillMaxWidth().padding(horizontal = ReaderSpace.sm, vertical = ReaderSpace.xs),
-                horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs, Alignment.End),
-            ) {
-                if (!loading) QuietButton(if (discovery?.error != null) "Retry" else "Refresh", { refresh++ })
-                QuietButton("Close", onDismiss)
-            }
+                    selection?.let { current ->
+                        draft.models.firstOrNull { it.identity() == (current.review.provider to current.review.name) }?.let { existing ->
+                            val rates = if (capability == LlmCapability.EMBEDDING) {
+                                "embedding $${existing.embeddingPer1m}"
+                            } else {
+                                "input $${existing.inputPer1m}, output $${existing.outputPer1m}"
+                            }
+                            Text("Saved rates per 1M: $rates. Confirm prices for this use; other saved prices stay unchanged.", style = MaterialTheme.typography.bodySmall)
+                        }
+                        SelectionPane(
+                            model = model,
+                            state = state,
+                            providerIndex = providerIndex,
+                            providerName = providerName,
+                            providerKey = provider.discoveryFingerprint(),
+                            capability = capability,
+                            task = task,
+                            selection = current,
+                            free = free,
+                            configured = configured,
+                            room = room,
+                            onFreeChange = { value ->
+                                if (value) previousPrices = current.review
+                                selection = current.copy(review = current.review.freePriceChoice(capability, value, previousPrices))
+                                free = value
+                                if (!value) previousPrices = null
+                            },
+                            onReviewChange = { review ->
+                                selection = current.copy(review = review)
+                            },
+                            onApply = {
+                                // The pane is the explicit confirmation: its
+                                // completed review may fill a capability the saved
+                                // row lacks, while the view model preserves the
+                                // other side's saved rates.
+                                onSelect(current.review.toConfiguredModel(capability), true)
+                                onDismiss()
+                            },
+                            onDismiss = {
+                                selection = null
+                                free = false
+                                previousPrices = null
+                            },
+                        )
+                    }
+
+                }
+                FlowRow(
+                    Modifier.fillMaxWidth().padding(horizontal = ReaderSpace.sm, vertical = ReaderSpace.xs),
+                    horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs, Alignment.End),
+                ) {
+                    if (!loading) QuietButton(if (discovery?.error != null) "Retry" else "Refresh", { refresh++ })
+                    QuietButton("Close", onDismiss)
+                }
             }
         }
     }
@@ -1412,11 +1413,7 @@ private fun SelectionPane(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             when {
-                check?.loading == true -> Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(Modifier.width(16.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Checking…", style = MaterialTheme.typography.bodySmall)
-                }
+                check?.loading == true -> InlineProgress("Checking…")
                 check?.error != null -> Text(check.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 check?.result != null -> {
                     val result = check.result
@@ -1426,13 +1423,13 @@ private fun SelectionPane(
                             style = MaterialTheme.typography.bodySmall,
                         )
                         if (result.compatible && (result.dimensions != null || result.supportsCustomDimensions != null)) {
-                            TextButton(onClick = {
+                            QuietButton("Use observed geometry", {
                                 val next = review.copy(
                                     dimensions = result.dimensions?.toString() ?: review.dimensions,
                                     supportsCustomDimensions = result.supportsCustomDimensions ?: review.supportsCustomDimensions,
                                 )
                                 onReviewChange(next)
-                            }) { Text("Use observed geometry") }
+                            })
                         }
                     }
                 }
@@ -1443,7 +1440,8 @@ private fun SelectionPane(
                 horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs, Alignment.End),
             ) {
                 QuietButton("Cancel", onDismiss)
-                TextButton(
+                QuietButton(
+                    "Check model",
                     onClick = {
                         // A no-context selection checks chat; a task context
                         // always has a concrete capability.
@@ -1458,7 +1456,7 @@ private fun SelectionPane(
                     enabled = check?.loading != true && review.name.isNotBlank() &&
                         (if (embedding) ch.lkmc.earnest.core.validLlmMoney(review.embedding) else true) &&
                         (if (chat) ch.lkmc.earnest.core.validLlmMoney(review.input) && ch.lkmc.earnest.core.validLlmMoney(review.output) else true),
-                ) { Text("Check model") }
+                )
                 SecondaryButton(
                     if (task != null) "Use for ${task.label()}" else "Add to draft",
                     onApply,

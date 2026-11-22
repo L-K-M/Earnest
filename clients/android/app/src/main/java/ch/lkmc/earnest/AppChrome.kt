@@ -58,18 +58,24 @@ internal data class ScreenTitle(val title: String, val subtitle: String? = null)
 
 internal enum class BarNavigation { DRAWER, BACK }
 
-/** What the bar offers at its end. Search and Settings are on every main screen. */
-internal data class BarActions(
-    val onSearch: () -> Unit,
-    val onSettings: () -> Unit,
-    val onSignOut: () -> Unit,
+/** The app's own commands, offered wherever you are outside Settings. */
+internal data class AppOptions(
     val theme: ThemeSetting,
     val onThemeChange: (ThemeSetting) -> Unit,
-    /** Null where the screen carries its own refresh, as the front page does. */
-    val onRefresh: (() -> Unit)?,
-    val refreshing: Boolean,
+    val onSettings: () -> Unit,
+    val onSignOut: () -> Unit,
     /** Present only while Android withholds the notification permission. */
     val onEnableNotifications: (() -> Unit)?,
+)
+
+/** What the bar offers at its end. */
+internal data class BarActions(
+    val options: AppOptions,
+    /** Null on Search itself. */
+    val onSearch: (() -> Unit)?,
+    /** Null on Search, and where the screen carries its own refresh, as the front page does. */
+    val onRefresh: (() -> Unit)?,
+    val refreshing: Boolean,
 )
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
@@ -79,8 +85,7 @@ internal fun EarnestTopBar(
     size: BarSize,
     navigation: BarNavigation,
     onNavigation: () -> Unit,
-    /** Null on a focused screen, such as Search. */
-    actions: BarActions?,
+    actions: BarActions,
     scrollBehavior: TopAppBarScrollBehavior?,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -99,7 +104,7 @@ internal fun EarnestTopBar(
                 { Text(subtitle, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis) }
             },
             navigationIcon = navigationButton,
-            actions = { actions?.let { BarActionButtons(it) } },
+            actions = { BarActionButtons(actions) },
             colors = colors,
             windowInsets = barInsets,
             scrollBehavior = scrollBehavior,
@@ -107,7 +112,7 @@ internal fun EarnestTopBar(
         BarSize.SMALL -> TopAppBar(
             title = { SmallBarTitle(title.title) },
             navigationIcon = navigationButton,
-            actions = { actions?.let { BarActionButtons(it) } },
+            actions = { BarActionButtons(actions) },
             colors = colors,
             windowInsets = barInsets,
         )
@@ -145,7 +150,7 @@ private val BarTitleMinSize = 16.sp
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun BarActionButtons(actions: BarActions) {
-    ActionIconButton(EarnestIcons.Search, "Search", actions.onSearch)
+    actions.onSearch?.let { ActionIconButton(EarnestIcons.Search, "Search", it) }
     actions.onRefresh?.let { refresh ->
         if (actions.refreshing) {
             Box(Modifier.size(TouchTarget).semantics { contentDescription = "Refreshing" }, contentAlignment = Alignment.Center) {
@@ -155,11 +160,11 @@ private fun BarActionButtons(actions: BarActions) {
             ActionIconButton(EarnestIcons.Refresh, "Refresh", refresh)
         }
     }
-    OverflowMenu(actions)
+    OverflowMenu(actions.options)
 }
 
 @Composable
-private fun OverflowMenu(actions: BarActions) {
+private fun OverflowMenu(options: AppOptions) {
     var open by remember { mutableStateOf(false) }
     var choosingTheme by remember { mutableStateOf(false) }
     // The menu anchors to this Box, beside the button rather than inside the
@@ -167,30 +172,38 @@ private fun OverflowMenu(actions: BarActions) {
     Box {
         ActionIconButton(EarnestIcons.More, "More options", { open = true })
         AppMenu(open, { open = false }) {
-            AppMenuItem(
-                "Theme",
-                { open = false; choosingTheme = true },
-                EarnestIcons.Theme,
-                supporting = actions.theme.label,
-            )
-            actions.onEnableNotifications?.let { enable ->
-                AppMenuItem("Enable notifications", { open = false; enable() }, EarnestIcons.Bell)
-            }
-            AppMenuItem("Settings", { open = false; actions.onSettings() }, EarnestIcons.Settings)
-            HorizontalDivider(Modifier.padding(vertical = ReaderSpace.xxs))
-            AppMenuItem("Sign out", { open = false; actions.onSignOut() }, EarnestIcons.SignOut, role = MenuRole.DESTRUCTIVE)
+            AppOptionItems(options, dismiss = { open = false }, chooseTheme = { choosingTheme = true })
         }
     }
-    if (choosingTheme) {
-        ThemeDialog(
-            current = actions.theme,
-            onDismiss = { choosingTheme = false },
-            onSelect = { setting ->
-                choosingTheme = false
-                actions.onThemeChange(setting)
-            },
-        )
+    if (choosingTheme) AppThemeChooser(options) { choosingTheme = false }
+}
+
+/** [AppOptions] as menu items. The menu's owner shows [AppThemeChooser], which outlives the menu. */
+@Composable
+internal fun AppOptionItems(options: AppOptions, dismiss: () -> Unit, chooseTheme: () -> Unit) {
+    fun choose(action: () -> Unit): () -> Unit = {
+        dismiss()
+        action()
     }
+    AppMenuItem("Theme", choose(chooseTheme), EarnestIcons.Theme, supporting = options.theme.label)
+    options.onEnableNotifications?.let {
+        AppMenuItem("Enable notifications", choose(it), EarnestIcons.Bell)
+    }
+    AppMenuItem("Settings", choose(options.onSettings), EarnestIcons.Settings)
+    HorizontalDivider(Modifier.padding(vertical = ReaderSpace.xxs))
+    AppMenuItem("Sign out", choose(options.onSignOut), EarnestIcons.SignOut, role = MenuRole.DESTRUCTIVE)
+}
+
+@Composable
+internal fun AppThemeChooser(options: AppOptions, onDismiss: () -> Unit) {
+    ThemeDialog(
+        current = options.theme,
+        onDismiss = onDismiss,
+        onSelect = { setting ->
+            onDismiss()
+            options.onThemeChange(setting)
+        },
+    )
 }
 
 /** One destination in the bottom bar or the rail. */

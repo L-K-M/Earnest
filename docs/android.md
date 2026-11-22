@@ -114,8 +114,8 @@ an app restore return you to about the same place in it. **Open reader** opens
 the dedicated reading tools.
 The layout choice is remembered on your device. Wide screens keep the existing
 side-by-side list and reader; Front page and Feeds take the whole width
-there. With the title expanded, pull a list down to refresh it, or use Refresh
-in the top bar (on the front page, beside its date).
+there. Pull a list down to refresh it (under a large title, once that is
+expanded), or use Refresh in the top bar (on the front page, beside its date).
 In Articles, **Unread only** filters the current
 feed, folder or all articles. It starts with your account’s **Show only unread**
 setting. The open article stays visible until you collapse it or open another.
@@ -210,13 +210,15 @@ failed refresh leaves a visible warning on the next offline launch.
 
 The reader shows the feed title and the published date (falling back to
 first seen) under the article title. Its bottom bar has Keep, Later, Done and
-Open original; in a short window these move into Reader options.
+Open original; in a short window these move into Reader options, and the
+feed and date share one line under the title.
 Open original opens the URL in the browser.
 Reader options contains Share, Copy link, Open original, Mark unread for a
-read article, Settings when the reader fills the window, and Smaller and
-Larger text, a device-local zoom from 80% to 200% that persists and
-multiplies the system font size. Copy link places the URL on the clipboard; Share opens the system
-share sheet. The header's search icon opens Find in article, with match counts
+read article, and Smaller and Larger text, a device-local zoom from 80% to
+200% that persists and multiplies the system font size. When the reader fills
+the window, it also holds the app's options: Theme, Settings, Sign out and,
+while permission is missing, Enable notifications. Copy link places the URL on
+the clipboard; Share opens the system share sheet. The header's search icon opens Find in article, with match counts
 and next/previous steps. When the
 cached copy is shown instead of the live article, the header says so.
 It loads the signed content URL in a WebView with JavaScript, file access
@@ -246,7 +248,8 @@ you can choose Hybrid, which can make an embedding call. Feed, folder and page-s
 filters are available. More search results and Save as new keep the submitted
 query and filters even while you edit the next query.
 
-Search opens with the keyboard up while the query is empty. Save a query as a
+Search opens with the keyboard up while the query is empty, and keeps the
+app's options in its top bar. Save a query as a
 named view, open it from the Saved searches row, rename it or delete
 its definition without removing articles. Mutations report errors rather than
 claiming offline success. Search is online-only; its transient results and drafts
@@ -322,9 +325,10 @@ Core repository tests exercise real wire payloads, batch boundaries, in-flight
 retries, entry hydration and sibling subscription projections. Room regressions
 use Robolectric's native SQLite mode on Apple silicon because legacy SQLite
 has no compatible binary. Other hosts retain legacy mode because native SQLite
-stalled on the shared CI host. There is no emulator in CI, so the device-flow
-approval, UnifiedPush delivery, widget rendering and WebView reading have not
-been verified on a device.
+stalled on the shared CI host. There is no emulator in CI, so it does not
+exercise device-flow approval, widget rendering or WebView reading on
+Android; `docs/android-design.md` records the manual emulator checks.
+UnifiedPush delivery has not been verified on a device.
 
 ## Reader preferences and exact counts
 

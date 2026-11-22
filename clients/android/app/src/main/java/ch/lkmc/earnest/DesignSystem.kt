@@ -38,6 +38,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.material3.LoadingIndicator
 
 /** Shared rhythm for chrome, lists, forms and transient states. */
 internal object ReaderSpace {
@@ -283,3 +284,19 @@ internal fun SettingsGroup(title: String, modifier: Modifier = Modifier, content
         }
     }
 }
+
+/** [LoadingState] for a step inside a dialog or form. */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+internal fun InlineProgress(label: String, modifier: Modifier = Modifier) {
+    Row(
+        modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+    ) {
+        LoadingIndicator(Modifier.size(InlineProgressSize))
+        Text(label, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+private val InlineProgressSize = 24.dp

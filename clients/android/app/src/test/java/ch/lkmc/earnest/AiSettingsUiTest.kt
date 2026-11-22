@@ -1,5 +1,7 @@
 package ch.lkmc.earnest
 
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import android.app.Application
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
@@ -45,6 +47,7 @@ class AiSettingsUiTest {
         models: List<LlmModel> = emptyList(),
         tasks: List<LlmTaskRoute> = emptyList(),
         defaults: LlmSettingsDefaults? = null,
+        baseUrl: String = "https://api.venice.ai/api/v1",
     ): AppViewModel {
         // Network/state transitions have separate AppViewModel tests. This
         // fixture exercises the actual Compose picker at a phone-sized width.
@@ -57,7 +60,7 @@ class AiSettingsUiTest {
             error("This UI fixture must not make network requests")
         }
         val loaded = LlmSettings(revision = 3, providers = listOf(
-            LlmProvider("venice", LlmProviderKind.OPENAI, "https://api.venice.ai/api/v1"),
+            LlmProvider("venice", LlmProviderKind.OPENAI, baseUrl),
         ), models = models, tasks = tasks, defaults = defaults)
         val discovery = LlmDiscoveryUi(
             0, loaded.toDraft().providers[0].discoveryFingerprint(), 3, 1,
@@ -88,6 +91,12 @@ class AiSettingsUiTest {
         compose.onNodeWithText("Base URL").assertDoesNotExist()
         compose.onNodeWithText("venice").performScrollTo().performClick()
         compose.onNodeWithText("Base URL").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun aProviderWithAProblemOffersNoFoldThatCannotWork() {
+        show(baseUrl = "")
+        compose.onNodeWithText("Base URL").assertExists()
+        compose.onNode(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Expanded")).assertDoesNotExist()
     }
 
     @Test fun choosingADefaultOpensTheProviderCatalogueDirectly() {

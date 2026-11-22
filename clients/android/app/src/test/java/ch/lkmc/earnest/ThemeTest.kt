@@ -1,5 +1,6 @@
 package ch.lkmc.earnest
 
+import android.view.ContextThemeWrapper
 import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.graphics.Color
@@ -20,6 +21,27 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35])
 class ThemeTest {
     private val context: Context get() = ApplicationProvider.getApplicationContext()
+
+    // Compose restyles the bars only once it has drawn its first frame.
+    @Test fun theLaunchWindowsBarsShareItsBackground() = launchBarsMatchTheWindow(darkIcons = true)
+
+    @Test
+    @Config(sdk = [34], qualifiers = "night")
+    fun theNightLaunchWindowsBarsShareItsBackground() = launchBarsMatchTheWindow(darkIcons = false)
+
+    private fun launchBarsMatchTheWindow(darkIcons: Boolean) {
+        val themed = ContextThemeWrapper(context, R.style.Theme_Earnest)
+        val attrs = intArrayOf(
+            android.R.attr.statusBarColor, android.R.attr.navigationBarColor,
+            android.R.attr.windowLightStatusBar, android.R.attr.windowLightNavigationBar,
+        )
+        val paper = context.getColor(R.color.earnest_window)
+        attrs.forEachIndexed { index, attr ->
+            val values = themed.obtainStyledAttributes(intArrayOf(attr))
+            if (index < 2) assertEquals(paper, values.getColor(0, 0)) else assertEquals(darkIcons, values.getBoolean(0, !darkIcons))
+            values.recycle()
+        }
+    }
 
     @Test fun defaultIsSystem() {
         assertEquals(ThemeSetting.SYSTEM, context.themeSetting())

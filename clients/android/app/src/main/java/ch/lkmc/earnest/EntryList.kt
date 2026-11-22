@@ -127,7 +127,8 @@ internal fun EntryListScreen(
     title: String,
     entries: List<CachedEntry>,
     destination: View = View.ALL,
-    loading: Boolean = false,
+    /** Nothing has ever synced and a sync is running, so empty doesn't yet mean nothing to show. */
+    firstSync: Boolean = false,
     onBrowse: (() -> Unit)? = null,
     states: Map<Long, ch.lkmc.earnest.core.State>,
     principalId: Long,
@@ -448,7 +449,7 @@ internal fun EntryListScreen(
         item(key = "end") {
             when {
                 visibleEntries.isNotEmpty() -> ListEnd()
-                entries.isEmpty() && loading -> LoadingState("Fetching your articles…")
+                entries.isEmpty() && firstSync -> LoadingState("Fetching your articles…")
                 unreadOnly == true && entries.isNotEmpty() -> QuietState(
                     "All caught up",
                     "Turn off Unread only to see read articles.",
