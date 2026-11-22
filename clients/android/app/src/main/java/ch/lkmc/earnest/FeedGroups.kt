@@ -37,7 +37,8 @@ internal data class FeedProblem(val detail: String, val consecutiveFailures: Lon
  */
 internal fun feedProblem(health: FeedHealth?): FeedProblem? {
     health ?: return null
-    val detail = health.errorMessage ?: health.errorClass
+    // Bootstrap sends "" where the REST projection omits a field.
+    val detail = health.errorMessage?.ifBlank { null } ?: health.errorClass?.ifBlank { null }
     if (detail == null && health.consecutiveFailures <= 0L) return null
     return FeedProblem(detail ?: "unknown error", health.consecutiveFailures, health.lastAttemptAt)
 }

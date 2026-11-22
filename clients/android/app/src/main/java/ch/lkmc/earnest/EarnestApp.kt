@@ -858,6 +858,12 @@ internal fun MainScaffold(
 
     }
 
+    // Composed only while the drawer opens or is open, so it registers after
+    // every handler beneath it, however recently one of those was registered.
+    if (drawerState.targetValue == DrawerValue.Open) {
+        BackHandler { scope.launch { drawerState.close() } }
+    }
+
     if (showSubscribe) {
         SubscribeDialog(
             onDismiss = { showSubscribe = false },
