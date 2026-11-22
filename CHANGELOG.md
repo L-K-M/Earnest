@@ -100,9 +100,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Mark unread holds while an article is still opening, on Android, Mac and
-  the web. On the Mac it also holds through Load Images and retries, until
-  you open the article again.
 - Credentials work over plain HTTP again for loopback and for exact hosts
   in `EARNEST_OUTBOUND_ALLOW_PRIVATE`, such as `hister:8080`. Other HTTP
   destinations still need HTTPS, and an LLM provider with a blocked key
@@ -115,6 +112,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until you open it. A link or notification no longer reopens its article
   after a rotation either, and tapping the same link again now opens it
   again.
+- Mark unread holds while an article is still opening, on Android, Mac and
+  the web. On the Mac it also holds through Load Images and retries, until
+  you open the article again.
 - Scrolling an Android list no longer marks articles read, so scrolling
   down and back up keeps their unread dots. As on the web, only opening an
   article, in the reader or by expanding it in Read in feed, marks it read.
