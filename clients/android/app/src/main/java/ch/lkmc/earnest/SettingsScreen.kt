@@ -173,7 +173,11 @@ internal fun SettingsScreen(
                 SettingsCategory.IMPORT_EXPORT -> ImportExportCategory(model, state, importScope, readingImport)
             }
         }
-        if (category == SettingsCategory.READING) ReadingSettingsActions(model, state)
+        when (category) {
+            SettingsCategory.READING -> ReadingSettingsActions(model, state)
+            SettingsCategory.AI -> LlmSettingsActions(model, state)
+            SettingsCategory.IMPORT_EXPORT -> Unit
+        }
     }
 
     val pending = pendingCategory
@@ -215,24 +219,22 @@ internal fun SettingsScreen(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ReadingSettingsActions(model: AppViewModel, state: UiState) {
     val ui = state.readerSettingsUi
-    FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
-        verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
-    ) {
-        val dirty = ui.draft != null
-        Button(
-            onClick = model::saveReaderSettings,
-            enabled = ui.loaded != null && state.snapshot.cursor.generation.isNotEmpty() && dirty && !ui.saving,
-            modifier = Modifier.testTag("reader-settings-save"),
-        ) { Text("Save") }
-        TextButton(onClick = model::discardReaderSettingsDraft, enabled = dirty && !ui.saving) { Text("Discard") }
-        if (ui.frozen != null) TextButton(onClick = model::retryReaderSettingsSave, enabled = !ui.saving) { Text("Retry save") }
-        if (ui.loading || ui.saving) CircularProgressIndicator(Modifier.width(20.dp))
-    }
+    val dirty = ui.draft != null
+    SettingsActionBar(
+        DraftActions(
+            canSave = ui.loaded != null && state.snapshot.cursor.generation.isNotEmpty() && dirty && !ui.saving,
+            canDiscard = dirty && !ui.saving,
+            working = ui.loading || ui.saving,
+            onSave = model::saveReaderSettings,
+            onDiscard = model::discardReaderSettingsDraft,
+            onRetry = if (ui.frozen != null) model::retryReaderSettingsSave else null,
+            canRetry = !ui.saving,
+        ),
+        saveModifier = Modifier.testTag("reader-settings-save"),
+    )
 }
 
 /** The reader preferences, with contextual Save, Discard and Retry. */

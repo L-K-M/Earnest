@@ -86,22 +86,6 @@ internal fun LlmServicesSection(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            val dirty = ui.draft != null
-            TextButton(
-                onClick = model::saveLlmSettings,
-                enabled = current != null && dirty && !ui.loading && !ui.saving && !ui.conflict,
-            ) { Text("Save") }
-            TextButton(
-                onClick = { if (ui.conflict) confirmReload = true else model.discardLlmSettingsDraft() },
-                enabled = dirty && !ui.saving,
-            ) { Text("Discard") }
-            if (ui.frozen != null && !ui.conflict) TextButton(
-                onClick = model::retryLlmSettingsSave,
-                enabled = !ui.loading && !ui.saving,
-            ) { Text("Retry save") }
-            if (ui.loading || ui.saving) CircularProgressIndicator(Modifier.width(20.dp))
-        }
         ui.error?.let { NoticeBanner(it, tone = NoticeTone.ERROR) }
         if (ui.success) NoticeBanner("Saved", tone = NoticeTone.SUCCESS)
         if (ui.conflict) {
@@ -163,15 +147,12 @@ internal fun LlmServicesSection(
     }
 
     if (confirmReload) {
-        AlertDialog(
-            onDismissRequest = { confirmReload = false },
-            title = { Text("Reload AI settings?") },
-            text = { Text("Your edits will be replaced after the latest settings load successfully.") },
-            confirmButton = { TextButton(onClick = {
+        ReloadLlmSettingsDialog(
+            onDismiss = { confirmReload = false },
+            onReload = {
                 confirmReload = false
                 model.reloadLlmSettings()
-            }) { Text("Reload") } },
-            dismissButton = { TextButton(onClick = { confirmReload = false }) { Text("Keep editing") } },
+            },
         )
     }
 
