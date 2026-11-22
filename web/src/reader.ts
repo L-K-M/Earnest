@@ -8,6 +8,8 @@ export type View = {kind: 'today' | 'edition' | 'all' | 'later' | 'kept' | 'done
 export type ReaderActions = {
   deleted?: (entry: Entry) => boolean
   state: (entry: Entry) => EntryState
+  // Counts this tab's deliberate read and unread choices for the entry.
+  seenChoices?: (entry: Entry) => number
   act: (entry: Entry, register: Register, value: Value, kind?: 'explicit' | 'passive') => Promise<void>
 }
 export function viewKey(view: View): string { return `${view.kind}${view.id === undefined ? '' : `:${view.id}`}` }

@@ -462,6 +462,12 @@ internal fun MainScaffold(
         offerUndo(action.message) { model.undo(action) }
     }
 
+    /** Marks [entryId] unread, which also withdraws the mark its open still owes. */
+    fun markUnread(entryId: Long) {
+        if (readOnLoad == entryId) readOnLoad = null
+        model.markUnread(entryId, undoable)
+    }
+
     fun selectView(destination: View) {
         model.beginListVisit()
         showSettings = false
@@ -693,7 +699,7 @@ internal fun MainScaffold(
                                     onDone = { id -> model.done(id, undoable) },
                                     onKeep = { id -> model.keep(id, undoable) },
                                     onUnkeep = { id -> model.unkeep(id, undoable) },
-                                    onMarkUnread = { id -> model.markUnread(id, undoable) },
+                                    onMarkUnread = ::markUnread,
                                     accountKey = state.accountKey,
                                     // Wide screens keep the existing side-by-side reader.
                                     layoutOverride = ArticleLayout.HEADLINES.takeIf { directive.maxHorizontalPartitions > 1 },
@@ -796,7 +802,7 @@ internal fun MainScaffold(
                                                 }
                                             }
                                         },
-                                        onMarkUnread = { model.markUnread(entry.id, undoable) },
+                                        onMarkUnread = { markUnread(entry.id) },
                                         onFind = {
                                             findOpen = !findOpen
                                             if (!findOpen) closeFind()

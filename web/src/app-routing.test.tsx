@@ -6,18 +6,18 @@ import {createRoot} from 'react-dom/client'
 import type {QueryClient} from '@tanstack/react-query'
 import {request, RequestError} from './request'
 import {defaultSettings} from './Settings'
-import type {Entry, View} from './reader'
+import type {Entry, ReaderActions, View} from './reader'
 
-const {act, entries, listMounted} = vi.hoisted(() => {
+const {act, entries, listMounted, listSeenChoices, seenChoices} = vi.hoisted(() => {
   const state = (shelf = 'none') => ({shelf:{value:shelf}, kept:{value:false}, seen:{value:'unseen'}})
-  return {listMounted: vi.fn(), act:vi.fn().mockResolvedValue(undefined), entries:[4,5].map(id => ({id, title:`Article ${id}`, subscription_id:8, feed_id:42, url:`https://example.test/${id}`, state:state()}))}
+  return {listMounted: vi.fn(), listSeenChoices: vi.fn(), seenChoices: vi.fn().mockReturnValue(0), act:vi.fn().mockResolvedValue(undefined), entries:[4,5].map(id => ({id, title:`Article ${id}`, subscription_id:8, feed_id:42, url:`https://example.test/${id}`, state:state()}))}
 })
 vi.mock('react-dom/client',() => ({createRoot:vi.fn()}))
 vi.mock('./request',async original => ({...await original<typeof import('./request')>(), request:vi.fn(), setCSRF:vi.fn()}))
-vi.mock('./syncBridge',() => ({useReaderSync:() => ({state:(value: Entry) => value.state,act,actRange:vi.fn(),retry:vi.fn(),status:'Reading actions synced.',error:''})}))
+vi.mock('./syncBridge',() => ({useReaderSync:() => ({state:(value: Entry) => value.state,act,seenChoices,actRange:vi.fn(),retry:vi.fn(),status:'Reading actions synced.',error:''})}))
 vi.mock('./offline/Offline',() => ({OfflineStatus:() => null,useOnline:() => true,registerOffline:vi.fn().mockResolvedValue(undefined),clearOffline:vi.fn().mockResolvedValue(undefined)}))
-vi.mock('./River',() => ({River: function River({view,onOpen,unreadOnly,onUnreadOnlyChange}: {view: View; onOpen: (entry: Entry) => void; unreadOnly?: boolean; onUnreadOnlyChange?: (value: boolean) => void}) {
-  useState(() => {listMounted(view); return null})
+vi.mock('./River',() => ({River: function River({view,actions,onOpen,unreadOnly,onUnreadOnlyChange}: {view: View; actions: ReaderActions; onOpen: (entry: Entry) => void; unreadOnly?: boolean; onUnreadOnlyChange?: (value: boolean) => void}) {
+  useState(() => {listMounted(view); listSeenChoices(actions.seenChoices); return null})
   return <section data-unread-only={unreadOnly}><h2>{view.title} list</h2><button aria-pressed={!unreadOnly} onClick={() => onUnreadOnlyChange?.(false)}>Show all</button><button aria-pressed={unreadOnly} onClick={() => onUnreadOnlyChange?.(true)}>Show only unread</button>{entries.map(entry => <button key={entry.id} onClick={() => onOpen(entry as Entry)}>Open {entry.title}</button>)}</section>
 }}))
 vi.mock('./FrontPage',() => ({FrontPage:({onOpen}: {onOpen: (entry: Entry) => void}) => <section><h2>Front page list</h2><button onClick={() => onOpen(entries[0] as Entry)}>Open front story</button></section>}))
@@ -177,6 +177,13 @@ it('offers an undo for a deliberate action and restores the previous value with 
   reactAct(() => {fireEvent.keyDown(document.body,{key:'z'})})
   await waitFor(() => expect(act).toHaveBeenLastCalledWith(entries[0],'shelf','none'))
   expect(await screen.findByText('Undone.')).toBeTruthy()
+})
+
+// Without it an open that waits to be saved undoes Mark unread.
+it('gives the list the count of deliberate read choices', async () => {
+  await start('/feeds/8')
+  await screen.findByRole('heading', {name: 'Rust list'}, {timeout: 5000})
+  expect(listSeenChoices).toHaveBeenCalledWith(seenChoices)
 })
 
 it('follows go-to shortcuts without letting the second key act on the list', async () => {
