@@ -1,5 +1,13 @@
 package ch.lkmc.earnest
 
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Text
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.test.swipeDown
+import androidx.compose.runtime.snapshots.Snapshot
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import androidx.compose.ui.test.assertHasClickAction
@@ -69,6 +77,7 @@ import org.robolectric.annotation.GraphicsMode
 class MobileDesignTest {
     private companion object {
         const val SETTLE_MS = 1_000L
+        const val PULL_ANSWER_MS = 5_000L
     }
 
     @get:Rule val compose = createComposeRule()
@@ -185,6 +194,76 @@ class MobileDesignTest {
         assertTrue("the notice ends at ${notice.bottom}, below the actions' top ${bar.top}", notice.bottom <= bar.top)
     }
 
+    @Test fun aFilterChipGrowsWithItsLabelAtLargeText() {
+        val label = "Only articles from feeds I follow"
+        content(2f) {
+            ReaderFilterChip(selected = true, onClick = {}, label = { Text(label) })
+        }
+        val chip = compose.onNodeWithText(label)
+        val minimum = with(Density(compose.density.density, 2f)) { 20.sp.toDp() } + 12.dp
+        chip.assertIsDisplayed().assertHeightIsAtLeast(minimum)
+        assertTrue("the chip must fit a narrow phone", chip.getUnclippedBoundsInRoot().right <= 320.dp)
+    }
+
+    @Test fun anEmptyListSaysItIsFetchingDuringTheFirstSync() {
+        compose.mainClock.autoAdvance = false
+        content {
+            MainScaffold(
+                model = viewModel(), state = UiState(loading = true), theme = ThemeSetting.LIGHT,
+                onThemeChange = {}, initialEntry = null, notificationId = null, intentDelivery = 0,
+                notificationsDenied = false, onRequestNotifications = {},
+            )
+        }
+        compose.mainClock.advanceTimeBy(SETTLE_MS)
+        compose.onNodeWithText("Articles").performClick()
+        compose.mainClock.advanceTimeBy(SETTLE_MS)
+        compose.onNodeWithText("Fetching your articles…").assertExists()
+    }
+
+    @Test fun aPullThatStartsNoLoadLeavesALaterSyncQuiet() {
+        var loading by mutableStateOf(false)
+        var pulls = 0
+        content { PullList(loading = { loading }, onRefresh = { pulls++ }) }
+        pullDown()
+        compose.mainClock.advanceTimeBy(PULL_ANSWER_MS)
+        assertEquals("the pull must ask for a refresh", 1, pulls)
+        compose.mainClock.autoAdvance = false
+        // A background sync starts later, on its own.
+        compose.runOnUiThread {
+            loading = true
+            // The paused clock would otherwise never tell Compose of the write.
+            Snapshot.sendApplyNotifications()
+        }
+        compose.mainClock.advanceTimeBy(SETTLE_MS)
+        compose.onAllNodes(refreshingIndicator).assertCountEquals(0)
+    }
+
+    @Test fun aPullThatStartsALoadShowsItsProgress() {
+        var loading by mutableStateOf(false)
+        content { PullList(loading = { loading }, onRefresh = { loading = true }) }
+        compose.mainClock.autoAdvance = false
+        pullDown()
+        compose.mainClock.advanceTimeBy(SETTLE_MS)
+        compose.onAllNodes(refreshingIndicator).assertCountEquals(1)
+    }
+
+    private val refreshingIndicator = SemanticsMatcher.expectValue(SemanticsProperties.ProgressBarRangeInfo, ProgressBarRangeInfo.Indeterminate)
+
+    @Composable
+    private fun PullList(loading: () -> Boolean, onRefresh: () -> Unit) {
+        RefreshableContent(loading = loading(), enabled = true, onRefresh = onRefresh) {
+            LazyColumn(Modifier.fillMaxSize().testTag("pull-list")) {
+                items(40) { Text("Row $it") }
+            }
+        }
+    }
+
+    private fun pullDown() {
+        compose.onNodeWithTag("pull-list").performTouchInput {
+            swipeDown(startY = top + 20f, endY = bottom, durationMillis = 400)
+        }
+    }
+
     @Test fun settingsSaveStaysReachableWhileTheFormScrolls() {
         content(2f) {
             SettingsScreen(
@@ -203,7 +282,7 @@ class MobileDesignTest {
         compose.onNodeWithText("Start device sign in").performScrollTo().assertIsDisplayed()
     }
 
-    @Test fun feedCadencesWrapWithoutHidingTheLastOption() {
+    @Test fun theCadenceMenuShowsEveryOptionOnANarrowPhone() {
         content(2f) {
             FeedRow(
                 subscription = SyncObject(SyncEngine.OBJECT_SUBSCRIPTION, 1, name = "A thoughtful publication", raw = """{"url":"https://example.test/feed","cadence":"day"}""", rev = 1),
@@ -214,8 +293,8 @@ class MobileDesignTest {
         Cadence.entries.forEach { cadence ->
             val chip = compose.onNode(hasText(cadence.label) and hasAnyAncestor(isPopup()))
             chip.assertIsDisplayed()
-            // Allow nonlinear Android font scaling: the 20sp label line
-            // still needs 12dp of breathing room inside the chip surface.
+            // Allow nonlinear Android font scaling: a row grows with its
+            // 20sp label line and keeps 12dp of breathing room around it.
             val minimum = with(Density(compose.density.density, 2f)) { 20.sp.toDp() } + 12.dp
             chip.assertHeightIsAtLeast(minimum)
             assertTrue("${cadence.label} must fit on a narrow phone", chip.getUnclippedBoundsInRoot().right <= 320.dp)

@@ -61,6 +61,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -89,6 +91,8 @@ import ch.lkmc.earnest.core.iconUrl
 import ch.lkmc.earnest.core.typographyFor
 import java.time.Instant
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
 
@@ -780,10 +784,12 @@ private const val LARGE_TITLE_MAX_FONT_SCALE = 1.5f
 
 private val BottomControlClearance = 72.dp
 
+private const val PULL_LOAD_START_MS = 2_000L
+
 /** Pull to refresh, showing its indicator only for a pull and not for background syncs. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun RefreshableContent(
+internal fun RefreshableContent(
     loading: Boolean,
     enabled: Boolean,
     onRefresh: () -> Unit,
@@ -792,7 +798,16 @@ private fun RefreshableContent(
 ) {
     var pulled by remember { mutableStateOf(false) }
     val pullState = rememberPullToRefreshState()
-    LaunchedEffect(loading) { if (!loading) pulled = false }
+    val currentLoading by rememberUpdatedState(loading)
+    // A pull is answered when the load it started ends. Some pulls start
+    // none, such as one that shows a front page already fetched, and must
+    // not lend their indicator to the next background sync.
+    LaunchedEffect(pulled) {
+        if (!pulled) return@LaunchedEffect
+        withTimeoutOrNull(PULL_LOAD_START_MS) { snapshotFlow { currentLoading }.first { it } }
+        snapshotFlow { currentLoading }.first { !it }
+        pulled = false
+    }
     val refreshing = pulled && loading
     PullToRefreshBox(
         isRefreshing = refreshing,
