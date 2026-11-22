@@ -78,6 +78,7 @@ func TestArticleIntegrationSettings(t *testing.T) {
 		t.Fatalf("disable: %+v %v", out, err)
 	}
 	token = "hister-key"
+	f.s.outbound = namedEgress(t, "hister.local:80")
 	in = IntegrationSettingsInput{URL: "http://hister.local", DefaultLabel: "Reading queue", Token: &token, OpID: "hister"}
 	if _, err := f.s.PutArticleIntegration(ctx, f.a, IntegrationHister, in); err != nil {
 		t.Fatal(err)

@@ -296,10 +296,16 @@ Earnest signs requests using Standard Webhooks. Save the whsec_ secret
 shown once at creation and verify webhook-id, webhook-timestamp and
 webhook-signature on the receiver. The secret is encrypted at rest.
 
+A signature is a credential, so a destination needs HTTPS, or an exact
+host:port in `EARNEST_OUTBOUND_ALLOW_PRIVATE` for HTTP (port 80 written
+out). Creating, moving or enabling any other HTTP destination is refused,
+and deliveries to one saved earlier fail until they disable it.
+
 Requests use the shared outbound client and never follow redirects.
 Only definite failures are retried, with exponential backoff. Unknown
 outcomes are not retried. Five consecutive definite failures disable the
-destination. Re-enable it after fixing the receiver.
+destination and discard its pending deliveries. Re-enable it after fixing
+the receiver.
 
 A redirect response is an unknown outcome: the receiver may have processed
 the POST before returning a Location. Earnest discards the attempt rather

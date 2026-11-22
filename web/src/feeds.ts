@@ -83,8 +83,8 @@ const HEALTH_EXPLANATIONS: Record<string, string> = {
   decode: 'The site answers but not with a readable feed. The address may point at a page instead of a feed.',
   size: 'The feed response is too large to process.',
   too_large: 'The feed response is too large to process.',
-  policy: 'Earnest refused the address for safety. A private or otherwise disallowed address is not fetched.',
-  denied_address: 'Earnest refused the address for safety. A private or otherwise disallowed address is not fetched.',
+  policy: 'Earnest refused the address for safety. It is private or otherwise disallowed, or it would send a password or token over plain HTTP.',
+  denied_address: 'Earnest refused the address for safety. It is private or otherwise disallowed, or it would send a password or token over plain HTTP.',
   redirect_loop: 'The feed redirects in a loop.',
   extraction: 'Full-text extraction fails on this feed\u2019s pages.',
 }

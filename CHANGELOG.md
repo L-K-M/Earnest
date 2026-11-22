@@ -100,6 +100,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Webhook signatures, and secrets in feed URLs such as `?token=`, no longer
+  travel over plain HTTP to hosts outside `EARNEST_OUTBOUND_ALLOW_PRIVATE`.
+  On upgrade, such feeds stop refreshing, and such webhooks are disabled
+  after five failed deliveries, which discards their pending ones. Use
+  HTTPS, or list the exact `host:port` and restart.
+- Settings refuse an integration or ntfy token, or a webhook, for a plain
+  HTTP host that couldn't receive it, instead of failing when it is used.
 - A redirect, discovered feed link or stored redirect to a look-alike
   international domain, such as `wİki.test` for `wiki.test`, no longer
   receives the original site's password, headers or token. Two Unicode
