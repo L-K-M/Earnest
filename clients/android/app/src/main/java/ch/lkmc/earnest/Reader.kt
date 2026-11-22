@@ -72,9 +72,12 @@ internal fun openOriginal(context: Context, url: String): Boolean = try {
 }
 
 /** Copies the article link to the clipboard, reporting false without one. */
-internal fun copyLink(context: Context, url: String): Boolean {
+internal fun copyLink(context: Context, url: String): Boolean = copyText(context, "Link", url)
+
+/** Copies plain text to the clipboard, reporting false without one. */
+internal fun copyText(context: Context, label: String, text: String): Boolean {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return false
-    clipboard.setPrimaryClip(ClipData.newPlainText("Link", url))
+    clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
     return true
 }
 

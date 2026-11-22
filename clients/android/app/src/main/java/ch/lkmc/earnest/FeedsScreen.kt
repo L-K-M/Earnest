@@ -178,7 +178,7 @@ internal fun FeedsScreen(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
                     ) {
-                        SecondaryButton(
+                        QuietButton(
                             "Import OPML",
                             onClick = { importPicker.launch(arrayOf("text/x-opml", "application/xml", "text/xml", "*/*")) },
                             enabled = !fileBusy,
@@ -242,7 +242,8 @@ internal fun FeedsScreen(
         if (subscriptions.isNotEmpty()) {
             ExtendedFloatingActionButton(
                 text = { Text("Subscribe by URL") },
-                icon = { Icon(EarnestIcons.Add, contentDescription = if (atTop) null else "Subscribe by URL") },
+                // Material clears the label's semantics, expanded or not: the icon names the button.
+                icon = { Icon(EarnestIcons.Add, contentDescription = "Subscribe by URL") },
                 onClick = onSubscribe,
                 expanded = atTop,
                 containerColor = MaterialTheme.colorScheme.primary,
