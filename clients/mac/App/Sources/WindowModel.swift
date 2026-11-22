@@ -52,9 +52,12 @@ import AppKit
             // Reevaluate the unread-only list's open-article exception. An
             // unread-only visit instead retains every admitted article.
             if oldValue != nil, section.supportsUnreadFilter { rebuildPresentation() }
-            open(selected)
+            beginReading(selected)
         }
     }
+    /// The selected article's unread marks when you opened it. Reloading,
+    /// retrying and loading images keep it, so they cannot undo Mark as Unread.
+    private var unreadMarksAtOpen = 0
     @Published var html = ""
     @Published private(set) var imageOrigin: URL?
     @Published private(set) var imageMode: ArticleImageMode = .proxied
@@ -619,7 +622,7 @@ import AppKit
             pendingRestoredSelection = nil
             // External links never load images automatically.
             imageMode = .click
-            if selected == link { open(link) } else { selected = link }
+            if selected == link { beginReading(link) } else { selected = link }
         } else {
             restorePendingSelection()
         }
@@ -712,6 +715,7 @@ import AppKit
         do {
             let index = visibleEntryIDs().firstIndex(of: entry.id)
             try engine.queue(write)
+            if command == .unread { app.noteMarkedUnread(entry.id) }
             let unkeep = command == .keep && value == .flag(false)
             let counted = !(command == .later && value == .text("none"))
             if counted { app.sessionActions.record(command, unkeep: unkeep) }
@@ -791,6 +795,7 @@ import AppKit
                                        register: register, value: value,
                                        base: Cursor(generation: generation, rev: state[register].rev),
                                        occurredAt: Date()))
+                if register == .seen, value == .text("unseen") { app.noteMarkedUnread(entryID) }
             }
         } catch {
             app.report(error)
@@ -943,7 +948,7 @@ import AppKit
             return
         }
         imageMode = .click
-        if selected == entryID { open(entryID) } else { selected = entryID }
+        if selected == entryID { beginReading(entryID) } else { selected = entryID }
     }
 
     /// Change a feed's cadence with an undoable step.
@@ -975,7 +980,7 @@ import AppKit
         if section == .activity {
             selectedActivityID = id.flatMap { id in app.activityGroups.flatMap(\.items).first { $0.entryID == id }?.id }
         }
-        if selected == id { open(id) }
+        if selected == id { beginReading(id) }
         else { selected = id }
     }
 
@@ -983,7 +988,7 @@ import AppKit
         pendingRestoredSelection = nil
         selectedMatchID = match.id
         imageMode = match.kind == "agent_note" || match.untrusted ? .click : .proxied
-        if selected == match.entryID { open(match.entryID) }
+        if selected == match.entryID { beginReading(match.entryID) }
         else { selected = match.entryID }
     }
 
@@ -997,7 +1002,7 @@ import AppKit
             pendingDeepLink = id
             return
         }
-        if selected == id { open(id) }
+        if selected == id { beginReading(id) }
         else { selected = id }
     }
 
@@ -1007,6 +1012,13 @@ import AppKit
         open(selected)
     }
 
+    /// Opens an article at your request, which may mark it read.
+    private func beginReading(_ id: Int64?) {
+        unreadMarksAtOpen = id.flatMap { app.unreadMarks[$0] } ?? 0
+        open(id)
+    }
+
+    /// Loads the open article; a repeated load is not a new request to read it.
     func open(_ id: Int64?) {
         tasks["open"]?.cancel()
         html = ""
@@ -1080,7 +1092,9 @@ import AppKit
                 if let contentError, ErrorPresentation.isConnection(contentError) {
                     app.connectionNote = ErrorPresentation.message(contentError)
                 }
-                self.markSeen(entryID: id, entry: self.entries.first(where: { $0.id == id }))
+                if app.unreadMarks[id, default: 0] == self.unreadMarksAtOpen {
+                    self.markSeen(entryID: id, entry: self.entries.first(where: { $0.id == id }))
+                }
             } catch is CancellationError {
             } catch {
                 guard app.loggedIn, app.session == expectedSession, self.selected == id, !Task.isCancelled,

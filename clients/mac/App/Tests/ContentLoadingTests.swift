@@ -385,6 +385,60 @@ import Network
         }
     }
 
+    func testMarkUnreadWhileLoadingOutlastsTheLoad() async throws {
+        for markedInAnotherWindow in [false, true] {
+            let requested = DispatchSemaphore(value: 0)
+            let release = DispatchSemaphore(value: 0)
+            var signed = ContentHTTP.Reply.signed(mode: "proxied")
+            signed.beforeResponse = {
+                requested.signal()
+                _ = release.wait(timeout: .now() + 5)
+            }
+            let (model, window, session) = try makeModel([signed, .article])
+            defer { model.signOut(); session.invalidateAndCancel() }
+            let other = WindowModel(app: model, section: .allArticles)
+            other.entries = window.entries
+            let entry = try XCTUnwrap(window.entries.first)
+
+            window.selectFromList(42)
+            let deadline = Date().addingTimeInterval(5)
+            var loading = false
+            while !loading && Date() < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+                loading = requested.wait(timeout: .now()) == .success
+            }
+            XCTAssertTrue(loading)
+            (markedInAnotherWindow ? other : window).command(.unread, entryID: 42)
+            release.signal()
+            try await waitForArticle(window, model)
+            XCTAssertEqual(window.effectiveState(of: entry).seen.value, .text("unseen"))
+            ContentHTTP.assertFinished()
+        }
+    }
+
+    func testReloadingAfterMarkUnreadKeepsItUnread() async throws {
+        let (model, window, session) = try makeModel([
+            .signed(mode: "proxied"), .article,
+            .signed(mode: "proxied"), .article,
+            .signed(mode: "proxied"), .article,
+        ])
+        defer { model.signOut(); session.invalidateAndCancel() }
+        let entry = try XCTUnwrap(window.entries.first)
+        window.selectFromList(42)
+        try await waitForArticle(window, model)
+        XCTAssertEqual(window.effectiveState(of: entry).seen.value, .text("seen"))
+        window.command(.unread, entryID: 42)
+        window.loadImages()
+        try await waitForArticle(window, model)
+        XCTAssertEqual(window.effectiveState(of: entry).seen.value, .text("unseen"))
+
+        // Opening it again is a new intent.
+        window.selectFromList(42)
+        try await waitForArticle(window, model)
+        XCTAssertEqual(window.effectiveState(of: entry).seen.value, .text("seen"))
+        ContentHTTP.assertFinished()
+    }
+
     func testListAndKeyboardSelectionsUseProxiedImages() async throws {
         let (model, window, session) = try makeModel([
             .signed(mode: "proxied"), .article,
