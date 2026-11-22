@@ -236,6 +236,21 @@ class ArticleSwipeTest {
         expectTurns()
     }
 
+    @Test fun aRefusalAtTheEdgeDoesNotTurnOnceThePageScrollsBack() {
+        var page: WebView? = null
+        showRealPage { page = it }
+        touch { down(center); drag(-30f) }
+        compose.runOnIdle {
+            val view = checkNotNull(page)
+            view.scrollTo(40, 0)
+            view.reportOverscroll(clampedX = true)
+        }
+        touch { drag(-250f) }
+        compose.runOnIdle { checkNotNull(page).scrollTo(0, 0) }
+        touch { drag(40f); up() }
+        expectTurns()
+    }
+
     @Test fun inAListSwipesTurnAndVerticalDragsStillScroll() {
         compose.setContent {
             val state = boundSwipe()

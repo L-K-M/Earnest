@@ -113,8 +113,8 @@ exact anchor would need script in the page.
 Article pages run without JavaScript, so a swipe cannot ask what is under the
 finger. The WebView's clamped horizontal overscroll answers instead: Chromium
 reports it only when no element on the page took the movement. Without that
-report a drag on the page never changes article, so a WebView that stopped
-reporting would lose the swipe and not the page's own scrolling.
+report a drag on the page never changes article. If a WebView stops reporting,
+the swipe stops working and the page's own scrolling is unaffected.
 
 ## Verification
 

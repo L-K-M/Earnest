@@ -97,10 +97,13 @@ internal class ArticleSwipeState(private val scope: CoroutineScope, private val 
 
     /** The WebView could not scroll sideways any further. */
     fun pageRefusedScroll() {
+        // At the edge of a page this gesture scrolled, it refuses only the rest
+        // of that scroll. Dragging back must not turn that into a swipe.
+        if (!pageIsStill()) return
         refused = true
         val flick = lateFlick ?: return
         lateFlick = null
-        if (SystemClock.uptimeMillis() <= flick.until && pageIsStill()) commit(flick.direction)
+        if (SystemClock.uptimeMillis() <= flick.until) commit(flick.direction)
     }
 
     internal fun begin() {

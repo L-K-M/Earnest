@@ -126,6 +126,9 @@ you gave it. Back returns to the list, however many articles you moved through.
 A code block or table that can scroll sideways keeps the drag; once it is at
 its edge, a new swipe changes article. With TalkBack, use the headline's
 **Next article** and **Previous article** actions.
+TalkBack 16.0 cannot step through paragraphs in an expanded article: moving
+to the next one scrolls the feed on and loses focus. To read that way, choose
+**Open reader** from the headline's **Article actions** menu.
 
 Article rows share consistent gutters and keep their source, time, headline
 and read indicator together. Use the article's overflow menu for Keep, Unkeep,
@@ -142,8 +145,10 @@ restores oversized caches written by older versions, including unsent actions,
 without clearing app data or changing the database format.
 
 Lists work without a connection; the reader falls back to the cached content
-when the signed content URL cannot be fetched. Swipe a collapsed row left a short distance for Later, or a long distance
-for Done (the expanded article's swipe changes article; use its menu there); the label appears during the gesture and an undo action is offered
+when the signed content URL cannot be fetched. Swipe a collapsed row left a
+short distance for Later, or a long distance for Done (the expanded article's
+swipe changes article; use its menu there); the label appears during the
+gesture and an undo action is offered
 in a snackbar that names the action and auto-dismisses. The swipe background
 is hidden until the row moves. Each article's overflow menu also offers
 Keep, Unkeep and, once read, Mark unread. Mark unread returns the article to unread and clears Done with
