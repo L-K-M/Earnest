@@ -25,7 +25,7 @@ func TestLLMCheckDraftAllowsUnknownWidthAndUnconfirmedSavedPrice(t *testing.T) {
 	previous := llm.DefaultConfig()
 	unconfirmed := false
 	previous.Models[llm.ModelKey("local", model.Name)] = llm.ModelInfo{EmbeddingPricingConfigured: &unconfirmed}
-	cfg, err := validateLLMCheckDraft(LLMModelCheckInput{Provider: settings.Providers[0], Model: model, Capability: "embedding"}, previous)
+	cfg, err := validateLLMCheckDraft(LLMModelCheckInput{Provider: settings.Providers[0], Model: model, Capability: "embedding"}, previous, nil)
 	if err != nil {
 		t.Fatalf("checking explicitly priced model with unknown dimensions: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestLLMCheckDraftAllowsUnknownWidthAndUnconfirmedSavedPrice(t *testing.T) {
 		t.Fatalf("check must observe native dimensions, got %d", got)
 	}
 	model.EmbeddingPer1M = ""
-	if _, err := validateLLMCheckDraft(LLMModelCheckInput{Provider: settings.Providers[0], Model: model, Capability: "embedding"}, previous); !errors.Is(err, ErrInvalid) {
+	if _, err := validateLLMCheckDraft(LLMModelCheckInput{Provider: settings.Providers[0], Model: model, Capability: "embedding"}, previous, nil); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("unpriced check: %v", err)
 	}
 }

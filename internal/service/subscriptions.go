@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/L-K-M/Earnest/internal/outbound"
 	"github.com/L-K-M/Earnest/internal/store"
 	"github.com/L-K-M/Earnest/internal/syncmodel"
 	"github.com/jackc/pgx/v5"
@@ -112,9 +113,9 @@ func normalizedFeedURL(raw string) (string, error) {
 	return u.String(), nil
 }
 
-func validateCredentialTransport(rawURL string, credentials *FeedCredentials) error {
-	if credentials != nil && strings.HasPrefix(rawURL, "http://") {
-		return fmt.Errorf("private feed credentials require HTTPS: %w", ErrInvalid)
+func validateCredentialTransport(rawURL string, credentials *FeedCredentials, client *outbound.Client) error {
+	if credentials != nil && !credentialsMayTravel(client, rawURL) {
+		return fmt.Errorf("private feed credentials %s: %w", credentialTransportRule, ErrInvalid)
 	}
 	return nil
 }
@@ -253,7 +254,7 @@ func (s *Service) Subscribe(ctx context.Context, a Actor, rawURL string, options
 	if err != nil {
 		return Subscription{}, err
 	}
-	if err := validateCredentialTransport(rawURL, options.Credentials); err != nil {
+	if err := validateCredentialTransport(rawURL, options.Credentials, s.outbound); err != nil {
 		return Subscription{}, err
 	}
 	var previous []byte
@@ -645,7 +646,7 @@ func (s *Service) UpdateSubscription(ctx context.Context, a Actor, id int64, opt
 		if sub.Deleted {
 			return ErrNotFound
 		}
-		if err := validateCredentialTransport(sub.URL, options.Credentials); err != nil {
+		if err := validateCredentialTransport(sub.URL, options.Credentials, s.outbound); err != nil {
 			return err
 		}
 		if options.FolderID != nil {

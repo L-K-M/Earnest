@@ -114,7 +114,9 @@ enter the change feed.
 The outbound private-host allowlist remains deployment configuration. A local
 model server such as `ollama:11434` still needs
 `EARNEST_OUTBOUND_ALLOW_PRIVATE=ollama:11434` and a service restart. Settings
-cannot bypass address checks. Prices and caps are exact decimal USD with up
+cannot bypass address checks. An API key over plain HTTP needs loopback or
+such an entry; without one Earnest refuses to save it, and disables an
+already configured provider instead of failing to start. Prices and caps are exact decimal USD with up
 to six fractional digits; zero cap means unlimited. The editor supports up to
 32 providers and 128 models, and timeouts from 1 to 600 seconds.
 
@@ -126,6 +128,9 @@ Historical credentials are removed when their jobs finish. Clearing a key
 removes it from new routing, not from a batch already accepted by its provider.
 Disabling the edition task pauses collection until you re-enable it; it does
 not cancel work already running at the provider.
+A batch whose key may no longer travel over HTTP waits, without contacting its
+provider, for the allowlist entry to return. If the edition falls due first,
+it uses the current settings and warns that the batch may still be charged.
 
 ## Environment defaults
 
@@ -178,7 +183,8 @@ built-in table.
 
 A local server is a private address. `internal/outbound` denies private
 addresses unless `EARNEST_OUTBOUND_ALLOW_PRIVATE` names them, so add
-`ollama:11434`. The provider layer also derives the non-standard port from the
+`ollama:11434`. The same entry lets Earnest send that provider's API key
+over plain HTTP. The provider layer also derives the non-standard port from the
 base URL and passes it to outbound, which otherwise refuses ports other than
 80 and 443.
 
@@ -302,6 +308,8 @@ startup error, not a runtime surprise.
 - **One egress path.** Every request goes through `internal/outbound` with
   `Purpose: llm`, so the shared address checks, host spacing, redirect
   handling and private-address allowlist apply.
+- **Keys need HTTPS or a trusted destination.** A key travels over plain HTTP
+  only to loopback or an exact allowlisted `host:port`.
 - **No secrets or prompts in logs.** The providers log provider, model and
   token counts at debug level only. API keys and request bodies never reach a
   log.

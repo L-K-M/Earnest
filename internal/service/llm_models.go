@@ -35,7 +35,7 @@ func (s *Service) DiscoverLLMModels(ctx context.Context, a Actor, in LLMModelsIn
 	}
 	// Use the same validation and credential inheritance as Save. No other
 	// draft providers, prices or incomplete task routes are needed to browse.
-	cfg, err := validateLLMSettings(LLMSettingsInput{Providers: []LLMProviderInput{in.Provider}}, previous)
+	cfg, err := validateLLMSettings(LLMSettingsInput{Providers: []LLMProviderInput{in.Provider}}, previous, s.outbound)
 	if err != nil {
 		return LLMModels{}, err
 	}

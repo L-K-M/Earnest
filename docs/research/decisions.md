@@ -61,6 +61,13 @@ Taken on 2026-11-12, at your request.
 - **Publisher headlines and pictures, optional generated summaries.** Story summaries combine up to five feeds under the existing Edition provider settings, consent and budgets. Excerpts remain available while generation is disabled, pending or unavailable. Larger publisher pictures are stored by the background media worker and never fetched because someone opened the page.
 - **One selection across clients.** Web, Mac and Android render the same server response and retain account-scoped offline copies. Legacy Today and Edition destinations map to the daily and weekly tabs. Existing cadence preferences and API endpoints remain available for older clients.
 
+## Outbound credentials
+
+Taken on 2026-11-22, with your approval, after requiring HTTPS for every credential broke local integrations and startup.
+
+- **Plain HTTP carries credentials only to destinations you trust.** Loopback, or an exact `host:port` in `EARNEST_OUTBOUND_ALLOW_PRIVATE`. Everything else needs HTTPS. One rule covers LLM keys, integration and push tokens, and feed credentials. See [operations.md](../operations.md#outbound-access-and-models).
+- **A blocked key never stops the server.** Only that LLM provider is disabled, so Settings stays available to repair it. The CLI keeps its stricter rule of HTTPS outside loopback, as it has no allowlist.
+
 ## Fetching
 
 Taken on 2026-11-09, at your request, while fixing a feed that stopped the server.

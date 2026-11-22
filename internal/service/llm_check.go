@@ -37,7 +37,7 @@ func (s *Service) CheckLLMModel(ctx context.Context, a Actor, in LLMModelCheckIn
 	if in.Model.Provider != "" && in.Model.Provider != in.Provider.Name {
 		return llm.ModelCheck{}, fmt.Errorf("model belongs to a different provider: %w", ErrInvalid)
 	}
-	cfg, err := validateLLMCheckDraft(in, previous)
+	cfg, err := validateLLMCheckDraft(in, previous, s.outbound)
 	if err != nil {
 		return llm.ModelCheck{}, err
 	}
@@ -78,7 +78,7 @@ func (s *Service) CheckLLMModel(ctx context.Context, a Actor, in LLMModelCheckIn
 
 // A check supplies its own explicit prices and may need to discover the width.
 // Those temporary choices must not modify the saved configuration.
-func validateLLMCheckDraft(in LLMModelCheckInput, previous llm.Config) (llm.Config, error) {
+func validateLLMCheckDraft(in LLMModelCheckInput, previous llm.Config, egress *outbound.Client) (llm.Config, error) {
 	model := in.Model
 	model.Provider = in.Provider.Name
 	confirmed := true
@@ -102,7 +102,7 @@ func validateLLMCheckDraft(in LLMModelCheckInput, previous llm.Config) (llm.Conf
 	if in.Capability == "embedding" {
 		task = llm.TaskEmbed
 	}
-	cfg, err := validateLLMSettings(LLMSettingsInput{Providers: []LLMProviderInput{in.Provider}, Models: []LLMModelSettings{model}, Tasks: []LLMTaskSettings{{Task: string(task), Provider: in.Provider.Name, Model: model.Name}}}, previous)
+	cfg, err := validateLLMSettings(LLMSettingsInput{Providers: []LLMProviderInput{in.Provider}, Models: []LLMModelSettings{model}, Tasks: []LLMTaskSettings{{Task: string(task), Provider: in.Provider.Name, Model: model.Name}}}, previous, egress)
 	if err != nil {
 		return llm.Config{}, err
 	}

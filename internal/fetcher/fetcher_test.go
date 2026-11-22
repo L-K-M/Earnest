@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -800,12 +801,76 @@ func TestFetchScopesCredentialsToCanonicalOrigin(t *testing.T) {
 	if movedAuth != "" {
 		t.Fatalf("credentials leaked to the redirect target: %q", movedAuth)
 	}
-	// A legacy cleartext feed must fail before sending its stored credentials.
+	// The feed's own origin still receives them, including on another path.
 	if err := f.Fetch(ctx, service.FeedToFetch{FeedID: 1, URL: home.URL + "/feed", FetchURL: home.URL + "/other", Credentials: creds}); err != nil {
 		t.Fatal(err)
 	}
-	if homeHits.Load() != 0 || homeAuth != "" {
-		t.Fatal("credentials reached a cleartext feed")
+	if homeHits.Load() != 1 || homeAuth == "" {
+		t.Fatal("credentials missing on the feed's own origin")
+	}
+}
+
+type loopbackResolver struct{}
+
+func (loopbackResolver) LookupNetIP(context.Context, string, string) ([]netip.Addr, error) {
+	return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+}
+
+func TestFetchCleartextCredentialsNeedExactHost(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		listed bool
+		hits   int32
+		status service.FetchStatus
+	}{
+		{name: "allowlisted", listed: true, hits: 1, status: service.FetchOK},
+		// A legacy cleartext feed must fail before sending its stored credentials.
+		{name: "unlisted", status: service.FetchFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var hits atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+				if user, password, ok := r.BasicAuth(); !ok || user != "u" || password != "p" {
+					t.Error("credentials missing")
+				}
+				fmt.Fprint(w, `<rss version="2.0"><channel><title>T</title></channel></rss>`)
+			}))
+			defer server.Close()
+			_, port, err := net.SplitHostPort(mustHost(t, server))
+			if err != nil {
+				t.Fatal(err)
+			}
+			number, err := strconv.Atoi(port)
+			if err != nil {
+				t.Fatal(err)
+			}
+			host := net.JoinHostPort("feeds.test", port)
+			cfg := outbound.Config{
+				Resolver:      loopbackResolver{},
+				AllowPrefixes: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")},
+				Spacing:       time.Nanosecond,
+			}
+			if tc.listed {
+				cfg.AllowHosts = []string{host}
+			}
+			c, err := outbound.New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorded := &fakeService{}
+			f, err := New(recorded, c, Config{ExtraPorts: []uint16{uint16(number)}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			item := service.FeedToFetch{FeedID: 1, URL: "http://" + host + "/rss", Credentials: &service.FeedCredentials{Username: "u", Password: "p"}}
+			if err := f.Fetch(t.Context(), item); err != nil {
+				t.Fatal(err)
+			}
+			if hits.Load() != tc.hits || recorded.outcomes[0].Status != tc.status {
+				t.Fatalf("hits %d, outcome %+v", hits.Load(), recorded.outcomes[0])
+			}
+		})
 	}
 }
 

@@ -14,17 +14,23 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
 )
 
 const UserAgentFormat = "Earnest/%s (+https://github.com/L-K-M/Earnest)"
 const defaultRatio = 100
 const defaultSize int64 = 10 << 20
 const defaultTimeout = 30 * time.Second
+const localhostName = "localhost"
+
+// credentialHeaders always count as credentials, as do Credentials.Headers.
+var credentialHeaders = []string{"Authorization", "Proxy-Authorization", "Cookie", "X-API-Key", "X-Goog-Api-Key"}
 
 type Purpose string
 
@@ -95,7 +101,8 @@ func (systemResolver) LookupNetIP(ctx context.Context, _, host string) ([]netip.
 
 type Config struct {
 	Version string
-	// AllowHosts contains exact host:port entries; AllowPrefixes permits addresses in a prefix.
+	// AllowHosts contains exact host:port entries, which may also receive
+	// credentials over HTTP. AllowPrefixes only permits addresses in a prefix.
 	AllowHosts    []string
 	AllowPrefixes []netip.Prefix
 	// Spacing applies to all purposes. Zero selects the two-second default.
@@ -198,9 +205,6 @@ func (c *Client) Do(request *http.Request, p Policy) (*Result, error) {
 	if req.URL.User != nil {
 		return nil, fmt.Errorf("URL credentials are not allowed")
 	}
-	if req.URL.Scheme != "https" && (p.Credentials.Username != "" || p.Credentials.Password != "" || len(p.Credentials.Headers) > 0) {
-		return nil, classified(DeniedAddress, errors.New("credentials require HTTPS"))
-	}
 	if p.ETag != "" {
 		req.Header.Set("If-None-Match", p.ETag)
 	}
@@ -225,8 +229,8 @@ func (c *Client) Do(request *http.Request, p Policy) (*Result, error) {
 		if err := validateURL(req.URL, p.ExtraPorts); err != nil {
 			return nil, err
 		}
-		if req.URL.Scheme != "https" && !loopbackHost(req.URL.Hostname()) && hasCredentialHeaders(req.Header) {
-			return nil, classified(DeniedAddress, errors.New("credential headers require HTTPS"))
+		if !c.AllowsCredentials(req.URL) && hasCredentialHeaders(req.Header, p.Credentials.Headers) {
+			return nil, classified(DeniedAddress, errors.New("credentials require HTTPS, loopback or an allowlisted host:port"))
 		}
 		if seen[req.URL.String()] {
 			return nil, classified(RedirectLoop, errors.New("redirect loop"))
@@ -266,13 +270,7 @@ func (c *Client) Do(request *http.Request, p Policy) (*Result, error) {
 			nextReq.Header = req.Header.Clone()
 			if origin(next) != original {
 				for k := range nextReq.Header {
-					sensitive := strings.EqualFold(k, "Authorization") || strings.EqualFold(k, "Proxy-Authorization") || strings.EqualFold(k, "Cookie")
-					for credential := range p.Credentials.Headers {
-						if strings.EqualFold(k, credential) {
-							sensitive = true
-						}
-					}
-					if sensitive {
+					if isCredentialHeader(k, p.Credentials.Headers) {
 						delete(nextReq.Header, k)
 					}
 				}
@@ -309,17 +307,63 @@ func (c *Client) Do(request *http.Request, p Policy) (*Result, error) {
 	}
 }
 
+// AllowsCredentials reports whether credentials may be sent to u: over HTTPS
+// to any host, over HTTP only to loopback or an exact AllowHosts entry. A nil
+// client has no entries. The dial-time address checks apply as well.
+func (c *Client) AllowsCredentials(u *url.URL) bool {
+	if u == nil {
+		return false
+	}
+	if u.Scheme == "https" {
+		return true
+	}
+
+	host := u.Hostname()
+	// IDNA can map a non-ASCII name to another host than case folding does.
+	if u.Scheme != "http" || host == "" || strings.ContainsFunc(host, func(r rune) bool { return r > unicode.MaxASCII }) {
+		return false
+	}
+	if loopbackHost(host) {
+		return true
+	}
+	if c == nil {
+		return false
+	}
+
+	port := u.Port()
+	if port == "" {
+		port = "80"
+	}
+	return c.allowlisted(net.JoinHostPort(host, port))
+}
+
+func (c *Client) allowlisted(hostport string) bool {
+	return slices.ContainsFunc(c.config.AllowHosts, func(entry string) bool { return strings.EqualFold(entry, hostport) })
+}
+
 func loopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
+	if strings.EqualFold(host, localhostName) {
 		return true
 	}
 	ip, err := netip.ParseAddr(host)
 	return err == nil && ip.IsLoopback()
 }
 
-func hasCredentialHeaders(headers http.Header) bool {
-	for _, name := range []string{"Authorization", "Proxy-Authorization", "Cookie", "X-API-Key", "X-Goog-Api-Key"} {
-		if headers.Get(name) != "" {
+func hasCredentialHeaders(headers, custom http.Header) bool {
+	for name, values := range headers {
+		if isCredentialHeader(name, custom) && slices.ContainsFunc(values, func(v string) bool { return v != "" }) {
+			return true
+		}
+	}
+	return false
+}
+
+func isCredentialHeader(name string, custom http.Header) bool {
+	if slices.ContainsFunc(credentialHeaders, func(known string) bool { return strings.EqualFold(known, name) }) {
+		return true
+	}
+	for header := range custom {
+		if strings.EqualFold(header, name) {
 			return true
 		}
 	}
@@ -396,10 +440,8 @@ func (c *Client) allowed(addr netip.Addr, hostport string) bool {
 	if !blocked {
 		return true
 	}
-	for _, h := range c.config.AllowHosts {
-		if strings.EqualFold(h, hostport) {
-			return true
-		}
+	if c.allowlisted(hostport) {
+		return true
 	}
 	for _, p := range c.config.AllowPrefixes {
 		if p.Contains(addr) || (addr.Is4In6() && p.Contains(addr.Unmap())) {
@@ -442,6 +484,10 @@ func (c *Client) newTransport(protocol Protocol) *http.Transport {
 		}
 		var last error
 		for _, ip := range ips {
+			// AllowsCredentials trusts this name, so hold it to loopback.
+			if strings.EqualFold(host, localhostName) && !ip.IsLoopback() {
+				return nil, classified(DeniedAddress, fmt.Errorf("localhost resolved outside loopback: %s", ip))
+			}
 			if !c.allowed(ip, hostport) {
 				return nil, classified(DeniedAddress, fmt.Errorf("address denied: %s", ip))
 			}
