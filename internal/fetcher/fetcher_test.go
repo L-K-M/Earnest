@@ -1108,3 +1108,20 @@ func TestFetchQuerySecretNeedsHTTPS(t *testing.T) {
 		t.Fatalf("feed health: %+v", got)
 	}
 }
+
+func TestFetchKeepsSrcsetURLsWithCommas(t *testing.T) {
+	const srcset = "https://cdn.test/a.jpg 6000w, https://cdn.test/a.jpg?resize=250,141 250w, https://cdn.test/a.jpg?resize=1536,864 1536w"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `<rss version="2.0"><channel><title>T</title><item><guid>g</guid><description><![CDATA[`+
+			`<img src="https://cdn.test/a.jpg?w=800" width="800" height="450" srcset="`+srcset+`"><p>Text</p>]]></description></item></channel></rss>`)
+	}))
+	defer server.Close()
+	f, recorded := testFetcher(t, server)
+
+	if err := f.Fetch(t.Context(), service.FeedToFetch{FeedID: 1, URL: server.URL}); err != nil {
+		t.Fatal(err)
+	}
+	if got := recorded.outcomes[0].Items[0].ContentHTML; !strings.Contains(got, `srcset="`+srcset+`"`) {
+		t.Fatalf("stored srcset is corrupt: %s", got)
+	}
+}

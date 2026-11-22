@@ -640,6 +640,30 @@ func TestEntriesGetAndContent(t *testing.T) {
 	})
 }
 
+// Earnest used to store srcsets split at the commas inside their URLs.
+func TestStoredSplitSrcsetFallsBackToSrc(t *testing.T) {
+	f := entriesTestNew(t, storetest.NewTemplate(t))
+	ctx := t.Context()
+	feed := entriesTestFeed(t, f.db, "https://srcset.test/rss", 0)
+	entriesTestSub(t, f.db, f.a.UserID, feed, "today")
+	id := f.ingest(t, feed, "article", f.now())
+
+	const stored = `<img src="https://cdn.test/a.jpg?w=800" srcset="https://cdn.test/a.jpg?resize=1536, https://srcset.test/864 1536w"/>`
+	const want = `<img src="https://cdn.test/a.jpg?w=800"/>`
+	if _, err := f.db.Pool().Exec(ctx, "UPDATE contents SET html=$2 WHERE entry_id=$1", id, stored); err != nil {
+		t.Fatal(err)
+	}
+
+	content, err := f.s.Content(ctx, f.a, id)
+	if err != nil || content.HTML != want {
+		t.Fatalf("Content: %q, %v", content.HTML, err)
+	}
+	entries, err := f.s.GetByIDsWithContent(ctx, f.a, []int64{id})
+	if err != nil || len(entries) != 1 || entries[0].Content == nil || entries[0].Content.HTML != want {
+		t.Fatalf("GetByIDsWithContent: %+v, %v", entries, err)
+	}
+}
+
 // TestEntryTagConditionsCompose pins SQL precedence: filter conditions join
 // with AND, so a tag condition with a top-level OR must parenthesise it or
 // entries bypass the rest of the filter (a Done entry of one subscription

@@ -112,6 +112,36 @@ func TestResolveHTML(t *testing.T) {
 			base: "https://example.com/",
 			want: `<img srcset="https://example.com/a.png 1x, https://example.com/b.png 2x"/>`,
 		},
+		{
+			name: "srcset keeps commas in queries",
+			in:   `<img srcset="https://cdn.test/a.jpg 6000w, https://cdn.test/a.jpg?resize=250,141 250w, /a.jpg?resize=1536,864 1536w">`,
+			base: "https://example.com/blog/feed/",
+			want: `<img srcset="https://cdn.test/a.jpg 6000w, https://cdn.test/a.jpg?resize=250,141 250w, https://example.com/a.jpg?resize=1536,864 1536w"/>`,
+		},
+		{
+			name: "srcset keeps commas in paths",
+			in:   `<img srcset="/w_424,c_limit/a.jpg 424w,/w_848,c_limit/a.jpg 848w">`,
+			base: "https://example.com/post",
+			want: `<img srcset="https://example.com/w_424,c_limit/a.jpg 424w, https://example.com/w_848,c_limit/a.jpg 848w"/>`,
+		},
+		{
+			name: "srcset of one candidate keeps its descriptor",
+			in:   `<img srcset="a.png 2x">`,
+			base: "https://example.com/",
+			want: `<img srcset="https://example.com/a.png 2x"/>`,
+		},
+		{
+			name: "srcset keeps data URLs whole",
+			in:   `<img srcset="data:image/png;base64,AA 2x">`,
+			base: "https://example.com/",
+			want: `<img srcset="data:image/png;base64,AA 2x"/>`,
+		},
+		{
+			name: "malformed srcset untouched",
+			in:   `<img srcset="a.png 1x 2x">`,
+			base: "https://example.com/",
+			want: `<img srcset="a.png 1x 2x"/>`,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
