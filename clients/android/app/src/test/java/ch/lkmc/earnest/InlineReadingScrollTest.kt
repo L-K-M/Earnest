@@ -284,6 +284,53 @@ class InlineReadingScrollTest {
         }
     }
 
+    @Test fun resizingInPlaceKeepsTheSamePlaceInAFullArticle() {
+        lateinit var viewport: InlineArticleState
+        lateinit var list: LazyListState
+        showMeasuredArticles(onViewport = { viewport = it }, onList = { list = it })
+        compose.onNodeWithText("Headline 2").performClick()
+        compose.waitForIdle()
+        settle(viewport, 300_000)
+        compose.runOnIdle { list.requestScrollToItem(1, 150_000) }
+        compose.waitForIdle()
+        val before = compose.runOnIdle { (list.firstVisibleItemScrollOffset - viewport.headerPx) / 300_000f }
+        // A fold within the same resource buckets resizes without recreating the activity.
+        // The WebView reports its old height at the new width before the next composition.
+        compose.runOnIdle {
+            viewport.invalidate()
+            viewport.reportHeight(300_000)
+        }
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals("reflow must wait on the headline", 0, list.firstVisibleItemScrollOffset) }
+        settle(viewport, 330_000)
+        compose.runOnIdle {
+            assertEquals(1, list.firstVisibleItemIndex)
+            val after = (list.firstVisibleItemScrollOffset - viewport.headerPx) / 330_000f
+            assertEquals("resizing must keep the reading place", before, after, 0.001f)
+        }
+    }
+
+    @Test fun recreationInAShortListStillResumesTheSamePlace() {
+        val restoration = StateRestorationTester(compose)
+        val few = ARTICLES.take(3)
+        lateinit var viewport: InlineArticleState
+        lateinit var list: LazyListState
+        showMeasuredArticles(restoration, entries = { few }, onViewport = { viewport = it }, onList = { list = it })
+        compose.onNodeWithText("Headline 3").performClick()
+        compose.waitForIdle()
+        settle(viewport, 300_000)
+        compose.runOnIdle { list.requestScrollToItem(2, 150_000) }
+        compose.waitForIdle()
+        val before = compose.runOnIdle { (list.firstVisibleItemScrollOffset - viewport.headerPx) / 300_000f }
+        restoration.emulateSavedInstanceStateRestore()
+        compose.waitForIdle()
+        settle(viewport, 250_000)
+        compose.runOnIdle {
+            assertEquals(2, list.firstVisibleItemIndex)
+            assertEquals(before, (list.firstVisibleItemScrollOffset - viewport.headerPx) / 250_000f, 0.001f)
+        }
+    }
+
     @Test fun scrollingWhileTheBodyLoadsAbandonsTheSavedPlace() {
         val restoration = StateRestorationTester(compose)
         lateinit var viewport: InlineArticleState
@@ -352,6 +399,22 @@ class InlineReadingScrollTest {
         compose.onNodeWithText("Headline 3").performTouchInput { swipeRight() }
         compose.waitForIdle()
         compose.runOnIdle { assertEquals(listOf(2L, 3L, 2L), expanded) }
+    }
+
+    @Test fun swipingNearTheEndOfTheListStillBringsTheArticleToTheTop() {
+        lateinit var viewport: InlineArticleState
+        lateinit var list: LazyListState
+        val few = ARTICLES.take(4)
+        showMeasuredArticles(entries = { few }, onViewport = { viewport = it }, onList = { list = it })
+        compose.onNodeWithText("Headline 2").performClick()
+        compose.onNodeWithText("Headline 2").performTouchInput { swipeLeft() }
+        compose.waitForIdle()
+        // Until its body arrives the list is too short to put the headline at the top.
+        settle(viewport, 50_000)
+        compose.runOnIdle {
+            assertEquals(2, list.firstVisibleItemIndex)
+            assertEquals(0, list.firstVisibleItemScrollOffset)
+        }
     }
 
     @Test fun swipingBackInAnUnreadListReturnsToTheArticleJustRead() {

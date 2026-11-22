@@ -101,8 +101,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Android's Read in feed shows expanded articles in full, without pages,
-  keeps your place in them across folding and rotation, and offers Reload
-  article if the renderer stops.
+  returns to about your place in them after folding and rotation, and offers
+  Reload article if the renderer stops.
 - Rotating an Android device, or Android restoring the app, no longer marks
   the open article read again, so an article you marked unread stays unread
   until you open it. A link or notification no longer reopens its article

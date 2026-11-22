@@ -78,8 +78,12 @@ private const val MIN_INLINE_HEIGHT_DP = 120
 // after the load ends. A height that holds this long is the article's.
 internal const val INLINE_SETTLE_MS = 300L
 
-/** Whether a saved reading place is waiting for the body it points into. */
-internal enum class ResumeState { IDLE, WAITING, ABANDONED }
+/**
+ * How a saved reading place relates to the body it points into: not applied
+ * since that body was last measured, waiting on the headline for its height,
+ * given up because the reader scrolled, or in effect.
+ */
+internal enum class ResumeState { UNPLACED, WAITING, ABANDONED, PLACED }
 
 /** Owned by the list, not its disposable lazy item or native WebView. */
 internal class InlineArticleState {
@@ -98,7 +102,9 @@ internal class InlineArticleState {
         private set
     var offline by mutableStateOf(false)
         private set
-    var resume = ResumeState.IDLE
+    // Observed on its own: a WebView can report a height again before the
+    // composition that saw the last one forgotten.
+    var resume by mutableStateOf(ResumeState.UNPLACED)
 
     /** The expanded row's height above the body. */
     var headerPx = 0
@@ -117,7 +123,7 @@ internal class InlineArticleState {
     fun invalidate() {
         pixels = 0
         settled = false
-        resume = ResumeState.IDLE
+        resume = ResumeState.UNPLACED
     }
 
     fun documentReleased() {
@@ -142,7 +148,7 @@ internal class InlineArticleState {
     fun settle() {
         settled = true
         pixels = contentPx
-        resume = ResumeState.IDLE
+        resume = ResumeState.PLACED
     }
 
     /** The body's height, given the [natural] height measured for the live WebView. */

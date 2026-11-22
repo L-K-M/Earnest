@@ -103,7 +103,6 @@ import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteDefaul
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -1198,8 +1197,11 @@ internal fun EntryListScreen(
     val currentRowIndexOf by rememberUpdatedState(rowIndexOf)
     var scrollAnchor by remember { mutableStateOf<InlineScrollAnchor?>(null) }
     // Read while composing, so losing the measurement runs the effect below again.
-    val needsPlacing = remember(inlineViewport) { derivedStateOf { inlineViewport.pixels == 0 } }.value
+    val resumeState = inlineViewport.resume
     val lastExpanded = remember { arrayOfNulls<Long>(1) }
+    // The article a swipe is bringing to the top. Near the end of a list its
+    // row can only get there once the body has made the list tall enough.
+    val revealing = remember { arrayOfNulls<Long>(1) }
     SideEffect {
         val previous = lastExpanded[0]
         lastExpanded[0] = expanded
@@ -1222,7 +1224,7 @@ internal fun EntryListScreen(
                 }
             }
         }
-        if (selectedEntry != null && needsPlacing && place != null && inlineViewport.resume == ResumeState.IDLE) {
+        if (selectedEntry != null && resumeState == ResumeState.UNPLACED && place != null) {
             // Wait on the headline until the body has a height to resume into.
             inlineViewport.resume = ResumeState.WAITING
             listState.requestScrollToItem(rowIndexOf(selectedEntry.id))
@@ -1230,7 +1232,9 @@ internal fun EntryListScreen(
     }
     LaunchedEffect(inlineViewport, listState) {
         snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
-            if (scrolling && inlineViewport.resume == ResumeState.WAITING) {
+            if (!scrolling) return@collect
+            revealing[0] = null
+            if (inlineViewport.resume == ResumeState.WAITING) {
                 inlineViewport.resume = ResumeState.ABANDONED
                 place = null
             }
@@ -1240,7 +1244,9 @@ internal fun EntryListScreen(
         val id = expanded ?: return@LaunchedEffect
         snapshotFlow { Triple(inlineViewport.loaded, inlineViewport.contentPx, inlineViewport.settled) }
             .collectLatest { (loaded, height, settled) ->
-                if (!loaded || height <= 0 || settled) return@collectLatest
+                if (height <= 0 || settled) return@collectLatest
+                if (revealing[0] == id) listState.requestScrollToItem(currentRowIndexOf(id))
+                if (!loaded) return@collectLatest
                 delay(INLINE_SETTLE_MS)
                 val header = inlineViewport.headerPx
                 val held = inlineViewport.pixels
@@ -1252,6 +1258,7 @@ internal fun EntryListScreen(
                     else -> null
                 }
                 inlineViewport.settle()
+                revealing[0] = null
                 resumeAt?.let {
                     listState.requestScrollToItem(currentRowIndexOf(id), header + (it.coerceIn(0f, 1f) * height).roundToInt())
                 }
@@ -1278,6 +1285,7 @@ internal fun EntryListScreen(
     }
     fun changeExpansion(id: Long?) {
         if (id != null) snapshotOrder(id)
+        revealing[0] = null
         val anchor = id ?: expanded
         scrollAnchor = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == anchor }?.let { item ->
             // Keep a tapped headline in place; collapsing inside a body
@@ -1302,6 +1310,7 @@ internal fun EntryListScreen(
     }
     val turn = { step: ArticleStep ->
         scrollAnchor = InlineScrollAnchor(rowIndexOf(step.entryId), 0)
+        revealing[0] = step.entryId
         expandedId = step.entryId
         onExpand(step.entryId)
     }

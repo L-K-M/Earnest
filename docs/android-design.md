@@ -106,7 +106,9 @@ can. Never measure it with the scroll range either, which can include the
 viewport and feed back into the height. The row holds its last height until the
 document has loaded and stayed the same size for 300ms. The reading place is
 saved as a fraction of the body, because folding and rotation change its
-height; until the body is measured again the list waits on the headline.
+height; until the body is measured again the list waits on the headline. The
+place is approximate when a new width reflows text and images unevenly, as an
+exact anchor would need script in the page.
 
 Article pages run without JavaScript, so a swipe cannot ask what is under the
 finger. The WebView's clamped horizontal overscroll answers instead: Chromium

@@ -106,9 +106,9 @@ content and reader images, and only one article is expanded at a time. Opening
 another article keeps its headline in place instead of carrying over the previous
 article's scroll offset. Collapse or Back returns you to the expanded headline
 when you are inside its body. The expanded article shows in full: keep scrolling
-the list to read it and to continue to the next headline. Your place in it
-survives folding, rotating and an app restore. **Open reader** opens the
-dedicated reading tools.
+the list to read it and to continue to the next headline. Folding, rotating and
+an app restore return you to about the same place in it. **Open reader** opens
+the dedicated reading tools.
 The layout choice is remembered on your device. Wide screens keep the existing
 side-by-side list and reader. In Articles, **Unread only** filters the current
 feed, folder or all articles. It starts with your account’s **Show only unread**
