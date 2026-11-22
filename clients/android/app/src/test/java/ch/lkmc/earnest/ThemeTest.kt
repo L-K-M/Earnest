@@ -175,6 +175,35 @@ class ThemeTest {
         }
     }
 
+    @Test fun toneSurfacesCarrySmallTextInEveryTheme() {
+        ThemeSetting.entries.forEach { setting ->
+            listOf(false, true).forEach { systemDark ->
+                val scheme = colorScheme(setting, systemDark)
+                val tones = tones(setting, systemDark)
+                listOf(tones.orange, tones.amber, tones.plum, tones.purple, tones.blue, tones.green).forEach { tone ->
+                    val colors = toneColors(scheme, tone)
+                    val where = "$setting tone $tone (dark system: $systemDark)"
+                    assertTrue("$where ink on its container", contrast(colors.ink, colors.container) >= 4.5f)
+                    assertTrue("$where body on its container", contrast(scheme.onSurface, colors.container) >= 4.5f)
+                    assertTrue("$where ink on the page", contrast(colors.ink, scheme.surface) >= 4.5f)
+                }
+            }
+        }
+    }
+
+    @Test fun controlEdgesAndGroupedTextKeepTheirContrast() {
+        ThemeSetting.entries.forEach { setting ->
+            listOf(false, true).forEach { systemDark ->
+                val scheme = colorScheme(setting, systemDark)
+                assertTrue("$setting outline", contrast(scheme.outline, scheme.surface) >= 3f)
+                assertTrue("$setting grouped text", contrast(scheme.onSurfaceVariant, scheme.groupContainer) >= 4.5f)
+                assertTrue("$setting section header", contrast(scheme.primary, scheme.surface) >= 4.5f)
+                assertTrue("$setting tonal button", contrast(scheme.onSecondaryContainer, scheme.secondaryContainer) >= 4.5f)
+                assertTrue("$setting destructive menu item", contrast(scheme.error, scheme.surfaceContainerHigh) >= 4.5f)
+            }
+        }
+    }
+
     @Test fun eInkFeedbackStaysMonochrome() {
         val scheme = colorScheme(ThemeSetting.E_INK, systemDark = false)
         assertEquals(Color.Black, scheme.error)

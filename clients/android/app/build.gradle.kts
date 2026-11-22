@@ -150,7 +150,7 @@ dependencies {
 
     implementation(platform("androidx.compose:compose-bom:2026.09.00"))
     // Expressive theme, motion and controls are public starting with 1.5.
-    implementation("androidx.compose.material3:material3:1.5.0-rc01")
+    implementation("androidx.compose.material3:material3:1.5.0")
     implementation("androidx.compose.material3:material3-adaptive-navigation-suite")
     implementation("androidx.compose.material3.adaptive:adaptive-navigation")
     implementation("androidx.compose.material:material-icons-core")

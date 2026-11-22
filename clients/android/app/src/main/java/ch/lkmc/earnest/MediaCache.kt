@@ -210,6 +210,8 @@ internal fun MediaImage(
     path: String?,
     modifier: Modifier = Modifier,
     shape: Shape = RectangleShape,
+    placeholder: @Composable (Modifier) -> Unit = { Box(it) },
+    frame: @Composable (Modifier, @Composable (Modifier) -> Unit) -> Unit = { box, picture -> picture(box) },
     model: AppViewModel = viewModel(),
 ) {
     if (path.isNullOrEmpty()) return
@@ -224,13 +226,15 @@ internal fun MediaImage(
     }
     val image = bitmap
     if (image == null) {
-        Box(modifier.clip(shape))
+        placeholder(modifier.clip(shape))
     } else {
-        Image(
-            bitmap = image,
-            contentDescription = null,
-            modifier = modifier.clip(shape),
-            contentScale = ContentScale.Crop,
-        )
+        frame(modifier.clip(shape)) { pictureModifier ->
+            Image(
+                bitmap = image,
+                contentDescription = null,
+                modifier = pictureModifier,
+                contentScale = ContentScale.Crop,
+            )
+        }
     }
 }
