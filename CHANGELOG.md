@@ -100,6 +100,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Android article text follows the system font size, Back closes the drawer
+  instead of the app, healthy feeds no longer report a failed fetch, and
+  Articles on a wide screen opens with the reader pane beside the list.
 - Android's Read in feed shows expanded articles in full, without pages,
   returns to about your place in them after folding and rotation, and offers
   Reload article if the renderer stops.
@@ -166,6 +169,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The Android app is redesigned in Material 3 Expressive: collapsing serif
+  titles, a Saved destination for Kept, Later and Done, reader actions in
+  thumb reach, pull to refresh, grouped Feeds with a pace menu, and rebuilt
+  drawer, Search, Settings, Connect and widget. See `docs/android-design.md`.
 - The web, Android and Mac clients take their colours from the app icon:
   each place has its own tone (orange Today, blue Edition, amber Later,
   plum Kept, green Done), unread dots are orange, selection is a warm
