@@ -7,6 +7,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/L-K-M/Earnest/internal/sanitize"
 	xhtml "golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
 )
@@ -316,22 +317,10 @@ func absolutizeURL(val, base string) string {
 	return ResolveURL(base, val)
 }
 
-// absolutizeSrcset resolves every candidate in a srcset list, preserving the
-// descriptors after each URL.
+// absolutizeSrcset resolves every candidate in a srcset list, preserving
+// descriptors and the commas inside URLs.
 func absolutizeSrcset(val, base string) string {
-	if !strings.Contains(val, ",") {
-		return absolutizeURL(val, base)
-	}
-	parts := strings.Split(val, ",")
-	for i, part := range parts {
-		fields := strings.Fields(strings.TrimSpace(part))
-		if fields == nil {
-			continue
-		}
-		fields[0] = ResolveURL(base, fields[0])
-		parts[i] = strings.Join(fields, " ")
-	}
-	return strings.Join(parts, ", ")
+	return sanitize.MapSrcsetURLs(val, func(src string) string { return absolutizeURL(src, base) })
 }
 
 // nodeAttr returns an attribute value from an HTML node.

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/L-K-M/Earnest/internal/sanitize"
 	"github.com/L-K-M/Earnest/internal/store"
 	"github.com/L-K-M/Earnest/internal/syncmodel"
 	"github.com/jackc/pgx/v5"
@@ -302,7 +303,7 @@ func (s *Service) getByIDs(ctx context.Context, a Actor, ids []int64, withConten
 		e.State = states[id]
 		if withContent && !e.Deleted {
 			if c, ok := content[id]; ok {
-				e.Content = &EntryContent{EntryID: id, HTML: c.HTML, Text: c.Text, SanitizerVersion: c.Version, Source: ContentSource(c.Source)}
+				e.Content = &EntryContent{EntryID: id, HTML: sanitize.DropUnusableSrcsets(c.HTML), Text: c.Text, SanitizerVersion: c.Version, Source: ContentSource(c.Source)}
 			}
 		}
 		out = append(out, e)
@@ -377,7 +378,7 @@ func (s *Service) Content(ctx context.Context, a Actor, id int64) (EntryContent,
 	}
 	return EntryContent{
 		EntryID:          id,
-		HTML:             html,
+		HTML:             sanitize.DropUnusableSrcsets(html),
 		Text:             text,
 		SanitizerVersion: version,
 		Source:           ContentSource(source),

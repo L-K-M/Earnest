@@ -100,6 +100,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Article images whose `srcset` URLs contain commas, as on Hackaday, load
+  instead of leaving a blank gap and then a broken image. Articles already
+  stored with a damaged list show their regular image.
 - Credentials work over plain HTTP again for loopback and for exact hosts
   in `EARNEST_OUTBOUND_ALLOW_PRIVATE`, such as `hister:8080`. Other HTTP
   destinations still need HTTPS, and an LLM provider with a blocked key
