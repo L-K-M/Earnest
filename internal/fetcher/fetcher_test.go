@@ -816,6 +816,101 @@ func (loopbackResolver) LookupNetIP(context.Context, string, string) ([]netip.Ad
 	return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
 }
 
+// Plain HTTP keeps these tests local: credentials wrongly scoped to a
+// non-ASCII name make the egress gate refuse the request.
+func TestCredentialsStayOffLookAlikeHosts(t *testing.T) {
+	const body = `<rss version="2.0"><channel><title>T</title></channel></rss>`
+	for _, tc := range []struct {
+		name, home, lookAlike string
+		run                   func(t *testing.T, f *Fetcher, home, lookAlike string) error
+	}{
+		{
+			name: "recorded permanent redirect", home: "wiki.test", lookAlike: "wİki.test",
+			run: func(t *testing.T, f *Fetcher, home, lookAlike string) error {
+				return f.Fetch(t.Context(), service.FeedToFetch{
+					FeedID: 1, URL: home + "/feed", FetchURL: lookAlike + "/feed",
+					Credentials: &service.FeedCredentials{Username: "u", Password: "p"},
+				})
+			},
+		},
+		{
+			name: "discovered feed link", home: "wish.test", lookAlike: "wiſh.test",
+			run: func(t *testing.T, f *Fetcher, home, _ string) error {
+				_, _, _, err := f.Probe(t.Context(), home+"/page", &service.FeedCredentials{Username: "u", Password: "p"})
+				return err
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var feedHits atomic.Int32
+			var leaked atomic.Bool
+			var link string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasPrefix(r.Host, tc.home+":") && r.URL.Path != "/page" {
+					http.NotFound(w, r) // not the look-alike: discovery's fallback paths
+					return
+				}
+				if r.URL.Path == "/page" {
+					w.Header().Set("Content-Type", "text/html")
+					fmt.Fprintf(w, `<html><head><link rel="alternate" type="application/rss+xml" href="%s"></head></html>`, link)
+					return
+				}
+				feedHits.Add(1)
+				if r.Header.Get("Authorization") != "" {
+					leaked.Store(true)
+				}
+				fmt.Fprint(w, body)
+			}))
+			defer server.Close()
+			_, port, err := net.SplitHostPort(mustHost(t, server))
+			if err != nil {
+				t.Fatal(err)
+			}
+			number, err := strconv.Atoi(port)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c, err := outbound.New(outbound.Config{
+				Resolver:      loopbackResolver{},
+				AllowHosts:    []string{tc.home + ":" + port},
+				AllowPrefixes: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")},
+				Spacing:       time.Nanosecond,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f, err := New(&fakeService{}, c, Config{ExtraPorts: []uint16{uint16(number)}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			lookAlike := "http://" + tc.lookAlike + ":" + port
+			link = lookAlike + "/feed"
+
+			if err := tc.run(t, f, "http://"+tc.home+":"+port, lookAlike); err != nil {
+				t.Fatal(err)
+			}
+			if feedHits.Load() != 1 || leaked.Load() {
+				t.Fatalf("look-alike was given credentials: hits %d, leaked %t", feedHits.Load(), leaked.Load())
+			}
+		})
+	}
+}
+
+func TestSameOriginComparesNamesAsDialled(t *testing.T) {
+	for _, tc := range []struct {
+		a, b string
+		want bool
+	}{
+		{"https://WIKI.test/a", "https://wiki.test:443/b", true},
+		{"https://wİki.test", "https://wiki.test", false},
+		{"https://wσki.test", "https://wςki.test", false},
+	} {
+		if got := sameOrigin(tc.a, tc.b); got != tc.want {
+			t.Errorf("sameOrigin(%q, %q) = %t, want %t", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
 func TestFetchCleartextCredentialsNeedExactHost(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

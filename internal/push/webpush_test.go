@@ -339,6 +339,9 @@ func TestEndpointOrigin(t *testing.T) {
 		{"https://push.example.net:8443/push/x", "https://push.example.net:8443"},
 		{"http://ntfy.local:8080/topic", "http://ntfy.local:8080"},
 		{"http://example.net/topic", "http://example.net"},
+		{"https://PUSH.Example.net/x", "https://push.example.net"},
+		// A look-alike must not get an assertion that names the real service.
+		{"https://wİki.test/x", "https://wİki.test"},
 	}
 	for _, tt := range tests {
 		got, err := endpointOrigin(tt.raw)

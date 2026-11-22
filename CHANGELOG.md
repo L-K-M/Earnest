@@ -100,6 +100,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A redirect, discovered feed link or stored redirect to a look-alike
+  international domain, such as `wİki.test` for `wiki.test`, no longer
+  receives the original site's password, headers or token. Two Unicode
+  spellings of one domain now need their own credentials.
 - Credentials work over plain HTTP again for loopback and for exact hosts
   in `EARNEST_OUTBOUND_ALLOW_PRIVATE`, such as `hister:8080`. Other HTTP
   destinations still need HTTPS, and an LLM provider with a blocked key

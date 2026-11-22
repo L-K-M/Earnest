@@ -21,6 +21,8 @@ import (
 	"syscall"
 	"time"
 	"unicode"
+
+	"github.com/L-K-M/Earnest/internal/hostname"
 )
 
 const UserAgentFormat = "Earnest/%s (+https://github.com/L-K-M/Earnest)"
@@ -378,7 +380,7 @@ func origin(u *url.URL) string {
 			port = "80"
 		}
 	}
-	return strings.ToLower(u.Scheme) + "://" + net.JoinHostPort(strings.ToLower(u.Hostname()), port)
+	return strings.ToLower(u.Scheme) + "://" + net.JoinHostPort(hostname.Lower(u.Hostname()), port)
 }
 func isRedirect(code int) bool {
 	return code == 301 || code == 302 || code == 303 || code == 307 || code == 308
