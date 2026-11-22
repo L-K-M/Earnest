@@ -4,20 +4,14 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.semantics.CustomAccessibilityAction
-import androidx.compose.ui.semantics.customActions
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -30,68 +24,67 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import ch.lkmc.earnest.ReaderFilterChip as FilterChip
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.constrainHeight
 import androidx.compose.ui.unit.dp
+import ch.lkmc.earnest.ReaderFilterChip as FilterChip
 import ch.lkmc.earnest.core.CachedEntry
 import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.core.UnreadCounts
 import ch.lkmc.earnest.core.typographyFor
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
-import kotlin.math.roundToInt
 
 /** The feed owns one loaded article while its pane is off screen. Native
  * views still follow the lazy item's lifetime and large bodies stay out of saved state.
@@ -130,11 +123,14 @@ private data class InlineScrollAnchor(val index: Int, val offset: Int)
 private fun androidx.compose.foundation.lazy.LazyListState.depthInto(entryId: Long): Int? =
     layoutInfo.visibleItemsInfo.firstOrNull()?.takeIf { it.key == entryId && it.offset < 0 }?.let { -it.offset }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 internal fun EntryListScreen(
     title: String,
     entries: List<CachedEntry>,
+    destination: View = View.ALL,
+    loading: Boolean = false,
+    onBrowse: (() -> Unit)? = null,
     states: Map<Long, ch.lkmc.earnest.core.State>,
     principalId: Long,
     subscriptionTitles: Map<Long, String>,
@@ -343,19 +339,16 @@ internal fun EntryListScreen(
     LazyColumn(state = listState, modifier = Modifier.fillMaxSize().onSizeChanged { listWidth = it.width }, contentPadding = PaddingValues(bottom = 16.dp)) {
         if (layoutOverride == null || unreadOnly != null) {
             item(key = "reading-layout") {
-                if (layoutOverride == null) ArticleLayoutControl(layout, onLayout = {
-                    changeExpansion(null)
-                    preferredLayout = it
-                    context.setArticleLayout(it)
-                })
-                if (unreadOnly != null) {
-                    FilterChip(
-                        selected = unreadOnly,
-                        onClick = { onUnreadOnlyChange(!unreadOnly) },
-                        label = { Text("Unread only") },
-                        modifier = Modifier.padding(horizontal = ReaderSpace.gutter),
-                    )
-                }
+                ListControls(
+                    layout = layout.takeIf { layoutOverride == null },
+                    unreadOnly = unreadOnly,
+                    onUnreadOnlyChange = onUnreadOnlyChange,
+                    onLayout = {
+                        changeExpansion(null)
+                        preferredLayout = it
+                        context.setArticleLayout(it)
+                    },
+                )
             }
         }
         if (unreadMode) {
@@ -365,12 +358,17 @@ internal fun EntryListScreen(
                     unreadSyncedAt != null -> "Unread ${unreadCounts.total} · last synced ${unreadSyncedAt.relativeTime()}"
                     else -> "Unread ${unreadCounts.total}"
                 }
-                Text(text, modifier = Modifier.fillMaxWidth().padding(16.dp), style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    text,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = ReaderSpace.gutter, vertical = ReaderSpace.xs),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
         if (briefs.isNotEmpty()) {
             item(key = "briefs") {
-                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.fillMaxWidth().padding(ReaderSpace.gutter), verticalArrangement = Arrangement.spacedBy(ReaderSpace.xs)) {
                     briefs.forEach { brief ->
                         Text(
                             briefLabel(principalNames[brief.principalId], brief.principalId, brief.value),
@@ -382,7 +380,9 @@ internal fun EntryListScreen(
         }
         if (agentChanges.isNotEmpty() || agentChangesError != null) {
             item(key = "agent-changes") {
-                AgentChangesNotice("While you were out", agentChanges, entryTitles, agentChangesError, onOpenAgentSelected, onRevert)
+                Box(Modifier.padding(horizontal = ReaderSpace.md, vertical = ReaderSpace.xs)) {
+                    AgentChangesNotice("While you were out", agentChanges, entryTitles, agentChangesError, onOpenAgentSelected, onRevert)
+                }
             }
         }
         items(visibleEntries, key = { it.id }) { entry ->
@@ -423,22 +423,24 @@ internal fun EntryListScreen(
                     }
                     if (isExpanded) {
                         when {
-                            inlineReader.loading -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator(Modifier.size(24.dp))
+                            inlineReader.loading -> Box(Modifier.fillMaxWidth().padding(ReaderSpace.lg), contentAlignment = Alignment.Center) {
+                                LoadingIndicator()
                             }
                             inlineReader.content != null -> inlineContent(inlineReader.content!!, entry, inlineViewport)
-                            else -> Column(Modifier.padding(horizontal = 16.dp)) {
-                                Text(
-                                    inlineReader.error ?: "Could not load this article. Connect and try again, or open a cached article.",
-                                    color = MaterialTheme.colorScheme.error,
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                                TextButton(onClick = { retry++ }) { Text("Try again") }
-                            }
+                            else -> NoticeBanner(
+                                inlineReader.error ?: "Could not load this article. Connect and try again, or open a cached article.",
+                                modifier = Modifier.padding(horizontal = ReaderSpace.md),
+                                tone = NoticeTone.ERROR,
+                                actionLabel = "Try again",
+                                onAction = { retry++ },
+                            )
                         }
-                        FlowRow(Modifier.fillMaxWidth().padding(horizontal = ReaderSpace.md, vertical = ReaderSpace.xs), horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs)) {
-                            FilledTonalButton(onClick = { openReader(entry.id) }) { Text("Open reader") }
-                            TextButton(onClick = { changeExpansion(null) }) { Text("Collapse") }
+                        FlowRow(
+                            Modifier.fillMaxWidth().padding(horizontal = ReaderSpace.md, vertical = ReaderSpace.sm),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            SecondaryButton("Open reader", { openReader(entry.id) }, icon = EarnestIcons.Book)
+                            QuietButton("Collapse", { changeExpansion(null) }, icon = EarnestIcons.ChevronUp)
                         }
                     }
                     HorizontalDivider(Modifier.padding(horizontal = ReaderSpace.gutter), color = MaterialTheme.colorScheme.outlineVariant)
@@ -446,23 +448,99 @@ internal fun EntryListScreen(
             }
         }
         item(key = "end") {
-            if (visibleEntries.isEmpty()) {
-                val message = if (unreadOnly == true) "Turn off Unread only to see read articles." else when (title) {
-                    "Kept" -> "Keep an article from its menu to find it here. Your favorites stay close at hand."
-                    "Later" -> "Save an article for Later from its menu, or give it a short swipe to the left."
-                    "Done" -> "Articles you mark Done will appear here. You can always mark them unread again."
-                    else -> "No cached articles for $title. Refresh to check for new articles, or add a source in Feeds."
-                }
-                QuietState(if (title == "Kept") "Your favorites belong here" else "Nothing here yet", message, icon = if (title == "Kept") Icons.Filled.Star else Icons.AutoMirrored.Filled.List)
-            } else {
-                Text("End of cached articles.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.fillMaxWidth().padding(ReaderSpace.lg))
+            when {
+                visibleEntries.isNotEmpty() -> ListEnd()
+                entries.isEmpty() && loading -> LoadingState("Fetching your articles…")
+                unreadOnly == true && entries.isNotEmpty() -> QuietState(
+                    "All caught up",
+                    "Turn off Unread only to see read articles.",
+                    tone = LocalTones.current.green,
+                    actionLabel = "Show read articles",
+                    onAction = { onUnreadOnlyChange(false) },
+                )
+                else -> EmptyPlace(destination, title, onBrowse)
             }
             if (sessionChanges.isNotEmpty() || agentChangesError != null) {
-                AgentChangesNotice("Agent changes this session", sessionChanges, entryTitles, agentChangesError, onOpenAgentSelected, onRevert)
+                Box(Modifier.padding(horizontal = ReaderSpace.md, vertical = ReaderSpace.xs)) {
+                    AgentChangesNotice("Agent changes this session", sessionChanges, entryTitles, agentChangesError, onOpenAgentSelected, onRevert)
+                }
             }
         }
     }
     ArticleSwipeHint(swipe)
+    }
+}
+
+/** One row: the filter at the start, the layout at the end, wrapping when they do not fit. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ListControls(
+    layout: ArticleLayout?,
+    unreadOnly: Boolean?,
+    onUnreadOnlyChange: (Boolean) -> Unit,
+    onLayout: (ArticleLayout) -> Unit,
+) {
+    FlowRow(
+        Modifier.fillMaxWidth().padding(horizontal = ReaderSpace.md, vertical = ReaderSpace.xxs),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        itemVerticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (unreadOnly != null) {
+            FilterChip(
+                selected = unreadOnly,
+                onClick = { onUnreadOnlyChange(!unreadOnly) },
+                label = { Text("Unread only") },
+            )
+        }
+        if (layout != null) ArticleLayoutControl(layout, onLayout)
+    }
+}
+
+@Composable
+private fun EmptyPlace(place: View, title: String, onBrowse: (() -> Unit)?) {
+    val tones = LocalTones.current
+    val browse = "Browse articles".takeIf { onBrowse != null }
+    val open = onBrowse ?: {}
+    when (place) {
+        View.KEPT -> QuietState(
+            "Your favorites belong here",
+            "Keep an article from its menu to find it here. Your favorites stay close at hand.",
+            icon = EarnestIcons.KeptSelected, tone = tones.plum, actionLabel = browse, onAction = open,
+        )
+        View.LATER -> QuietState(
+            "Nothing saved for Later",
+            "Save an article for Later from its menu, or give it a short swipe to the left.",
+            icon = EarnestIcons.LaterSelected, tone = tones.amber, actionLabel = browse, onAction = open,
+        )
+        View.DONE -> QuietState(
+            "Nothing marked Done yet",
+            "Articles you mark Done will appear here. You can always mark them unread again.",
+            icon = EarnestIcons.DoneSelected, tone = tones.green, actionLabel = browse, onAction = open,
+        )
+        else -> QuietState(
+            "Nothing here yet",
+            "No cached articles for $title. Refresh to check for new articles, or add a source in Feeds.",
+            tone = tones.blue, actionLabel = "Manage feeds".takeIf { onBrowse != null }, onAction = open,
+        )
+    }
+}
+
+private val EndMarkSize = 28.dp
+
+@Composable
+private fun ListEnd() {
+    Column(
+        Modifier.fillMaxWidth().padding(ReaderSpace.xl),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+    ) {
+        Icon(
+            painterResource(R.drawable.ic_notification),
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.outline,
+            modifier = Modifier.size(EndMarkSize),
+        )
+        Text("End of cached articles.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -492,6 +570,14 @@ private fun Modifier.unreadHeadlineHeight(text: String, style: TextStyle, measur
         layout(placeable.width, height) { placeable.place(0, 0) }
     }
 
+private val UnreadDotSize = 8.dp
+private val RowMarkSize = 20.dp
+private val ThumbnailSize = 80.dp
+
+/**
+ * The unread dot lives in the gutter, so reading never moves the text. The
+ * headline's weight and ink say the same thing without colour.
+ */
 @Composable
 internal fun EntryRow(
     entry: CachedEntry,
@@ -511,7 +597,7 @@ internal fun EntryRow(
 ) {
     val unread = isUnread(state)
     val kept = state.kept.value == JsonPrimitive(true)
-    var menuOpen by remember { mutableStateOf(false) }
+    val scheme = MaterialTheme.colorScheme
     Column(
         Modifier.fillMaxWidth().clickable(
             onClickLabel = when {
@@ -525,45 +611,50 @@ internal fun EntryRow(
                 stateDescription = if (unread) "Unread" else "Read"
                 if (articleActions.isNotEmpty()) customActions = articleActions
             }
-            .padding(start = ReaderSpace.gutter, end = ReaderSpace.xs, top = ReaderSpace.xs, bottom = ReaderSpace.gutter),
+            .padding(top = ReaderSpace.xxs, bottom = ReaderSpace.gutter),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(6.dp).background(if (unread) LocalTones.current.orange else Color.Transparent, RoundedCornerShape(3.dp)))
-            Spacer(Modifier.width(6.dp))
-            if (sourceIcon != null) {
-                MediaImage(sourceIcon, Modifier.size(16.dp), RoundedCornerShape(4.dp))
-                Spacer(Modifier.width(6.dp))
+        Row(Modifier.padding(end = ReaderSpace.xxs), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.width(ReaderSpace.gutter), contentAlignment = Alignment.Center) {
+                if (unread) Box(Modifier.size(UnreadDotSize).background(LocalTones.current.orange, CircleShape))
             }
+            val feed = source.ifBlank { "Feed" }
+            FeedAvatar(feed, sourceIcon, size = RowMarkSize)
+            Spacer(Modifier.width(ReaderSpace.xs))
             Text(
-                source.ifBlank { "Feed" },
+                feed,
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = scheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            Spacer(Modifier.width(8.dp))
-            Text(entry.firstSeenAt.relativeTime(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-            if (kept) Icon(Icons.Filled.Star, contentDescription = "Kept", tint = LocalTones.current.plum, modifier = Modifier.padding(start = 6.dp).size(16.dp))
-            Box {
-                IconButton(onClick = { menuOpen = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "Article actions") }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    DropdownMenuItem(text = { Text("Open reader") }, onClick = { menuOpen = false; onOpenReader() })
-                    DropdownMenuItem(text = { Text(if (kept) "Unkeep" else "Keep") }, onClick = { menuOpen = false; if (kept) onUnkeep() else onKeep() })
-                    DropdownMenuItem(text = { Text("Later") }, onClick = { menuOpen = false; onLater() })
-                    DropdownMenuItem(text = { Text("Done") }, onClick = { menuOpen = false; onDone() })
-                    if (canMarkUnread(state)) {
-                        DropdownMenuItem(text = { Text("Mark unread") }, onClick = { menuOpen = false; onMarkUnread() })
-                    }
-                }
+            Spacer(Modifier.width(ReaderSpace.xs))
+            Text(entry.firstSeenAt.relativeTime(), style = MaterialTheme.typography.labelMedium, color = scheme.onSurfaceVariant, maxLines = 1)
+            if (kept) {
+                Icon(
+                    EarnestIcons.KeptSelected,
+                    contentDescription = "Kept",
+                    tint = LocalTones.current.plum,
+                    modifier = Modifier.padding(start = ReaderSpace.xs).size(16.dp),
+                )
             }
+            EntryMenu(
+                kept = kept,
+                canUnread = canMarkUnread(state),
+                onOpenReader = onOpenReader,
+                onToggleKept = if (kept) onUnkeep else onKeep,
+                onLater = onLater,
+                onDone = onDone,
+                onMarkUnread = onMarkUnread,
+            )
         }
-        Row(Modifier.padding(end = 8.dp), verticalAlignment = Alignment.Top) {
+        Row(Modifier.padding(start = ReaderSpace.gutter, end = ReaderSpace.gutter), verticalAlignment = Alignment.Top) {
             val headline = entry.title.ifBlank { "Untitled" }
-            val headlineStyle = MaterialTheme.typography.titleMedium
+            val headlineStyle = StoryType.row
             Text(
                 headline,
                 style = headlineStyle,
+                color = if (unread) scheme.onSurface else scheme.onSurfaceVariant,
                 fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal,
                 maxLines = HEADLINE_MAX_LINES,
                 overflow = TextOverflow.Ellipsis,
@@ -572,18 +663,58 @@ internal fun EntryRow(
                 ),
             )
             entry.thumbnailUrl?.let { thumbnail ->
-                Spacer(Modifier.width(12.dp))
-                MediaImage(thumbnail, Modifier.size(72.dp), RoundedCornerShape(16.dp))
+                Spacer(Modifier.width(ReaderSpace.md))
+                MediaImage(
+                    thumbnail,
+                    Modifier.size(ThumbnailSize),
+                    MaterialTheme.shapes.medium,
+                    placeholder = { Box(it.background(scheme.surfaceContainer)) },
+                )
             }
         }
         if (readingInFeed && expanded) {
-            Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(if (expanded) "Reading in feed" else "Read in feed", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                Icon(
-                    if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                    contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp),
-                )
+            Row(
+                Modifier.padding(start = ReaderSpace.gutter, top = ReaderSpace.xs),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xxs),
+            ) {
+                Icon(EarnestIcons.LayoutReading, contentDescription = null, tint = scheme.primary, modifier = Modifier.size(16.dp))
+                Text("Reading in feed", style = MaterialTheme.typography.labelMedium, color = scheme.primary)
             }
+        }
+    }
+}
+
+@Composable
+private fun EntryMenu(
+    kept: Boolean,
+    canUnread: Boolean,
+    onOpenReader: () -> Unit,
+    onToggleKept: () -> Unit,
+    onLater: () -> Unit,
+    onDone: () -> Unit,
+    onMarkUnread: () -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    fun choose(action: () -> Unit): () -> Unit = {
+        open = false
+        action()
+    }
+    Box {
+        IconButton(onClick = { open = true }) {
+            Icon(EarnestIcons.More, contentDescription = "Article actions", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        AppMenu(open, { open = false }) {
+            AppMenuItem("Open reader", choose(onOpenReader), EarnestIcons.Book)
+            HorizontalDivider()
+            AppMenuItem(
+                if (kept) "Unkeep" else "Keep",
+                choose(onToggleKept),
+                if (kept) EarnestIcons.KeptSelected else EarnestIcons.Kept,
+            )
+            AppMenuItem("Later", choose(onLater), EarnestIcons.Later)
+            AppMenuItem("Done", choose(onDone), EarnestIcons.Done)
+            if (canUnread) AppMenuItem("Mark unread", choose(onMarkUnread), EarnestIcons.MarkUnread)
         }
     }
 }
@@ -611,26 +742,8 @@ private fun SwipeActionRow(
         }
     }
     Box(modifier.fillMaxWidth()) {
-        val target = swipeTargetFor(-offset, laterThreshold, doneThreshold)
-        // Below the Later threshold the reveal already promises Later, so it
-        // keeps the Later tone rather than fading to neutral.
-        val reveal = lerp(
-            MaterialTheme.colorScheme.surface,
-            if (target == SwipeTarget.DONE) LocalTones.current.green else LocalTones.current.amber,
-            0.18f,
-        )
-        Box(
-            Modifier
-                .matchParentSize()
-                .background(reveal),
-            contentAlignment = Alignment.CenterEnd,
-        ) {
-            Text(
-                target?.label ?: SwipeTarget.LATER.label,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(end = 24.dp),
-            )
-        }
+        val revealed by remember { derivedStateOf { offset < 0f } }
+        if (revealed) SwipeReveal(swipeTargetFor(-offset, laterThreshold, doneThreshold), Modifier.matchParentSize())
         // The opaque foreground keeps the reveal hidden until the row moves.
         Box(
             Modifier
@@ -661,5 +774,28 @@ private fun SwipeActionRow(
         ) {
             content()
         }
+    }
+}
+
+/**
+ * Before the threshold the reveal already promises Later, tinted. Past it
+ * the reveal turns solid: letting go now does this.
+ */
+@Composable
+private fun SwipeReveal(target: SwipeTarget?, modifier: Modifier) {
+    val scheme = MaterialTheme.colorScheme
+    val shown = target ?: SwipeTarget.LATER
+    val done = shown == SwipeTarget.DONE
+    val colors = toneColors(scheme, if (done) LocalTones.current.green else LocalTones.current.amber)
+    val content = if (target == null) colors.ink else scheme.surface
+    Row(
+        modifier.background(if (target == null) colors.container else colors.ink)
+            .padding(horizontal = ReaderSpace.lg)
+            .clearAndSetSemantics {},
+        horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs, Alignment.End),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(shown.label, style = MaterialTheme.typography.labelLarge, color = content)
+        Icon(if (done) EarnestIcons.DoneSelected else EarnestIcons.LaterSelected, contentDescription = null, tint = content)
     }
 }

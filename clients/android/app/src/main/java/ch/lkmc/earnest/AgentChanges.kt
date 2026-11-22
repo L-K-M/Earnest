@@ -4,7 +4,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.ui.Alignment
 import androidx.compose.material3.Surface
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -12,7 +16,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -121,26 +124,42 @@ internal fun AgentChangesNotice(
     onOpen: (Long) -> Unit,
     onRevert: (Long) -> Unit,
 ) {
-    Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
-        Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(ReaderSpace.sm)) {
-            Text(title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.semantics { heading() })
+    val scheme = MaterialTheme.colorScheme
+    val colors = toneColors(scheme, LocalTones.current.purple)
+    Surface(shape = MaterialTheme.shapes.large, color = colors.container, contentColor = scheme.onSurface) {
+        Column(Modifier.fillMaxWidth().padding(ReaderSpace.gutter), verticalArrangement = Arrangement.spacedBy(ReaderSpace.sm)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = colors.ink,
+                    modifier = Modifier.weight(1f).semantics { heading() },
+                )
+                Icon(EarnestIcons.Sparkle, contentDescription = null, tint = colors.ink, modifier = Modifier.size(20.dp))
+            }
             error?.let { NoticeBanner(it, tone = NoticeTone.ERROR) }
-            changes.forEach { change ->
+            changes.forEachIndexed { index, change ->
+                if (index > 0) HorizontalDivider(color = colors.ink.copy(alpha = NOTICE_RULE_ALPHA))
                 Column(verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs)) {
                     Text(agentChangeText(change, entryTitles), style = MaterialTheme.typography.bodyMedium)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs)) {
                         agentChangedEntryId(change)?.let { id ->
-                            TextButton(onClick = { onOpen(id) }) { Text("Open article") }
+                            QuietButton("Open article", { onOpen(id) }, color = colors.ink)
                         }
                         if (change.nextAction == "revert") {
-                            TextButton(onClick = { onRevert(change.id) }) { Text("Revert") }
+                            QuietButton("Revert", { onRevert(change.id) }, color = colors.ink)
                         }
                     }
                     if (change.nextAction != "revert") {
-                        Text(change.reason?.takeIf { it.isNotBlank() }?.let { "Cannot revert: $it" } ?: "Cannot revert this change.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            change.reason?.takeIf { it.isNotBlank() }?.let { "Cannot revert: $it" } ?: "Cannot revert this change.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                     }
                 }
             }
         }
     }
 }
+
+private const val NOTICE_RULE_ALPHA = 0.2f

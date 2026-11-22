@@ -16,7 +16,11 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
@@ -313,6 +317,18 @@ internal fun barIcons(scheme: ColorScheme): BarIcons =
 internal fun indicatorBlend(scheme: ColorScheme): Float =
     if (scheme.background.luminance() >= LIGHT_BACKGROUND_LUMINANCE) 0.08f else 0.18f
 
+private val LocalBarIconOverride = staticCompositionLocalOf<MutableState<BarIcons?>?> { null }
+
+/** For a screen that fills the window with its own canvas, such as the article. */
+@Composable
+internal fun OverrideBarIcons(icons: BarIcons) {
+    val override = LocalBarIconOverride.current ?: return
+    DisposableEffect(override, icons) {
+        override.value = icons
+        onDispose { override.value = null }
+    }
+}
+
 internal fun ComponentActivity.applyBarIcons(icons: BarIcons) {
     // Before Android 15, the manifest theme leaves opaque bars. Use the same
     // edge-to-edge policy on every supported API, then match the app's ink.
@@ -329,14 +345,16 @@ fun EarnestTheme(setting: ThemeSetting, content: @Composable () -> Unit) {
     val scheme = colorScheme(setting, systemDark)
     val tone = tones(setting, systemDark)
     val view = LocalView.current
+    val override = remember { mutableStateOf<BarIcons?>(null) }
+    val icons = override.value ?: barIcons(scheme)
     // The app draws edge to edge, and the in-app theme can differ from the
-    // system's, so the bars must follow the effective scheme.
+    // system's, so the bars must follow whatever is drawn beneath them.
     SideEffect {
         if (view.isInEditMode) return@SideEffect
         val activity = view.context as? ComponentActivity ?: return@SideEffect
-        activity.applyBarIcons(barIcons(scheme))
+        activity.applyBarIcons(icons)
     }
-    CompositionLocalProvider(LocalTones provides tone) {
+    CompositionLocalProvider(LocalTones provides tone, LocalBarIconOverride provides override) {
         MaterialExpressiveTheme(
             colorScheme = scheme,
             typography = EarnestTypography,

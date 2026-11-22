@@ -17,9 +17,6 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.Column
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -148,10 +145,15 @@ internal fun Reader(
     key(url, fallbackHtml) {
         var rendererLost by remember { mutableStateOf(false) }
         if (rendererLost) {
-            Column(modifier) {
-                Text("The article renderer stopped.")
-                TextButton(onClick = { rendererLost = false }) { Text("Reload article") }
-            }
+            QuietState(
+                title = "The article renderer stopped.",
+                message = "Your place in the list is safe.",
+                modifier = modifier,
+                icon = EarnestIcons.Alert,
+                tone = LocalTones.current.amber,
+                actionLabel = "Reload article",
+                onAction = { rendererLost = false },
+            )
         } else AndroidView(
             modifier = (if (swipe == null) Modifier else Modifier.articlePage(swipe) { published[0] }).then(modifier),
             factory = { context ->
@@ -201,9 +203,11 @@ internal const val MAX_READER_ZOOM = 200
 internal fun zoomStep(current: Int, up: Boolean): Int =
     (current + if (up) 10 else -10).coerceIn(MIN_READER_ZOOM, MAX_READER_ZOOM)
 
+internal const val NO_MATCHES = "No matches"
+
 /** The find bar's match label: "3/12", or "No matches" for an empty search. */
 internal fun findCountLabel(active: Int, total: Int): String =
-    if (total <= 0) "No matches" else "${active + 1}/$total"
+    if (total <= 0) NO_MATCHES else "${active + 1}/$total"
 
 /** Maps the account's article theme to the content origin's `theme` value (internal/web/content.go). */
 internal fun ReaderTheme.contentTheme(systemDark: Boolean): String = when (this) {
@@ -233,6 +237,16 @@ internal fun readerUrl(url: String, typography: ReaderTypography, systemDark: Bo
 
 internal fun readerBackground(typography: ReaderTypography, systemDark: Boolean): Int =
     Color.parseColor(readerColors(typography, systemDark).first)
+
+/** The text colour of the same canvas, for chrome drawn on it. */
+internal fun readerForeground(typography: ReaderTypography, systemDark: Boolean): Int =
+    when (typography.theme.contentTheme(systemDark)) {
+        // The CSS uses three-digit colours, which parseColor does not accept.
+        "dark" -> Color.parseColor("#eeeeee")
+        "black" -> Color.WHITE
+        "eink" -> Color.BLACK
+        else -> Color.parseColor("#202020")
+    }
 
 private fun readerColors(typography: ReaderTypography, systemDark: Boolean): Pair<String, String> =
     when (typography.theme.contentTheme(systemDark)) {

@@ -142,11 +142,14 @@ class MobileDesignTest {
         compose.onNodeWithContentDescription("Back").assertIsDisplayed()
         // The closed drawer remains composed off screen, but the bottom
         // navigation must not be displayed during a focused search.
+        compose.onNodeWithText("Saved").assertDoesNotExist()
         compose.onNodeWithText("Kept").assertIsNotDisplayed()
         compose.runOnIdle { back!!.onBackPressed() }
         compose.onNodeWithContentDescription("Folders and feeds").assertIsDisplayed()
         compose.onNodeWithText("Your sources").assertIsDisplayed()
-        compose.onAllNodesWithText("Kept").assertCountEquals(2)
+        // The bottom bar returns, and the drawer still lists Kept by name.
+        compose.onNodeWithText("Saved").assertIsDisplayed()
+        compose.onAllNodesWithText("Kept").assertCountEquals(1)
     }
 
     @Test

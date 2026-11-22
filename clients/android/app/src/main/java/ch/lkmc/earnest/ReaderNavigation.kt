@@ -46,10 +46,51 @@ import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.core.SyncObject
 import ch.lkmc.earnest.core.UnreadCounts
 
-/** Secondary shelves remain in the drawer, not seven tiny phone tabs. */
+/** Four destinations; the drawer keeps every shelf one tap away as well. */
 internal val primaryDestinations = listOf(View.FRONT, View.ALL, View.KEPT, View.FEEDS)
 
-internal val View.navigationLabel: String get() = if (this == View.ALL) "Articles" else label
+/** The shelves behind the Saved destination, which opens on Kept. */
+internal val savedShelves = listOf(View.KEPT, View.LATER, View.DONE)
+
+internal val View.navigationLabel: String
+    get() = when (this) {
+        View.ALL -> "Articles"
+        View.KEPT -> "Saved"
+        else -> label
+    }
+
+/** The destination that stands for this view; every saved shelf is Saved. */
+internal val View.primary: View get() = if (this in savedShelves) View.KEPT else this
+
+internal fun View.navigationIcon(selected: Boolean): ImageVector = when {
+    this == View.KEPT && selected -> EarnestIcons.SavedSelected
+    this == View.KEPT -> EarnestIcons.Saved
+    selected -> selectedIcon
+    else -> icon
+}
+
+internal fun screenTitle(view: View, selection: FeedSelection, objects: List<SyncObject>): ScreenTitle = when (view) {
+    View.ALL -> ScreenTitle(selection.title(objects), (selection as? FeedSelection.Folder)?.let { folderSummary(it, objects) })
+    View.KEPT, View.LATER, View.DONE -> ScreenTitle(View.KEPT.navigationLabel)
+    View.FEEDS -> ScreenTitle(view.label, subscriptionSummary(objects))
+    else -> ScreenTitle(view.label)
+}
+
+private fun folderSummary(folder: FeedSelection.Folder, objects: List<SyncObject>): String? {
+    val key = if (folder.id == 0L) "unfiled" else "folder-${folder.id}"
+    val group = navigationFeedGroups(objects).firstOrNull { it.key == key } ?: return null
+    return "Folder · ${feedCount(group.subscriptions.size)}"
+}
+
+private fun subscriptionSummary(objects: List<SyncObject>): String? {
+    val feeds = objects.count { it.kind == SyncEngine.OBJECT_SUBSCRIPTION && !it.deleted }
+    if (feeds == 0) return null
+    val folders = objects.count { it.kind == SyncEngine.OBJECT_FOLDER && !it.deleted }
+    if (folders == 0) return feedCount(feeds)
+    return "${feedCount(feeds)} in $folders ${if (folders == 1) "folder" else "folders"}"
+}
+
+internal fun feedCount(count: Int): String = "$count ${if (count == 1) "feed" else "feeds"}"
 
 /** Folder and subscription IDs are different namespaces, including after restoration. */
 internal sealed interface FeedSelection {

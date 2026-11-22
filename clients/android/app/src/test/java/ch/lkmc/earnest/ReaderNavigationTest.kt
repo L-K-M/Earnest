@@ -21,6 +21,9 @@ class ReaderNavigationTest {
     @Test fun phonesHaveFourPrimaryDestinationsAndShelvesStayAvailable() {
         assertEquals(listOf(View.FRONT, View.ALL, View.KEPT, View.FEEDS), primaryDestinations)
         assertEquals("Articles", View.ALL.navigationLabel)
+        assertEquals("Saved", View.KEPT.navigationLabel)
+        savedShelves.forEach { assertEquals("every shelf lights up Saved", View.KEPT, it.primary) }
+        assertEquals(View.ACTIVITY, View.ACTIVITY.primary)
         assertTrue(View.entries.containsAll(listOf(View.LATER, View.DONE, View.ACTIVITY)))
     }
 

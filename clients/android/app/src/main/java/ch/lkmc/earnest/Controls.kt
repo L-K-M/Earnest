@@ -39,6 +39,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.ToggleButton
+import androidx.compose.material3.ToggleButtonColors
 import androidx.compose.material3.ToggleButtonDefaults
 import androidx.compose.material3.TooltipAnchorPosition
 import androidx.compose.material3.TooltipBox
@@ -229,7 +230,7 @@ internal fun <T> ChoiceGroup(
                     options.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
                     else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
                 },
-                colors = ToggleButtonDefaults.colors(),
+                colors = choiceColors(),
                 contentPadding = PaddingValues(horizontal = ReaderSpace.xs, vertical = ReaderSpace.xs),
             ) {
                 icon?.let {
@@ -245,6 +246,18 @@ internal fun <T> ChoiceGroup(
             }
         }
     }
+}
+
+/** A selection is peach and an action teal. E-paper gets solid black instead. */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+internal fun choiceColors(): ToggleButtonColors {
+    val scheme = MaterialTheme.colorScheme
+    if (scheme.isMonochrome) return ToggleButtonDefaults.colors()
+    return ToggleButtonDefaults.colors(
+        checkedContainerColor = scheme.secondaryContainer,
+        checkedContentColor = scheme.onSecondaryContainer,
+    )
 }
 
 @Composable

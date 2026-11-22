@@ -83,6 +83,7 @@ class SettingsNavigationTest {
         compose.onAllNodesWithContentDescription("Back").assertCountEquals(1)
         compose.onNodeWithContentDescription("Search").assertDoesNotExist()
         compose.onNodeWithText("Kept").assertDoesNotExist()
+        compose.onNodeWithText("Saved").assertDoesNotExist()
         compose.onNodeWithContentDescription("Back").performClick()
         compose.onNodeWithText("Discard unsaved changes?").assertDoesNotExist()
         compose.onNodeWithContentDescription("Folders and feeds").assertIsDisplayed()
