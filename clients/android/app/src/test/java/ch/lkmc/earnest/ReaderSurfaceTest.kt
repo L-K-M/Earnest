@@ -10,10 +10,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -61,6 +64,19 @@ class ReaderSurfaceTest {
                 assertEquals("$theme must not start with the default white WebView canvas", expected, shadowOf(views.getValue(theme)).backgroundColor)
             }
         }
+    }
+
+    @Test fun articleTextGrowsWithTheSystemFontSizeAsWellAsTheReadersOwn() {
+        var view: WebView? = null
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, 1.5f)) {
+                Reader(
+                    url = null, cachedHtml = "<p>Article</p>", typography = ReaderTypography(ReaderTheme.LIGHT, 68, ReaderFont.SERIF),
+                    textZoom = 120, modifier = Modifier.fillMaxWidth().height(120.dp), onWebView = { view = it },
+                )
+            }
+        }
+        compose.runOnIdle { assertEquals(180, view!!.settings.textZoom) }
     }
 
     @Test fun nativeDocumentPaintingCannotEscapeItsResizingViewport() {

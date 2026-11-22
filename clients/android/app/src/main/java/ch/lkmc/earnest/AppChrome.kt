@@ -1,5 +1,8 @@
 package ch.lkmc.earnest
 
+import androidx.compose.foundation.text.TextAutoSize
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -124,10 +127,20 @@ private fun BarTitle(text: String, maxLines: Int) {
 private fun SmallBarTitle(text: String) {
     val density = LocalDensity.current
     val titleDensity = Density(density.density, density.fontScale.coerceAtMost(BAR_TITLE_MAX_FONT_SCALE))
-    CompositionLocalProvider(LocalDensity provides titleDensity) { BarTitle(text, maxLines = 1) }
+    val style = LocalTextStyle.current
+    CompositionLocalProvider(LocalDensity provides titleDensity) {
+        Text(
+            text,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            autoSize = TextAutoSize.StepBased(minFontSize = BarTitleMinSize, maxFontSize = style.fontSize),
+            modifier = Modifier.semantics { heading() },
+        )
+    }
 }
 
 private const val BAR_TITLE_MAX_FONT_SCALE = 1.15f
+private val BarTitleMinSize = 16.sp
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable

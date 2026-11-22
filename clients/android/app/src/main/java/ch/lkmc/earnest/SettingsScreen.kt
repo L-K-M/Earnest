@@ -169,7 +169,10 @@ internal fun SettingsScreen(
     // A short window or very large text needs the height for the form itself.
     val density = LocalDensity.current
     val windowHeight = with(density) { LocalWindowInfo.current.containerSize.height.toDp() }
-    val categoriesScroll = windowHeight < ShortSettingsHeight || density.fontScale > CATEGORY_PIN_MAX_FONT_SCALE
+    val shortWindow = windowHeight < ShortSettingsHeight
+    val categoriesScroll = shortWindow || density.fontScale > CATEGORY_PIN_MAX_FONT_SCALE
+    // There, the bar waits until it has something to do.
+    val showActions = !shortWindow || dirty || readerUi.saving || llmUi.saving
     val categorySwitch = @Composable {
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
             FlowRow(
@@ -240,7 +243,7 @@ internal fun SettingsScreen(
         }
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
             Box(Modifier.widthIn(max = ReaderSpace.formWidth).fillMaxWidth()) {
-                when (category) {
+                if (showActions) when (category) {
                     SettingsCategory.READING -> ReadingSettingsActions(model, state)
                     SettingsCategory.AI -> LlmSettingsActions(model, state)
                     SettingsCategory.IMPORT_EXPORT -> Unit

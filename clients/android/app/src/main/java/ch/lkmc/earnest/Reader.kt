@@ -1,5 +1,7 @@
 package ch.lkmc.earnest
 
+import androidx.compose.ui.platform.LocalDensity
+import kotlin.math.roundToInt
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.ClipData
@@ -130,6 +132,8 @@ internal fun Reader(
     swipe: ArticleSwipeState? = null,
 ) {
     val systemDark = isSystemInDarkTheme()
+    // Setting a zoom replaces WebView's own default, which is the system font size.
+    val effectiveZoom = (textZoom * LocalDensity.current.fontScale).roundToInt()
     val displayUrl = remember(url, typography, systemDark) { url?.let { readerUrl(it, typography, systemDark) } }
     val fallbackHtml = remember(cachedHtml, typography, systemDark) {
         cachedHtml?.let { offlineReaderHtml(it, typography, systemDark) }
@@ -180,7 +184,7 @@ internal fun Reader(
                 published[0] = webView
                 webViewCallback.value(webView)
                 webView.setBackgroundColor(backgroundColor)
-                if (webView.settings.textZoom != textZoom) webView.settings.textZoom = textZoom
+                if (webView.settings.textZoom != effectiveZoom) webView.settings.textZoom = effectiveZoom
                 if (webView.tag != (displayUrl ?: fallbackHtml)) {
                     webView.tag = displayUrl ?: fallbackHtml
                     if (displayUrl != null) webView.loadUrl(displayUrl) else webView.loadUrl(ASSET_URL)
