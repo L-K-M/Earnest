@@ -105,13 +105,12 @@ func TestCleartextRedirectsKeepCredentialsOnTheirOrigin(t *testing.T) {
 	for _, tc := range []struct {
 		name, host  string
 		credentials bool // whether the redirect target may receive them
-		blocked     bool
 	}{
 		{name: "same origin", host: "wiki.test", credentials: true},
 		{name: "another allowlisted origin", host: "other.test"},
 		{name: "loopback", host: "127.0.0.1"},
-		// origin() folds this name onto wiki.test, but it resolves as another host.
-		{name: "look-alike origin", host: "wİki.test", blocked: true},
+		// Unicode case folding equates this name with wiki.test; IDNA dials another host.
+		{name: "look-alike origin", host: "wİki.test"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var hits atomic.Int32
@@ -148,12 +147,6 @@ func TestCleartextRedirectsKeepCredentialsOnTheirOrigin(t *testing.T) {
 			p.Credentials = Credentials{Username: "reader", Password: "private", Headers: http.Header{"X-Secret": {"private"}}}
 
 			_, err = c.Do(req, p)
-			if tc.blocked {
-				if ErrorClass(err) != DeniedAddress || hits.Load() != 0 {
-					t.Fatalf("followed look-alike: hits %d, %v", hits.Load(), err)
-				}
-				return
-			}
 			if err != nil || hits.Load() != 1 {
 				t.Fatalf("redirect: hits %d, %v", hits.Load(), err)
 			}

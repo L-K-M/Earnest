@@ -31,3 +31,28 @@ func TestBearerTokenDoesNotFollowCrossOriginRedirect(t *testing.T) {
 		t.Fatal("accepted cross-origin redirect")
 	}
 }
+
+func TestBearerTokenDoesNotFollowLookAlikeRedirect(t *testing.T) {
+	c := newClient("https://reader.example", "private-token")
+	for _, tc := range []struct {
+		from, to string
+		follow   bool
+	}{
+		{from: "reader.example", to: "READER.example", follow: true},
+		// Unicode case folding equates these, but IDNA dials two hosts.
+		{from: "wσki.example", to: "wςki.example"},
+		{from: "wΣki.example", to: "wςki.example"},
+	} {
+		first, err := http.NewRequest(http.MethodGet, "https://"+tc.from+"/v1/me", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		next, err := http.NewRequest(http.MethodGet, "https://"+tc.to+"/v1/me", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.http.CheckRedirect(next, []*http.Request{first}); (err == nil) != tc.follow {
+			t.Errorf("redirect %s to %s: %v, want follow %t", tc.from, tc.to, err, tc.follow)
+		}
+	}
+}

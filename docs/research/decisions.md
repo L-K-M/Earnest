@@ -67,6 +67,7 @@ Taken on 2026-11-22, with your approval, after requiring HTTPS for every credent
 
 - **Plain HTTP carries credentials only to destinations you trust.** Loopback, or an exact `host:port` in `EARNEST_OUTBOUND_ALLOW_PRIVATE`. Everything else needs HTTPS. One rule covers LLM keys, integration and push tokens, and feed credentials. See [operations.md](../operations.md#outbound-access-and-models).
 - **A blocked key never stops the server.** Only that LLM provider is disabled, so Settings stays available to repair it. The CLI keeps its stricter rule of HTTPS outside loopback, as it has no allowlist.
+- **An origin folds ASCII case only.** Unicode case folding equates names that IDNA dials as different servers, so a redirect to `wİki.test` got the password of `wiki.test`. Two Unicode spellings of one name now count as two origins and need their own credentials. Feed discovery keeps the host's spelling for the same reason. Entry identities still fold Unicode case, as changing them would duplicate stored entries.
 
 ## Fetching
 

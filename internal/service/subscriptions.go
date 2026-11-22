@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/L-K-M/Earnest/internal/hostname"
 	"github.com/L-K-M/Earnest/internal/outbound"
 	"github.com/L-K-M/Earnest/internal/store"
 	"github.com/L-K-M/Earnest/internal/syncmodel"
@@ -98,7 +99,7 @@ func normalizedFeedURL(raw string) (string, error) {
 	if err != nil || u == nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || len(raw) > 8192 {
 		return "", fmt.Errorf("feed URL: %w", ErrInvalid)
 	}
-	u.Host = strings.ToLower(u.Host)
+	u.Host = hostname.Lower(u.Host) // credentialOrigin relies on this folding
 	if port := u.Port(); (u.Scheme == "http" && port == "80") || (u.Scheme == "https" && port == "443") {
 		host := u.Hostname()
 		if strings.Contains(host, ":") {
