@@ -31,7 +31,9 @@ work every second, processing bounded batches rather than launching one model
 call per feed goroutine. A database advisory lock prevents overlapping workers
 from spending twice on the same batch.
 
-`GET /v1/pipeline` reports each task as `enabled`, `disabled` (unconfigured), or
+`GET /v1/pipeline` reports each task as `enabled`, `disabled` (unconfigured,
+or its provider's key
+[may not travel over HTTP](operations.md#outbound-access-and-models)), or
 `paused` (its provider budget is exhausted, including in-flight reservations).
 This availability snapshot makes no model calls; each call must still reserve
 its input-dependent cost, which may exceed the remaining budget. Hybrid search and

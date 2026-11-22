@@ -3,13 +3,15 @@ package llm
 import (
 	"errors"
 	"fmt"
-	"net/netip"
+	"log/slog"
 	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/L-K-M/Earnest/internal/outbound"
 )
+
+var errBlockedAPIKey = errors.New("API key requires HTTPS, or an exact host:port in EARNEST_OUTBOUND_ALLOW_PRIVATE for HTTP")
 
 // Route is a resolved task: the provider to call and the model to use.
 type Route struct {
@@ -26,7 +28,8 @@ type Router struct {
 
 // NewRouter constructs the providers described by cfg and returns a router
 // over them. It fails when a configured task names a model with no price
-// entry, so an unpriced model cannot be called by accident.
+// entry, so an unpriced model cannot be called by accident. A provider whose
+// key may not travel to its URL is left out, which disables only its tasks.
 func NewRouter(cfg Config, client *outbound.Client) (*Router, error) {
 	if client == nil {
 		return nil, errors.New("llm: outbound client is required")
@@ -34,6 +37,12 @@ func NewRouter(cfg Config, client *outbound.Client) (*Router, error) {
 	providers := make(map[string]Provider, len(cfg.Providers))
 	for name, providerConfig := range cfg.Providers {
 		provider, err := newProvider(name, providerConfig, client)
+		if errors.Is(err, errBlockedAPIKey) {
+			// Configuration can predate the rule, or outlive its allowlist entry.
+			// Failing here would stop the server and the Settings that repair it.
+			slog.Warn("LLM provider disabled", "provider", name, "error", err)
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -87,8 +96,8 @@ func newProvider(name string, cfg ProviderConfig, client *outbound.Client) (Prov
 	if parsed.Hostname() == "" {
 		return nil, fmt.Errorf("llm: provider %s base URL must name a host", name)
 	}
-	if cfg.APIKey != "" && parsed.Scheme != "https" && !localProviderHost(parsed.Hostname()) {
-		return nil, fmt.Errorf("llm: provider %s API key requires HTTPS", name)
+	if cfg.APIKey != "" && !client.AllowsCredentials(parsed) {
+		return nil, fmt.Errorf("llm: provider %s: %w", name, errBlockedAPIKey)
 	}
 	ports, err := baseExtraPorts(parsed)
 	if err != nil {
@@ -108,14 +117,6 @@ func newProvider(name string, cfg ProviderConfig, client *outbound.Client) (Prov
 	default:
 		return nil, fmt.Errorf("llm: provider %s has unknown kind %q", name, cfg.Kind)
 	}
-}
-
-func localProviderHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip, err := netip.ParseAddr(host)
-	return err == nil && ip.IsLoopback()
 }
 
 // baseExtraPorts returns the non-standard port in u, which outbound requires

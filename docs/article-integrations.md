@@ -40,7 +40,8 @@ the old token to the new URL: enter it again if needed. Disabling an
 integration clears its token. Keep `EARNEST_SECRET_KEY` with your backups.
 
 Use HTTPS unless HTTP is appropriate for your trusted local or tailnet
-connection. Requests originate on the Earnest server, not in your browser.
+connection. Earnest sends a token over HTTP only to loopback or an exact
+`host:port` in `EARNEST_OUTBOUND_ALLOW_PRIVATE`. Requests originate on the Earnest server, not in your browser.
 CORS configuration on the destination is not needed.
 
 The existing outbound address checks also apply to these integrations. For

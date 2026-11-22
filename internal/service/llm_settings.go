@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	"github.com/L-K-M/Earnest/internal/llm"
+	"github.com/L-K-M/Earnest/internal/outbound"
 	"github.com/L-K-M/Earnest/internal/store"
 	"github.com/jackc/pgx/v5"
 )
@@ -131,7 +132,7 @@ func (s *Service) PutLLMSettings(ctx context.Context, a Actor, in LLMSettingsInp
 		if in.Revision != revision {
 			return fmt.Errorf("LLM settings changed; reload before saving: %w", ErrConflict)
 		}
-		cfg, err := validateLLMSettings(in, previous)
+		cfg, err := validateLLMSettings(in, previous, s.outbound)
 		if err != nil {
 			return err
 		}
@@ -229,7 +230,7 @@ func redactedLLMBaseURL(raw string) string {
 	return u.String()
 }
 
-func validateLLMSettings(in LLMSettingsInput, previous llm.Config) (llm.Config, error) {
+func validateLLMSettings(in LLMSettingsInput, previous llm.Config, client *outbound.Client) (llm.Config, error) {
 	cfg := llm.Config{Providers: map[string]llm.ProviderConfig{}, Tasks: map[llm.Task]llm.TaskConfig{}, Models: map[string]llm.ModelInfo{}, Defaults: in.Defaults, TaskModes: map[llm.Task]string{}}
 	if len(in.Providers) > 32 || len(in.Models) > 128 || len(in.Tasks) > len(llmTasks) {
 		return cfg, fmt.Errorf("too many providers, models or tasks: %w", ErrInvalid)
@@ -274,8 +275,8 @@ func validateLLMSettings(in LLMSettingsInput, previous llm.Config) (llm.Config, 
 			}
 			key = old.APIKey
 		}
-		if key != "" && strings.HasPrefix(base, "http://") {
-			return cfg, fmt.Errorf("provider API keys require HTTPS: %w", ErrInvalid)
+		if key != "" && !credentialsMayTravel(client, base) {
+			return cfg, fmt.Errorf("provider %q: API keys %s: %w", p.Name, credentialTransportRule, ErrInvalid)
 		}
 		cfg.Providers[p.Name] = llm.ProviderConfig{Kind: kind, BaseURL: base, APIKey: key, MonthlyLimitUSD: limit, Timeout: time.Duration(p.TimeoutSeconds) * time.Second, TokenField: field}
 	}

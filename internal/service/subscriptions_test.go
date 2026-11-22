@@ -39,13 +39,13 @@ func TestNormalizedFeedURLDefaultPorts(t *testing.T) {
 
 func TestPrivateFeedCredentialsRequireHTTPS(t *testing.T) {
 	credentials := &FeedCredentials{Username: "reader", Password: "private"}
-	if err := validateCredentialTransport("http://feed.example/rss", credentials); !errors.Is(err, ErrInvalid) {
+	if err := validateCredentialTransport("http://feed.example/rss", credentials, nil); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("accepted cleartext credentials: %v", err)
 	}
-	if err := validateCredentialTransport("https://feed.example/rss", credentials); err != nil {
+	if err := validateCredentialTransport("https://feed.example/rss", credentials, nil); err != nil {
 		t.Fatalf("rejected HTTPS credentials: %v", err)
 	}
-	if err := validateCredentialTransport("http://feed.example/rss", nil); err != nil {
+	if err := validateCredentialTransport("http://feed.example/rss", nil, nil); err != nil {
 		t.Fatalf("rejected public HTTP feed: %v", err)
 	}
 }
