@@ -102,6 +102,7 @@ internal fun NoticeBanner(
     actionLabel: String? = null,
     onAction: () -> Unit = {},
     icon: ImageVector? = null,
+    actionModifier: Modifier = Modifier,
 ) {
     val scheme = MaterialTheme.colorScheme
     val success = toneColors(scheme, LocalTones.current.green)
@@ -134,7 +135,7 @@ internal fun NoticeBanner(
                 Icon(mark, contentDescription = null, modifier = Modifier.size(20.dp))
                 Text(message, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             }
-            if (actionLabel != null) QuietButton(actionLabel, onAction, Modifier.align(Alignment.End), color = ink)
+            if (actionLabel != null) QuietButton(actionLabel, onAction, actionModifier.align(Alignment.End), color = ink)
         }
     }
 }
@@ -155,7 +156,7 @@ internal fun QuietState(
     actionModifier: Modifier = Modifier,
 ) {
     Column(
-        modifier.fillMaxWidth().padding(horizontal = ReaderSpace.lg, vertical = ReaderSpace.xl),
+        modifier.fillMaxWidth().padding(ReaderSpace.lg),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
     ) {
@@ -180,9 +181,9 @@ internal fun QuietState(
     }
 }
 
-private val StateMarkSize = 112.dp
-private val StateIconSize = 44.dp
-private val StateGlyphSize = 64.dp
+private val StateMarkSize = 88.dp
+private val StateIconSize = 36.dp
+private val StateGlyphSize = 52.dp
 private val StateTextWidth = 360.dp
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)

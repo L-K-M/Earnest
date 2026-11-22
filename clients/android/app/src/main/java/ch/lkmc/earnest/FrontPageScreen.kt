@@ -1,18 +1,18 @@
 package ch.lkmc.earnest
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -20,27 +20,13 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.IntrinsicSize
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -54,24 +40,29 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.Image
 import androidx.lifecycle.viewmodel.compose.viewModel
-import ch.lkmc.earnest.core.FrontPage
 import ch.lkmc.earnest.core.Entry
+import ch.lkmc.earnest.core.FrontPage
 import ch.lkmc.earnest.core.FrontPageCoverage
 import ch.lkmc.earnest.core.FrontPagePeriod
 import ch.lkmc.earnest.core.FrontPageStory
 import ch.lkmc.earnest.core.State
 import ch.lkmc.earnest.core.SyncEngine
 import ch.lkmc.earnest.db.BriefEntity
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.serialization.json.JsonPrimitive
 
 /** The tab's short name; the label beneath it is the window's span. */
 internal fun frontPageWindowName(period: FrontPagePeriod): String = when (period) {
@@ -118,21 +109,20 @@ internal fun FrontPageScreen(
                 state = state,
                 onPeriodChange = onPeriodChange,
                 onRefresh = onRefresh,
-                modifier = Modifier.padding(horizontal = 16.dp),
+                modifier = Modifier.padding(horizontal = ReaderSpace.gutter),
             )
             when {
                 state.loading -> LoadingState("Loading the front page…")
-                state.error != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(
-                        Modifier.padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        QuietState("Front page did not load", state.error.orEmpty(), icon = Icons.Filled.Info)
-                        TextButton(onClick = onRefresh, modifier = Modifier.testTag("front-try-again")) { Text("Try again") }
-                    }
-                }
-                else -> FrontPageEmpty(Modifier.fillMaxSize().padding(horizontal = 24.dp), state.period)
+                state.error != null -> QuietState(
+                    "Front page did not load",
+                    state.error.orEmpty(),
+                    icon = EarnestIcons.Offline,
+                    tone = LocalTones.current.amber,
+                    actionLabel = "Try again",
+                    onAction = onRefresh,
+                    actionModifier = Modifier.testTag("front-try-again"),
+                )
+                else -> FrontPageEmpty(state.period, onPeriodChange, Modifier.fillMaxWidth().padding(horizontal = ReaderSpace.lg))
             }
         }
     } else {
@@ -157,6 +147,7 @@ internal fun FrontPageScreen(
     }
 }
 
+/** The dateline, the window and anything waiting to change the page. */
 @Composable
 private fun FrontPageMasthead(
     state: FrontPageUi,
@@ -164,64 +155,47 @@ private fun FrontPageMasthead(
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val scheme = MaterialTheme.colorScheme
     val page = state.page
-    Column(modifier.fillMaxWidth().padding(top = ReaderSpace.xs, bottom = ReaderSpace.sm), verticalArrangement = Arrangement.spacedBy(ReaderSpace.md)) {
+    val quiet = MaterialTheme.typography.bodySmall
+    Column(modifier.fillMaxWidth().padding(bottom = ReaderSpace.xxs), verticalArrangement = Arrangement.spacedBy(ReaderSpace.sm)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 page?.let {
                     val date = frontPageDate(it)
-                    if (date.isNotBlank()) Text(date, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() })
+                    if (date.isNotBlank()) Text(date, style = StoryType.secondary, modifier = Modifier.semantics { heading() })
                 }
                 state.updatedAt?.let {
-                    Text("Updated ${it.relativeTime()}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Updated ${it.relativeTime()}", style = quiet, color = scheme.onSurfaceVariant)
+                }
+                if (state.loading && page != null) {
+                    Text(
+                        "Updating…",
+                        style = quiet,
+                        color = scheme.onSurfaceVariant,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                    )
                 }
             }
-            TextButton(onClick = onRefresh, enabled = !state.loading, modifier = Modifier.testTag("front-refresh")) { Text("Refresh") }
+            QuietButton("Refresh", onRefresh, Modifier.testTag("front-refresh"), enabled = !state.loading, icon = EarnestIcons.Refresh)
         }
-        Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
-            Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(ReaderSpace.xxs).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xxs)) {
-                FrontPagePeriod.entries.forEach { period ->
-                    val selected = state.period == period
-                    Surface(
-                        modifier = Modifier.weight(1f).fillMaxHeight().selectable(selected = selected, role = Role.Tab, onClick = { onPeriodChange(period) }),
-                        shape = RoundedCornerShape(20.dp),
-                        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
-                        contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                    ) {
-                        Column(Modifier.heightIn(min = 60.dp).padding(horizontal = ReaderSpace.sm, vertical = ReaderSpace.sm), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(frontPageWindowName(period), style = MaterialTheme.typography.labelLarge)
-                            Text(frontPageWindowLabel(period), style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                }
-            }
-        }
-        if (state.loading && page != null) {
-            Text("Updating…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        ChoiceGroup(
+            options = FrontPagePeriod.entries,
+            selected = state.period,
+            onSelect = onPeriodChange,
+            label = ::frontPageWindowName,
+            supporting = ::frontPageWindowLabel,
+        )
         state.pendingRevision?.let {
-            Row(
-                Modifier.fillMaxWidth().padding(top = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "New coverage available",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = onRefresh, modifier = Modifier.testTag("front-apply")) { Text("Refresh") }
-            }
+            NoticeBanner(
+                "New coverage available",
+                actionLabel = "Refresh",
+                onAction = onRefresh,
+                icon = EarnestIcons.FrontPage,
+                actionModifier = Modifier.testTag("front-apply"),
+            )
         }
-        state.error?.let { error ->
-            if (page != null) {
-                Text(
-                    error,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
-            }
-        }
+        if (page != null) state.error?.let { NoticeBanner(it, tone = NoticeTone.ERROR, icon = EarnestIcons.Offline) }
     }
 }
 
@@ -259,8 +233,8 @@ private fun FrontPageGrid(
         state = gridState,
         modifier = Modifier.fillMaxSize().testTag("front-grid"),
         contentPadding = PaddingValues(start = ReaderSpace.gutter, end = ReaderSpace.gutter, top = ReaderSpace.xs, bottom = ReaderSpace.xl),
-        horizontalArrangement = Arrangement.spacedBy(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        horizontalArrangement = Arrangement.spacedBy(ReaderSpace.lg),
+        verticalArrangement = Arrangement.spacedBy(ReaderSpace.md),
     ) {
         // The masthead scrolls away with the stories instead of trapping them
         // beneath fixed phone chrome.
@@ -269,14 +243,7 @@ private fun FrontPageGrid(
         }
         if (daily && briefs.isNotEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }, key = "briefs") {
-                Column(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    briefs.forEach { brief ->
-                        Text(
-                            briefLabel(principalNames[brief.principalId], brief.principalId, brief.value),
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                }
+                AgentBriefs(briefs, principalNames)
             }
         }
         if (daily && (agentChanges.isNotEmpty() || agentChangesError != null)) {
@@ -293,19 +260,11 @@ private fun FrontPageGrid(
         }
         if (sections.isEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }, key = "empty") {
-                FrontPageEmpty(Modifier.fillMaxWidth(), state.period)
+                FrontPageEmpty(state.period, onPeriodChange)
             }
         }
         sections.forEach { section ->
-            item(span = { GridItemSpan(maxLineSpan) }, key = "section-${section.name}") {
-                Text(
-                    section.name,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp)
-                        .semantics { heading() }.testTag("section-${section.name}"),
-                )
-            }
+            item(span = { GridItemSpan(maxLineSpan) }, key = "section-${section.name}") { SectionRule(section.name) }
             section.stories.forEach { story ->
                 val lead = story.id == leadId
                 item(
@@ -327,6 +286,9 @@ private fun FrontPageGrid(
                 }
             }
         }
+        if (sections.isNotEmpty()) {
+            item(span = { GridItemSpan(maxLineSpan) }, key = "front-end") { FrontPageEnd() }
+        }
         if (daily && (sessionChanges.isNotEmpty() || agentChangesError != null)) {
             item(span = { GridItemSpan(maxLineSpan) }, key = "session-changes") {
                 AgentChangesNotice(
@@ -343,15 +305,88 @@ private fun FrontPageGrid(
 }
 
 @Composable
-private fun FrontPageEmpty(modifier: Modifier = Modifier, period: FrontPagePeriod) {
+private fun FrontPageEmpty(period: FrontPagePeriod, onPeriodChange: (FrontPagePeriod) -> Unit, modifier: Modifier = Modifier) {
     QuietState(
         title = "No stories in this window",
         message = "Nothing matched the ${frontPageWindowLabel(period).lowercase()}.",
-        icon = Icons.Filled.DateRange,
+        icon = EarnestIcons.FrontPage,
+        tone = LocalTones.current.orange,
+        actionLabel = "See this week".takeIf { period == FrontPagePeriod.DAILY },
+        onAction = { onPeriodChange(FrontPagePeriod.WEEKLY) },
         modifier = modifier,
     )
 }
 
+@Composable
+private fun AgentBriefs(briefs: List<BriefEntity>, principalNames: Map<Long, String>) {
+    val colors = toneColors(MaterialTheme.colorScheme, LocalTones.current.purple)
+    Surface(shape = MaterialTheme.shapes.large, color = colors.container, contentColor = MaterialTheme.colorScheme.onSurface) {
+        Row(
+            Modifier.fillMaxWidth().padding(ReaderSpace.gutter),
+            horizontalArrangement = Arrangement.spacedBy(ReaderSpace.sm),
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(ReaderSpace.xs)) {
+                briefs.forEach { brief ->
+                    Text(
+                        briefLabel(principalNames[brief.principalId], brief.principalId, brief.value),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+            Icon(EarnestIcons.Sparkle, contentDescription = null, tint = colors.ink, modifier = Modifier.size(20.dp))
+        }
+    }
+}
+
+/** A newspaper's section rule: the name, then a hairline to the margin. */
+@Composable
+private fun SectionRule(name: String) {
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().padding(top = ReaderSpace.xs),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(ReaderSpace.sm),
+    ) {
+        Text(
+            name,
+            style = MaterialTheme.typography.titleSmall,
+            color = scheme.primary,
+            modifier = Modifier.weight(1f, fill = false).semantics { heading() }.testTag("section-$name"),
+        )
+        HorizontalDivider(Modifier.weight(1f), color = scheme.outlineVariant)
+    }
+}
+
+@Composable
+private fun FrontPageEnd() {
+    Column(
+        Modifier.fillMaxWidth().padding(ReaderSpace.md),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+    ) {
+        Icon(
+            painterResource(R.drawable.ic_notification),
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.outline,
+            modifier = Modifier.size(28.dp),
+        )
+        Text(
+            "You have reached the end of the front page.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+private val LeadImageHeight = 208.dp
+private val SideImageSize = 92.dp
+private const val LEAD_HEADLINE_LINES = 5
+private const val SIDE_HEADLINE_LINES = 4
+private const val LEAD_EXCERPT_LINES = 5
+private const val SIDE_EXCERPT_LINES = 3
+
+/** The lead has the width and the large picture; the others set theirs beside the headline. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun FrontStory(
     story: FrontPageStory,
@@ -369,163 +404,149 @@ private fun FrontStory(
     val coverage = story.coverage.filterNot { it.entry.deleted }
     val others = coverage.filter { it.entry.id != representative.entry.id }
     val entry = representative.entry
-    val title = entry.title.ifBlank { "Untitled" }
     val read = story.isRead(states, principalId)
-    Surface(
-        modifier = Modifier.fillMaxWidth().testTag(story.id),
-        shape = RoundedCornerShape(if (lead) 24.dp else 0.dp),
-        color = if (lead) MaterialTheme.colorScheme.surfaceContainerLowest else MaterialTheme.colorScheme.surface,
+    val imageUrl = story.imageUrl
+    val scheme = MaterialTheme.colorScheme
+    Column(
+        Modifier.fillMaxWidth().testTag(story.id).clickable { onOpen(entry.id) },
+        verticalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
     ) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .clickable { onOpen(entry.id) }
-                .padding(if (lead) ReaderSpace.gutter else 0.dp),
-        ) {
-            val imageUrl = story.imageUrl
-            if (imageUrl != null) {
-                image(
-                    imageUrl,
-                    Modifier.fillMaxWidth()
-                        .height(if (lead) 200.dp else 156.dp)
-                        .clip(RoundedCornerShape(16.dp)),
+        // An absent picture is still asked for, but never reserves its height.
+        if (imageUrl == null) image(null, Modifier)
+        if (lead && imageUrl != null) {
+            image(imageUrl, Modifier.fillMaxWidth().height(LeadImageHeight).clip(MaterialTheme.shapes.large))
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(ReaderSpace.md)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs)) {
+                StoryByline(representative.sourceTitle, story.publishedAt.relativeTime(), read)
+                Text(
+                    entry.title.ifBlank { "Untitled" },
+                    style = if (lead) StoryType.lead else StoryType.secondary,
+                    color = if (read) scheme.onSurfaceVariant else scheme.onSurface,
+                    modifier = Modifier.semantics { heading() },
+                    maxLines = if (lead) LEAD_HEADLINE_LINES else SIDE_HEADLINE_LINES,
+                    overflow = TextOverflow.Ellipsis,
                 )
-                Spacer(Modifier.height(16.dp))
-            } else {
-                // Still ask for the absent picture, but never reserve its height.
-                image(null, Modifier)
             }
-            Text(
-                title,
-                style = if (lead) MaterialTheme.typography.headlineMedium.copy(fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold) else MaterialTheme.typography.titleLarge,
-                modifier = Modifier.semantics { heading() },
-                maxLines = if (lead) 5 else 4,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Column(Modifier.padding(top = 8.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        listOfNotNull(
-                            representative.sourceTitle.takeIf { it.isNotBlank() },
-                            story.publishedAt.relativeTime().takeIf { it.isNotBlank() },
-                        ).joinToString(" · "),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (read) {
-                        Icon(
-                            Icons.Filled.CheckCircle,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(16.dp),
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text("Read", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-                    }
-                }
+            if (!lead && imageUrl != null) image(imageUrl, Modifier.size(SideImageSize).clip(MaterialTheme.shapes.medium))
+        }
+        StoryText(
+            story = story,
+            coverage = coverage,
+            excerptLines = if (lead) LEAD_EXCERPT_LINES else SIDE_EXCERPT_LINES,
+            expandedCitations = expandedCitations,
+            onToggleCitations = onToggleCitations,
+            onOpen = onOpen,
+        )
+        if (story.feedCount > 1 || others.isNotEmpty()) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
+                itemVerticalAlignment = Alignment.CenterVertically,
+            ) {
                 if (story.feedCount > 1) {
-                    Text(
+                    TagPill(
                         "Covered by ${story.feedCount} feeds",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        icon = EarnestIcons.Articles,
+                        colors = toneColors(scheme, LocalTones.current.orange),
                     )
                 }
-            }
-            Spacer(Modifier.height(12.dp))
-            StoryText(
-                story = story,
-                coverage = coverage,
-                expandedCitations = expandedCitations,
-                onToggleCitations = onToggleCitations,
-                onOpen = onOpen,
-            )
-            if (others.isNotEmpty()) {
-                TextButton(onClick = onToggleCoverage) {
-                    Text(if (expandedCoverage) "Hide other sources" else "Other sources (${others.size})")
+                if (others.isNotEmpty()) {
+                    QuietButton(if (expandedCoverage) "Hide other sources" else "Other sources (${others.size})", onToggleCoverage)
                 }
-                AnimatedVisibility(visible = expandedCoverage) {
-                    Column {
-                        others.forEach { item ->
-                            TextButton(onClick = { onOpen(item.entry.id) }) {
-                                Text("${item.sourceTitle} · ${item.entry.title.ifBlank { "Untitled" }}")
-                            }
-                        }
+            }
+            AnimatedVisibility(visible = expandedCoverage) {
+                Column {
+                    others.forEach { item ->
+                        StoryLink("${item.sourceTitle} · ${item.entry.title.ifBlank { "Untitled" }}") { onOpen(item.entry.id) }
                     }
                 }
             }
-            if (!lead) HorizontalDivider(Modifier.padding(top = ReaderSpace.lg), color = MaterialTheme.colorScheme.outlineVariant)
+        }
+        HorizontalDivider(Modifier.padding(top = ReaderSpace.xs), color = scheme.outlineVariant)
+    }
+}
+
+@Composable
+private fun StoryByline(source: String, time: String, read: Boolean) {
+    val scheme = MaterialTheme.colorScheme
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xxs)) {
+        Text(
+            listOfNotNull(source.takeIf { it.isNotBlank() }, time.takeIf { it.isNotBlank() }).joinToString(" · "),
+            style = MaterialTheme.typography.labelMedium,
+            color = scheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (read) {
+            Icon(EarnestIcons.DoneSelected, contentDescription = null, tint = scheme.primary, modifier = Modifier.size(16.dp))
+            Text("Read", style = MaterialTheme.typography.labelMedium, color = scheme.primary)
         }
     }
+}
+
+/** A line of text that opens an article. Long ones wrap from the start edge. */
+@Composable
+private fun StoryLink(text: String, onClick: () -> Unit) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.fillMaxWidth().heightIn(min = TouchTarget)
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(vertical = ReaderSpace.sm),
+    )
 }
 
 @Composable
 private fun StoryText(
     story: FrontPageStory,
     coverage: List<FrontPageCoverage>,
+    excerptLines: Int,
     expandedCitations: Boolean,
     onToggleCitations: () -> Unit,
     onOpen: (Long) -> Unit,
 ) {
+    val quiet = MaterialTheme.typography.labelMedium
+    val quietInk = MaterialTheme.colorScheme.onSurfaceVariant
     val summary = story.summary
-    when {
-        summary != null -> {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                summary.claims.forEach { claim -> Text(claim.text, style = MaterialTheme.typography.bodyMedium) }
-                Text(
-                    "Summary of linked coverage · ${summary.generatedAt.relativeTime()}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                summary.excerptNotice?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                val citations = summary.claims.flatMap { it.citations.orEmpty() }
-                if (citations.isNotEmpty()) {
-                    TextButton(onClick = onToggleCitations) {
-                        Text(if (expandedCitations) "Hide citations" else "Citations")
-                    }
-                    if (expandedCitations) {
-                        citations.forEach { citation ->
-                            Column(Modifier.padding(start = 8.dp, bottom = 4.dp)) {
-                                Text(
-                                    if (citation.verified) "Verified citation" else "Citation not found in the article",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                citation.passages.orEmpty().forEach { passage ->
-                                    val target = coverage.firstOrNull { it.entry.id == citation.entryId }
-                                    if (target != null) {
-                                        TextButton(onClick = { onOpen(target.entry.id) }) { Text(passage) }
-                                    } else {
-                                        Text(passage, style = MaterialTheme.typography.bodySmall)
-                                    }
-                                }
-                            }
-                        }
+    if (summary == null) {
+        if (story.excerpt.isBlank()) {
+            Text("No summary or excerpt is available.", style = quiet, color = quietInk)
+            return
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs)) {
+            Text(
+                story.excerpt,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = excerptLines,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text("Excerpt from ${story.sourceTitle}", style = quiet, color = quietInk)
+        }
+        return
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(ReaderSpace.xxs)) {
+        summary.claims.forEach { claim -> Text(claim.text, style = MaterialTheme.typography.bodyMedium) }
+        Text("Summary of linked coverage · ${summary.generatedAt.relativeTime()}", style = quiet, color = quietInk)
+        summary.excerptNotice?.let { Text(it, style = quiet, color = quietInk) }
+        val citations = summary.claims.flatMap { it.citations.orEmpty() }
+        if (citations.isEmpty()) return@Column
+        QuietButton(if (expandedCitations) "Hide citations" else "Citations", onToggleCitations)
+        if (!expandedCitations) return@Column
+        citations.forEach { citation ->
+            Column(Modifier.padding(start = ReaderSpace.sm, bottom = ReaderSpace.xxs)) {
+                Text(if (citation.verified) "Verified citation" else "Citation not found in the article", style = quiet, color = quietInk)
+                val target = coverage.firstOrNull { it.entry.id == citation.entryId }
+                citation.passages.orEmpty().forEach { passage ->
+                    if (target != null) {
+                        StoryLink(passage) { onOpen(target.entry.id) }
+                    } else {
+                        Text(passage, style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
         }
-        story.excerpt.isNotBlank() -> {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(story.excerpt, style = MaterialTheme.typography.bodyMedium)
-                Text(
-                    "Excerpt from ${story.sourceTitle}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        else -> Text(
-            "No summary or excerpt is available.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 
