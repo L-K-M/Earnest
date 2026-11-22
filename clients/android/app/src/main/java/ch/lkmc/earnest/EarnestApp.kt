@@ -717,7 +717,14 @@ internal fun MainScaffold(
                     },
                 )
                 if (showSettings) {
-                    SettingsScreen(model = model, state = state, onBack = { showSettings = false }, modifier = Modifier.fillMaxSize())
+                    SettingsScreen(
+                        model = model,
+                        state = state,
+                        onBack = { showSettings = false },
+                        modifier = Modifier.fillMaxSize(),
+                        appTheme = theme,
+                        onAppTheme = onThemeChange,
+                    )
                 } else if (compactSearch) {
                     SearchContent()
                 }

@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -210,19 +211,25 @@ internal fun ThemeDialog(current: ThemeSetting, onDismiss: () -> Unit, onSelect:
         onDismissRequest = onDismiss,
         title = { Text("Theme") },
         text = {
-            Column(Modifier.verticalScroll(rememberScrollState()).selectableGroup()) {
-                ThemeSetting.entries.forEach { setting ->
-                    OptionRow(
-                        label = setting.label,
-                        selected = setting == current,
-                        onSelect = { onSelect(setting) },
-                        leading = { ThemeSwatch(setting) },
-                    )
-                }
-            }
+            Column(Modifier.verticalScroll(rememberScrollState())) { ThemeOptions(current, onSelect) }
         },
         confirmButton = { QuietButton("Close", onDismiss) },
     )
+}
+
+/** The app's five themes, as the app bar's dialog and Settings both offer them. */
+@Composable
+internal fun ThemeOptions(current: ThemeSetting, onSelect: (ThemeSetting) -> Unit) {
+    Column(Modifier.fillMaxWidth().selectableGroup()) {
+        ThemeSetting.entries.forEach { setting ->
+            OptionRow(
+                label = setting.label,
+                selected = setting == current,
+                onSelect = { onSelect(setting) },
+                leading = { ThemeSwatch(setting) },
+            )
+        }
+    }
 }
 
 private val SwatchSize = 36.dp
