@@ -100,6 +100,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The Android home-screen widget renders instead of saying it can't show
+  content.
 - Android article text follows the system font size, Back closes the drawer
   instead of the app, healthy feeds no longer report a failed fetch, and
   Articles on a wide screen opens with the reader pane beside the list.

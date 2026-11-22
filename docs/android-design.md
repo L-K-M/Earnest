@@ -165,7 +165,8 @@ The expressive redesign was reviewed on an API 36 arm64 emulator against a
 disposable server with fixture feeds: every main screen on a light phone, the
 main screens in dark, at 320dp with 200% text, in phone landscape and at
 1280x800dp, and the reader, lists or Feeds in e-ink and true black. Device
-sign-in was completed against that server.
+sign-in was completed against that server. The widget was placed on the
+launcher, rendered in day and night, and opened the headline that was tapped.
 
 Not covered: physical devices, TalkBack speech, push delivery and OEM font
 or launcher differences. Do not infer them from these checks.

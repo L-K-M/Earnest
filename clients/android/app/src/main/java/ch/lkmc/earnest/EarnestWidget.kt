@@ -5,7 +5,6 @@ import android.content.Intent
 import androidx.compose.material3.ColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
@@ -13,12 +12,16 @@ import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.Image
 import androidx.glance.ImageProvider
+// Glance composes without Compose UI, so only its own LocalContext exists here.
+import androidx.glance.LocalContext
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.action.actionStartActivity
 import androidx.glance.appwidget.appWidgetBackground
 import androidx.glance.appwidget.cornerRadius
+import androidx.glance.appwidget.lazy.LazyColumn
+import androidx.glance.appwidget.lazy.items
 import androidx.glance.appwidget.provideContent
 import androidx.glance.appwidget.updateAll
 import androidx.glance.background
@@ -88,22 +91,25 @@ class EarnestWidget : GlanceAppWidget() {
                     modifier = GlanceModifier.padding(top = ReaderSpace.sm),
                 )
             }
-            entries.forEach { entry ->
-                Text(
-                    entry.title,
-                    style = TextStyle(color = ink, fontSize = WidgetHeadline, fontFamily = FontFamily.Serif),
-                    maxLines = HEADLINE_LINES,
-                    modifier = GlanceModifier
-                        .fillMaxWidth()
-                        .padding(top = ReaderSpace.sm)
-                        .clickable(
-                            actionStartActivity(
-                                Intent(context, MainActivity::class.java).apply {
-                                    data = "earnest://entry/${entry.id}".toUri()
-                                },
+            // A list scrolls, so a short widget never cuts a headline in half for good.
+            LazyColumn(GlanceModifier.fillMaxWidth().defaultWeight()) {
+                items(entries, itemId = { it.id }) { entry ->
+                    Text(
+                        entry.title,
+                        style = TextStyle(color = ink, fontSize = WidgetHeadline, fontFamily = FontFamily.Serif),
+                        maxLines = HEADLINE_LINES,
+                        modifier = GlanceModifier
+                            .fillMaxWidth()
+                            .padding(top = ReaderSpace.sm)
+                            .clickable(
+                                actionStartActivity(
+                                    Intent(context, MainActivity::class.java).apply {
+                                        data = "earnest://entry/${entry.id}".toUri()
+                                    },
+                                ),
                             ),
-                        ),
-                )
+                    )
+                }
             }
         }
     }
