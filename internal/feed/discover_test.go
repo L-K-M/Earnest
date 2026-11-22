@@ -87,6 +87,26 @@ func TestDiscoverDeduplicatesFallbacks(t *testing.T) {
 	}
 }
 
+// Unicode lowercasing can name another server, such as wiki.test for
+// wİki.test, and always names another origin for credential scoping.
+func TestDiscoverKeepsTheHostAsWritten(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ page, linked, fallback string }{
+		{"https://w%C4%B0ki.test/", "https://w%C4%B0ki.test/linked", "https://w%C4%B0ki.test/feed"},
+		{"https://M%C3%9CNCHEN.test:443/", "https://m%C3%9Cnchen.test/linked", "https://m%C3%9Cnchen.test/feed"},
+	} {
+		page := `<html><head><link rel="alternate" type="application/rss+xml" href="/linked"></head></html>`
+		got, err := Discover([]byte(page), tc.page)
+		if err != nil {
+			t.Fatalf("Discover(%q): %v", tc.page, err)
+		}
+		if urls := discoveredURLs(got); len(urls) < 2 || urls[0] != tc.linked || urls[1] != tc.fallback {
+			t.Errorf("Discover(%q) = %v, want %q and %q first", tc.page, urls, tc.linked, tc.fallback)
+		}
+	}
+}
+
 func TestDiscoverYouTube(t *testing.T) {
 	t.Parallel()
 

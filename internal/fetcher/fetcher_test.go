@@ -896,6 +896,22 @@ func TestCredentialsStayOffLookAlikeHosts(t *testing.T) {
 	}
 }
 
+// A test over HTTP cannot cover this: cleartext credentials never travel to
+// a non-ASCII name.
+func TestDiscoveredFeedsKeepThePagesOrigin(t *testing.T) {
+	for _, page := range []string{"https://m%C3%9Cnchen.test/", "https://w%C4%B0ki.test/", "https://wiki.test/"} {
+		candidates, err := feed.Discover([]byte(`<link rel="alternate" type="application/rss+xml" href="/linked">`), page)
+		if err != nil || len(candidates) == 0 {
+			t.Fatalf("Discover(%q) = %v, %v", page, candidates, err)
+		}
+		for _, candidate := range candidates {
+			if !sameOrigin(page, candidate.URL) {
+				t.Errorf("%q from %q would lose the page's credentials", candidate.URL, page)
+			}
+		}
+	}
+}
+
 func TestSameOriginComparesNamesAsDialled(t *testing.T) {
 	for _, tc := range []struct {
 		a, b string

@@ -104,6 +104,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   international domain, such as `wİki.test` for `wiki.test`, no longer
   receives the original site's password, headers or token. Two Unicode
   spellings of one domain now need their own credentials.
+- Feed discovery on an international domain, such as `wİki.test`, finds
+  that site's feeds instead of those of a look-alike such as `wiki.test`.
 - Credentials work over plain HTTP again for loopback and for exact hosts
   in `EARNEST_OUTBOUND_ALLOW_PRIVATE`, such as `hister:8080`. Other HTTP
   destinations still need HTTPS, and an LLM provider with a blocked key

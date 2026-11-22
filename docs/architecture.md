@@ -32,7 +32,7 @@ Each layer talks only to the layer below it. HTTP handlers, the Google Reader ad
 | `internal/store` | Postgres access, embedded migrations, counters and locking. Only `internal/service` imports it |
 | `internal/service` | Domain operations, authorisation by principal and scope, change log, activity log |
 | `internal/outbound` | The one HTTP client for egress: SSRF checks at dial time, redirects, per-host limits, credential scoping |
-| `internal/hostname` | Host name comparison for credential scoping: folds ASCII case only. No I/O, so the CLI and every layer may use it |
+| `internal/hostname` | Host name folding for credential scoping and feed discovery: folds ASCII case only. No I/O, so the CLI and every layer may use it |
 | `internal/feed` | RSS, Atom and JSON Feed parsing into Earnest's types, entry identity, URL cleaning, autodiscovery, OPML |
 | `internal/sanitize` | The stored HTML subset, versioned |
 | `internal/extract` | Full-text extraction from fetched pages |
