@@ -5,82 +5,106 @@ mobile composition rather than shrinking the web client's sidebar and toolbars.
 
 ## Direction
 
-A quiet, editorial reading experience with Material 3 Expressive controls and
-motion. Warm paper is the canvas, teal identifies actions, and small destination
-accents help with orientation. Typography and spacing do most of the work; an
+**Morning paper, expressive controls.** The content reads like a paper: serif
+titles and headlines, warm stock, hairline rules and one lead story. The
+controls are Material 3 Expressive: shape-changing buttons, connected choices,
+a loading indicator and spring motion. Typography and spacing do the work; an
 article list is not a stack of bordered cards.
 
-The web capability review covered the front page, reading streams, shelves,
-reader, feeds, search, settings and agent activity. Android keeps its four main
-destinations, folder drawer, inline reading and dedicated reader. This redesign
-does not add web-only capabilities or change the sync, account or content-origin
-contracts.
+Color has three jobs and no others:
+
+- **Teal is an action:** the primary button, links and the text cursor.
+- **Peach is a choice:** selected chips, segments and tonal buttons. E-ink
+  shows a choice as solid black.
+- **One tone is a place:** orange Front page, blue Articles, plum Saved, green
+  Feeds, amber Later, purple Activity and agents. A tone colors a place's
+  icon, indicator and empty state, never body text.
 
 ## Shared system
 
-`clients/android/app/src/main/java/ch/lkmc/earnest/DesignSystem.kt` owns:
+| File | Owns |
+|---|---|
+| `Theme.kt` | The five chrome palettes, place tones, monochrome rules and system bar icons |
+| `EarnestType.kt` | The type scale (serif for display, headlines and large titles, sans for everything else) and the story styles |
+| `DesignSystem.kt` | Spacing, widths, grouped shapes, section headers, notices, loading and quiet states, pills, settings groups |
+| `Controls.kt` | Buttons, connected choices, menus and option rows |
+| `EarnestIcons.kt` | Original stroke icons, solid when selected |
+| `FeedAvatar.kt` | Feed icons and letter marks, matching the web client's |
+| `SettingsActionBar.kt` | The one save bar for every settings draft |
 
-- A 4dp spacing rhythm: 4, 8, 12, 16, 20, 24, 32 and 48dp. Article and feed rows
-  share a 20dp gutter. Forms and longer reading surfaces have bounded widths.
-- A complete sp-based type scale with distinct headings, article titles,
-  metadata, body text and control labels. The front-page lead uses a serif face
-  for editorial emphasis; navigation and controls use native sans-serif text.
-- `SettingsGroup`, `ScreenIntro`, `NoticeBanner`, `QuietState` and `LoadingState`
-  for consistent grouping and feedback. `ReaderFilterChip` sizes its surface to
-  the scaled label line height, including Android's nonlinear font scaling. Status is conveyed in words and icons,
-  not just color. Notices announce updates politely to accessibility services.
+Use these before adding a screen-local style:
 
-`Theme.kt` applies the expressive motion scheme, rounded component shapes and
-existing accessible light, dark, true-black and monochrome e-ink palettes.
-Material 3 is explicitly pinned to 1.5.0-rc01 because its expressive theme and
-motion APIs are not public in the BOM's 1.4 release. No third-party UI toolkit,
-font download or additional runtime network dependency is introduced.
+- Spacing is 4, 8, 12, 16, 20, 24, 32 and 48dp. Lists, titles and the menu
+  glyph share a 20dp gutter. The reader's header uses the document's own 16dp.
+  Reading columns stop at 720dp, forms at 560dp and the paper at 1100dp.
+- A screen has at most one filled button. Other actions are tonal or text, and
+  destructive ones use the error color.
+- A single choice is a connected group, an option row or a menu, and its whole
+  row is the target. Targets are at least 48dp.
+- Loading, empty, error and success each have a component. State is in words
+  and icons as well as color, and notices announce themselves politely.
+- Material 3 is pinned to 1.5.0 for the expressive APIs. There is no icon
+  pack, font download, third-party UI toolkit or new network dependency.
 
 ## Composition and interaction
 
-- **Front page:** dated masthead, grouped window selector, one emphasized lead,
-  flatter secondary stories, clear coverage and read metadata, and expandable
-  sources. Absent photographs do not leave an empty image slot. The masthead
-  continues to scroll with the stories.
-- **Articles and shelves:** aligned, full-width rows with quiet separators,
-  consistent source/time metadata, stronger headlines and larger thumbnails.
-  Article menus, collapsed-row swipes and undo retain their existing meaning.
-  Swipe thresholds give haptic feedback; released and cancelled gestures settle
-  back into place.
-- **Feeds:** an obvious subscribe action, secondary import/export actions,
-  scannable source rows and wrapping cadence choices. Unsubscribe sits in the
-  feed menu and asks for confirmation.
-- **Reader:** a quieter focused shell, distinct original-page action, compact
-  find tools and a height-bounded, scrollable native header so large text does
-  not consume the entire reading viewport. Existing WebView restrictions and
-  click-to-load behavior remain unchanged.
-- **Article swipes:** the article follows a sideways drag at a third of the
-  finger's speed and a label at the uncovered edge names the move, or says
-  there is no article that way. The label fills and the device ticks at the
-  72dp threshold.
-- **Search:** the query leads, filters use progressive disclosure, results are
-  readable rows rather than text buttons, and publisher articles remain
-  separate from agent notes.
-- **Settings:** account reading preferences precede imports and server-level AI
-  configuration. Logical groups, wrapping controls and a local typography
-  preview replace the previous undifferentiated form. The labelled reading
-  preferences Save bar stays reachable while the form scrolls. Reload asks
-  before discarding local edits or a frozen save retry; Load preserves both.
-- **Connect:** a focused, scrollable form with URL keyboard support, honest
-  request progress, clear authorization-code instructions and retry feedback.
+- **Shell:** a collapsing title names the place. Short windows, two panes and
+  text from 150% use a small bar, whose title shrinks before it truncates.
+  Four destinations sit in a bottom bar, or in a rail in wide and short
+  windows. Navigation labels stop growing at 130%.
+- **Front page:** a dateline with the Today/This week choice, one lead with
+  its picture above the headline, then ruled secondary stories in columns.
+- **Articles and Saved:** source and time, a serif headline and a thumbnail.
+  The unread dot lives in the gutter, so reading never moves the text. The
+  layout toggle stays neutral, so it does not compete with the shelf choice.
+- **Reader:** the tools take the article's canvas. Keep, Later, Done and Open
+  original sit in thumb reach. A short window moves them into the reader's
+  menu to keep its height for the text, and keeps the byline as one line
+  that starts with Cached copy when it shows one.
+- **Drawer:** brand mark, places in their tones, feeds with their own marks
+  and Settings pinned below the list.
+- **Feeds:** grouped rows by folder, each with one pace menu that explains
+  the choices. Subscribe is the floating action and opens a sheet with its
+  button above the keyboard.
+- **Search:** the field takes focus when opened empty. Filters fold away,
+  saved searches stay visible and agent notes are labelled apart.
+- **Settings:** three categories of titled groups and one pinned save bar that
+  states the draft. A short window scrolls the categories and shows the bar
+  only when there is something to save.
+- **Connect:** brand and ribbon, one field and one action. The code then
+  appears above the form with Copy code and Open approval page.
+- **Widget and launch:** the app's paper in day and night. The widget follows
+  the device rather than the app's theme.
 
-Focused search, settings and phone-reader screens hide primary navigation to
-avoid competing tasks. Back returns to the previous reading destination;
-search preserves the folder/feed context. System bars follow the selected
-palette. Short landscape windows use a navigation rail to preserve reading
-height. Insets, keyboard resizing and scrolling keep content clear of system
-UI, and actions retain Android's standard touch targets. Find focuses its
-input and temporarily hides the reader header to leave room for the keyboard.
-Wide-screen search retains the open article; resizing search into a compact
-window keeps the search task visible, and Back restores the reading context.
-The adaptive transition stays bound beneath focused settings/search screens,
-with inactive panes empty and hidden from accessibility, so incoming articles
-cannot leave navigation history and the visible pane out of step.
+Focused search, settings and phone-reader screens hide primary navigation.
+Search and the phone reader keep the app's options in their menus. Notices
+sit above the reader's action bar and the subscribe button, never over them.
+Back returns to the previous reading place. Front page and Feeds use one pane
+on wide screens, as neither has anything to show in an article pane. A change
+of place navigates only after the new place's pane directive has been
+composed; navigating in the click computes the panes of the place being left.
+The adaptive transition stays bound beneath focused settings and search
+screens, with inactive panes empty and hidden from accessibility, so incoming
+articles cannot leave navigation history and the visible pane out of step.
+
+Article swipes follow the finger at a third of its speed, and a label at the
+uncovered edge names the move or says there is no article that way. The label
+fills and the device ticks at the 72dp threshold. Under a large title, pull
+to refresh starts once the title is expanded, so it never competes with
+expanding it. An empty list says it is fetching only during the account's
+first sync; later refreshes leave its empty state in place.
+
+## Decisions in this redesign
+
+These are the redesign's defaults, not owner decisions, and are open to change:
+
+- Later and Done live behind **Saved** with Kept. They were only in the drawer.
+- A feed's pace is a menu. Three chips on each row showed under three feeds
+  per phone screen.
+- Excerpt attribution, every existing action and the article theme semantics
+  stay as they were. An article's System theme follows the device, not the
+  app's theme.
+- Article zoom multiplies the system font size instead of replacing it.
 
 ## Inline reading stability
 
@@ -137,20 +161,23 @@ recreation, and no white flash during dark article switches. Light and narrow
 on the Huawei Android 12 device in the supplied recording.
 
 For visual acceptance, inspect a populated front page, article list, inline
-article, reader, feeds, search/results, settings and connect screen. Repeat on
-a 320dp phone, at 200% system text, in landscape/tablet widths and in dark,
-true-black and e-ink modes. Open the keyboard in URL, search, find and settings
-dialogs. Check Back, drawer dismissal, action menus and empty/error states.
-The redesign was visually reviewed on an API 36 arm64 emulator at phone,
-320dp narrow-phone, 800dp and 1200dp tablet, and landscape sizes. The narrow
-phone was also checked at 200% system text. Light, dark, true-black and e-ink
-screens, loading/empty/error states, URL/search/find keyboards, and the sticky
-settings action were inspected over multiple passes. The disposable fixture
-activity and its sample data are not included in the app or patch.
+article, reader, drawer, feeds, search and results, settings and Connect.
+Repeat on a 320dp phone at 200% system text, in landscape, at tablet widths
+and in dark, true-black and e-ink modes. Open the keyboard in URL, search,
+find and settings fields. Check Back, menus and empty and error states.
 
-Do not infer live device-authorization approval, server sync or push delivery
-from fixture-based visual checks; those require a reachable deployment.
-Physical-device behavior and widget rendering remain outside these checks.
+The expressive redesign was reviewed on an API 36 arm64 emulator against a
+disposable server with fixture feeds: every main screen on a light phone, the
+main screens in dark, at 320dp with 200% text, in phone landscape and at
+1280x800dp, and the reader, lists or Feeds in e-ink and true black. Device
+sign-in was completed against that server. The widget was placed on the
+launcher, rendered in day and night, and opened the headline that was tapped.
+The cached-copy reader and the failed-refresh notice were seen offline.
+
+Not covered: physical devices, Android before 16, TalkBack speech, push
+delivery, 600-840dp windows, AI settings with a configured provider, file
+pickers, the swipe gestures and OEM font or launcher differences. Do not
+infer them from these checks.
 
 ## References
 

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- DarkColors in Theme.kt, for what draws before Compose does. -->
+    <color name="earnest_window">#FF141413</color>
+    <color name="earnest_window_ink">#FFC8C4B8</color>
+</resources>

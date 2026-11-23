@@ -4,14 +4,21 @@ import android.content.Context
 import android.webkit.WebView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.material3.ButtonGroupDefaults
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.ToggleButton
+import androidx.compose.material3.ToggleButtonDefaults
+import androidx.compose.material3.ToggleButtonColors
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -23,6 +30,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
@@ -46,30 +57,45 @@ internal fun Context.setArticleLayout(layout: ArticleLayout) {
     getSharedPreferences(LAYOUT_PREFS, Context.MODE_PRIVATE).edit { putString(LAYOUT_KEY, layout.name) }
 }
 
+/** Both layouts stay in view; tapping the other one switches. */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-internal fun ArticleLayoutControl(layout: ArticleLayout, onLayout: (ArticleLayout) -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-            ArticleLayout.entries.forEachIndexed { index, option ->
-                SegmentedButton(
-                    selected = layout == option,
-                    onClick = { onLayout(option) },
-                    shape = SegmentedButtonDefaults.itemShape(index, ArticleLayout.entries.size),
-                    colors = SegmentedButtonDefaults.colors(
-                        activeContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        activeContentColor = MaterialTheme.colorScheme.primary,
-                    ),
-                    label = { Text(option.label, style = MaterialTheme.typography.labelLarge) },
-                )
+internal fun ArticleLayoutControl(layout: ArticleLayout, onLayout: (ArticleLayout) -> Unit, modifier: Modifier = Modifier) {
+    Row(modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
+        ArticleLayout.entries.forEachIndexed { index, option ->
+            val checked = layout == option
+            ToggleButton(
+                checked = checked,
+                onCheckedChange = { if (!checked) onLayout(option) },
+                modifier = Modifier.heightIn(min = TouchTarget).semantics {
+                    role = Role.RadioButton
+                    selected = checked
+                },
+                shapes = if (index == 0) {
+                    ButtonGroupDefaults.connectedLeadingButtonShapes()
+                } else {
+                    ButtonGroupDefaults.connectedTrailingButtonShapes()
+                },
+                colors = layoutChoiceColors(),
+                contentPadding = PaddingValues(horizontal = ReaderSpace.sm, vertical = ReaderSpace.xxs),
+            ) {
+                Text(option.label, style = MaterialTheme.typography.labelLarge)
             }
         }
-        Text(
-            if (layout == ArticleLayout.READING) "Tap a headline to read without leaving this feed." else "Tap a headline to open the reader.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
-        )
     }
+}
+
+/** A view preference stays neutral; the accent is for choosing what to read. */
+@Composable
+private fun layoutChoiceColors(): ToggleButtonColors {
+    val scheme = MaterialTheme.colorScheme
+    if (scheme.isMonochrome) return choiceColors()
+    return ToggleButtonDefaults.colors(
+        containerColor = Color.Transparent,
+        contentColor = scheme.onSurfaceVariant,
+        checkedContainerColor = scheme.surfaceContainerHighest,
+        checkedContentColor = scheme.onSurface,
+    )
 }
 
 private const val MIN_INLINE_HEIGHT_DP = 120
@@ -183,11 +209,10 @@ internal fun InlineArticleContent(
     val attached = remember(state) { arrayOfNulls<WebView>(1) }
     Column {
         if (state.offline || content.url == null) {
-            Text(
+            TagPill(
                 "Cached copy",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                icon = EarnestIcons.Offline,
+                modifier = Modifier.padding(horizontal = ReaderSpace.gutter, vertical = ReaderSpace.xs),
             )
         }
         Reader(

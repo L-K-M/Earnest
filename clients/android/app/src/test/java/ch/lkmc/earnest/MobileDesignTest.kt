@@ -1,5 +1,18 @@
 package ch.lkmc.earnest
 
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Text
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.test.swipeDown
+import androidx.compose.runtime.snapshots.Snapshot
+import android.app.Application
+import androidx.test.core.app.ApplicationProvider
+import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
 import androidx.activity.OnBackPressedDispatcher
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -62,6 +75,11 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [35], qualifiers = "w320dp-h800dp")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class MobileDesignTest {
+    private companion object {
+        const val SETTLE_MS = 1_000L
+        const val PULL_ANSWER_MS = 5_000L
+    }
+
     @get:Rule val compose = createComposeRule()
 
     private fun content(fontScale: Float = 1f, width: Dp = 320.dp, body: @Composable () -> Unit) {
@@ -90,6 +108,163 @@ class MobileDesignTest {
         compose.onNodeWithText("Share").assertIsDisplayed()
     }
 
+    @Test fun aShortReaderStillSaysWhenItShowsACachedCopy() {
+        content {
+            ReaderHeader(
+                entry = CachedEntry(1, title = "An article worth reading"),
+                source = "A favorite publication", isRead = true, offlineCopy = true,
+                chrome = ReaderChrome.SHORT,
+                onOpenOriginal = {}, onCopyLink = {}, onShare = {}, onMarkUnread = {},
+                onFind = {}, onSmallerText = {}, onLargerText = {},
+            )
+        }
+        compose.onNodeWithText("Cached copy", substring = true).assertIsDisplayed()
+    }
+
+    @Test fun searchKeepsTheAppsOptions() {
+        content {
+            MainScaffold(
+                model = viewModel(), state = UiState(), theme = ThemeSetting.LIGHT,
+                onThemeChange = {}, initialEntry = null, notificationId = null, intentDelivery = 0,
+                notificationsDenied = true, onRequestNotifications = {},
+            )
+        }
+        compose.onNodeWithText("Articles").performClick()
+        compose.onNodeWithContentDescription("Search").performClick()
+        compose.onNodeWithContentDescription("More options").performClick()
+        listOf("Theme", "Enable notifications", "Settings", "Sign out").forEach {
+            compose.onNode(hasText(it) and hasAnyAncestor(isPopup())).assertExists()
+        }
+    }
+
+    @Test fun anArticleThatFillsTheWindowKeepsTheAppsOptions() {
+        val title = "An article that fills the window"
+        ApplicationProvider.getApplicationContext<Application>().setArticleLayout(ArticleLayout.HEADLINES)
+        content {
+            MainScaffold(
+                model = viewModel(), state = UiState(snapshot = SyncSnapshot(Revision("generation", 1), entries = listOf(CachedEntry(7, title = title)))), theme = ThemeSetting.LIGHT,
+                onThemeChange = {}, initialEntry = null, notificationId = null, intentDelivery = 0,
+                notificationsDenied = true, onRequestNotifications = {},
+            )
+        }
+        compose.onNodeWithText("Articles").performClick()
+        compose.onNodeWithText(title).performClick()
+        compose.onNodeWithContentDescription("Reader options").performClick()
+        listOf("Theme", "Enable notifications", "Settings", "Sign out").forEach {
+            compose.onNode(hasText(it) and hasAnyAncestor(isPopup())).assertExists()
+        }
+    }
+
+    @Test fun aRefreshDoesNotReplaceAnEmptyShelfsMessage() {
+        compose.mainClock.autoAdvance = false
+        content {
+            MainScaffold(
+                model = viewModel(), state = UiState(loading = true, snapshot = SyncSnapshot(Revision("generation", 1))), theme = ThemeSetting.LIGHT,
+                onThemeChange = {}, initialEntry = null, notificationId = null, intentDelivery = 0,
+                notificationsDenied = false, onRequestNotifications = {},
+            )
+        }
+        compose.mainClock.advanceTimeBy(SETTLE_MS)
+        compose.onNodeWithText("Saved").performClick()
+        compose.mainClock.advanceTimeBy(SETTLE_MS)
+        compose.onNodeWithText("Your favorites belong here").assertExists()
+        compose.onNodeWithText("Fetching your articles…").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(sdk = [35], qualifiers = "w1200dp-h800dp")
+    fun aNoticeLeavesTheActionBarUncoveredBesideTheList() {
+        val entry = CachedEntry(7, title = "An article beside the list", url = "https://example.test/article")
+        content(width = 1200.dp) {
+            MainScaffold(
+                model = viewModel(), state = UiState(snapshot = SyncSnapshot(Revision("generation", 1), entries = listOf(entry))), theme = ThemeSetting.LIGHT,
+                onThemeChange = {}, initialEntry = null, notificationId = null, intentDelivery = 0,
+                notificationsDenied = false, onRequestNotifications = {},
+            )
+        }
+        compose.onNodeWithText("Articles").performClick()
+        compose.onNodeWithText(entry.title).performClick()
+        compose.onNodeWithContentDescription("Reader options").performClick()
+        compose.onNodeWithText("Copy link").performClick()
+        compose.mainClock.autoAdvance = false
+        compose.mainClock.advanceTimeBy(SETTLE_MS)
+        val notice = compose.onNodeWithText("Link copied.").getUnclippedBoundsInRoot()
+        // The merged node is the whole action, not just its label.
+        val bar = compose.onNodeWithText("Open original").getUnclippedBoundsInRoot()
+        assertTrue("the notice ends at ${notice.bottom}, below the actions' top ${bar.top}", notice.bottom <= bar.top)
+    }
+
+    @Test fun aFilterChipGrowsWithItsLabelAtLargeText() {
+        val label = "Only articles from feeds I follow"
+        val fontScale = 2f
+        content(fontScale) {
+            ReaderFilterChip(selected = true, onClick = {}, label = { Text(label) })
+        }
+        val chip = compose.onNodeWithText(label)
+        val minimum = with(Density(compose.density.density, fontScale)) { 20.sp.toDp() } + 12.dp
+        chip.assertIsDisplayed().assertHeightIsAtLeast(minimum)
+        assertTrue("the chip must fit a narrow phone", chip.getUnclippedBoundsInRoot().right <= 320.dp)
+    }
+
+    @Test fun anEmptyListSaysItIsFetchingDuringTheFirstSync() {
+        compose.mainClock.autoAdvance = false
+        content {
+            MainScaffold(
+                model = viewModel(), state = UiState(loading = true), theme = ThemeSetting.LIGHT,
+                onThemeChange = {}, initialEntry = null, notificationId = null, intentDelivery = 0,
+                notificationsDenied = false, onRequestNotifications = {},
+            )
+        }
+        compose.mainClock.advanceTimeBy(SETTLE_MS)
+        compose.onNodeWithText("Articles").performClick()
+        compose.mainClock.advanceTimeBy(SETTLE_MS)
+        compose.onNodeWithText("Fetching your articles…").assertExists()
+    }
+
+    @Test fun aPullThatStartsNoLoadLeavesALaterSyncQuiet() {
+        var loading by mutableStateOf(false)
+        var pulls = 0
+        content { PullList(loading = { loading }, onRefresh = { pulls++ }) }
+        pullDown()
+        compose.mainClock.advanceTimeBy(PULL_ANSWER_MS)
+        assertEquals("the pull must ask for a refresh", 1, pulls)
+        compose.mainClock.autoAdvance = false
+        // A background sync starts later, on its own.
+        compose.runOnUiThread {
+            loading = true
+            // The paused clock would otherwise never tell Compose of the write.
+            Snapshot.sendApplyNotifications()
+        }
+        compose.mainClock.advanceTimeBy(SETTLE_MS)
+        compose.onAllNodes(refreshingIndicator).assertCountEquals(0)
+    }
+
+    @Test fun aPullThatStartsALoadShowsItsProgress() {
+        var loading by mutableStateOf(false)
+        content { PullList(loading = { loading }, onRefresh = { loading = true }) }
+        compose.mainClock.autoAdvance = false
+        pullDown()
+        compose.mainClock.advanceTimeBy(SETTLE_MS)
+        compose.onAllNodes(refreshingIndicator).assertCountEquals(1)
+    }
+
+    private val refreshingIndicator = SemanticsMatcher.expectValue(SemanticsProperties.ProgressBarRangeInfo, ProgressBarRangeInfo.Indeterminate)
+
+    @Composable
+    private fun PullList(loading: () -> Boolean, onRefresh: () -> Unit) {
+        RefreshableContent(loading = loading(), enabled = true, onRefresh = onRefresh) {
+            LazyColumn(Modifier.fillMaxSize().testTag("pull-list")) {
+                items(40) { Text("Row $it") }
+            }
+        }
+    }
+
+    private fun pullDown() {
+        compose.onNodeWithTag("pull-list").performTouchInput {
+            swipeDown(startY = top + 20f, endY = bottom, durationMillis = 400)
+        }
+    }
+
     @Test fun settingsSaveStaysReachableWhileTheFormScrolls() {
         content(2f) {
             SettingsScreen(
@@ -108,23 +283,35 @@ class MobileDesignTest {
         compose.onNodeWithText("Start device sign in").performScrollTo().assertIsDisplayed()
     }
 
-    @Test fun feedCadencesWrapWithoutHidingTheLastOption() {
+    @Test fun theCadenceMenuShowsEveryOptionOnANarrowPhone() {
         content(2f) {
             FeedRow(
                 subscription = SyncObject(SyncEngine.OBJECT_SUBSCRIPTION, 1, name = "A thoughtful publication", raw = """{"url":"https://example.test/feed","cadence":"day"}""", rev = 1),
                 unreadMode = false, unreadCount = null, onCadence = { _, _ -> }, onOpen = {}, onUnsubscribe = {},
             )
         }
+        compose.onNodeWithContentDescription("Delivery pace for A thoughtful publication").performClick()
         Cadence.entries.forEach { cadence ->
-            val chip = compose.onNodeWithText(cadence.label)
+            val chip = compose.onNode(hasText(cadence.label) and hasAnyAncestor(isPopup()))
             chip.assertIsDisplayed()
-            // Allow nonlinear Android font scaling: the 20sp label line
-            // still needs 12dp of breathing room inside the chip surface.
+            // Allow nonlinear Android font scaling: a row grows with its
+            // 20sp label line and keeps 12dp of breathing room around it.
             val minimum = with(Density(compose.density.density, 2f)) { 20.sp.toDp() } + 12.dp
             chip.assertHeightIsAtLeast(minimum)
             assertTrue("${cadence.label} must fit on a narrow phone", chip.getUnclippedBoundsInRoot().right <= 320.dp)
         }
         compose.onNodeWithContentDescription("Feed options for A thoughtful publication").assertIsDisplayed()
+    }
+
+    @Test fun aFeedWithoutANameIsUntitledInItsMenuLabel() {
+        content {
+            FeedRow(
+                subscription = SyncObject(SyncEngine.OBJECT_SUBSCRIPTION, 1, name = "", raw = """{"url":"https://example.test/feed"}""", rev = 1),
+                unreadMode = false, unreadCount = null, onCadence = { _, _ -> }, onOpen = {}, onUnsubscribe = {},
+            )
+        }
+        compose.onNodeWithContentDescription("Feed options for Untitled feed").assertExists()
+        compose.onNode(hasClickLabel("Read feed")).assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button))
     }
 
     @Test fun searchUsesFocusedNavigationAndSystemBackRestoresThePreviousDestination() {
@@ -142,11 +329,14 @@ class MobileDesignTest {
         compose.onNodeWithContentDescription("Back").assertIsDisplayed()
         // The closed drawer remains composed off screen, but the bottom
         // navigation must not be displayed during a focused search.
+        compose.onNodeWithText("Saved").assertDoesNotExist()
         compose.onNodeWithText("Kept").assertIsNotDisplayed()
         compose.runOnIdle { back!!.onBackPressed() }
         compose.onNodeWithContentDescription("Folders and feeds").assertIsDisplayed()
         compose.onNodeWithText("Your sources").assertIsDisplayed()
-        compose.onAllNodesWithText("Kept").assertCountEquals(2)
+        // The bottom bar returns, and the drawer still lists Kept by name.
+        compose.onNodeWithText("Saved").assertIsDisplayed()
+        compose.onAllNodesWithText("Kept").assertCountEquals(1)
     }
 
     @Test
@@ -156,6 +346,40 @@ class MobileDesignTest {
         content(2f) { ThemeDialog(ThemeSetting.SYSTEM, {}, { selected = it }) }
         compose.onNodeWithText("E-ink").performScrollTo().performClick()
         compose.runOnIdle { assertEquals(ThemeSetting.E_INK, selected) }
+    }
+
+    @Test fun savedSwitchesShelvesWithoutTheDrawer() {
+        content {
+            MainScaffold(
+                model = viewModel(), state = UiState(), theme = ThemeSetting.LIGHT,
+                onThemeChange = {}, initialEntry = null, notificationId = null, intentDelivery = 0,
+                notificationsDenied = false, onRequestNotifications = {},
+            )
+        }
+        compose.onNodeWithText("Saved").performClick()
+        val shelf = { name: String ->
+            compose.onNode(hasText(name) and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton))
+        }
+        shelf("Kept").assertIsSelected()
+        shelf("Done").performClick()
+        shelf("Done").assertIsSelected()
+        shelf("Kept").assertIsNotSelected()
+    }
+
+    @Test fun theSubscribeButtonKeepsItsAccessibleName() {
+        val feed = SyncObject(SyncEngine.OBJECT_SUBSCRIPTION, 1, name = "A source", raw = """{"url":"https://example.test/feed"}""", rev = 1)
+        content {
+            MainScaffold(
+                model = viewModel(),
+                state = UiState(snapshot = SyncSnapshot(Revision("generation", 1), objects = listOf(feed))),
+                theme = ThemeSetting.LIGHT, onThemeChange = {}, initialEntry = null, notificationId = null, intentDelivery = 0,
+                notificationsDenied = false, onRequestNotifications = {},
+            )
+        }
+        compose.onNodeWithText("Feeds").performClick()
+        // The button's visible label has no semantics of its own.
+        compose.onNodeWithContentDescription("Subscribe by URL").assertHasClickAction().performClick()
+        compose.onNodeWithText("Feed URL").assertExists()
     }
 
     @Test fun theFeedIconOpensItsSourceAndTheMenuDoesNot() {
@@ -275,6 +499,35 @@ class MobileDesignTest {
         compose.onNodeWithContentDescription("Find in article").assertExists()
         compose.onNodeWithContentDescription("Back").performClick()
         compose.onNodeWithText("Find something worth revisiting").assertExists()
+    }
+
+    @Test
+    @Config(sdk = [35], qualifiers = "w1200dp-h800dp")
+    fun leavingTheFrontPageOpensTheArticlePaneBesideTheList() {
+        content(width = 1200.dp) {
+            MainScaffold(
+                model = viewModel(), state = UiState(), theme = ThemeSetting.LIGHT,
+                onThemeChange = {}, initialEntry = null, notificationId = null, intentDelivery = 0,
+                notificationsDenied = false, onRequestNotifications = {},
+            )
+        }
+        compose.onNodeWithText("Articles").performClick()
+        compose.onNodeWithText("Ready when you are").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(sdk = [35], qualifiers = "w1200dp-h800dp")
+    fun feedsOffersNoEmptyArticlePane() {
+        content(width = 1200.dp) {
+            MainScaffold(
+                model = viewModel(), state = UiState(), theme = ThemeSetting.LIGHT,
+                onThemeChange = {}, initialEntry = null, notificationId = null, intentDelivery = 0,
+                notificationsDenied = false, onRequestNotifications = {},
+            )
+        }
+        compose.onNodeWithText("Articles").performClick()
+        compose.onNodeWithText("Feeds").performClick()
+        compose.onNodeWithText("Ready when you are").assertDoesNotExist()
     }
 
     @Test

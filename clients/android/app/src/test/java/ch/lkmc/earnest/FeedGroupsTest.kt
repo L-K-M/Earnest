@@ -88,6 +88,15 @@ class FeedGroupsTest {
         assertNull(feedProblem(health()))
     }
 
+    @Test fun aHealthyFeedWithBlankErrorFieldsReportsNoProblem() {
+        // Bootstrap writes "" where the REST projection omits the field.
+        assertNull(feedProblem(health(errorClass = "", errorMessage = "")))
+    }
+
+    @Test fun aBlankMessageFallsBackToTheErrorClass() {
+        assertEquals("HttpError", feedProblem(health(errorClass = "HttpError", errorMessage = ""))?.detail)
+    }
+
     @Test fun aFailingFetchReportsItsDetailAndLastAttempt() {
         val problem = feedProblem(health(errorMessage = "connection refused", consecutiveFailures = 3, lastAttemptAt = "2026-11-10T00:00:00Z"))
         assertEquals("connection refused", problem?.detail)

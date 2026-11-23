@@ -16,9 +16,14 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalView
 import androidx.core.content.edit
@@ -31,6 +36,15 @@ enum class ThemeSetting(val label: String) {
     BLACK("True black"),
     E_INK("E-ink"),
 }
+
+/** Corners grow with the surface: controls, rows, groups, then sheets. */
+private val EarnestShapes = Shapes(
+    extraSmall = RoundedCornerShape(8.dp),
+    small = RoundedCornerShape(12.dp),
+    medium = RoundedCornerShape(16.dp),
+    large = RoundedCornerShape(24.dp),
+    extraLarge = RoundedCornerShape(28.dp),
+)
 
 private const val THEME_PREFS = "appearance"
 private const val THEME_KEY = "theme"
@@ -81,10 +95,14 @@ internal val LightColors = lightColorScheme(
     onSurface = Color(0xFF282620),
     surfaceVariant = Color(0xFFE4DFD1),
     onSurfaceVariant = Color(0xFF4A463C),
-    outline = Color(0xFFB9B5AA),
+    // Outlines mark fields and controls, so they keep the 3:1 graphics floor.
+    outline = Color(0xFF7D786C),
     outlineVariant = Color(0xFFD8D3C5),
     error = Color(0xFFB3261E),
     onError = Color(0xFFFFFFFF),
+    errorContainer = Color(0xFFF9DEDC),
+    onErrorContainer = Color(0xFF410E0B),
+    surfaceTint = Color(0xFF07566E),
     surfaceContainerLowest = Color(0xFFFFFFFF),
     surfaceContainerLow = Color(0xFFF5F1E8),
     surfaceContainer = Color(0xFFF1ECE1),
@@ -104,7 +122,7 @@ internal val DarkColors = darkColorScheme(
     onPrimaryContainer = Color(0xFFD3E4EA),
     secondary = Color(0xFFFFB68E),
     onSecondary = Color(0xFF552000),
-    secondaryContainer = Color(0xFF6E2E07),
+    secondaryContainer = Color(0xFF5A2E18),
     onSecondaryContainer = Color(0xFFFFDCC8),
     tertiary = Color(0xFFDA7FAD),
     onTertiary = Color(0xFF3A0A24),
@@ -116,10 +134,13 @@ internal val DarkColors = darkColorScheme(
     onSurface = Color(0xFFE8E4DA),
     surfaceVariant = Color(0xFF2A2A28),
     onSurfaceVariant = Color(0xFFC8C4B8),
-    outline = Color(0xFF5A5A54),
+    outline = Color(0xFF8A857B),
     outlineVariant = Color(0xFF3A3A36),
     error = Color(0xFFFFB4AB),
     onError = Color(0xFF4E1410),
+    errorContainer = Color(0xFF5C1D18),
+    onErrorContainer = Color(0xFFFFDAD6),
+    surfaceTint = Color(0xFF8BD0EF),
     surfaceContainerLowest = Color(0xFF0E0E0D),
     surfaceContainerLow = Color(0xFF1A1A18),
     surfaceContainer = Color(0xFF1E1E1C),
@@ -209,6 +230,7 @@ internal fun colorScheme(setting: ThemeSetting, systemDark: Boolean): ColorSchem
             surfaceContainerHighest = Color(0xFF222222),
             surfaceDim = Color.Black,
             surfaceBright = Color(0xFF2A2A2A),
+            outlineVariant = Color(0xFF2C2C2A),
         )
         // E-ink is deliberately monochrome and high contrast.
         ThemeSetting.E_INK -> LightColors.copy(
@@ -235,7 +257,9 @@ internal fun colorScheme(setting: ThemeSetting, systemDark: Boolean): ColorSchem
             surfaceVariant = Color(0xFFF2F2F2),
             onSurfaceVariant = Color.Black,
             outline = Color.Black,
-            outlineVariant = Color(0xFFD0D0D0),
+            // Faint greys disappear on an e-paper panel.
+            outlineVariant = Color(0xFF9E9E9E),
+            surfaceTint = Color.Black,
             surfaceContainerLowest = Color.White,
             surfaceContainerLow = Color.White,
             surfaceContainer = Color.White,
@@ -250,18 +274,60 @@ internal fun colorScheme(setting: ThemeSetting, systemDark: Boolean): ColorSchem
         )
     }
 
+internal val ColorScheme.isDark: Boolean
+    get() = background.luminance() < LIGHT_BACKGROUND_LUMINANCE
+
+/** E-ink: no hue may carry meaning or decoration. */
+internal val ColorScheme.isMonochrome: Boolean
+    get() = primary == Color.Black || primary == Color.White
+
+/** The quiet surface that groups related rows: paper on paper, or a lifted ink. */
+internal val ColorScheme.groupContainer: Color
+    get() = if (isDark) surfaceContainer else surfaceContainerLowest
+
+/** A tinted surface and the ink that stays readable on it and on the chrome. */
+internal data class ToneColors(val container: Color, val ink: Color)
+
+private const val LIGHT_TONE_TINT = 0.16f
+private const val LIGHT_TONE_INK = 0.45f
+private const val DARK_TONE_TINT = 0.24f
+private const val DARK_TONE_INK = 0.35f
+
+/**
+ * A tone as a place's surface. The raw tones only clear the graphics floor,
+ * so the ink mixes in the theme's text colour until it carries small text.
+ */
+internal fun toneColors(scheme: ColorScheme, tone: Color): ToneColors {
+    if (scheme.isMonochrome) return ToneColors(scheme.primaryContainer, scheme.onSurface)
+    val tint = if (scheme.isDark) DARK_TONE_TINT else LIGHT_TONE_TINT
+    val ink = if (scheme.isDark) DARK_TONE_INK else LIGHT_TONE_INK
+    return ToneColors(lerp(scheme.surfaceContainer, tone, tint), lerp(tone, scheme.onSurface, ink))
+}
+
 /** Bar icons must contrast with the background the app draws under the bars. */
 internal fun barIcons(scheme: ColorScheme): BarIcons =
     if (scheme.background.luminance() >= LIGHT_BACKGROUND_LUMINANCE) BarIcons.DARK else BarIcons.LIGHT
 
 /**
- * How much of a destination's tone tints its selected navigation indicator.
+ * How much of a tone tints the ground behind that same tone as a graphic.
  * The light tones sit just above 3:1 on the light containers, so more than
- * 8% would push the selected icon below that floor; the dark tones have room
- * for a stronger tint.
+ * 8% would push the graphic below that floor; the dark tones have room for a
+ * stronger tint.
  */
 internal fun indicatorBlend(scheme: ColorScheme): Float =
     if (scheme.background.luminance() >= LIGHT_BACKGROUND_LUMINANCE) 0.08f else 0.18f
+
+private val LocalBarIconOverride = staticCompositionLocalOf<MutableState<BarIcons?>?> { null }
+
+/** For a screen that fills the window with its own canvas, such as the article. */
+@Composable
+internal fun OverrideBarIcons(icons: BarIcons) {
+    val override = LocalBarIconOverride.current ?: return
+    DisposableEffect(override, icons) {
+        override.value = icons
+        onDispose { override.value = null }
+    }
+}
 
 internal fun ComponentActivity.applyBarIcons(icons: BarIcons) {
     // Before Android 15, the manifest theme leaves opaque bars. Use the same
@@ -279,24 +345,20 @@ fun EarnestTheme(setting: ThemeSetting, content: @Composable () -> Unit) {
     val scheme = colorScheme(setting, systemDark)
     val tone = tones(setting, systemDark)
     val view = LocalView.current
+    val override = remember { mutableStateOf<BarIcons?>(null) }
+    val icons = override.value ?: barIcons(scheme)
     // The app draws edge to edge, and the in-app theme can differ from the
-    // system's, so the bars must follow the effective scheme.
+    // system's, so the bars must follow whatever is drawn beneath them.
     SideEffect {
         if (view.isInEditMode) return@SideEffect
         val activity = view.context as? ComponentActivity ?: return@SideEffect
-        activity.applyBarIcons(barIcons(scheme))
+        activity.applyBarIcons(icons)
     }
-    CompositionLocalProvider(LocalTones provides tone) {
+    CompositionLocalProvider(LocalTones provides tone, LocalBarIconOverride provides override) {
         MaterialExpressiveTheme(
             colorScheme = scheme,
             typography = EarnestTypography,
-            shapes = Shapes(
-                extraSmall = RoundedCornerShape(8.dp),
-                small = RoundedCornerShape(12.dp),
-                medium = RoundedCornerShape(16.dp),
-                large = RoundedCornerShape(24.dp),
-                extraLarge = RoundedCornerShape(28.dp),
-            ),
+            shapes = EarnestShapes,
             motionScheme = MotionScheme.expressive(),
             content = content,
         )

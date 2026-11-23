@@ -14,7 +14,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -31,8 +30,8 @@ private val BrandInkOnDark = Color(0xFF8BD0EF)
  * themes such as e-ink keep their black or white primary.
  */
 internal fun brandInk(scheme: ColorScheme): Color = when {
-    scheme.primary == Color.Black || scheme.primary == Color.White -> scheme.primary
-    scheme.background.luminance() < 0.5f -> BrandInkOnDark
+    scheme.isMonochrome -> scheme.primary
+    scheme.isDark -> BrandInkOnDark
     else -> BrandInk
 }
 

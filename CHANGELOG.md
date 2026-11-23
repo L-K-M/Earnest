@@ -100,6 +100,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The Android home-screen widget renders instead of saying it can't show
+  content.
+- Android article text follows the system font size, Back closes the drawer
+  instead of the app, healthy feeds no longer report a failed fetch, and
+  Articles on a wide screen opens with the reader pane beside the list.
 - Webhook signatures, and secrets in feed URLs such as `?token=`, no longer
   travel over plain HTTP to hosts outside `EARNEST_OUTBOUND_ALLOW_PRIVATE`.
   On upgrade, such feeds stop refreshing, and such webhooks are disabled
@@ -189,6 +194,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The Android app is redesigned in Material 3 Expressive: collapsing serif
+  titles, a Saved destination for Kept, Later and Done, reader actions in
+  thumb reach, pull to refresh, grouped Feeds with a pace menu, and rebuilt
+  drawer, Search, Settings, Connect and widget. See `docs/android-design.md`.
 - The web, Android and Mac clients take their colours from the app icon:
   each place has its own tone (orange Today, blue Edition, amber Later,
   plum Kept, green Done), unread dots are orange, selection is a warm
