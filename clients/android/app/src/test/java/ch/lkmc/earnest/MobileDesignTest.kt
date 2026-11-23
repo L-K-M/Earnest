@@ -236,6 +236,31 @@ class MobileDesignTest {
         compose.onNodeWithText("Fetching your articles…").assertExists()
     }
 
+    @Test fun feedsShowLoadingUntilTheFirstSyncSettles() {
+        var state by mutableStateOf(UiState(loading = true))
+        compose.mainClock.autoAdvance = false
+        content {
+            MainScaffold(
+                model = viewModel(), state = state, theme = ThemeSetting.LIGHT,
+                onThemeChange = {}, initialEntry = null, notificationId = null, intentDelivery = 0,
+                notificationsDenied = false, onRequestNotifications = {},
+            )
+        }
+        compose.mainClock.advanceTimeBy(SETTLE_MS)
+        compose.onNodeWithText("Feeds").performClick()
+        compose.mainClock.advanceTimeBy(SETTLE_MS)
+        compose.onNodeWithText("Fetching your feeds…").assertExists()
+        compose.onNodeWithText("A home for your interests").assertDoesNotExist()
+
+        compose.runOnUiThread {
+            state = UiState(snapshot = SyncSnapshot(Revision("generation", 1)))
+            Snapshot.sendApplyNotifications()
+        }
+        compose.mainClock.advanceTimeBy(SETTLE_MS)
+        compose.onNodeWithText("Fetching your feeds…").assertDoesNotExist()
+        compose.onNodeWithText("A home for your interests").assertExists()
+    }
+
     @Test fun aPullThatStartsNoLoadLeavesALaterSyncQuiet() {
         var loading by mutableStateOf(false)
         var pulls = 0

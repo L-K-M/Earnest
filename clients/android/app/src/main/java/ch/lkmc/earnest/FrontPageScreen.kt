@@ -114,17 +114,16 @@ internal fun FrontPageScreen(
                 modifier = Modifier.padding(horizontal = ReaderSpace.gutter),
             )
             when {
-                state.loading -> LoadingState("Loading the front page…")
-                state.error != null -> QuietState(
+                !state.loading && state.error != null -> QuietState(
                     "Front page did not load",
-                    state.error.orEmpty(),
+                    state.error,
                     icon = EarnestIcons.Offline,
                     tone = LocalTones.current.amber,
                     actionLabel = "Try again",
                     onAction = onRefresh,
                     actionModifier = Modifier.testTag("front-try-again"),
                 )
-                else -> FrontPageEmpty(state.period, onPeriodChange, Modifier.fillMaxWidth().padding(horizontal = ReaderSpace.lg))
+                else -> LoadingState("Loading the front page…")
             }
         }
     } else {
@@ -158,6 +157,7 @@ private fun FrontPageMasthead(
     onPeriodChange: (FrontPagePeriod) -> Unit,
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
+    showUpdating: Boolean = false,
 ) {
     val scheme = MaterialTheme.colorScheme
     val page = state.page
@@ -173,7 +173,7 @@ private fun FrontPageMasthead(
                 state.updatedAt?.let {
                     Text("Updated ${it.relativeTime()}", style = quiet, color = scheme.onSurfaceVariant)
                 }
-                if (state.loading && page != null) {
+                if (showUpdating) {
                     Text(
                         "Updating…",
                         style = quiet,
@@ -256,7 +256,7 @@ private fun FrontPageGrid(
         // The masthead scrolls away with the stories instead of trapping them
         // beneath fixed phone chrome.
         item(span = { GridItemSpan(maxLineSpan) }, key = "front-masthead") {
-            FrontPageMasthead(state, onPeriodChange, onRefresh)
+            FrontPageMasthead(state, onPeriodChange, onRefresh, showUpdating = state.loading && sections.isNotEmpty())
         }
         if (daily && briefs.isNotEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }, key = "briefs") {
@@ -276,8 +276,9 @@ private fun FrontPageGrid(
             }
         }
         if (sections.isEmpty()) {
-            item(span = { GridItemSpan(maxLineSpan) }, key = "empty") {
-                FrontPageEmpty(state.period, onPeriodChange)
+            item(span = { GridItemSpan(maxLineSpan) }, key = "front-placeholder") {
+                if (state.loading) LoadingState("Loading the front page…")
+                else FrontPageEmpty(state.period, onPeriodChange)
             }
         }
         sections.forEach { section ->
@@ -322,7 +323,7 @@ private fun FrontPageGrid(
 }
 
 @Composable
-private fun FrontPageEmpty(period: FrontPagePeriod, onPeriodChange: (FrontPagePeriod) -> Unit, modifier: Modifier = Modifier) {
+private fun FrontPageEmpty(period: FrontPagePeriod, onPeriodChange: (FrontPagePeriod) -> Unit) {
     QuietState(
         title = "No stories in this window",
         message = "Nothing matched the ${frontPageWindowLabel(period).lowercase()}.",
@@ -330,7 +331,6 @@ private fun FrontPageEmpty(period: FrontPagePeriod, onPeriodChange: (FrontPagePe
         tone = LocalTones.current.orange,
         actionLabel = "See this week".takeIf { period == FrontPagePeriod.DAILY },
         onAction = { onPeriodChange(FrontPagePeriod.WEEKLY) },
-        modifier = modifier,
     )
 }
 
