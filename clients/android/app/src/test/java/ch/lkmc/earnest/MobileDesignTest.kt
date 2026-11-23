@@ -196,11 +196,12 @@ class MobileDesignTest {
 
     @Test fun aFilterChipGrowsWithItsLabelAtLargeText() {
         val label = "Only articles from feeds I follow"
-        content(2f) {
+        val fontScale = 2f
+        content(fontScale) {
             ReaderFilterChip(selected = true, onClick = {}, label = { Text(label) })
         }
         val chip = compose.onNodeWithText(label)
-        val minimum = with(Density(compose.density.density, 2f)) { 20.sp.toDp() } + 12.dp
+        val minimum = with(Density(compose.density.density, fontScale)) { 20.sp.toDp() } + 12.dp
         chip.assertIsDisplayed().assertHeightIsAtLeast(minimum)
         assertTrue("the chip must fit a narrow phone", chip.getUnclippedBoundsInRoot().right <= 320.dp)
     }
@@ -300,6 +301,17 @@ class MobileDesignTest {
             assertTrue("${cadence.label} must fit on a narrow phone", chip.getUnclippedBoundsInRoot().right <= 320.dp)
         }
         compose.onNodeWithContentDescription("Feed options for A thoughtful publication").assertIsDisplayed()
+    }
+
+    @Test fun aFeedWithoutANameIsUntitledInItsMenuLabel() {
+        content {
+            FeedRow(
+                subscription = SyncObject(SyncEngine.OBJECT_SUBSCRIPTION, 1, name = "", raw = """{"url":"https://example.test/feed"}""", rev = 1),
+                unreadMode = false, unreadCount = null, onCadence = { _, _ -> }, onOpen = {}, onUnsubscribe = {},
+            )
+        }
+        compose.onNodeWithContentDescription("Feed options for Untitled feed").assertExists()
+        compose.onNode(hasClickLabel("Read feed")).assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button))
     }
 
     @Test fun searchUsesFocusedNavigationAndSystemBackRestoresThePreviousDestination() {

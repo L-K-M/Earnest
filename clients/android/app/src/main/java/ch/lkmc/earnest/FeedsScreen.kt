@@ -355,7 +355,7 @@ internal fun FeedRow(
         border = if (scheme.isMonochrome) BorderStroke(1.dp, scheme.outlineVariant) else null,
     ) {
         Column(
-            Modifier.clickable(onClickLabel = "Read feed", onClick = onOpen)
+            Modifier.clickable(onClickLabel = "Read feed", role = Role.Button, onClick = onOpen)
                 .padding(start = ReaderSpace.md, top = ReaderSpace.xs, bottom = ReaderSpace.xs),
         ) {
             Row(
@@ -363,7 +363,7 @@ internal fun FeedRow(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(ReaderSpace.sm),
             ) {
-                FeedAvatar(name, iconUrl, Modifier.testTag("feed-icon-${subscription.id}"), FeedMark)
+                FeedAvatar(subscription.name, iconUrl, Modifier.testTag("feed-icon-${subscription.id}"), FeedMark)
                 Column(Modifier.weight(1f)) {
                     Text(name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(
@@ -375,7 +375,7 @@ internal fun FeedRow(
                     )
                 }
                 Box {
-                    ActionIconButton(EarnestIcons.More, "Feed options for ${subscription.name}", onClick = { menuOpen = true })
+                    ActionIconButton(EarnestIcons.More, "Feed options for $name", onClick = { menuOpen = true })
                     AppMenu(expanded = menuOpen, onDismiss = { menuOpen = false }) {
                         AppMenuItem("Read", onClick = { menuOpen = false; onOpen() }, icon = EarnestIcons.Book)
                         AppMenuItem(

@@ -1,10 +1,10 @@
 package ch.lkmc.earnest
 
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -40,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -424,7 +425,7 @@ private fun FrontStory(
     val imageUrl = story.imageUrl
     val scheme = MaterialTheme.colorScheme
     Column(
-        Modifier.fillMaxWidth().testTag(story.id).clickable { onOpen(entry.id) },
+        Modifier.fillMaxWidth().testTag(story.id).clickable(onClickLabel = "Open article") { onOpen(entry.id) },
         verticalArrangement = Arrangement.spacedBy(ReaderSpace.xs),
     ) {
         // An absent picture is still asked for, but never reserves its height.
@@ -504,14 +505,15 @@ private fun StoryByline(source: String, time: String, read: Boolean) {
 /** A line of text that opens an article. Long ones wrap from the start edge. */
 @Composable
 private fun StoryLink(text: String, onClick: () -> Unit) {
-    Text(
-        text,
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.fillMaxWidth().heightIn(min = TouchTarget)
+    // The text sits in the middle of its touch target, not at its top.
+    Box(
+        Modifier.fillMaxWidth().heightIn(min = TouchTarget)
             .clickable(role = Role.Button, onClick = onClick)
             .padding(vertical = ReaderSpace.sm),
-    )
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+    }
 }
 
 @Composable

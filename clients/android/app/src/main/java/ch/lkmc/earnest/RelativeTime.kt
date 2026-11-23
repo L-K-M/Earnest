@@ -13,12 +13,5 @@ internal fun Long.relativeTime(): String {
 }
 
 internal fun String.relativeTime(): String = runCatching {
-    val instant = Instant.parse(this)
-    val minutes = java.time.Duration.between(instant, Instant.now()).toMinutes()
-    when {
-        minutes < 1 -> "just now"
-        minutes < 60 -> "${minutes}m ago"
-        minutes < 60 * 24 -> "${minutes / 60}h ago"
-        else -> "${minutes / (60 * 24)}d ago"
-    }
+    Instant.parse(this).toEpochMilli().relativeTime()
 }.getOrDefault("")

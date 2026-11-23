@@ -1,5 +1,6 @@
 package ch.lkmc.earnest
 
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import android.app.Application
@@ -91,6 +92,12 @@ class AiSettingsUiTest {
         compose.onNodeWithText("Base URL").assertDoesNotExist()
         compose.onNodeWithText("venice").performScrollTo().performClick()
         compose.onNodeWithText("Base URL").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun aProviderFoldSaysWhatATapDoes() {
+        show()
+        compose.onNode(hasText("venice") and hasClickLabel("Expand")).performScrollTo().performClick()
+        compose.onNode(hasText("venice") and hasClickLabel("Collapse")).assertExists()
     }
 
     @Test fun aProviderWithAProblemOffersNoFoldThatCannotWork() {

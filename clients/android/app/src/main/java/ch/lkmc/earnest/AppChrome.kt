@@ -222,7 +222,7 @@ internal fun DestinationItem(destination: View, selected: Boolean, type: Navigat
         icon = { Icon(destination.navigationIcon(selected), contentDescription = null) },
         label = {
             CompositionLocalProvider(LocalDensity provides labelDensity) {
-                Text(destination.navigationLabel, textAlign = TextAlign.Center, maxLines = 2)
+                Text(destination.navigationLabel, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         },
         colors = ShortNavigationBarItemDefaults.colors(

@@ -98,7 +98,8 @@ private const val MIN_DECAY_DAYS = 1L
 private const val MAX_DECAY_DAYS = 365L
 private const val MIN_MEASURE = 62L
 private const val MAX_MEASURE = 72L
-private const val MEASURE_STEPS = 9
+// The slider stops at every whole line length between the bounds.
+private const val MEASURE_STEPS = (MAX_MEASURE - MIN_MEASURE - 1).toInt()
 private const val LOAD_DISPATCH_GRACE_MS = 300L
 private const val CATEGORY_PIN_MAX_FONT_SCALE = 1.5f
 // Phones in landscape; the smallest portrait phones still pin the switch.
@@ -705,15 +706,16 @@ private fun FeedOverridePickerDialog(feeds: List<FeedChoice>, onDismiss: () -> U
                             Modifier.fillMaxWidth().weight(1f, fill = false).heightIn(max = FeedPickerListHeight),
                         ) {
                             items(shown) { feed ->
+                                val name = feed.name.ifBlank { "Untitled feed" }
                                 Row(
                                     Modifier.fillMaxWidth().heightIn(min = TouchTarget)
-                                        .clickable(onClickLabel = "Choose ${feed.name}") { onChoose(feed.feedId) }
+                                        .clickable(onClickLabel = "Choose $name") { onChoose(feed.feedId) }
                                         .padding(vertical = ReaderSpace.xxs),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(ReaderSpace.sm),
                                 ) {
                                     FeedAvatar(feed.name, feed.iconUrl, size = OverrideAvatarSize)
-                                    Text(feed.name.ifBlank { "Untitled feed" }, style = MaterialTheme.typography.titleMedium)
+                                    Text(name, style = MaterialTheme.typography.titleMedium)
                                 }
                             }
                         }
@@ -761,7 +763,7 @@ private fun FeedOverrideDialog(
                 OutlinedTextField(
                     value = measureInput.text,
                     onValueChange = { onMeasureInput(measureInput.edit(it)) },
-                    label = { Text("Line length 62-72 (blank for account)") },
+                    label = { Text("Line length $MIN_MEASURE-$MAX_MEASURE (blank for account)") },
                     isError = !measureInput.canApply,
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),

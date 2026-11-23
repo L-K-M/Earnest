@@ -368,7 +368,7 @@ private fun ProviderCard(
         val fold = if (onExpanded == null) {
             Modifier
         } else {
-            Modifier.clickable(role = Role.Button, onClick = onExpanded)
+            Modifier.clickable(onClickLabel = if (expanded) "Collapse" else "Expand", role = Role.Button, onClick = onExpanded)
                 .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
         }
         val summary = @Composable { modifier: Modifier ->
@@ -828,7 +828,7 @@ private fun ModelPricingSection(
                         (if (target.truncatable) " (truncatable)" else "") +
                         (if (target.supportsCustomDimensions) " (custom width)" else ""),
                 )
-                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ReaderSpace.xs, Alignment.End)) {
                     QuietButton("Remove", { onRemove(target) }, enabled = !saving, color = MaterialTheme.colorScheme.error)
                     QuietButton("Edit", { onEdit(target) })
                 }
@@ -1016,7 +1016,7 @@ private fun CatalogueDialog(
             Column(Modifier.heightIn(max = CatalogueHeight).fillMaxWidth()) {
                 Column(
                     Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())
-                        .padding(start = ReaderSpace.lg, top = ReaderSpace.lg, end = ReaderSpace.lg),
+                        .padding(start = ReaderSpace.lg, top = ReaderSpace.lg, end = ReaderSpace.lg, bottom = ReaderSpace.sm),
                 ) {
                     Text(
                         if (task != null) "Models for ${task.label()}; $providerName" else "Models; $providerName",
@@ -1196,7 +1196,6 @@ private fun CatalogueDialog(
                             },
                         )
                     }
-
                 }
                 FlowRow(
                     Modifier.fillMaxWidth().padding(horizontal = ReaderSpace.sm, vertical = ReaderSpace.xs),
@@ -1535,7 +1534,7 @@ private fun SummaryRow(title: String, supporting: String, action: @Composable ()
 private fun Disclosure(label: String, expanded: Boolean, onToggle: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().heightIn(min = TouchTarget)
-            .clickable(role = Role.Button, onClick = onToggle)
+            .clickable(onClickLabel = if (expanded) "Collapse" else "Expand", role = Role.Button, onClick = onToggle)
             .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" },
         verticalAlignment = Alignment.CenterVertically,
     ) {

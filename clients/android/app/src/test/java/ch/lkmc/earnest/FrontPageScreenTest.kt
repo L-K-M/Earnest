@@ -1,5 +1,8 @@
 package ch.lkmc.earnest
 
+import androidx.compose.ui.unit.height
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -215,6 +218,22 @@ class FrontPageScreenTest {
         compose.onNodeWithText("Passage one").assertExists()
         compose.onNodeWithText("Passage one").performClick()
         assertEquals(listOf(3L), opened)
+    }
+
+    @Test fun aCoverageLinkCentersItsTextInItsTarget() {
+        setContent(FrontPageUi(page = page(listOf(story("story-lead", 2, coverageIds = listOf(2, 3),
+            summary = summary(claims = listOf(claim("Claim one.", citationEntryId = 3))))))))
+        compose.onNodeWithText("Citations").performClick()
+        val target = compose.onNodeWithText("Passage one").getUnclippedBoundsInRoot()
+        val text = compose.onNodeWithText("Passage one", useUnmergedTree = true).getUnclippedBoundsInRoot()
+        assertTrue("the text must sit inside a larger touch target", text.height < target.height)
+        val offset = ((text.top + text.bottom) - (target.top + target.bottom)) / 2
+        assertTrue("the text is $offset off its target's center", offset.value in -1f..1f)
+    }
+
+    @Test fun aStoryCardSaysItOpensTheArticle() {
+        setContent(FrontPageUi(page = page(listOf(story("story-lead", 2)))))
+        compose.onNodeWithTag("story-lead").assert(hasClickLabel("Open article"))
     }
 
     @Test fun anAttributedExcerptReplacesTheSummary() {
