@@ -313,6 +313,27 @@ class FrontPageScreenTest {
     @Test fun aLoadingWindowIsHonest() {
         setContent(FrontPageUi(loading = true))
         compose.onNodeWithText("Loading the front page…").assertExists()
+        compose.onNodeWithText("No stories in this window").assertDoesNotExist()
+    }
+
+    @Test fun aWindowAwaitsItsFirstResultBeforeShowingAnEmptyState() {
+        setContent(FrontPageUi())
+        compose.onNodeWithText("Loading the front page…").assertExists()
+        compose.onNodeWithText("No stories in this window").assertDoesNotExist()
+    }
+
+    @Test fun anEmptyCachedWindowShowsLoadingWhileItRefreshes() {
+        setContent(FrontPageUi(page = page(emptyList()), loading = true))
+        compose.onNodeWithText("Loading the front page…").assertExists()
+        compose.onNodeWithText("No stories in this window").assertDoesNotExist()
+        compose.onNodeWithText("See this week").assertDoesNotExist()
+    }
+
+    @Test fun aPopulatedWindowKeepsItsStoriesWhileItRefreshes() {
+        setContent(FrontPageUi(page = page(listOf(story("story-lead", 2))), loading = true))
+        compose.onNodeWithText("Headline 2").assertExists()
+        compose.onNodeWithText("Updating…").assertExists()
+        compose.onNodeWithText("Loading the front page…").assertDoesNotExist()
     }
 
     @Test fun aFailedWindowIsHonestAndRetryable() {
@@ -336,8 +357,8 @@ class FrontPageScreenTest {
         compose.onNodeWithText("Offline. Showing the last updated page.").assertExists()
     }
 
-    @Test fun theStaticEmptyStateKeepsHorizontalInsetsWithLargeText() {
-        setContent(FrontPageUi(), fontScale = 2f)
+    @Test fun theEmptyStateKeepsHorizontalInsetsWithLargeText() {
+        setContent(FrontPageUi(page = page(emptyList())), fontScale = 2f)
         val title = compose.onNodeWithText("No stories in this window", useUnmergedTree = true).fetchSemanticsNode()
         val minimum = with(compose.density) { 24.dp.toPx() }
         assertTrue("empty state must retain 24dp horizontal insets, got ${title.boundsInRoot}", title.boundsInRoot.left >= minimum - 1f)

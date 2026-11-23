@@ -89,7 +89,10 @@ data class UiState(
     val unreadCountsSyncedAt: Long? = null,
     val unreadCountsError: String? = null,
     val frontPage: FrontPageUi = FrontPageUi(),
-)
+) {
+    internal val initialSyncInProgress: Boolean
+        get() = loading && snapshot.cursor.generation.isEmpty()
+}
 
 /**
  * The front page for the selected window. [page] is the visit's stable copy:
@@ -359,6 +362,7 @@ class AppViewModel internal constructor(
                     val restored = restoredState(syncEngine, session.identity.principalId)
                     search.invalidateForGeneration(restored.snapshot.cursor.generation)
                     _state.value = restored.copy(
+                        loading = true,
                         accountKey = session.identity.cacheKey,
                         cacheNotice = if (cache.legacyCacheRetained) "An older cache is retained on this device. Its unsent actions need manual recovery because their account is unknown." else null,
                         briefs = cache.db.briefs().get(),
@@ -376,7 +380,7 @@ class AppViewModel internal constructor(
                         llmSettingsUi = LlmSettingsUi(epoch = llmEpochValue),
                         unreadCounts = cache.cachedUnreadCounts(restored.snapshot.cursor.generation),
                         unreadCountsSyncedAt = cache.cachedUnreadCountsAt(restored.snapshot.cursor.generation),
-                        frontPage = restoredFrontPage(cache, FrontPagePeriod.DAILY),
+                        frontPage = FrontPageUi().withCachedPage(cache),
                     )
                     _loggedIn.value = true
                 }
@@ -386,6 +390,7 @@ class AppViewModel internal constructor(
                         error = failureText("Could not restore the account cache", error),
                         readerSettingsUi = ReaderSettingsUi(epoch = epoch),
                         llmSettingsUi = LlmSettingsUi(epoch = llmEpochValue),
+                        frontPage = FrontPageUi(error = "Refresh to try loading the front page again."),
                     )
                     _loggedIn.value = true
                 } else if (sessions.current() == null) {
@@ -432,11 +437,7 @@ class AppViewModel internal constructor(
                     unreadCounts = cache.cachedUnreadCounts(restored.snapshot.cursor.generation),
                     unreadCountsSyncedAt = cache.cachedUnreadCountsAt(restored.snapshot.cursor.generation),
                     unreadCountsError = if (readerRestore) null else previous.unreadCountsError,
-                    frontPage = if (previous.frontPage.page == null) {
-                        restoredFrontPage(cache, previous.frontPage.period)
-                    } else {
-                        previous.frontPage
-                    },
+                    frontPage = previous.frontPage.withCachedPage(cache),
                 ).withProjectedReader(restored, readerRestore, restoreEpoch) }
             }
         }
@@ -1869,10 +1870,11 @@ class AppViewModel internal constructor(
         ))
     }
 
-    /** The stored page for [period], or an empty state when none has synced. */
-    private fun restoredFrontPage(cache: SessionCache, period: FrontPagePeriod): FrontPageUi {
-        val page = cache.cachedFrontPage(period) ?: return FrontPageUi(period = period)
-        return FrontPageUi(period = period, page = page, updatedAt = cache.cachedFrontPageAt(period))
+    /** Seeds the visible page from disk while preserving any active request. */
+    private fun FrontPageUi.withCachedPage(cache: SessionCache): FrontPageUi {
+        if (page != null) return this
+        val cached = cache.cachedFrontPage(period) ?: return this
+        return copy(page = cached, updatedAt = cache.cachedFrontPageAt(period))
     }
 
     /**

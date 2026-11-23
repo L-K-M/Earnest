@@ -635,7 +635,7 @@ internal fun MainScaffold(
                                 else -> key(section.view, feedSelection) { EntryListScreen(
                                     title = if (section.view == View.ALL) feedSelection.title(state.snapshot.objects) else section.view.label,
                                     destination = section.view,
-                                    firstSync = state.loading && state.snapshot.cursor.generation.isEmpty(),
+                                    firstSync = state.initialSyncInProgress,
                                     onBrowse = { selectView(if (section.view == View.ALL) View.FEEDS else View.ALL) },
                                     entries = listEntries,
                                     readingState = feedReading,

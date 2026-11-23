@@ -201,15 +201,19 @@ internal fun FeedsScreen(
                 }
             }
             if (subscriptions.isEmpty()) {
-                item(key = "no-feeds") {
-                    QuietState(
-                        "A home for your interests",
-                        "Subscribe to a favorite site, or import an OPML file from another reader. Your articles will appear here after syncing.",
-                        icon = EarnestIcons.FeedsSelected,
-                        tone = LocalTones.current.green,
-                        actionLabel = "Subscribe by URL",
-                        onAction = onSubscribe,
-                    )
+                item(key = "feeds-placeholder") {
+                    if (state.initialSyncInProgress) {
+                        LoadingState("Fetching your feeds…")
+                    } else {
+                        QuietState(
+                            "A home for your interests",
+                            "Subscribe to a favorite site, or import an OPML file from another reader. Your articles will appear here after syncing.",
+                            icon = EarnestIcons.FeedsSelected,
+                            tone = LocalTones.current.green,
+                            actionLabel = "Subscribe by URL",
+                            onAction = onSubscribe,
+                        )
+                    }
                 }
             }
             groups.forEach { group ->
