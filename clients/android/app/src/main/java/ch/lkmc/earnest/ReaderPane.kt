@@ -311,6 +311,7 @@ internal fun ReaderHeader(
                     ShortByline(entry, source, offlineCopy)
                 }
             }
+            ActionIconButton(EarnestIcons.MarkUnread, "Mark as unread", onMarkUnread, enabled = isRead)
             ActionIconButton(EarnestIcons.Search, "Find in article", onFind)
             ReaderMenu(
                 canOpen = originalUrl(entry) != null,

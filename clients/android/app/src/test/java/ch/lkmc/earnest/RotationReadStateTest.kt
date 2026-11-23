@@ -216,8 +216,7 @@ class RotationReadStateTest {
         try {
             compose.onNodeWithText(TITLE).performClick()
             compose.onNodeWithText("Opening article…").assertExists()
-            compose.onNodeWithContentDescription("Reader options").performClick()
-            compose.onNodeWithText("Mark unread").performClick()
+            compose.onNodeWithContentDescription("Mark as unread").performClick()
             compose.waitForIdle()
         } finally {
             SyncAccess.mutex.unlock()

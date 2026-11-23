@@ -121,6 +121,21 @@ class MobileDesignTest {
         compose.onNodeWithText("Cached copy", substring = true).assertIsDisplayed()
     }
 
+    @Test fun readerToolbarMarksTheArticleUnreadWithoutOpeningTheMenu() {
+        var isRead by mutableStateOf(true)
+        content {
+            ReaderHeader(
+                entry = CachedEntry(1, title = "An article worth reading"),
+                source = "A favorite publication", isRead = isRead, offlineCopy = false,
+                onOpenOriginal = {}, onCopyLink = {}, onShare = {}, onMarkUnread = { isRead = false },
+                onFind = {}, onSmallerText = {}, onLargerText = {},
+            )
+        }
+        val markUnread = compose.onNodeWithContentDescription("Mark as unread")
+        markUnread.assertIsDisplayed().performClick()
+        markUnread.assertIsNotEnabled()
+    }
+
     @Test fun searchKeepsTheAppsOptions() {
         content {
             MainScaffold(
