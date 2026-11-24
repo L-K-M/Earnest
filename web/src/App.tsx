@@ -48,11 +48,11 @@ const GO_TO: Record<string, string> = {t:'/front', e:'/front?period=weekly', l:'
 const DAILY: FrontTarget = {kind: 'front', period: 'daily'}
 const THEME_COLORS: Record<string, string> = {light:'#f8f6ef', dark:'#1d1d1b', black:'#000000', eink:'#ffffff'}
 // The reader toolbar's spare room recalls the shortcuts that work beside it,
-// most useful first. j and k belong to an article list; the Front page has
-// none, so its reader recalls only the help.
+// most useful first. j and k need an article list's key handler; the Front
+// page and a list that is gone have none, so their reader recalls the help.
 const HELP_HINT: KeyHint = {keys:['?'], label:'All shortcuts'}
 const LIST_READER_HINTS: readonly KeyHint[] = [{keys:['j','k'], label:'Next or previous'}, HELP_HINT]
-const FRONT_READER_HINTS: readonly KeyHint[] = [HELP_HINT]
+const READER_HINTS: readonly KeyHint[] = [HELP_HINT]
 
 // Rarely visited screens load on demand. A failed chunk download is retried
 // from the screen's error boundary rather than leaving a blank page.
@@ -644,7 +644,7 @@ function Session({onLogout}: {onLogout: () => void}) {
 
   function readerPane(): ReactNode {
     if (!reading) return <ReaderPlaceholder shortcuts={shortcuts} />
-    if (openEntry) return <Reader key={openEntry.id} onOpen={entry => openArticle(entry, {mode: 'push'})} entry={openEntry} subscription={subs.find(sub => sub.id === openEntry.subscription_id)} settings={settings} actions={actions} onSettings={savedSettings} onNotify={notify} renderBody={url => <ArticleFrame src={url} />} onClose={closeReader} hints={!shortcuts ? [] : route.name === 'river' ? LIST_READER_HINTS : FRONT_READER_HINTS} />
+    if (openEntry) return <Reader key={openEntry.id} onOpen={entry => openArticle(entry, {mode: 'push'})} entry={openEntry} subscription={subs.find(sub => sub.id === openEntry.subscription_id)} settings={settings} actions={actions} onSettings={savedSettings} onNotify={notify} renderBody={url => <ArticleFrame src={url} />} onClose={closeReader} hints={!shortcuts ? [] : route.name === 'river' && !resolved.missing ? LIST_READER_HINTS : READER_HINTS} />
     if (openQuery.isError) return <ReaderProblem error={openQuery.error} onBack={closeReader} onRetry={() => {void openQuery.refetch()}} />
     return <ReaderSkeleton />
   }

@@ -204,6 +204,8 @@ it('leaves Shift+U to the list without closing the article, which a bare u does'
 it.each([
   {path:'/feeds/8/articles/4', shortcuts:true, hints:'j k: Next or previous; ?: All shortcuts'},
   {path:'/today/articles/4', shortcuts:true, hints:'?: All shortcuts'},
+  // A feed that is gone shows an explanation instead of a list to move through.
+  {path:'/feeds/99/articles/4', shortcuts:true, hints:'?: All shortcuts'},
   {path:'/feeds/8/articles/4', shortcuts:false, hints:''},
 ])('gives the reader at $path the shortcut hints that work there (shortcuts on: $shortcuts)', async ({path, shortcuts, hints}) => {
   const fallback = vi.mocked(request).getMockImplementation()!
