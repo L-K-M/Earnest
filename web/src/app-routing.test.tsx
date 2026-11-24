@@ -5,8 +5,9 @@ import {act as reactAct, cleanup, fireEvent, render, screen, waitFor} from '@tes
 import {createRoot} from 'react-dom/client'
 import type {QueryClient} from '@tanstack/react-query'
 import {request, RequestError} from './request'
-import {defaultSettings} from './Settings'
+import {defaultSettings, type ReadingSettings} from './Settings'
 import type {Entry, ReaderActions, View} from './reader'
+import type {KeyHint} from './ArticleReader'
 
 const {act, entries, listMounted, listSeenChoices, seenChoices} = vi.hoisted(() => {
   const state = (shelf = 'none') => ({shelf:{value:shelf}, kept:{value:false}, seen:{value:'unseen'}})
@@ -21,7 +22,7 @@ vi.mock('./River',() => ({River: function River({view,actions,onOpen,unreadOnly,
   return <section data-unread-only={unreadOnly}><h2>{view.title} list</h2><button aria-pressed={!unreadOnly} onClick={() => onUnreadOnlyChange?.(false)}>Show all</button><button aria-pressed={unreadOnly} onClick={() => onUnreadOnlyChange?.(true)}>Show only unread</button>{entries.map(entry => <button key={entry.id} onClick={() => onOpen(entry as Entry)}>Open {entry.title}</button>)}</section>
 }}))
 vi.mock('./FrontPage',() => ({FrontPage:({onOpen}: {onOpen: (entry: Entry) => void}) => <section><h2>Front page list</h2><button onClick={() => onOpen(entries[0] as Entry)}>Open front story</button></section>}))
-vi.mock('./ArticleReader',() => ({Reader:({entry,onClose}: {entry: Entry; onClose: () => void}) => <article><h2>{entry.title}</h2><button onClick={onClose}>Back</button></article>}))
+vi.mock('./ArticleReader',() => ({Reader:({entry,onClose,settings,hints = []}: {entry: Entry; onClose: () => void; settings: ReadingSettings; hints?: readonly KeyHint[]}) => <article><h2>{entry.title}</h2><button onClick={onClose}>Back</button><p data-testid="hints" data-settings-rev={settings.rev}>{hints.map(hint => `${hint.keys.join(' ')}: ${hint.label}`).join('; ')}</p></article>}))
 
 let queryClient: QueryClient
 beforeEach(async () => {
@@ -184,6 +185,50 @@ it('gives the list the count of deliberate read choices', async () => {
   await start('/feeds/8')
   await screen.findByRole('heading', {name: 'Rust list'}, {timeout: 5000})
   expect(listSeenChoices).toHaveBeenCalledWith(seenChoices)
+})
+
+it.each([
+  {path:'/feeds/8/articles/4', key:'U'},
+  {path:'/front/articles/4', key:'U'},
+  // Shift with Caps Lock on can produce a lowercase key.
+  {path:'/feeds/99/articles/4', key:'u'},
+])('marks the displayed article unread with Shift+U at $path and closes it with a bare u', async ({path, key}) => {
+  await start(path)
+  await screen.findByRole('heading',{name:'Article 4'},{timeout:5000})
+  // Single-key shortcuts wait for the account's setting to load.
+  await waitFor(() => expect(screen.getByTestId('hints').textContent).not.toBe(''))
+  fireEvent.keyDown(document.body,{key:'U'})
+  expect(act).not.toHaveBeenCalled()
+  expect(location.pathname).toBe(path)
+  const shiftU = new KeyboardEvent('keydown',{key,shiftKey:true,bubbles:true,cancelable:true})
+  document.body.dispatchEvent(shiftU)
+  expect(shiftU.defaultPrevented).toBe(true)
+  await waitFor(() => expect(act).toHaveBeenCalledExactlyOnceWith(entries[0],'seen','unseen','explicit'))
+  expect(await screen.findByText('Marked unread.')).toBeTruthy()
+  expect(location.pathname).toBe(path)
+  fireEvent.keyDown(document.body,{key:'u'})
+  await waitFor(() => expect(location.pathname).toBe(path.replace('/articles/4','')))
+})
+
+it.each([
+  {path:'/feeds/8/articles/4', shortcuts:true, hints:'j k: Next or previous; ?: All shortcuts'},
+  {path:'/today/articles/4', shortcuts:true, hints:'?: All shortcuts'},
+  // A feed that is gone shows an explanation instead of a list to move through.
+  {path:'/feeds/99/articles/4', shortcuts:true, hints:'?: All shortcuts'},
+  {path:'/feeds/8/articles/4', shortcuts:false, hints:''},
+])('gives the reader at $path the shortcut hints that work there (shortcuts on: $shortcuts)', async ({path, shortcuts, hints}) => {
+  const fallback = vi.mocked(request).getMockImplementation()!
+  vi.mocked(request).mockImplementation(async (url, options) => url === '/v1/settings' ? {...defaultSettings, single_key_shortcuts: shortcuts, rev: 1} : fallback(url, options))
+  await start(path)
+  await screen.findByRole('heading',{name:'Article 4'},{timeout:5000})
+  // The off case has no hints even before preferences load. Wait for the
+  // reader to render the saved settings before checking for their absence.
+  await waitFor(() => expect(screen.getByTestId('hints').getAttribute('data-settings-rev')).toBe('1'))
+  await waitFor(() => expect(screen.getByTestId('hints').textContent).toBe(hints))
+  if (!shortcuts) {
+    fireEvent.keyDown(document.body,{key:'U',shiftKey:true})
+    expect(act).not.toHaveBeenCalled()
+  }
 })
 
 it('follows go-to shortcuts without letting the second key act on the list', async () => {

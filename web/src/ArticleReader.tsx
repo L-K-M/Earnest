@@ -11,7 +11,11 @@ import {SendActions} from './integrations/Integrations'
 import {Icon} from './Icon'
 import {longDate} from './format'
 
-export function Reader({entry, subscription, settings, actions, onClose, onSettings, renderBody, onOpen, onNotify}: {entry: Entry; subscription?: Subscription; settings: ReadingSettings; actions: ReaderActions; onClose: () => void; onSettings: (value: ReadingSettings) => void; renderBody: (url: string) => ReactNode; onOpen?: (entry: Entry) => void; onNotify?: (message: string) => void}) {
+// A shortcut reminder for the toolbar's spare room: keys pressed alone and
+// what they do, such as j and k for the next or previous article.
+export type KeyHint = {keys: readonly string[]; label: string}
+
+export function Reader({entry, subscription, settings, actions, onClose, onSettings, renderBody, onOpen, onNotify, hints = []}: {entry: Entry; subscription?: Subscription; settings: ReadingSettings; actions: ReaderActions; onClose: () => void; onSettings: (value: ReadingSettings) => void; renderBody: (url: string) => ReactNode; onOpen?: (entry: Entry) => void; onNotify?: (message: string) => void; hints?: readonly KeyHint[]}) {
   const online = useOnline()
   const ids = useId()
   const title = useRef<HTMLHeadingElement>(null)
@@ -87,8 +91,10 @@ export function Reader({entry, subscription, settings, actions, onClose, onSetti
       <button type="button" className="tool" data-tone="green" onClick={() => act('shelf', 'done')} title="Done (e)" aria-keyshortcuts="e"><Icon name="done" /><span className="label">Done</span></button>
       <button type="button" className="tool" data-tone="amber" aria-pressed={state.shelf.value === 'later'} onClick={() => act('shelf', state.shelf.value === 'later' ? 'none' : 'later')} title="Later (s)" aria-keyshortcuts="s"><Icon name="later" /><span className="label">Later</span></button>
       <button type="button" className="tool" data-tone="plum" aria-pressed={state.kept.value === true} onClick={() => act('kept', state.kept.value !== true)} title="Keep (f)" aria-keyshortcuts="f"><Icon name="keep" /><span className="label">Keep</span></button>
-      <button type="button" className="tool" onClick={() => act('seen', 'unseen')} title="Mark unread (m)" aria-keyshortcuts="m"><Icon name="unread" /><span className="label">Mark unread</span></button>
-      <span className="tool-spacer" />
+      <button type="button" className="tool" onClick={() => act('seen', 'unseen')} title="Mark unread (m or Shift+U)" aria-keyshortcuts="m Shift+U"><Icon name="unread" /><span className="label">Mark unread</span></button>
+      {/* The hints repeat the shortcut help for sighted keyboard users; the
+          buttons carry their own keys, and ? lists every one. */}
+      <span className="tool-spacer tool-hints" aria-hidden="true">{hints.map(hint => <span key={hint.label} className="tool-hint">{hint.keys.map(key => <kbd key={key}>{key}</kbd>)}<span>{hint.label}</span></span>)}</span>
       <SendActions key={entry.id} entryID={entry.id} onNotify={onNotify} />
       <a className="tool secondary" href={entry.url} target="_blank" rel="noopener noreferrer" title="Open original (v)" aria-keyshortcuts="v"><Icon name="external" /><span className="label">Open original</span></a>
       <button type="button" className={`tool secondary copy${canShare ? ' has-share' : ''}`} onClick={() => {void copyLink()}} title="Copy link to the original"><Icon name="link" /><span className="label">Copy link</span></button>

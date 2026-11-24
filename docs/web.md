@@ -70,7 +70,9 @@ its direct feeds unfiled. Folder nesting is preserved in sync and OPML exports.
    past rows, selecting without opening, and leaving an article do not either.
    If you mark an open article unread, it stays unread when you move to another
    article; explicitly reopening it marks it read again.
-   Use Done (`e`), Later (`s`), Keep (`f`) or unread (`m`). Unread clears Done.
+   Use Done (`e`), Later (`s`), Keep (`f`) or unread (`m` or Shift+U) in the
+   list. Shift+U also marks the displayed article unread, including stories
+   opened from the Front page. Unread clears Done.
    Each of these applies at once and offers Undo (`z`) in a short notice that
    restores the registers it changed. `j` and `k` select, and while an article
    is open they open the next or previous one in place, so Back still returns
@@ -80,7 +82,10 @@ its direct feeds unfiled. Folder nesting is preserved in sync and OPML exports.
    Edition, Later, Kept or Done (`f`, `s`, `a`, `n` and `r` reach the other
    screens), `/` searches, `?` shows help, and Ctrl+K or Command+K opens the
    command palette. Single-key commands ignore text fields, editable regions
-   and dialogs, and respect the account off switch. Rows are links, so an
+   and dialogs, and respect the account off switch. While they are on and
+   there is room, the reader's toolbar shows `j` and `k` (in a list, not on the
+   Front page) and `?` between the article's actions and the links out, on
+   devices with a mouse or trackpad. Rows are links, so an
    article opens in a new tab with the usual modifier click.
    In Today, a feed or a folder, the palette's "Mark the rest of ... read"
    marks everything up to the newest loaded article after a confirmation;

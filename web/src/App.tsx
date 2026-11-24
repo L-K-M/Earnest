@@ -1,16 +1,16 @@
-import {Component, lazy, Suspense, useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type ComponentType, type CSSProperties, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode} from 'react'
+import {Component, lazy, Suspense, useCallback, useEffect, useEffectEvent, useId, useRef, useState, useSyncExternalStore, type ComponentType, type CSSProperties, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode} from 'react'
 import {useQuery, useQueryClient} from '@tanstack/react-query'
 import type {components} from './api.generated'
 import {request, RequestError, setCSRF} from './request'
 import {readUnreadCounts} from './counts'
 import {River, type SessionSummary} from './River'
 import {FrontPage} from './FrontPage'
-import {Reader} from './ArticleReader'
+import {Reader, type KeyHint} from './ArticleReader'
 import {ArticleFrame} from './ArticleFrame'
 import {defaultSettings, type ReadingSettings} from './Settings'
 import {ActivityScreen, Notifications} from './agents/Surfaces'
 import {useReaderSync} from './syncBridge'
-import {shortcutsAllowed, viewKey, type Entry, type EntryState, type RangeScope, type ReaderActions, type Register, type Value, type View} from './reader'
+import {isMarkUnreadShortcut, shortcutsAllowed, viewKey, type Entry, type EntryState, type RangeScope, type ReaderActions, type Register, type Value, type View} from './reader'
 import {Search, useSavedSearches} from './search/Search'
 import {markRestCommand} from './markRest'
 import {ContextMenu, menuRequest, SEPARATOR, tidy, useContextMenuKey, type MenuItem, type MenuRequest} from './ContextMenu'
@@ -47,6 +47,12 @@ const SEQUENCE_MS = 1500
 const GO_TO: Record<string, string> = {t:'/front', e:'/front?period=weekly', l:'/later', k:'/kept', d:'/done', f:'/feeds', s:'/settings', a:'/articles', A:'/activity', n:'/notifications', r:'/rules'}
 const DAILY: FrontTarget = {kind: 'front', period: 'daily'}
 const THEME_COLORS: Record<string, string> = {light:'#f8f6ef', dark:'#1d1d1b', black:'#000000', eink:'#ffffff'}
+// The reader toolbar's spare room recalls the shortcuts that work beside it,
+// most useful first. j and k need an article list's key handler; the Front
+// page and a list that is gone have none, so their reader recalls the help.
+const HELP_HINT: KeyHint = {keys:['?'], label:'All shortcuts'}
+const LIST_READER_HINTS: readonly KeyHint[] = [{keys:['j','k'], label:'Next or previous'}, HELP_HINT]
+const READER_HINTS: readonly KeyHint[] = [HELP_HINT]
 
 // Rarely visited screens load on demand. A failed chunk download is retried
 // from the screen's error boundary rather than leaving a blank page.
@@ -467,6 +473,10 @@ function Session({onLogout}: {onLogout: () => void}) {
   useEffect(() => { closeReaderRef.current = closeReader }, [closeReader])
   const toastRef = useRef(toast)
   useEffect(() => { toastRef.current = toast }, [toast])
+  const markOpenUnread = useEffectEvent(() => {
+    if (!openEntry) return
+    void actions.act(openEntry, 'seen', 'unseen').catch(error => setError(error instanceof Error ? error.message : 'Could not mark the article unread.'))
+  })
   useEffect(() => {
     let sequence = 0
     // Capture phase: the second key of "g e" must not also reach the list's
@@ -487,7 +497,8 @@ function Session({onLogout}: {onLogout: () => void}) {
       }
       sequence = 0
       if (event.key === 'g') { sequence = performance.now(); return }
-      if (event.key === 'u' && reading) { event.preventDefault(); closeReaderRef.current(); return }
+      if (reading && isMarkUnreadShortcut(event)) { event.preventDefault(); markOpenUnread(); return }
+      if (event.key === 'u' && !event.shiftKey && reading) { event.preventDefault(); closeReaderRef.current(); return }
       if (event.key === 'z' && toastRef.current?.undo) { event.preventDefault(); void toastRef.current.undo() }
     }
     window.addEventListener('keydown', keyboard, true)
@@ -638,7 +649,7 @@ function Session({onLogout}: {onLogout: () => void}) {
 
   function readerPane(): ReactNode {
     if (!reading) return <ReaderPlaceholder shortcuts={shortcuts} />
-    if (openEntry) return <Reader key={openEntry.id} onOpen={entry => openArticle(entry, {mode: 'push'})} entry={openEntry} subscription={subs.find(sub => sub.id === openEntry.subscription_id)} settings={settings} actions={actions} onSettings={savedSettings} onNotify={notify} renderBody={url => <ArticleFrame src={url} />} onClose={closeReader} />
+    if (openEntry) return <Reader key={openEntry.id} onOpen={entry => openArticle(entry, {mode: 'push'})} entry={openEntry} subscription={subs.find(sub => sub.id === openEntry.subscription_id)} settings={settings} actions={actions} onSettings={savedSettings} onNotify={notify} renderBody={url => <ArticleFrame src={url} />} onClose={closeReader} hints={!shortcuts ? [] : route.name === 'river' && !resolved.missing ? LIST_READER_HINTS : READER_HINTS} />
     if (openQuery.isError) return <ReaderProblem error={openQuery.error} onBack={closeReader} onRetry={() => {void openQuery.refetch()}} />
     return <ReaderSkeleton />
   }
