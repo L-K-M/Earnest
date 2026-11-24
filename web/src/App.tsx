@@ -498,7 +498,7 @@ function Session({onLogout}: {onLogout: () => void}) {
       sequence = 0
       if (event.key === 'g') { sequence = performance.now(); return }
       if (reading && isMarkUnreadShortcut(event)) { event.preventDefault(); markOpenUnread(); return }
-      if (event.key === 'u' && !event.shiftKey && reading) { event.preventDefault(); closeReaderRef.current(); return }
+      if (event.key === 'c' && !event.shiftKey && reading) { event.preventDefault(); closeReaderRef.current(); return }
       if (event.key === 'z' && toastRef.current?.undo) { event.preventDefault(); void toastRef.current.undo() }
     }
     window.addEventListener('keydown', keyboard, true)
@@ -563,7 +563,7 @@ function Session({onLogout}: {onLogout: () => void}) {
     articleCommand('done', 'Mark Done', 'e', entry => actions.act(entry,'shelf','done')),
     articleCommand('later', 'Toggle Later', 's', entry => actions.act(entry,'shelf',actions.state(entry).shelf.value === 'later' ? 'none' : 'later')),
     articleCommand('keep', 'Toggle Keep', 'f', entry => actions.act(entry,'kept',actions.state(entry).kept.value !== true)),
-    articleCommand('unread', 'Mark unread', 'm', entry => actions.act(entry,'seen','unseen')),
+    articleCommand('unread', 'Mark unread', 'u', entry => actions.act(entry,'seen','unseen')),
     articleCommand('original', 'Open original', 'v', entry => {window.open(entry.url, '_blank', 'noopener,noreferrer')}),
     articleCommand('copy-link', 'Copy Earnest link to the article', '', async entry => {
       // The clipboard API exists only in secure contexts (HTTPS or localhost).

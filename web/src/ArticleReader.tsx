@@ -86,12 +86,12 @@ export function Reader({entry, subscription, settings, actions, onClose, onSetti
   const shelf = state.shelf.value === 'done' ? 'Done' : state.shelf.value === 'later' ? 'Later' : ''
   return <article className="reader" aria-labelledby={`${ids}-title`} data-theme={surface} data-font={typography.font} style={{'--measure': typography.measure} as React.CSSProperties}>
     <div className="reader-toolbar" role="group" aria-label="Article actions">
-      <button type="button" className="tool back" onClick={onClose} title="Back (Esc)" aria-keyshortcuts="Escape"><Icon name="back" /><span className="label">Back</span></button>
+      <button type="button" className="tool back" onClick={onClose} title="Back (Esc or c)" aria-keyshortcuts="Escape c"><Icon name="back" /><span className="label">Back</span></button>
       <span className="tool-divider" aria-hidden="true" />
       <button type="button" className="tool" data-tone="green" onClick={() => act('shelf', 'done')} title="Done (e)" aria-keyshortcuts="e"><Icon name="done" /><span className="label">Done</span></button>
       <button type="button" className="tool" data-tone="amber" aria-pressed={state.shelf.value === 'later'} onClick={() => act('shelf', state.shelf.value === 'later' ? 'none' : 'later')} title="Later (s)" aria-keyshortcuts="s"><Icon name="later" /><span className="label">Later</span></button>
       <button type="button" className="tool" data-tone="plum" aria-pressed={state.kept.value === true} onClick={() => act('kept', state.kept.value !== true)} title="Keep (f)" aria-keyshortcuts="f"><Icon name="keep" /><span className="label">Keep</span></button>
-      <button type="button" className="tool" onClick={() => act('seen', 'unseen')} title="Mark unread (m or Shift+U)" aria-keyshortcuts="m Shift+U"><Icon name="unread" /><span className="label">Mark unread</span></button>
+      <button type="button" className="tool" onClick={() => act('seen', 'unseen')} title="Mark unread (u)" aria-keyshortcuts="u m Shift+U"><Icon name="unread" /><span className="label">Mark unread</span></button>
       {/* The hints repeat the shortcut help for sighted keyboard users; the
           buttons carry their own keys, and ? lists every one. */}
       <span className="tool-spacer tool-hints" aria-hidden="true">{hints.map(hint => <span key={hint.label} className="tool-hint">{hint.keys.map(key => <kbd key={key}>{key}</kbd>)}<span>{hint.label}</span></span>)}</span>

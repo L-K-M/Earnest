@@ -188,11 +188,13 @@ it('gives the list the count of deliberate read choices', async () => {
 })
 
 it.each([
-  {path:'/feeds/8/articles/4', key:'U'},
-  {path:'/front/articles/4', key:'U'},
+  {path:'/feeds/8/articles/4', key:'u', shiftKey:false},
+  {path:'/front/articles/4', key:'u', shiftKey:false},
+  {path:'/feeds/99/articles/4', key:'u', shiftKey:false},
+  {path:'/feeds/8/articles/4', key:'U', shiftKey:true},
   // Shift with Caps Lock on can produce a lowercase key.
-  {path:'/feeds/99/articles/4', key:'u'},
-])('marks the displayed article unread with Shift+U at $path and closes it with a bare u', async ({path, key}) => {
+  {path:'/feeds/8/articles/4', key:'u', shiftKey:true},
+])('marks the displayed article unread at $path with $key (Shift: $shiftKey) and closes it with c', async ({path, key, shiftKey}) => {
   await start(path)
   await screen.findByRole('heading',{name:'Article 4'},{timeout:5000})
   // Single-key shortcuts wait for the account's setting to load.
@@ -200,13 +202,11 @@ it.each([
   fireEvent.keyDown(document.body,{key:'U'})
   expect(act).not.toHaveBeenCalled()
   expect(location.pathname).toBe(path)
-  const shiftU = new KeyboardEvent('keydown',{key,shiftKey:true,bubbles:true,cancelable:true})
-  document.body.dispatchEvent(shiftU)
-  expect(shiftU.defaultPrevented).toBe(true)
+  fireEvent.keyDown(document.body,{key,shiftKey})
   await waitFor(() => expect(act).toHaveBeenCalledExactlyOnceWith(entries[0],'seen','unseen','explicit'))
   expect(await screen.findByText('Marked unread.')).toBeTruthy()
   expect(location.pathname).toBe(path)
-  fireEvent.keyDown(document.body,{key:'u'})
+  fireEvent.keyDown(document.body,{key:'c'})
   await waitFor(() => expect(location.pathname).toBe(path.replace('/articles/4','')))
 })
 
@@ -226,8 +226,12 @@ it.each([
   await waitFor(() => expect(screen.getByTestId('hints').getAttribute('data-settings-rev')).toBe('1'))
   await waitFor(() => expect(screen.getByTestId('hints').textContent).toBe(hints))
   if (!shortcuts) {
-    fireEvent.keyDown(document.body,{key:'U',shiftKey:true})
+    fireEvent.keyDown(document.body,{key:'u'})
+    fireEvent.keyDown(document.body,{key:'c'})
     expect(act).not.toHaveBeenCalled()
+    expect(location.pathname).toBe(path)
+    fireEvent.keyDown(document.body,{key:'Escape'})
+    await waitFor(() => expect(location.pathname).toBe('/feeds/8'))
   }
 })
 
