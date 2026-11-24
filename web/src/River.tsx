@@ -308,7 +308,8 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
       if (event.key === 'v') { event.preventDefault(); window.open(entry.url, '_blank', 'noopener,noreferrer'); return }
       const state = actions.state(entry)
       // Shift+U marks unread as m does, as in Gmail; a bare u closes the article.
-      const action = event.key === 'e' ? ['shelf', 'done'] as const : event.key === 's' ? ['shelf', state.shelf.value === 'later' ? 'none' : 'later'] as const : event.key === 'f' ? ['kept', state.kept.value !== true] as const : event.key === 'm' || event.key === 'U' ? ['seen', 'unseen'] as const : null
+      // Caps Lock also makes u a capital, so Shift must be held.
+      const action = event.key === 'e' ? ['shelf', 'done'] as const : event.key === 's' ? ['shelf', state.shelf.value === 'later' ? 'none' : 'later'] as const : event.key === 'f' ? ['kept', state.kept.value !== true] as const : event.key === 'm' || (event.key === 'U' && event.shiftKey) ? ['seen', 'unseen'] as const : null
       if (action) { event.preventDefault(); if (action[0] === 'seen') pending.current.delete(entry.id); void actions.act(entry, action[0], action[1]).catch(error => setError(error instanceof Error ? error.message : 'Could not save action.')) }
     }
     window.addEventListener('keydown', keyboard)

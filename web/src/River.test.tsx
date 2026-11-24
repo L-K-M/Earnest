@@ -98,6 +98,14 @@ describe('river interactions', () => {
     await new Promise(resolve => window.setTimeout(resolve, 1300))
     expect(act).not.toHaveBeenCalledWith(entries[0],'seen','seen','passive')
   })
+  it('leaves a row alone when Caps Lock, not Shift, makes u a capital', async () => {
+    const {act}=mount()
+    await screen.findByText('Article 1')
+    const capsU = new KeyboardEvent('keydown',{key:'U',bubbles:true,cancelable:true})
+    document.body.dispatchEvent(capsU)
+    expect(capsU.defaultPrevented).toBe(false)
+    expect(act).not.toHaveBeenCalledWith(entries[0],'seen','unseen')
+  })
   it('offers a row\'s actions in its context menu, dropping a queued passive seen as m does', async () => {
     const act = vi.fn().mockResolvedValue(undefined)
     const onMenu = vi.fn()

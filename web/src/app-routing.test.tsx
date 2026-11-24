@@ -211,8 +211,10 @@ it.each([
   await start(path)
   await screen.findByRole('heading',{name:'Article 4'},{timeout:5000})
   await waitFor(() => expect(vi.mocked(request).mock.calls.some(([url]) => url === '/v1/settings')).toBe(true))
+  // Before the setting loads there are no hints, so the off case needs the
+  // settling time; the on cases then wait for the hints themselves.
   await reactAct(async () => {await new Promise(resolve => setTimeout(resolve, 50))})
-  expect(screen.getByTestId('hints').textContent).toBe(hints)
+  await waitFor(() => expect(screen.getByTestId('hints').textContent).toBe(hints))
 })
 
 it('follows go-to shortcuts without letting the second key act on the list', async () => {
