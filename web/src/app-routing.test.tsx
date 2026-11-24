@@ -187,7 +187,7 @@ it('gives the list the count of deliberate read choices', async () => {
   expect(listSeenChoices).toHaveBeenCalledWith(seenChoices)
 })
 
-it('marks unread with Shift+U without closing the article, which a bare u does', async () => {
+it('leaves Shift+U to the list without closing the article, which a bare u does', async () => {
   await start('/feeds/8/articles/4')
   await screen.findByRole('heading',{name:'Article 4'},{timeout:5000})
   // Single-key shortcuts wait for the account's setting to load.

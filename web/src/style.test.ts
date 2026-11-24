@@ -69,6 +69,19 @@ it('keeps a title in place in every row state', () => {
   expect(ruleBody('\n.entry {')).toMatch(/padding: \S+ \S+ \S+ var\(--entry-gutter\);/)
 })
 
+// The reader toolbar's shortcut hints show only whole: the strip is one
+// control tall and clips, so a hint that does not fit wraps out of sight,
+// and its empty first item keeps even the first hint from overflowing. Touch
+// devices without a keyboard get none.
+it('clips shortcut hints that do not fit whole and hides them on touch', () => {
+  const strip = ruleBody('\n.tool-hints {')
+  for (const declaration of ['flex-wrap: wrap', 'height: var(--control)', 'overflow: hidden', 'min-width: 0']) expect(strip).toContain(declaration)
+  expect(ruleBody('\n.tool-hints::before {')).toContain('height: var(--control)')
+  expect(ruleBody('\n.tool-hint {')).toContain('height: var(--control)')
+  const coarse = css.slice(css.lastIndexOf('@media (pointer: coarse) {'))
+  expect(coarse.slice(0, coarse.indexOf('\n}\n'))).toMatch(/\.tool-hint\b[^{]*\{\s*display: none/)
+})
+
 it('defines the icon tones and the sign-in glow in every theme block', () => {
   const guard = css.indexOf('@supports (color: light-dark(#000, #fff))')
   const base = tokens(ruleBody(':root, [data-theme=light], [data-theme=dark] {'))
