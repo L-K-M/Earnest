@@ -70,14 +70,14 @@ its direct feeds unfiled. Folder nesting is preserved in sync and OPML exports.
    past rows, selecting without opening, and leaving an article do not either.
    If you mark an open article unread, it stays unread when you move to another
    article; explicitly reopening it marks it read again.
-   Use Done (`e`), Later (`s`), Keep (`f`) or unread (`m` or Shift+U) in the
-   list. Shift+U also marks the displayed article unread, including stories
-   opened from the Front page. Unread clears Done.
+   Use Done (`e`), Later (`s`), Keep (`f`) or unread (`u`, `m` or Shift+U) in
+   the list. `u` and Shift+U also mark the displayed article unread, including
+   stories opened from the Front page. Unread clears Done.
    Each of these applies at once and offers Undo (`z`) in a short notice that
    restores the registers it changed. `j` and `k` select, and while an article
    is open they open the next or previous one in place, so Back still returns
    to the list. Arrow keys, Home and End move through the list whether or not
-   single-key shortcuts are on. `o` or Enter opens, Escape or `u` closes, `v`
+   single-key shortcuts are on. `o` or Enter opens, Escape or `c` closes, `v`
    opens the original, `g` then `t`, `e`, `l`, `k` or `d` goes to Today,
    Edition, Later, Kept or Done (`f`, `s`, `a`, `n` and `r` reach the other
    screens), `/` searches, `?` shows help, and Ctrl+K or Command+K opens the

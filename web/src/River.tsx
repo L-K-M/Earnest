@@ -307,7 +307,7 @@ export function River({view, subscriptions, actions, selected, onSelect, onOpen,
       if (event.key === 'o' || event.key === 'Enter') { if (event.key === 'Enter' && event.target instanceof Element && event.target.closest('button, a, summary, label, [role="option"]')) return; event.preventDefault(); open(entry); return }
       if (event.key === 'v') { event.preventDefault(); window.open(entry.url, '_blank', 'noopener,noreferrer'); return }
       const state = actions.state(entry)
-      // When the reader is open, App handles Shift+U for the displayed article.
+      // When the reader is open, App handles u and Shift+U for the displayed article.
       const markUnread = event.key === 'm' || (!reading && isMarkUnreadShortcut(event))
       const action = event.key === 'e' ? ['shelf', 'done'] as const : event.key === 's' ? ['shelf', state.shelf.value === 'later' ? 'none' : 'later'] as const : event.key === 'f' ? ['kept', state.kept.value !== true] as const : markUnread ? ['seen', 'unseen'] as const : null
       if (action) { event.preventDefault(); if (action[0] === 'seen') pending.current.delete(entry.id); void actions.act(entry, action[0], action[1]).catch(error => setError(error instanceof Error ? error.message : 'Could not save action.')) }

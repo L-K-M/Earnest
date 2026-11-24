@@ -90,7 +90,7 @@ describe('river interactions', () => {
     await new Promise(resolve => window.setTimeout(resolve, 700))
     expect(act).not.toHaveBeenCalled()
   })
-  it.each([{key:'m', shiftKey:false}, {key:'U', shiftKey:true}])('drops a queued open read when $key marks the row unread', async press => {
+  it.each([{key:'u', shiftKey:false}, {key:'m', shiftKey:false}, {key:'U', shiftKey:true}])('drops a queued open read when $key marks the row unread', async press => {
     const {act}=mount()
     fireEvent.click(await screen.findByText('Article 1'))
     fireEvent.keyDown(document.body,press)

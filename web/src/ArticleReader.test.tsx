@@ -26,7 +26,7 @@ it('opens the article title in a new tab without giving the publisher an opener'
   expect(link.getAttribute('rel')).toBe('noopener noreferrer')
 })
 
-it('names Shift+U beside m on Mark unread and shows the shortcut hints it is given', () => {
+it('labels the close and unread shortcuts and shows the shortcut hints it is given', () => {
   vi.stubGlobal('matchMedia', () => ({matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn()}))
   const entry = {id: 1, feed_id: 2, title: 'An article', url: 'https://publisher.test/story', state: {shelf: {value: 'none'}, kept: {value: false}}} as Entry
   const reader = (hints?: KeyHint[]) => <QueryClientProvider client={new QueryClient({defaultOptions: {queries: {retry: false}}})}>
@@ -34,9 +34,12 @@ it('names Shift+U beside m on Mark unread and shows the shortcut hints it is giv
   </QueryClientProvider>
   const {container, rerender} = render(reader([{keys: ['j', 'k'], label: 'Next or previous'}, {keys: ['?'], label: 'All shortcuts'}]))
   const toolbar = screen.getByRole('group', {name: 'Article actions'})
+  const back = within(toolbar).getByRole('button', {name: 'Back'})
+  expect(back.getAttribute('aria-keyshortcuts')).toBe('Escape c')
+  expect(back.getAttribute('title')).toBe('Back (Esc or c)')
   const unread = within(toolbar).getByRole('button', {name: 'Mark unread'})
-  expect(unread.getAttribute('aria-keyshortcuts')).toBe('m Shift+U')
-  expect(unread.getAttribute('title')).toBe('Mark unread (m or Shift+U)')
+  expect(unread.getAttribute('aria-keyshortcuts')).toBe('u m Shift+U')
+  expect(unread.getAttribute('title')).toBe('Mark unread (u)')
   // Sit between the article's actions and the links out, hidden from
   // assistive technology, which hears each button's own keys instead.
   const strip = container.querySelector('.tool-hints')!

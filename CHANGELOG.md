@@ -13,8 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server-side tokens, a default Karakeep list and a default Hister label in
   Settings. See `docs/article-integrations.md`.
 - Web folder context menus offer Rename folder, Add feed and New subfolder.
-- Shift+U marks the open or selected web article unread. With
-  single-key shortcuts on, the web reader's toolbar uses its spare room to
+- Press `u` to mark the open or selected web article unread and `c` to close
+  the reader. With single-key shortcuts on, the toolbar uses its spare room to
   show `j` and `k` for the next or previous article in a list and `?` for
   every shortcut.
 - The Android reader finds text in an article with match counts and
