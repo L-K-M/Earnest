@@ -1,4 +1,4 @@
-import {Component, lazy, Suspense, useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type ComponentType, type CSSProperties, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode} from 'react'
+import {Component, lazy, Suspense, useCallback, useEffect, useEffectEvent, useId, useRef, useState, useSyncExternalStore, type ComponentType, type CSSProperties, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode} from 'react'
 import {useQuery, useQueryClient} from '@tanstack/react-query'
 import type {components} from './api.generated'
 import {request, RequestError, setCSRF} from './request'
@@ -10,7 +10,7 @@ import {ArticleFrame} from './ArticleFrame'
 import {defaultSettings, type ReadingSettings} from './Settings'
 import {ActivityScreen, Notifications} from './agents/Surfaces'
 import {useReaderSync} from './syncBridge'
-import {shortcutsAllowed, viewKey, type Entry, type EntryState, type RangeScope, type ReaderActions, type Register, type Value, type View} from './reader'
+import {isMarkUnreadShortcut, shortcutsAllowed, viewKey, type Entry, type EntryState, type RangeScope, type ReaderActions, type Register, type Value, type View} from './reader'
 import {Search, useSavedSearches} from './search/Search'
 import {markRestCommand} from './markRest'
 import {ContextMenu, menuRequest, SEPARATOR, tidy, useContextMenuKey, type MenuItem, type MenuRequest} from './ContextMenu'
@@ -473,6 +473,10 @@ function Session({onLogout}: {onLogout: () => void}) {
   useEffect(() => { closeReaderRef.current = closeReader }, [closeReader])
   const toastRef = useRef(toast)
   useEffect(() => { toastRef.current = toast }, [toast])
+  const markOpenUnread = useEffectEvent(() => {
+    if (!openEntry) return
+    void actions.act(openEntry, 'seen', 'unseen').catch(error => setError(error instanceof Error ? error.message : 'Could not mark the article unread.'))
+  })
   useEffect(() => {
     let sequence = 0
     // Capture phase: the second key of "g e" must not also reach the list's
@@ -493,7 +497,8 @@ function Session({onLogout}: {onLogout: () => void}) {
       }
       sequence = 0
       if (event.key === 'g') { sequence = performance.now(); return }
-      if (event.key === 'u' && reading) { event.preventDefault(); closeReaderRef.current(); return }
+      if (reading && isMarkUnreadShortcut(event)) { event.preventDefault(); markOpenUnread(); return }
+      if (event.key === 'u' && !event.shiftKey && reading) { event.preventDefault(); closeReaderRef.current(); return }
       if (event.key === 'z' && toastRef.current?.undo) { event.preventDefault(); void toastRef.current.undo() }
     }
     window.addEventListener('keydown', keyboard, true)

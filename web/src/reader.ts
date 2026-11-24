@@ -67,6 +67,10 @@ export function shortcutsAllowed(target: EventTarget | null, enabled: boolean): 
   // Keys pressed in an open menu belong to the menu.
   return !target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="menu"], dialog[open]')
 }
+export function isMarkUnreadShortcut(event: KeyboardEvent): boolean {
+  // Require Shift even when Caps Lock makes the key uppercase.
+  return event.shiftKey && event.key.toLowerCase() === 'u'
+}
 export function readerURL(raw: string, settings: {theme: string; measure: number; font: string}, dark: boolean): string {
   const url = new URL(raw)
   url.searchParams.set('theme', settings.theme === 'system' ? (dark ? 'dark' : 'light') : settings.theme)

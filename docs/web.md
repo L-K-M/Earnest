@@ -70,8 +70,9 @@ its direct feeds unfiled. Folder nesting is preserved in sync and OPML exports.
    past rows, selecting without opening, and leaving an article do not either.
    If you mark an open article unread, it stays unread when you move to another
    article; explicitly reopening it marks it read again.
-   Use Done (`e`), Later (`s`), Keep (`f`) or unread (`m` or Shift+U). Unread
-   clears Done.
+   Use Done (`e`), Later (`s`), Keep (`f`) or unread (`m` or Shift+U) in the
+   list. Shift+U also marks the displayed article unread, including stories
+   opened from the Front page. Unread clears Done.
    Each of these applies at once and offers Undo (`z`) in a short notice that
    restores the registers it changed. `j` and `k` select, and while an article
    is open they open the next or previous one in place, so Back still returns
