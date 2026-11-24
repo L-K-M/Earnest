@@ -90,10 +90,10 @@ describe('river interactions', () => {
     await new Promise(resolve => window.setTimeout(resolve, 700))
     expect(act).not.toHaveBeenCalled()
   })
-  it('drops a queued open read when the reader marks the row unread', async () => {
+  it.each([{key:'m', shiftKey:false}, {key:'U', shiftKey:true}])('drops a queued open read when $key marks the row unread', async press => {
     const {act}=mount()
     fireEvent.click(await screen.findByText('Article 1'))
-    fireEvent.keyDown(document.body,{key:'m'})
+    fireEvent.keyDown(document.body,press)
     expect(act).toHaveBeenCalledWith(entries[0],'seen','unseen')
     await new Promise(resolve => window.setTimeout(resolve, 1300))
     expect(act).not.toHaveBeenCalledWith(entries[0],'seen','seen','passive')

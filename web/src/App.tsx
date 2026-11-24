@@ -5,7 +5,7 @@ import {request, RequestError, setCSRF} from './request'
 import {readUnreadCounts} from './counts'
 import {River, type SessionSummary} from './River'
 import {FrontPage} from './FrontPage'
-import {Reader} from './ArticleReader'
+import {Reader, type KeyHint} from './ArticleReader'
 import {ArticleFrame} from './ArticleFrame'
 import {defaultSettings, type ReadingSettings} from './Settings'
 import {ActivityScreen, Notifications} from './agents/Surfaces'
@@ -47,6 +47,12 @@ const SEQUENCE_MS = 1500
 const GO_TO: Record<string, string> = {t:'/front', e:'/front?period=weekly', l:'/later', k:'/kept', d:'/done', f:'/feeds', s:'/settings', a:'/articles', A:'/activity', n:'/notifications', r:'/rules'}
 const DAILY: FrontTarget = {kind: 'front', period: 'daily'}
 const THEME_COLORS: Record<string, string> = {light:'#f8f6ef', dark:'#1d1d1b', black:'#000000', eink:'#ffffff'}
+// The reader toolbar's spare room recalls the shortcuts that work beside it,
+// most useful first. j and k belong to an article list; the Front page has
+// none, so its reader recalls only the help.
+const HELP_HINT: KeyHint = {keys:['?'], label:'All shortcuts'}
+const LIST_READER_HINTS: readonly KeyHint[] = [{keys:['j','k'], label:'Next or previous'}, HELP_HINT]
+const FRONT_READER_HINTS: readonly KeyHint[] = [HELP_HINT]
 
 // Rarely visited screens load on demand. A failed chunk download is retried
 // from the screen's error boundary rather than leaving a blank page.
@@ -638,7 +644,7 @@ function Session({onLogout}: {onLogout: () => void}) {
 
   function readerPane(): ReactNode {
     if (!reading) return <ReaderPlaceholder shortcuts={shortcuts} />
-    if (openEntry) return <Reader key={openEntry.id} onOpen={entry => openArticle(entry, {mode: 'push'})} entry={openEntry} subscription={subs.find(sub => sub.id === openEntry.subscription_id)} settings={settings} actions={actions} onSettings={savedSettings} onNotify={notify} renderBody={url => <ArticleFrame src={url} />} onClose={closeReader} />
+    if (openEntry) return <Reader key={openEntry.id} onOpen={entry => openArticle(entry, {mode: 'push'})} entry={openEntry} subscription={subs.find(sub => sub.id === openEntry.subscription_id)} settings={settings} actions={actions} onSettings={savedSettings} onNotify={notify} renderBody={url => <ArticleFrame src={url} />} onClose={closeReader} hints={!shortcuts ? [] : route.name === 'river' ? LIST_READER_HINTS : FRONT_READER_HINTS} />
     if (openQuery.isError) return <ReaderProblem error={openQuery.error} onBack={closeReader} onRetry={() => {void openQuery.refetch()}} />
     return <ReaderSkeleton />
   }

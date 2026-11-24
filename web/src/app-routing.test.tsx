@@ -7,6 +7,7 @@ import type {QueryClient} from '@tanstack/react-query'
 import {request, RequestError} from './request'
 import {defaultSettings} from './Settings'
 import type {Entry, ReaderActions, View} from './reader'
+import type {KeyHint} from './ArticleReader'
 
 const {act, entries, listMounted, listSeenChoices, seenChoices} = vi.hoisted(() => {
   const state = (shelf = 'none') => ({shelf:{value:shelf}, kept:{value:false}, seen:{value:'unseen'}})
@@ -21,7 +22,7 @@ vi.mock('./River',() => ({River: function River({view,actions,onOpen,unreadOnly,
   return <section data-unread-only={unreadOnly}><h2>{view.title} list</h2><button aria-pressed={!unreadOnly} onClick={() => onUnreadOnlyChange?.(false)}>Show all</button><button aria-pressed={unreadOnly} onClick={() => onUnreadOnlyChange?.(true)}>Show only unread</button>{entries.map(entry => <button key={entry.id} onClick={() => onOpen(entry as Entry)}>Open {entry.title}</button>)}</section>
 }}))
 vi.mock('./FrontPage',() => ({FrontPage:({onOpen}: {onOpen: (entry: Entry) => void}) => <section><h2>Front page list</h2><button onClick={() => onOpen(entries[0] as Entry)}>Open front story</button></section>}))
-vi.mock('./ArticleReader',() => ({Reader:({entry,onClose}: {entry: Entry; onClose: () => void}) => <article><h2>{entry.title}</h2><button onClick={onClose}>Back</button></article>}))
+vi.mock('./ArticleReader',() => ({Reader:({entry,onClose,hints = []}: {entry: Entry; onClose: () => void; hints?: readonly KeyHint[]}) => <article><h2>{entry.title}</h2><button onClick={onClose}>Back</button><p data-testid="hints">{hints.map(hint => `${hint.keys.join(' ')}: ${hint.label}`).join('; ')}</p></article>}))
 
 let queryClient: QueryClient
 beforeEach(async () => {
@@ -184,6 +185,34 @@ it('gives the list the count of deliberate read choices', async () => {
   await start('/feeds/8')
   await screen.findByRole('heading', {name: 'Rust list'}, {timeout: 5000})
   expect(listSeenChoices).toHaveBeenCalledWith(seenChoices)
+})
+
+it('marks unread with Shift+U without closing the article, which a bare u does', async () => {
+  await start('/feeds/8/articles/4')
+  await screen.findByRole('heading',{name:'Article 4'},{timeout:5000})
+  // Single-key shortcuts wait for the account's setting to load.
+  await waitFor(() => expect(screen.getByTestId('hints').textContent).not.toBe(''))
+  const shiftU = new KeyboardEvent('keydown',{key:'U',shiftKey:true,bubbles:true,cancelable:true})
+  document.body.dispatchEvent(shiftU)
+  // The list's handler, mocked away here, is what acts on Shift+U.
+  expect(shiftU.defaultPrevented).toBe(false)
+  expect(location.pathname).toBe('/feeds/8/articles/4')
+  fireEvent.keyDown(document.body,{key:'u'})
+  await waitFor(() => expect(location.pathname).toBe('/feeds/8'))
+})
+
+it.each([
+  {path:'/feeds/8/articles/4', shortcuts:true, hints:'j k: Next or previous; ?: All shortcuts'},
+  {path:'/today/articles/4', shortcuts:true, hints:'?: All shortcuts'},
+  {path:'/feeds/8/articles/4', shortcuts:false, hints:''},
+])('gives the reader at $path the shortcut hints that work there (shortcuts on: $shortcuts)', async ({path, shortcuts, hints}) => {
+  const fallback = vi.mocked(request).getMockImplementation()!
+  vi.mocked(request).mockImplementation(async (url, options) => url === '/v1/settings' ? {...defaultSettings, single_key_shortcuts: shortcuts, rev: 1} : fallback(url, options))
+  await start(path)
+  await screen.findByRole('heading',{name:'Article 4'},{timeout:5000})
+  await waitFor(() => expect(vi.mocked(request).mock.calls.some(([url]) => url === '/v1/settings')).toBe(true))
+  await reactAct(async () => {await new Promise(resolve => setTimeout(resolve, 50))})
+  expect(screen.getByTestId('hints').textContent).toBe(hints)
 })
 
 it('follows go-to shortcuts without letting the second key act on the list', async () => {

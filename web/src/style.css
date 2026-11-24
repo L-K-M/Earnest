@@ -321,6 +321,15 @@ dd {margin: 0}
 .tool.back:hover {background: var(--hover)}
 .tool-divider {flex: none; width: 1px; height: 1.25rem; margin: 0 var(--s1); background: var(--line)}
 .tool-spacer {flex: 1}
+/* Shortcut hints fill the spare room between the article's actions and the
+   links out. The box is one line tall and clips: a hint that does not fit
+   whole wraps onto a hidden second line, taking the less useful ones after
+   it. The empty first item keeps that first line, so even the first hint
+   shows only when it fits. */
+.tool-hints {display: flex; flex-wrap: wrap; align-content: flex-start; align-items: center; justify-content: center; min-width: 0; height: var(--control); overflow: hidden; color: var(--ink-muted); font-size: var(--step--1); white-space: nowrap}
+.tool-hints::before {content: ''; height: var(--control)}
+.tool-hint {display: inline-flex; align-items: center; gap: .25rem; height: var(--control); padding: 0 var(--s2)}
+.tool-hint > span {margin-left: .15rem}
 .integration-mark {display: inline-grid; place-items: center; width: 1.15rem; height: 1.15rem; border: 1px solid currentColor; border-radius: 3px; font: 700 .75rem/1 var(--font-ui)}
 @container reader (max-width: 62rem) {
   .tool.secondary .label {position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap}
@@ -472,7 +481,7 @@ dialog::backdrop {background: rgb(10 10 8 / .42)}
   button.small, .banner button, .toast-action, .toast-close {min-height: 2.75rem}
   .context-menu [role=menuitem] {min-height: 2.75rem}
   .toast-close {width: 2.75rem}
-  .palette-hint {display: none}
+  .palette-hint, .tool-hint {display: none}
 }
 
 /* Motion explains a change of place; it is off when the reader asks. */
